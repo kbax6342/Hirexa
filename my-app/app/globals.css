@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.jd-pay {
+  font-weight: 800;
+  font-size: 1.08em;
+  color: rgb(17 24 39);            /* gray-900 */
+  background: rgb(239 246 255);    /* blue-50 */
+  padding: 0.12rem 0.45rem;
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.jd-kv {
+  margin-top: 1rem;
+  border: 1px solid rgb(229 231 235); /* gray-200 */
+  border-radius: 0.75rem;
+  padding: 0.9rem 1rem;
+  background: rgb(249 250 251); /* gray-50 */
+}
+
+.jd-kv-title {
+  font-weight: 700;
+  color: rgb(17 24 39);
+  margin-bottom: 0.25rem;
+}
+
+.jd-kv-body {
+  color: rgb(55 65 81); /* gray-700 */
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+
+
+
+/* button {
+  background-color: initial;
+} */
+

@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String?
+  email     String   @unique
+  password  String? // ✅ allow null for guest until they finish
+  isGuest   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  emailVerifiedAt DateTime? // ✅ add this
+
+  userProfile UserProfile?
+}
+
+model UserProfile {
+  id      String  @id @default(cuid())
+  userId  String? @unique
+  guestId String? @unique
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // ...
+  skills String[] @default([])
+  email  String?
+  welcomeEmailSentAt DateTime?
+
+  // optional: store extracted resume skills for quick load
+  resumeSkills String[] @default([])
+
+  minCompensation  Int?
+  compensationType String? // "yearly" | "hourly"
+
+  firstName String?
+  lastName  String?
+  phone     String?
+
+  authorizedUS String?
+  sponsorship  String?
+  felony       String?
+  startDate    String?
+  screening    String?
+  relocate     String?
+  gender       String?
+  pronouns     String?
+  ethnicity    String?
+  disability   String?
+  veteran      String?
+
+  // ✅ moved here:
+  resume       Resume?
+  jobInterests JobInterest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model JobInterest {
+  id            String @id @default(cuid())
+  userProfileId String
+  uuid          String
+  title         String
+
+  userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, uuid])
+  @@index([userProfileId])
+}
+
+model Resume {
+  id            String      @id @default(cuid())
+  userProfileId String      @unique
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  filename  String?
+  mimeType  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  experiences Experience[]
+}
+
+model Experience {
+  id       String @id @default(cuid())
+  resumeId String
+  resume   Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  order     Int
+  title     String
+  company   String
+  location  String?
+  dateRange String?
+
+  bullets Bullet[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([resumeId])
+  @@index([resumeId, order])
+}
+
+model Bullet {
+  id           String     @id @default(cuid())
+  experienceId String
+  experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  order Int
+  text  String
+
+  @@index([experienceId])
+  @@index([experienceId, order])
+}
+
+model EmailOtp {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  resendAfter DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}

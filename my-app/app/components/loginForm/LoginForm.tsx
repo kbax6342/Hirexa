@@ -25,7 +25,8 @@ export default function LoginForm() {
         router.refresh();
         router.push("/dashboard");
       } catch (err) {
-        alert("Invalid email or password");
+        //alert("Invalid email or password");
+        console.log(err)
       }
     });
   }

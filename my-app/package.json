@@ -11,9 +11,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@auth/prisma-adapter": "^2.11.1",
+    "@heroicons/react": "^2.2.0",
     "@prisma/adapter-pg": "^7.3.0",
     "@prisma/client": "^6.19.2",
     "bcryptjs": "^3.0.3",
+    "cheerio": "^1.2.0",
     "dotenv": "^17.2.3",
     "isomorphic-dompurify": "^2.35.0",
     "lucide-react": "^0.563.0",
@@ -26,7 +28,8 @@
     "pg": "^8.17.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-google-recaptcha-v3": "^1.11.0"
+    "react-google-recaptcha-v3": "^1.11.0",
+    "stripe": "^20.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

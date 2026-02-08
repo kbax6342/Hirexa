@@ -142,7 +142,7 @@ export default function LoginFooter() {
         </div>
 
         <div className="mt-12 text-xs text-gray-600">
-          © {new Date().getFullYear()}, Bold Limited. All rights reserved.
+          © {new Date().getFullYear()}, BA Technology. All rights reserved.
         </div>
       </div>
     </footer>

@@ -130,7 +130,6 @@ function OtpBoxes({
   );
 }
 
-
 export default function SplitAuthCard() {
   const { executeRecaptcha } = useGoogleReCaptcha();
 

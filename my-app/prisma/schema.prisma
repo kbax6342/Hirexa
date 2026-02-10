@@ -38,8 +38,9 @@ model UserProfile {
   user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // profile fields (keep what you need)
-  skills             String[]  @default([])
+  skills             String[] @default([])
   email              String?
+  registrationStatus String   @default("pending_verification")
   welcomeEmailSentAt DateTime?
 
   workplaceLocations Json?

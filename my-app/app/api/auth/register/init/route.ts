@@ -3,6 +3,7 @@ import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "../../../../lib/security/recaptcha";
 import { validatePassword, hashPassword } from "../../../../lib/security/password";
 import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
+import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 
 export async function POST(req: Request) {
   try {
@@ -34,15 +35,16 @@ export async function POST(req: Request) {
         password: passwordHash,
         isGuest: false,
         emailVerifiedAt: null,
-        userProfile: { create: { email } },
+        userProfile: { create: { email, registrationStatus: "pending_verification" } },
       },
       update: {
         password: passwordHash,
         isGuest: false,
+        emailVerifiedAt: null,
         userProfile: {
           upsert: {
-            create: { email },
-            update: { email },
+            create: { email, registrationStatus: "pending_verification" },
+            update: { email, registrationStatus: "pending_verification" },
           },
         },
       },
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
       },
     });
 
-    console.log("[OTP]", email, code);
+    await sendVerificationCodeEmail(email, code);
 
     return NextResponse.json({ ok: true });
   } catch {

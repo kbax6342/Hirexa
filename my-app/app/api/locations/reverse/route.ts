@@ -9,40 +9,38 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing lat/lon" }, { status: 400 });
   }
 
-  // Nominatim reverse geocode
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "Missing GOOGLE_MAPS_API_KEY" }, { status: 500 });
+  }
+
   const endpoint =
-    `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}` +
-    `&lon=${encodeURIComponent(lon)}&zoom=10&addressdetails=1`;
+    `https://maps.googleapis.com/maps/api/geocode/json` +
+    `?latlng=${encodeURIComponent(lat)},${encodeURIComponent(lon)}` +
+    `&key=${encodeURIComponent(apiKey)}`;
 
   try {
-    const res = await fetch(endpoint, {
-      headers: {
-        // Nominatim wants an identifying UA; put your app name
-        "User-Agent": "Hirexa/1.0 (location reverse geocode)",
-      },
-      cache: "no-store",
-    });
-
+    const res = await fetch(endpoint, { cache: "no-store" });
     const data = await res.json();
-    if (!res.ok) {
+
+    if (!res.ok || data.status !== "OK") {
       return NextResponse.json({ error: "Reverse geocode failed" }, { status: 500 });
     }
 
-    const addr = data?.address ?? {};
-    const city =
-      addr.city ||
-      addr.town ||
-      addr.village ||
-      addr.hamlet ||
-      addr.county ||
-      "";
-    const state = addr.state || addr.region || "";
+    const result = data.results[0];
+    if (!result) return NextResponse.json({ label: "" });
 
-    const label = [city, state].filter(Boolean).join(", ").trim();
+    let city = "";
+    let state = "";
 
-    return NextResponse.json({
-      label: label || data?.display_name || "",
-    });
+    for (const c of result.address_components) {
+      if (c.types.includes("locality")) city = c.long_name;
+      if (c.types.includes("administrative_area_level_1")) state = c.short_name;
+    }
+
+    const label = [city, state].filter(Boolean).join(", ");
+
+    return NextResponse.json({ label });
   } catch {
     return NextResponse.json({ error: "Reverse geocode error" }, { status: 500 });
   }

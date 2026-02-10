@@ -12,37 +12,79 @@ export async function POST(req: Request) {
     const guestId = c.get("guest_user_id")?.value ?? null;
 
     if (!userId && !guestId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await req.json().catch(() => null);
     const email = String(body?.email ?? "").trim().toLowerCase();
 
-    // basic validation
-    const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!ok) {
-      return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+    const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!okEmail) {
+      return NextResponse.json({ ok: false, error: "Invalid email" }, { status: 400 });
     }
 
-    // upsert profile by userId (if logged in) else guestId
-    await prisma.userProfile.upsert({
+    // ✅ Treat hitting this page as explicit opt-in
+    const newsletterOptIn = true;
+    const newsletterSource = "onboarding/job-alerts";
+
+    const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId! },
-      update: { email },
-      create: userId ? { userId, email } : { guestId: guestId!, email },
-      select: { id: true },
+      update: {
+        email,
+        newsletterOptIn,
+        newsletterSource,
+        // emailVerifiedAt: null, // keep null unless you add verification
+        // unsubscribedAt: null,  // only set when they unsubscribe
+      },
+      create: userId
+        ? { userId, email, newsletterOptIn, newsletterSource }
+        : { guestId: guestId!, email, newsletterOptIn, newsletterSource },
+      select: {
+        id: true,
+        userId: true,
+        guestId: true,
+        email: true,
+        newsletterOptIn: true,
+        newsletterSource: true,
+        emailVerifiedAt: true,
+        unsubscribedAt: true,
+      },
     });
 
-    // Optional: store email in a cookie too (nice for UX / prefill)
-    const res = NextResponse.json({ ok: true });
+    const res = NextResponse.json({
+      ok: true,
+      proof: {
+        session: { userId, guestId },
+        savedToProfile: profile,
+        cookiesSet: {
+          onboarding_email: email,
+          newsletter_opt_in: String(newsletterOptIn),
+        },
+      },
+    });
+
+    // ✅ Cookies: httpOnly so they’re safe (client JS cannot read them)
     res.cookies.set("onboarding_email", email, {
       httpOnly: true,
       sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
       path: "/",
-      maxAge: 60 * 60 * 24 * 14, // 14 days
+      maxAge: 60 * 60 * 24 * 14,
+    });
+
+    res.cookies.set("newsletter_opt_in", String(newsletterOptIn), {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
     });
 
     return res;
-  } catch {
-    return NextResponse.json({ error: "Failed to save email" }, { status: 500 });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Failed to save email" },
+      { status: 500 }
+    );
   }
 }

@@ -78,6 +78,37 @@ export default function ChooseWorkplacePage() {
     setDraftSelectedIds(new Set());
   }
 
+  async function saveLocations() {
+    const res = await fetch("/api/locations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        includeRemote,
+        locations: selected.map((s) => ({
+          label: s.label,
+          lat: s.lat,
+          lon: s.lon,
+        })),
+      }),
+    });
+  
+    const text = await res.text();
+    console.log("choose-workplace /locations raw:", { ok: res.ok, status: res.status, body: text });
+  
+
+  
+    if (!res.ok) {
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch {}
+      throw new Error(parsed?.error ?? parsed?.message ?? text ?? "Failed to save locations");
+    }
+  
+    const parsed = text ? JSON.parse(text) : { ok: true };
+    console.log("✅ PROOF locations saved:", parsed?.proof ?? parsed);
+    return parsed;
+  }
+
   // ---------- Auto-detect local city/state and add as first pill ----------
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +225,14 @@ export default function ChooseWorkplacePage() {
       abortRef.current?.abort();
     };
   }, [query, open]);
+
+  useEffect(() => {
+    console.log("🧭 Selected locations (client state):", selected);
+  }, [selected]);
+  
+  useEffect(() => {
+    console.log("🌐 includeRemote:", includeRemote);
+  }, [includeRemote]);
 
   // how many more can be added (not counting already-selected items)
   const remaining = useMemo(() => Math.max(0, MAX_LOCATIONS - selected.length), [selected.length]);
@@ -390,18 +429,23 @@ export default function ChooseWorkplacePage() {
 
           <button
             type="button"
-            onClick={() => {
-              // TODO: persist selections somewhere (db/cookie) then route forward
-              console.log("Selected locations:", selected);
-              console.log("Include remote:", includeRemote);
-              window.location.href = "/onboarding/account";
+            onClick={async () => {
+              try {
+                await saveLocations();
+                window.location.href = "/onboarding/account";
+              } catch (e: any) {
+                console.error("❌ saveLocations failed:", e?.message ?? e);
+                setError(e?.message ?? "Failed to save locations");
+              }
             }}
             className="rounded-full bg-blue-600 px-8 py-3 text-sm font-semibold text-white hover:bg-blue-700"
           >
             Next
-          </button>
+        </button>
+
         </div>
       </div>
     </div>
   );
 }
+ 

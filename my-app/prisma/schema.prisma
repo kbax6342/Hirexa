@@ -15,7 +15,7 @@ model User {
   isGuest   Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   emailVerifiedAt DateTime? // ✅ add this
 
   userProfile UserProfile?
@@ -28,9 +28,19 @@ model UserProfile {
   user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // ...
-  skills String[] @default([])
-  email  String?
+  skills             String[]  @default([])
+  email              String?
   welcomeEmailSentAt DateTime?
+
+  // ✅ Newsletter fields
+  newsletterOptIn    Boolean   @default(false)
+  emailVerifiedAt    DateTime? // set when user confirms email (optional)
+  unsubscribedAt     DateTime? // set when user unsubscribes (optional)
+  newsletterSource   String?   // e.g. "onboarding/job-alerts" (optional)
+
+  // ✅ add these:
+  workplaceLocations Json?     // array of { label, lat, lon }
+  includeRemote      Boolean   @default(true)
 
   // optional: store extracted resume skills for quick load
   resumeSkills String[] @default([])
@@ -58,8 +68,9 @@ model UserProfile {
   resume       Resume?
   jobInterests JobInterest[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  resumeFiles ResumeFile[]
 }
 
 model JobInterest {
@@ -86,6 +97,16 @@ model Resume {
 
   experiences Experience[]
 }
+
+model ResumeExperience {
+  resumeId     String  @id
+  experiences  Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  resume       Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+}
+
 
 model Experience {
   id       String @id @default(cuid())
@@ -128,4 +149,19 @@ model EmailOtp {
   resendAfter DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+}
+
+model ResumeFile {
+  id        String      @id @default(cuid())
+  profileId String
+  profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  blob      Bytes
+
+  createdAt DateTime @default(now())
+
+  @@index([profileId])
 }

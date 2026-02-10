@@ -52,18 +52,28 @@ export default function MinSalaryPage() {
     const res = await fetch("/api/onboarding/min-salary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({
         compensationType: nextType,
+        minCompCompensation: undefined, // (intentionally unused)
         minCompensation: nextValue,
       }),
     });
   
+    const text = await res.text();
+    console.log("min-salary POST raw:", { ok: res.ok, status: res.status, body: text });
+  
     if (!res.ok) {
-      // optional: show toast
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data?.error ?? "Failed to save");
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : null; } catch {}
+      throw new Error(parsed?.error ?? parsed?.message ?? text ?? "Failed to save");
     }
+  
+    return text ? JSON.parse(text) : { ok: true };
   }
+  
+  
+  
   
 
 
@@ -132,16 +142,43 @@ export default function MinSalaryPage() {
 
   async function onContinue() {
     persist(type, value);
-
+  
     try {
-      await saveMinSalaryToProfile(type, value);
+      const proof = await saveMinSalaryToProfile(type, value);
+      console.log("✅ PROOF: min-salary saved:", proof);
+  
+      // ✅ Now print the entire onboarding snapshot (resume + job titles + salary)
+      const debugRes = await fetch("/api/onboarding/debug", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      });
+  
+      const debugText = await debugRes.text();
+      console.log("📦 ONBOARDING DEBUG raw:", {
+        ok: debugRes.ok,
+        status: debugRes.status,
+        body: debugText,
+      });
+  
+      if (debugRes.ok) {
+        try {
+          const snapshot = debugText ? JSON.parse(debugText) : null;
+          console.log("✅ ONBOARDING SNAPSHOT (resume + jobs + salary):", snapshot);
+        } catch {
+          console.warn("Debug endpoint did not return JSON.");
+        }
+      }
+  
       router.push("/onboarding/skills");
     } catch (err) {
-      console.error(err);
-      // Optional: still allow moving on, or block navigation.
-      router.push("/onboarding/next-step");
+      console.error("❌ min salary save failed:", err);
+      // decide if you want to block or allow navigation
     }
   }
+  
+  
+  
 
   function onSkip() {
     // up to you: either store null or just navigate
@@ -150,12 +187,7 @@ export default function MinSalaryPage() {
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Top bar */}
-      <header className="h-14 border-b bg-gray-50">
-        <div className="mx-auto flex h-full w-full max-w-5xl items-center px-6">
-          <div className="font-semibold tracking-tight text-gray-900">sonara</div>
-        </div>
-      </header>
+  
 
       {/* Content */}
       <main className="mx-auto w-full max-w-5xl px-6 pb-28 pt-10">

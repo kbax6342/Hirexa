@@ -1,4 +1,3 @@
-// src/app/onboarding/skills/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -48,6 +47,9 @@ export default function SkillsOnboardingPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ show proof on screen + in console
+  const [proof, setProof] = useState<any>(null);
+
   const boxRef = useRef<HTMLDivElement | null>(null);
 
   const count = selected.length;
@@ -62,7 +64,10 @@ export default function SkillsOnboardingPage() {
 
     (async () => {
       try {
-        const res = await fetch("/api/onboarding/resume-skills", { cache: "no-store" });
+        const res = await fetch("/api/onboarding/resume-skills", {
+          cache: "no-store",
+          credentials: "include",
+        });
         const data = (await res.json()) as SkillApiResponse;
 
         if (cancelled) return;
@@ -70,9 +75,6 @@ export default function SkillsOnboardingPage() {
         const incoming = dedupe(data.skills ?? []).slice(0, 50);
         setResumeSkills(incoming);
 
-        // Auto-select resume skills (but don’t force to 50; keep it reasonable)
-        // You asked: “only put a minimum of 3 skills” → we’ll prefill up to 10 max,
-        // but ensure at least 3 if available.
         const prefill = incoming.slice(0, 10);
         const next = dedupe(prefill).slice(0, 50);
         setSelected(next);
@@ -86,7 +88,7 @@ export default function SkillsOnboardingPage() {
     };
   }, []);
 
-  // 2) Fetch options based on query (empty query => popular skills)
+  // 2) Fetch options based on query
   useEffect(() => {
     let cancelled = false;
 
@@ -94,34 +96,23 @@ export default function SkillsOnboardingPage() {
       setLoadingOpts(true);
       try {
         const url = debouncedQuery
-        ? `/api/onboarding/skills?q=${encodeURIComponent(debouncedQuery)}&limit=12`
-        : `/api/onboarding/skills?limit=12`;
-      
-        const res = await fetch(url, { cache: "no-store" });
+          ? `/api/onboarding/skills?q=${encodeURIComponent(debouncedQuery)}&limit=12`
+          : `/api/onboarding/skills?limit=12`;
+
+        const res = await fetch(url, { cache: "no-store", credentials: "include" });
         const raw = await res.json();
-      console.log("CLIENT /api/onboarding/skills raw:", raw);
-
-      // ✅ support BOTH response shapes:
-      // 1) ["a","b"]
-      // 2) { skills: ["a","b"] }
-     
-
-
-     
 
         if (cancelled) return;
 
-        // Remove anything already selected from options list
         const skillsFromApi: string[] = Array.isArray(raw)
-        ? raw.map(String)
-        : Array.isArray(raw?.skills)
-        ? raw.skills.map(String)
-        : [];
+          ? raw.map(String)
+          : Array.isArray(raw?.skills)
+          ? raw.skills.map(String)
+          : [];
 
-      setOptions(skillsFromApi);
-
-        //console.log("options set to:", filtered);
-
+        // optional: filter out selected in UI
+        const filtered = skillsFromApi.filter((s) => !selectedSet.has(String(s).toLowerCase()));
+        setOptions(filtered);
       } catch {
         if (!cancelled) setOptions([]);
       } finally {
@@ -146,15 +137,12 @@ export default function SkillsOnboardingPage() {
 
   function addSkill(skill: string) {
     setError(null);
-
-    const next = dedupe([...selected, skill]).slice(0, 50);
-
-    // If we hit max, don’t add more
     if (selected.length >= 50) return;
 
+    const next = dedupe([...selected, skill]).slice(0, 50);
     setSelected(next);
     setQuery("");
-    setOpen(true); // keep open so user can keep adding
+    setOpen(true);
   }
 
   function removeSkill(skill: string) {
@@ -162,8 +150,10 @@ export default function SkillsOnboardingPage() {
     setSelected(selected.filter((s) => s.toLowerCase() !== skill.toLowerCase()));
   }
 
+  // ✅ PROOF-SAVING CONTINUE
   async function onSave() {
     setError(null);
+    setProof(null);
 
     const finalSkills = dedupe(selected).slice(0, 50);
 
@@ -174,28 +164,59 @@ export default function SkillsOnboardingPage() {
 
     setSaving(true);
     try {
+      // 1) Save skills (server will upsert profile + set cookie)
       const res = await fetch("/api/onboarding/skills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ skills: finalSkills }),
       });
 
-      const data = await res.json().catch(() => null);
-      
+      const rawText = await res.text();
+      console.log("✅ /api/onboarding/skills raw:", { ok: res.ok, status: res.status, body: rawText });
+
+      let parsed: any = null;
+      try {
+        parsed = rawText ? JSON.parse(rawText) : null;
+      } catch {}
+
       if (!res.ok) {
-        setError(data?.error ?? "Failed to save skills.");
+        setError(parsed?.error ?? rawText ?? "Failed to save skills.");
         return;
       }
 
-      // Go next step (change to your actual next route)
+      // 2) Immediately ask server for a full snapshot (cookies + DB)
+      const debugRes = await fetch("/api/onboarding/debug", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      const debugText = await debugRes.text();
+      console.log("✅ /api/onboarding/debug raw:", { ok: debugRes.ok, status: debugRes.status, body: debugText });
+
+      let debugParsed: any = null;
+      try {
+        debugParsed = debugText ? JSON.parse(debugText) : null;
+      } catch {}
+
+      const combinedProof = {
+        skillsSaveResponse: parsed,
+        debugSnapshot: debugParsed,
+      };
+
+      console.log("🎯 PROOF (skills + snapshot):", combinedProof);
+      setProof(combinedProof);
+
+      // ✅ only proceed after proof is shown (you can keep this, or delay 1s)
       router.push("/onboarding/job-alerts");
-    } catch {
+    } catch (e: any) {
+      console.error("❌ skills save failed:", e?.message ?? e, e);
       setError("Failed to save skills.");
     } finally {
       setSaving(false);
     }
   }
- 
 
   return (
     <div className="min-h-screen bg-white">
@@ -233,7 +254,6 @@ export default function SkillsOnboardingPage() {
             )}
           </div>
 
-          {/* Optional: show where these came from */}
           {resumeSkills.length > 0 && (
             <div className="mt-3 text-xs text-gray-500">
               Prefilled from resume: {resumeSkills.slice(0, 8).join(", ")}
@@ -246,7 +266,7 @@ export default function SkillsOnboardingPage() {
         <div ref={boxRef} className="relative mt-6">
           <label className="block text-sm font-medium text-gray-800">Search skills</label>
           <input
-           suppressHydrationWarning
+            suppressHydrationWarning
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -260,40 +280,19 @@ export default function SkillsOnboardingPage() {
           {open && (
             <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
               <div className="flex items-center justify-between px-4 py-3">
-                <div className="text-xs font-medium text-gray-600">
-                  {query ? "Results" : "Popular skills"}
-                </div>
+                <div className="text-xs font-medium text-gray-600">{query ? "Results" : "Popular skills"}</div>
                 {loadingOpts && <div className="text-xs text-gray-400">Loading…</div>}
               </div>
 
               <div className="max-h-72 overflow-auto">
                 {options.length === 0 ? (
-                  <div className="px-4 py-4 text-sm text-gray-500">
-                    {query ? "No matches found." : "No suggestions."}
-                  </div>
+                  <div className="px-4 py-4 text-sm text-gray-500">{query ? "No matches found." : "No suggestions."}</div>
                 ) : (
-                  // options.map((s) => {
-                  //   const atMax = selected.length >= 50;
-                  //   return (
-                  //     <button
-                  //       key={s}
-                  //       type="button"
-                  //       onClick={() => addSkill(s)}
-                  //       disabled={atMax}
-                  //       className="flex w-full items-center justify-between px-4 py-3 text-left text-sm text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  //     >
-                  //       <span>{s}</span>
-                  //       <span className="text-xs text-gray-400">Add</span>
-                  //     </button>
-                  //   );
-                  // })
                   options.map((s) => {
                     const isSelected = selectedSet.has(s.toLowerCase());
                     const atMax = selected.length >= 50;
-                  
-                    // disable if already selected OR max reached
                     const disabled = isSelected || atMax;
-                  
+
                     return (
                       <button
                         key={s}
@@ -303,33 +302,36 @@ export default function SkillsOnboardingPage() {
                           if (disabled) return;
                           addSkill(s);
                         }}
-                        className={`flex w-full items-center justify-between px-4 py-3 text-left text-sm
-                          ${disabled ? "cursor-not-allowed opacity-50" : "text-gray-800 hover:bg-gray-50"}`}
+                        className={`flex w-full items-center justify-between px-4 py-3 text-left text-sm ${
+                          disabled ? "cursor-not-allowed opacity-50" : "text-gray-800 hover:bg-gray-50"
+                        }`}
                       >
                         <span className="text-gray-800">{s}</span>
-                  
-                        <span className="text-xs text-gray-400">
-                          {isSelected ? "Selected" : atMax ? "Max" : "Add"}
-                        </span>
+                        <span className="text-xs text-gray-400">{isSelected ? "Selected" : atMax ? "Max" : "Add"}</span>
                       </button>
                     );
                   })
-                  
                 )}
               </div>
 
-              <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
-                Tip: click to add. Max 50 skills.
-              </div>
+              <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">Tip: click to add. Max 50 skills.</div>
             </div>
           )}
         </div>
 
         {error && (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         )}
+
+        {/* ✅ Proof box */}
+        {/* {proof && (
+          <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
+            <div className="font-semibold">✅ Proof saved (skills + cookies + DB snapshot)</div>
+            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap">
+              {JSON.stringify(proof, null, 2)}
+            </pre>
+          </div>
+        )} */}
 
         {/* Save / Next */}
         <div className="mt-8 flex items-center justify-end gap-3">

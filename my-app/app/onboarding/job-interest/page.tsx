@@ -1,337 +1,195 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-
-interface Job {
-  uuid: string;
-  title: string;
+function Bullet({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3">
+      <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/90">
+        <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+          <path
+            d="M16.25 5.75L8.5 13.5L3.75 8.75"
+            stroke="white"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <p className="text-sm leading-6 text-white/90">{children}</p>
+    </div>
+  );
 }
 
-const DEFAULT_TERM = "manager"; // ✅ default dropdown content on focus
+export default function JobAlertsOnboardingPage() {
+  const [email, setEmail] = useState("");
+  const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
 
-export default function JobSearchPage() {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Job[]>([]);
-  const [selectedJobs, setSelectedJobs] = useState<Job[]>([]);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [draftSelectedIds, setDraftSelectedIds] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const router = useRouter();
 
+  useEffect(() => {
+    let cancelled = false;
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
+    (async () => {
+      try {
+        setJobsLoading(true);
+        const res = await fetch("/api/onboarding/selected-jobs", { cache: "no-store" });
+        const data: { jobs?: string[] } = await res.json();
+        if (cancelled) return;
+        setSelectedJobs(Array.isArray(data.jobs) ? data.jobs : []);
+      } catch {
+        if (!cancelled) setSelectedJobs([]);
+      } finally {
+        if (!cancelled) setJobsLoading(false);
+      }
+    })();
 
-  const remaining = useMemo(() => Math.max(0, 5 - selectedJobs.length), [selectedJobs.length]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-    
+  const emailLooksValid = useMemo(() => {
+    if (!email) return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  }, [email]);
 
-  // ---- helper: fetch jobs by term, tolerant of API response shape ----
-  async function fetchJobs(term: string) {
-    setLoading(true);
+  const titlesText = useMemo(() => {
+    if (!selectedJobs?.length) return "roles";
+    const max = 5;
+    const list = selectedJobs.slice(0, max);
+    const extra = selectedJobs.length - list.length;
+
+    const joined =
+      list.length === 1
+        ? list[0]
+        : list.length === 2
+        ? `${list[0]} and ${list[1]}`
+        : `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
+
+    return extra > 0 ? `${joined}, and ${extra} more` : joined;
+  }, [selectedJobs]);
+
+  async function onNext() {
+    if (!emailLooksValid || saving) return;
+
+    setSaving(true);
+    setSaveError(null);
+
     try {
-      const res = await fetch(`/api/job-titles?q=${encodeURIComponent(term)}`);
-      const data = await res.json().catch(() => null);
+      const res = await fetch("/api/onboarding/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email }),
+      });
 
-      // Support either: array OR {results: array}
-      const list: Job[] = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
-      setResults(list);
+      const text = await res.text();
+      console.log("job-alerts /email raw:", { ok: res.ok, status: res.status, body: text });
+
+      if (!res.ok) {
+        let parsed: any = null;
+        try { parsed = text ? JSON.parse(text) : null; } catch {}
+        setSaveError(parsed?.error ?? parsed?.message ?? text ?? "Failed to save email");
+        setSaving(false);
+        return;
+      }
+
+      const parsed = text ? JSON.parse(text) : { ok: true };
+      console.log("✅ PROOF email/newsletter saved:", parsed?.proof ?? parsed);
+
+      // ✅ only navigate AFTER save succeeds
+      router.push("/onboarding/choose-workplace");
+    } catch (e: any) {
+      console.error("❌ onNext failed:", e?.message ?? e);
+      setSaveError("Failed to save email");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  // ---- search behavior (debounced) ----
-  useEffect(() => {
-    // If user is typing, show dropdown & fetch debounced
-    if (!showDropdown) return;
-    // Every time the user changes the query, we treat it as a new search session
-    setDraftSelectedIds(new Set());
-    const term = query.trim();
-    const effectiveTerm = term.length > 0 ? term : DEFAULT_TERM;
-
-    // If empty query, we still fetch default list (manager)
-    const timeout = setTimeout(async() => {
-      //fetchJobs(effectiveTerm);
-      const res = await fetch(`/api/job-titles?q=${encodeURIComponent(effectiveTerm)}`);
-      const data = await res.json();
-
-       // supports array OR {results: []}
-      const list = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
-      setResults(list);
-    }, term.length > 0 ? 300 : 0);
-
-    return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, showDropdown]);
-
-  useEffect(() => {
-    fetch("/api/onboarding/start", { method: "POST" }).catch(console.error);
-  }, []);
-  
-
-  // ---- close dropdown on outside click ----
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      const el = containerRef.current;
-      if (!el) return;
-      if (!el.contains(e.target as Node)) setShowDropdown(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
-
-  const toggleJob = (job: Job) => {
-    setSelectedJobs((prev) => {
-      const exists = prev.some((j) => j.uuid === job.uuid);
-  
-      // remove
-      if (exists) return prev.filter((j) => j.uuid !== job.uuid);
-  
-      // add (limit 5)
-      if (prev.length >= 5) return prev;
-  
-      return [...prev, job];
-    });
-  };
-  
-
-  const handleNext = async () => {
-    try {
-      console.log("Saving job interests:", selectedJobs);
-  
-      const res = await fetch("/api/job-interests", 
-      { method: "POST",
-       headers: { "Content-Type": "application/json" },
-       credentials: "include", 
-       body: JSON.stringify({ jobs: selectedJobs }) 
-      });
-
-  
-      const text = await res.text(); // ✅ always read raw first
-  
-      console.log("Save response:", {
-        ok: res.ok,
-        status: res.status,
-        statusText: res.statusText,
-        body: text,
-      });
-  
-      if (!res.ok) {
-        // If your API returns JSON, this will parse it; otherwise it'll fall back to the raw text.
-        let parsed: any = null;
-        try {
-          parsed = text ? JSON.parse(text) : null;
-        } catch {}
-        throw new Error(parsed?.error ?? parsed?.message ?? text ?? "Save failed");
-      }
-  
-      // ✅ only navigate AFTER successful save
-      router.push("/onboarding/time-saved");
-    } catch (e: any) {
-      console.error("handleNext failed:", e?.message ?? e, e);
-    }
-  };
-
-  const handleBack = () => {
-    console.log("Going back");
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-20">
-        <div className="w-full max-w-xl">
-          <h1 className="text-4xl font-bold text-center text-gray-900 mb-3">
-            What kind of jobs are you looking for?
+    <main className="min-h-[calc(100vh-64px)] bg-white">
+      <div className="mx-auto w-full max-w-5xl px-6 py-10">
+        <div className="flex flex-col items-center text-center">
+          <h1 className="text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
+            Don’t miss out on new openings
           </h1>
 
-          <p className="text-center text-gray-600 mb-8">
-            We recommend up to 5 titles to get a great list of jobs.
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-600 sm:text-base">
+            Save your progress and get custom job alerts for{" "}
+            <span className="font-medium text-gray-800">
+              {jobsLoading ? "your selected roles" : titlesText}
+            </span>{" "}
+            based on your preferences.
           </p>
+        </div>
 
-          {/* Input + Dropdown wrapper */}
-          <div className="relative" ref={containerRef}>
-            <label htmlFor="job-search" className="block text-sm font-medium text-gray-700 mb-2">
-              Job title, keyword or category
-            </label>
-
-            <input
-                id="job-search"
-                type="text"
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-
-                  const next = new Set(draftSelectedIds);
-
-                  // If already selected → remove
-                  if (next.has(job.uuid)) {
-                    next.delete(job.uuid);
-
-                    // Draft behavior:
-                    // Unchecking does NOT remove from pills.
-                    // To remove from pills as well, call toggleJob(job) here.
-
-                    setDraftSelectedIds(next);
-                    return;
-                  }
-
-                  // Adding (limit to 5)
-                  if (selectedJobs.length >= 5) return;
-
-                  next.add(job.uuid);
-
-                  // Add to pills (persistent state)
-                  toggleJob(job);
-
-                  setDraftSelectedIds(next);
-                }}
-                onFocus={() => {
-                  // ✅ show dropdown even with empty input; will fetch DEFAULT_TERM
-                  setShowDropdown(true);
-                }}
-                placeholder="Project manager, marketing, driver, etc."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-700 placeholder-gray-400"
-              />
-
-
-            {/* Dropdown */}
-            {showDropdown && (
-              <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
-                {/* Header / status */}
-                <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                  <div className="text-sm font-medium text-gray-900">
-                    {query.trim().length > 0 ? `Results for “${query.trim()}”` : `Popular “${DEFAULT_TERM}” titles`}
-                  </div>
-                  <div className="text-xs text-gray-600">
-                    {selectedJobs.length} of 5 selected
-                  </div>
-                </div>
-
-                {/* Results */}
-                <div className="max-h-60 overflow-y-auto">
-                  {loading && (
-                    <div className="px-4 py-3 text-sm text-gray-500">Loading…</div>
-                  )}
-
-                  {!loading && results.length === 0 && (
-                    <div className="px-4 py-3 text-sm text-gray-500">
-                      No results. Try a different keyword.
-                    </div>
-                  )}
-
-                  {!loading &&
-                    results.map((job) => {
-                      const isSelected = selectedJobs.some((j) => j.uuid === job.uuid);
-                      const isDisabled = !isSelected && selectedJobs.length >= 5;
-                      return (
-                        <label
-                          key={job.uuid}
-                          className={`px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 flex items-center gap-3 ${
-                            isDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                             onChange={() => !isDisabled && toggleJob(job)}
-                            // onChange={(e) => setQuery(e.target.value)}
-                            disabled={isDisabled}
-                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                          />
-                          <span className="text-gray-700 flex-1">{job.title}</span>
-                        </label>
-                      );
-                    })}
-                </div>
-
-                {/* Footer controls */}
-                <div className="p-3 border-t border-gray-200 bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-gray-600">{remaining} more recommended</span>
-                    {selectedJobs.length >= 5 && (
-                      <span className="text-xs text-amber-600 font-medium">Maximum reached</span>
-                    )}
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQuery("");
-                        // keep dropdown open showing defaults
-                        setShowDropdown(true);
-                      }}
-                      className="flex-1 px-4 py-2 bg-white border border-gray-300 text-gray-800 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      Clear search
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowDropdown(false)}
-                      className="flex-1 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Selected Jobs Tags */}
-          {selectedJobs.length > 0 && (
-            <div className="mt-6 flex flex-wrap gap-2">
-              {selectedJobs.map((job) => (
-                <button
-                  key={job.uuid}
-                  onClick={() => toggleJob(job)}
-                  className="inline-flex items-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-full text-base font-medium hover:bg-blue-600 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  aria-label={`Remove ${job.title}`}
-                  type="button"
-                >
-                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span>{job.title}</span>
-                </button>
-              ))}
-
-              {selectedJobs.length < 5 && (
-                <span className="text-sm text-gray-500 self-center">
-                  {5 - selectedJobs.length} more {5 - selectedJobs.length === 1 ? "title" : "titles"} recommended
-                </span>
-              )}
+        <div className="mt-7 w-full max-w-2xl text-left">
+          <label htmlFor="email" className="block text-xs font-medium text-gray-700">
+            *Email Address
+          </label>
+          <input
+            id="email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="mt-2 w-full rounded-md border border-gray-300 px-4 py-3 text-gray-900 outline-none focus:border-gray-400 focus:ring-2 focus:ring-gray-200"
+          />
+          {saveError && (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {saveError}
             </div>
           )}
         </div>
-      </main>
 
-      {/* Footer Navigation */}
-      <footer className="px-6 py-6 flex justify-between items-center border-t border-gray-200">
-        <button
-          onClick={handleBack}
-          className="inline-flex items-center gap-2 px-6 py-3 text-gray-700 font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          Back
-        </button>
+        <div className="mt-10 w-full max-w-3xl rounded-xl bg-[#0B1F4B] px-6 py-8 text-left text-white shadow-sm">
+          <h2 className="text-center text-xl font-semibold sm:text-2xl">
+            Cast a wider net while saving time
+          </h2>
 
-        <Link href="/onboarding/time-saved" className="text-xl font-semibold tracking-tight">
-        <button
-          onClick={handleNext}
-          disabled={selectedJobs.length === 0}
-          className="px-8 py-3 rounded-full font-medium bg-black text-white disabled:opacity-50"
-        >
-          Next
-        </button>
-        </Link>
-      </footer>
-    </div>
+          <div className="mt-7 grid gap-5 sm:grid-cols-2">
+            <Bullet>We continuously scan millions of openings to find your top matches.</Bullet>
+            <Bullet>
+              Submit 10x as many applications with less effort than one manual application
+              <sup className="ml-0.5 text-xs">1</sup>.
+            </Bullet>
+            <Bullet>Start each day with a list of roles matched to your skills and preferences.</Bullet>
+            <Bullet>Reclaim your time by letting our AI handle the grunt work of job searching.</Bullet>
+          </div>
+        </div>
+
+        <div className="mt-16 flex items-center justify-between">
+          <Link
+            href="/onboarding/job-interest"
+            className="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-6 py-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+          >
+            <span aria-hidden>←</span> Back
+          </Link>
+
+          <button
+            type="button"
+            disabled={!emailLooksValid || saving}
+            onClick={onNext}
+            className={[
+              "inline-flex items-center justify-center rounded-full px-8 py-3 text-sm font-semibold",
+              emailLooksValid && !saving
+                ? "bg-[#1E40FF] text-white hover:brightness-95"
+                : "cursor-not-allowed bg-gray-200 text-gray-500",
+            ].join(" ")}
+          >
+            {saving ? "Saving..." : "Next"}
+          </button>
+        </div>
+      </div>
+    </main>
   );
 }

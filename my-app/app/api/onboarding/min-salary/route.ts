@@ -1,49 +1,67 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../lib/prisma";
+import { prisma } from "@/app/lib/prisma";
+import { auth } from "@/app/lib/auth";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
 
-    const compensationType =
-      body?.compensationType === "hourly" ? "hourly" : "yearly";
-
+    const compensationType = body?.compensationType === "hourly" ? "hourly" : "yearly";
     const minCompRaw = Number(body?.minCompensation);
-    const minComp = Math.round(minCompRaw);
+    const minCompensation = Math.round(minCompRaw);
 
-    if (!Number.isFinite(minComp) || minComp <= 0) {
-      return NextResponse.json({ error: "Invalid min compensation" }, { status: 400 });
+    if (!Number.isFinite(minCompensation) || minCompensation <= 0) {
+      return NextResponse.json({ ok: false, error: "Invalid min compensation" }, { status: 400 });
     }
 
-    // ✅ Next 15+: cookies() is async; Next 13/14: still works with await in practice.
-    const cookieStore = await cookies();
-    const userId = cookieStore.get("guest_user_id")?.value;
+    const session = await auth();
+    const userId = session?.user?.id ?? null;
 
-    if (!userId) {
-      return NextResponse.json({ error: "No onboarding session" }, { status: 400 });
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
+
+    if (!userId && !guestId) {
+      return NextResponse.json({ ok: false, error: "No session (user or guest)" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { userProfile: true },
+    // ✅ ensure profile exists
+    const profile = await prisma.userProfile.upsert({
+      where: userId ? { userId } : { guestId: guestId! },
+      create: userId ? { userId } : { guestId: guestId! },
+      update: {},
+      select: { id: true, userId: true, guestId: true },
     });
 
-    const profileId = user?.userProfile?.id;
-    if (!user?.isGuest || !profileId) {
-      return NextResponse.json({ error: "Invalid session" }, { status: 400 });
-    }
+    // ✅ save to cookies/session so the final page can read it
+    c.set("min_comp_type", compensationType, { httpOnly: true, sameSite: "lax", path: "/" });
+    c.set("min_comp_value", String(minCompensation), { httpOnly: true, sameSite: "lax", path: "/" });
+    c.set("onboarding_min_salary_saved", "1", { httpOnly: true, sameSite: "lax", path: "/" });
 
-    await prisma.userProfile.update({
-      where: { id: profileId },
+    // ✅ save to DB user profile
+    const updated = await prisma.userProfile.update({
+      where: { id: profile.id },
       data: {
-        minCompensation: minComp,
+        minCompensation,
         compensationType,
       },
+      select: { id: true, minCompensation: true, compensationType: true },
     });
 
-    return NextResponse.json({ ok: true });
+    // ✅ proof printout
+    return NextResponse.json({
+      ok: true,
+      profileId: profile.id,
+      userId: profile.userId ?? null,
+      guestId: profile.guestId ?? guestId ?? null,
+      savedToCookies: {
+        min_comp_type: compensationType,
+        min_comp_value: String(minCompensation),
+        onboarding_min_salary_saved: "1",
+      },
+      savedToProfile: updated,
+    });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+    return NextResponse.json({ ok: false, error: e?.message ?? "Server error" }, { status: 500 });
   }
 }

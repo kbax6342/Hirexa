@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
-import { cookies } from "next/headers";
 import { sendWelcomeEmail } from "@/app/lib/email/sendgrid";
+
+function normalizeEmail(v: unknown) {
+  return String(v ?? "").trim().toLowerCase();
+}
 
 export async function POST(req: Request) {
   try {
@@ -12,61 +16,111 @@ export async function POST(req: Request) {
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
 
-    const body = await req.json().catch(() => ({}));
-    const email = String(body?.email ?? "").trim().toLowerCase();
-
-    if (!email || !email.includes("@")) {
-      return NextResponse.json({ error: "Valid email is required" }, { status: 400 });
-    }
-
-    // must have either logged-in user or guest
     if (!userId && !guestId) {
-      return NextResponse.json({ error: "No session" }, { status: 401 });
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    // find profile (user OR guest)
-    const profile = await prisma.userProfile.findUnique({
+    const body = await req.json().catch(() => null);
+    const email = normalizeEmail(body?.email ?? body?.normalizedEmail);
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return NextResponse.json({ ok: false, error: "Invalid email" }, { status: 400 });
+    }
+
+    /* -----------------------------------------------------
+       1) UPSERT PROFILE (SAFE FOR USER OR GUEST)
+    ----------------------------------------------------- */
+    const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId! },
-      select: { id: true, userId: true, guestId: true, welcomeEmailSentAt: true, firstName: true },
-    });
-
-    if (!profile) {
-      return NextResponse.json({ error: "Profile not found" }, { status: 404 });
-    }
-
-    // 1) update profile (store email here if you want it)
-    await prisma.userProfile.update({
-      where: { id: profile.id },
-      data: {
-        // if you have an email field on profile, add it here.
-        // email,
+      create: userId
+        ? { userId, email }
+        : { guestId: guestId!, email },
+      update: { email },
+      select: {
+        id: true,
+        userId: true,
+        guestId: true,
+        email: true,
+        firstName: true,
+        welcomeEmailSentAt: true,
       },
     });
 
-    // 2) update the User table email (only if we have a real userId)
-    // If your flow "promotes" a guest into a real user, do that before this step.
+    /* -----------------------------------------------------
+       2) UPDATE USER EMAIL (ONLY IF LOGGED IN)
+       – HARD BLOCK DUPLICATES (NO P2002)
+    ----------------------------------------------------- */
     if (userId) {
+      const owner = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+
+      if (owner && owner.id !== userId) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Email already in use. Please log in instead.",
+            proof: {
+              email,
+              emailOwnerUserId: owner.id,
+              currentUserId: userId,
+            },
+          },
+          { status: 409 }
+        );
+      }
+
       await prisma.user.update({
         where: { id: userId },
         data: { email },
+        select: { id: true },
       });
     }
 
-    // 3) send email once (recommended)
+    /* -----------------------------------------------------
+       3) SEND WELCOME EMAIL (ONCE ONLY)
+    ----------------------------------------------------- */
     if (!profile.welcomeEmailSentAt) {
-      await sendWelcomeEmail(email, profile.firstName);
+      try {
+        await sendWelcomeEmail(email, profile.firstName ?? undefined);
 
-      await prisma.userProfile.update({
-        where: { id: profile.id },
-        data: { welcomeEmailSentAt: new Date() },
-      });
+        await prisma.userProfile.update({
+          where: { id: profile.id },
+          data: { welcomeEmailSentAt: new Date() },
+        });
+      } catch (emailErr) {
+        // Never block onboarding because email failed
+        console.warn("Welcome email failed:", emailErr);
+      }
     }
 
-    return NextResponse.json({ ok: true }, { status: 200 });
-  } catch (err: any) {
-    console.error("confirm-email error:", err);
+    /* -----------------------------------------------------
+       4) SET COOKIE FOR ONBOARDING CONTINUITY
+    ----------------------------------------------------- */
+    const res = NextResponse.json({
+      ok: true,
+      proof: {
+        userId,
+        guestId,
+        profileId: profile.id,
+        email,
+      },
+    });
+
+    res.cookies.set("onboarding_email", email, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 14, // 14 days
+    });
+
+    return res;
+  } catch (e: any) {
+    console.error("confirm-email error:", e);
     return NextResponse.json(
-      { error: "Failed to save email or send message" },
+      { ok: false, error: e?.message ?? "Failed to save email" },
       { status: 500 }
     );
   }

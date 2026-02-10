@@ -83,7 +83,7 @@ export default function SplitAuthCard() {
       const res1 = await fetch("/api/onboarding/confirm-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ normalizedEmail }),
+        body: JSON.stringify({ email: normalizedEmail }),
       });
   
       const data1 = await res1.json().catch(() => ({}));

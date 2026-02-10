@@ -78,25 +78,25 @@ if (hit && hit.expiresAt > now) {
 
   const prompt = q
     ? `
-Return a JSON array of up to ${limit} professional resume skills relevant to: "${q}".
+        Return a JSON array of up to ${limit} professional resume skills relevant to: "${q}".
 
-Rules:
-- Skills should be short (1-4 words).
-- Only skills (no job titles).
-- No duplicates.
-- No explanations.
-- Output ONLY valid JSON array of strings.
-`
-    : `
-Return a JSON array of up to ${limit} popular resume skills across many industries.
+        Rules:
+        - Skills should be short (1-4 words).
+        - Only skills (no job titles).
+        - No duplicates.
+        - No explanations.
+        - Output ONLY valid JSON array of strings.
+        `
+            : `
+        Return a JSON array of up to ${limit} popular resume skills across many industries.
 
-Rules:
-- Skills should be short (1-4 words).
-- Mix hard + soft skills.
-- No duplicates.
-- No explanations.
-- Output ONLY valid JSON array of strings.
-`;
+        Rules:
+        - Skills should be short (1-4 words).
+        - Mix hard + soft skills.
+        - No duplicates.
+        - No explanations.
+        - Output ONLY valid JSON array of strings.
+        `;
 
   try {
     const resp = await openai.chat.completions.create({
@@ -138,52 +138,103 @@ return NextResponse.json({ skills: final });
 
 
 /** ---------- POST: Save selected skills to DB + cookie ---------- **/
+
 export async function POST(req: NextRequest) {
-  // 2) Try session (auth())
-  const session = await auth();
-  console.log("POST /skills session:", session);
+  try {
+    // 1) Try session (auth())
+    const session = await auth();
+    let userId = (session?.user as any)?.id as string | undefined;
 
-  let userId = (session?.user as any)?.id as string | undefined;
+    // 2) Fallback: decode JWT directly
+    if (!userId) {
+      const secret = process.env.NEXTAUTH_SECRET;
+      const token = await getToken({ req, secret });
+      userId = ((token as any)?.id as string | undefined) ?? token?.sub ?? undefined;
+    }
 
-  // 3) Fallback: decode JWT directly (this works even if session callback isn't adding id)
-  if (!userId) {
-    const secret = process.env.NEXTAUTH_SECRET;
-    const token = await getToken({ req, secret });
-    console.log("POST /skills token:", token);
-    userId = ((token as any)?.id as string | undefined) ?? token?.sub ?? undefined;
-}
+    const cookieStore = await cookies();
+    const guestId = cookieStore.get("guest_user_id")?.value;
 
-const cookieStore = await cookies();
-const guestId = cookieStore.get("guest_user_id")?.value;
+    if (!userId && !guestId) {
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized (no session/token or guest id)" },
+        { status: 401 }
+      );
+    }
 
-if (!userId && !guestId) {
-  return NextResponse.json(
-    { error: "Unauthorized (no session/token or guest id)" },
-    { status: 401 }
-  );
-}
+    const body = await req.json().catch(() => null);
+    const incoming = Array.isArray(body?.skills) ? body.skills.map(String) : [];
+    const skills = incoming
+      .map((s) => s.trim().replace(/\s+/g, " "))
+      .filter(Boolean);
 
-const body = await req.json().catch(() => null);
-const incoming = Array.isArray(body?.skills) ? body.skills.map(String) : [];
-const skills = dedupe(incoming).slice(0, 50);
+    // dedupe case-insensitive
+    const seen = new Set<string>();
+    const finalSkills: string[] = [];
+    for (const s of skills) {
+      const k = s.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      finalSkills.push(s);
+      if (finalSkills.length >= 50) break;
+    }
 
-if (skills.length < 3) {
-  return NextResponse.json({ error: "Select at least 3 skills." }, { status: 400 });
-}
+    if (finalSkills.length < 3) {
+      return NextResponse.json({ ok: false, error: "Select at least 3 skills." }, { status: 400 });
+    }
 
-await prisma.userProfile.upsert({
-  where: userId ? { userId } : { guestId: guestId! },
-  create: userId ? { userId, skills } : { guestId: guestId!, skills },
-  update: { skills },
-});
+    const profile = await prisma.userProfile.upsert({
+      where: userId ? { userId } : { guestId: guestId! },
+      create: userId ? { userId, skills: finalSkills } : { guestId: guestId!, skills: finalSkills },
+      update: { skills: finalSkills },
+      select: {
+        id: true,
+        userId: true,
+        guestId: true,
+        skills: true,
+        minCompensation: true,
+        compensationType: true,
+      },
+    });
 
-cookieStore.set("user_skills", JSON.stringify(skills), {
-  httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-  maxAge: 60 * 60 * 24 * 30,
-});
+    // ✅ persist skills cookie (httpOnly)
+    cookieStore.set("user_skills", JSON.stringify(finalSkills), {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
 
-return NextResponse.json({ ok: true, skills });
+    // ✅ cookie flag for quick “proof”
+    cookieStore.set("skills_saved", "1", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+
+    // ✅ return proof payload (what server can confirm immediately)
+    const cookieProof = {
+      guest_user_id: cookieStore.get("guest_user_id")?.value ?? null,
+      resume_id: cookieStore.get("resume_id")?.value ?? null,
+      resume_uploaded: cookieStore.get("resume_uploaded")?.value ?? null,
+      job_interest_ids: cookieStore.get("job_interest_ids")?.value ?? null,
+      job_interest_titles: cookieStore.get("job_interest_titles")?.value ?? null,
+      min_comp_type: cookieStore.get("min_comp_type")?.value ?? null,
+      min_comp_value: cookieStore.get("min_comp_value")?.value ?? null,
+      skills_saved: cookieStore.get("skills_saved")?.value ?? null,
+    };
+
+    return NextResponse.json({
+      ok: true,
+      session: { userId: userId ?? null, guestId: guestId ?? null },
+      savedSkillsCount: finalSkills.length,
+      profile,
+      cookieProof,
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Server error" }, { status: 500 });
+  }
 }

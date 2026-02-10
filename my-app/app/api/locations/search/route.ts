@@ -1,5 +1,3 @@
-// app/api/locations/search/route.ts
-
 import { NextResponse } from "next/server";
 
 type LocationOption = {
@@ -9,77 +7,70 @@ type LocationOption = {
   lon?: number;
 };
 
-export async function GET(req: Request) {
-  console.log("📍 /api/locations/search HIT");
+export const runtime = "nodejs";
 
+export async function GET(req: Request) {
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
 
-  console.log("🔎 Query:", q);
+  if (!q) return NextResponse.json({ options: [] });
 
-  if (!q) {
-    console.log("⚠️ Empty query — returning no options");
-    return NextResponse.json({ options: [] });
-  }
-
-  // must be set in .env.local
-  const username = process.env.GEONAMES_USERNAME;
-
-  if (!username) {
-    console.error("❌ Missing GEONAMES_USERNAME in environment");
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
     return NextResponse.json(
-      { error: "Missing GEONAMES_USERNAME" },
+      { options: [], error: "Missing GOOGLE_MAPS_API_KEY" },
       { status: 500 }
     );
   }
 
-  const endpoint =
-    `https://secure.geonames.org/searchJSON?` +
-    `name_startsWith=${encodeURIComponent(q)}` +
-    `&country=US` +
-    `&featureClass=P` + // populated places (cities/towns)
-    `&maxRows=20` +
-    `&orderby=relevance` +
-    `&username=${encodeURIComponent(username)}`;
-
-  console.log("🌍 GeoNames request:", endpoint);
-
+  // ✅ Places API (New)
+  // https://places.googleapis.com/v1/places:autocomplete
   try {
-    const res = await fetch(endpoint, { cache: "no-store" });
+    const resp = await fetch("https://places.googleapis.com/v1/places:autocomplete", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        // FieldMask is required on many Places (New) calls
+        "X-Goog-FieldMask":
+          "suggestions.placePrediction.placeId,suggestions.placePrediction.text",
+      },
+      body: JSON.stringify({
+        input: q,
+        // US only (you can remove this if you want global)
+        includedRegionCodes: ["US"],
+        languageCode: "en",
+        // Prefer cities/localities (Places Autocomplete is “fuzzy”, so this is “best effort”)
+        includedPrimaryTypes: ["locality", "administrative_area_level_1"],
+      }),
+      cache: "no-store",
+    });
 
-    if (!res.ok) {
-      console.error("❌ GeoNames HTTP error:", res.status);
+    const data = await resp.json().catch(() => null);
+
+    if (!resp.ok) {
+      // show a useful error back to the client so you can see what Google said
       return NextResponse.json(
-        { options: [], error: "GeoNames request failed" },
+        { options: [], error: data?.error?.message ?? "Places autocomplete failed" },
         { status: 500 }
       );
     }
 
-    const data = await res.json();
-    console.log("📦 Raw GeoNames response:", data);
-
-    const geos = Array.isArray(data?.geonames) ? data.geonames : [];
-
-    const options: LocationOption[] = geos.map((g: any) => {
-      const city = String(g?.name ?? "").trim();
-      const state = String(g?.adminCode1 ?? "").trim(); // e.g. CA, NY
-      const label = state ? `${city}, ${state}` : city;
-
-      return {
-        id: `geonames:${g?.geonameId ?? label}`,
-        label,
-        lat: g?.lat ? Number(g.lat) : undefined,
-        lon: g?.lng ? Number(g.lng) : undefined,
-      };
-    });
-
-    console.log("✅ Parsed location options:", options);
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    const options: LocationOption[] = suggestions
+      .map((s: any) => {
+        const p = s?.placePrediction;
+        const placeId = String(p?.placeId ?? "");
+        const label = String(p?.text?.text ?? "").trim();
+        if (!placeId || !label) return null;
+        return { id: `google:${placeId}`, label };
+      })
+      .filter(Boolean) as LocationOption[];
 
     return NextResponse.json({ options });
-  } catch (err) {
-    console.error("🔥 Unexpected error:", err);
+  } catch (e: any) {
     return NextResponse.json(
-      { options: [], error: "Unexpected server error" },
+      { options: [], error: e?.message ?? "Search failed" },
       { status: 500 }
     );
   }

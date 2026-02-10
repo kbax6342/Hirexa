@@ -35,7 +35,7 @@ export default function SiteHeaderClient() {
           <Link href="/dashboard/applications" className="hover:text-blue-600">
             Applications
           </Link>
-          <Link href="/dashboard/profile" className="hover:text-blue-600">
+          <Link href="/profile" className="hover:text-blue-600">
             Profile
           </Link>
           <Link href="/job-tools/generate" className="hover:text-blue-600">

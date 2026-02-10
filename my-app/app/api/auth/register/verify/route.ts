@@ -33,11 +33,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid code" }, { status: 400 });
     }
 
-    await prisma.user.update({
+    const user = await prisma.user.update({
       where: { email },
       data: {
         emailVerifiedAt: new Date(),
         isGuest: false,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    await prisma.userProfile.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        email,
+        registrationStatus: "registered",
+      },
+      update: {
+        email,
+        registrationStatus: "registered",
       },
     });
 

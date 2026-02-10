@@ -25,3 +25,20 @@ export async function sendWelcomeEmail(to: string, name?: string | null) {
     `,
   });
 }
+
+export async function sendVerificationCodeEmail(to: string, code: string) {
+  await sgMail.send({
+    to,
+    from: SENDGRID_FROM,
+    subject: "Your Hirexa verification code",
+    text: `Your Hirexa verification code is ${code}. It expires in 10 minutes.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;line-height:1.5">
+        <h2>Verify your email</h2>
+        <p>Your Hirexa verification code is:</p>
+        <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:16px 0">${code}</p>
+        <p>This code expires in <b>10 minutes</b>.</p>
+      </div>
+    `,
+  });
+}

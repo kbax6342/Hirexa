@@ -26,6 +26,10 @@ function stepToTranslate(step: Step) {
   return "-translate-x-2/3";
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Something went wrong";
+}
+
 export default function SplitAuthCard() {
   const { executeRecaptcha } = useGoogleReCaptcha();
 
@@ -41,7 +45,7 @@ export default function SplitAuthCard() {
   const [msg, setMsg] = useState<string | null>(null);
 
   // teaser data (you can replace later with real counts from your backend)
-  const [foundCount, setFoundCount] = useState<number>(127);
+  const [foundCount] = useState<number>(127);
   const [teaserJobs] = useState(() => [
     { title: "Software Engineer", company: "Nimbus Labs", location: "Remote (US)" },
     { title: "Project Manager", company: "BluePeak", location: "Chicago, IL" },
@@ -77,30 +81,11 @@ export default function SplitAuthCard() {
       if (!res.ok) {
         throw new Error(data?.error ?? "Failed to start signup");
       }
-      const normalizedEmail = email.trim().toLowerCase();
-
-      // 2) Save email to profile + send welcome email (only after init succeeds)
-      const res1 = await fetch("/api/onboarding/confirm-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizedEmail }),
-      });
-  
-      const data1 = await res1.json().catch(() => ({}));
-  
-      if (!res1.ok) {
-        // Not fatal for signup/OTP, but you should surface it
-        // If you want it to be fatal, replace with: throw new Error(...)
-        console.warn("confirm-email failed:", data1);
-        throw new Error(data1?.error ?? "Failed to save email");
-
-      }
-  
-      // 3) Move UI forward
+      // 2) Move UI forward
       setStep("peek");
       setMsg("We sent a 6-digit verification code to your email.");
-    } catch (e: any) {
-      setMsg(e?.message ?? "Something went wrong");
+    } catch (e: unknown) {
+      setMsg(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -125,9 +110,9 @@ export default function SplitAuthCard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Verification failed");
 
-      window.location.href = "/jobs";
-    } catch (e: any) {
-      setMsg(e.message ?? "Something went wrong");
+      window.location.href = "/dashboard";
+    } catch (e: unknown) {
+      setMsg(getErrorMessage(e));
     } finally {
       setLoading(false);
     }

@@ -45,6 +45,13 @@ model UserProfile {
   workplaceLocations Json?
   includeRemote      Boolean @default(true)
 
+  newsletterOptIn   Boolean  @default(false)
+  newsletterSource  String?
+
+  emailVerifiedAt DateTime?
+  unsubscribedAt  DateTime?
+
+
   resumeSkills String[] @default([])
 
   minCompensation  Int?

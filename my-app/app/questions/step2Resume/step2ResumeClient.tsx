@@ -219,7 +219,7 @@ export default function Step2ResumeClient() {
 
                     <ul className="mt-3 list-disc space-y-2 pl-5 text-sm">
                       {bulletsToShow.map((b, idx) => (
-                        <li key={idx}>{b}</li>
+                        <li className="text-black" key={idx}>{b}</li>
                       ))}
                     </ul>
 

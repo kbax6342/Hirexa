@@ -11,18 +11,20 @@ type Step2ClientProps = {
 };
 
 type UploadProof = {
-  savedTo: {
-    sessionUserId: string | null;
-    guestId: string | null;
-    profileId: string;
+  savedTo?: {
+    sessionUserId?: string | null;
+    guestId?: string | null;
+    profileId?: string | null;
   };
   resume: {
     id: string;
-    profileId: string;
-    fileName: string;
+    profileId?: string | null;
+    userProfileId?: string | null;
+    fileName?: string;
+    filename?: string;
     mimeType: string;
-    sizeBytes: number;
-    createdAt: string;
+    sizeBytes?: number;
+    createdAt?: string;
   };
 };
 
@@ -97,16 +99,14 @@ export default function Step2Client({
         throw new Error(data?.error || "Upload failed");
       }
 
-      setProof({
-        savedTo: data.savedTo,
-        resume: data.resume,
-      });
+      setProof({ savedTo: data.savedTo, resume: data.resume });
 
       router.push(
         `/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`
       );
-    } catch (e: any) {
-      setSaveError(e?.message ?? "Something went wrong while saving your resume.");
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Something went wrong while saving your resume.";
+      setSaveError(errorMessage);
     } finally {
       setIsSaving(false);
     }
@@ -143,15 +143,17 @@ export default function Step2Client({
                 <span className="font-mono">{proof.resume.id}</span> • Profile
                 ID:{" "}
                 <span className="font-mono">
-                  {proof.savedTo.profileId}
+                  {proof.savedTo?.profileId ?? proof.resume.profileId ?? proof.resume.userProfileId ?? "N/A"}
                 </span>
               </div>
               <div className="mt-1 text-xs text-gray-600">
                 File:{" "}
                 <span className="font-semibold">
-                  {proof.resume.fileName}
+                  {proof.resume.fileName ?? proof.resume.filename ?? "Uploaded resume"}
                 </span>{" "}
-                • {(proof.resume.sizeBytes / 1024 / 1024).toFixed(2)} MB
+                {typeof proof.resume.sizeBytes === "number" ? (
+                  <>• {(proof.resume.sizeBytes / 1024 / 1024).toFixed(2)} MB</>
+                ) : null}
               </div>
             </div>
           ) : (

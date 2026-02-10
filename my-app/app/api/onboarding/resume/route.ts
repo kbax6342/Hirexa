@@ -379,9 +379,72 @@ export async function POST(req: Request) {
       select: { id: true, userProfileId: true, filename: true, mimeType: true },
     });
 
-    // (your parsing + experience transaction stays the same)
+    const parsedExperiences = await parseResumeWithLLM({ mimeType, buffer });
 
-    return NextResponse.json({ ok: true, resume });
+    await prisma.$transaction(async (tx) => {
+      const existingExperiences = await tx.experience.findMany({
+        where: { resumeId: resume.id },
+        select: { id: true },
+      });
+
+      if (existingExperiences.length > 0) {
+        await tx.bullet.deleteMany({
+          where: {
+            experienceId: {
+              in: existingExperiences.map((exp) => exp.id),
+            },
+          },
+        });
+      }
+
+      await tx.experience.deleteMany({ where: { resumeId: resume.id } });
+
+      for (const [index, exp] of parsedExperiences.entries()) {
+        const createdExperience = await tx.experience.create({
+          data: {
+            resumeId: resume.id,
+            order: index,
+            title: exp.title,
+            company: exp.company,
+            location: exp.location ?? null,
+            dateRange: exp.dateRange ?? null,
+          },
+          select: { id: true },
+        });
+
+        if (exp.bullets.length > 0) {
+          await tx.bullet.createMany({
+            data: exp.bullets.map((text, bulletIndex) => ({
+              experienceId: createdExperience.id,
+              order: bulletIndex,
+              text,
+            })),
+          });
+        }
+      }
+
+      await tx.resumeExperience.upsert({
+        where: { resumeId: resume.id },
+        update: { experiences: parsedExperiences },
+        create: { resumeId: resume.id, experiences: parsedExperiences },
+      });
+    });
+
+    return NextResponse.json({
+      ok: true,
+      savedTo: { sessionUserId: userId, guestId, profileId: profile.id },
+      resume: {
+        id: resume.id,
+        profileId: resume.userProfileId,
+        userProfileId: resume.userProfileId,
+        fileName: resume.filename,
+        filename: resume.filename,
+        mimeType: resume.mimeType,
+      },
+      parsed: {
+        experienceCount: parsedExperiences.length,
+      },
+    });
   } catch (e: any) {
     console.error("POST /api/onboarding/resume error:", e);
     return NextResponse.json({ ok: false, error: e?.message ?? "Server error" }, { status: 500 });

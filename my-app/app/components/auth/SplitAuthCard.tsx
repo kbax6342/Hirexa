@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 
 type Step = "signup" | "peek" | "verify";
@@ -29,6 +30,106 @@ function stepToTranslate(step: Step) {
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong";
 }
+
+function OtpBoxes({
+  value,
+  onChange,
+  onComplete,
+  disabled,
+}: {
+  value: string; // digits only, up to 6
+  onChange: (next: string) => void;
+  onComplete?: (code: string) => void;
+  disabled?: boolean;
+}) {
+  const refs = useRef<Array<HTMLInputElement | null>>([]);
+
+  const digits = Array.from({ length: 6 }, (_, i) => value[i] ?? "");
+
+  function setAt(index: number, char: string) {
+    const clean = char.replace(/\D/g, "").slice(-1);
+    const nextArr = digits.slice();
+    nextArr[index] = clean;
+    const next = nextArr.join("").slice(0, 6);
+    onChange(next);
+
+    if (clean && index < 5) refs.current[index + 1]?.focus();
+
+    if (next.length === 6 && !next.includes("") && onComplete) {
+      onComplete(next);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, index: number) {
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      if (digits[index]) {
+        const nextArr = digits.slice();
+        nextArr[index] = "";
+        onChange(nextArr.join(""));
+      } else if (index > 0) {
+        refs.current[index - 1]?.focus();
+        const nextArr = digits.slice();
+        nextArr[index - 1] = "";
+        onChange(nextArr.join(""));
+      }
+      return;
+    }
+
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      if (index > 0) refs.current[index - 1]?.focus();
+      return;
+    }
+
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      if (index < 5) refs.current[index + 1]?.focus();
+      return;
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    e.preventDefault();
+    const text = e.clipboardData.getData("text") ?? "";
+    const only = text.replace(/\D/g, "").slice(0, 6);
+    if (!only) return;
+
+    onChange(only);
+
+    const nextIndex = Math.min(only.length, 6) - 1;
+    refs.current[nextIndex]?.focus();
+
+    if (only.length === 6 && onComplete) onComplete(only);
+  }
+
+  return (
+    <div className="mt-3 flex justify-center gap-2">
+      {digits.map((d, i) => (
+        <input
+          key={i}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
+          value={d}
+          onChange={(e) => setAt(i, e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, i)}
+          onPaste={handlePaste}
+          inputMode="numeric"
+          autoComplete={i === 0 ? "one-time-code" : "off"}
+          disabled={disabled}
+          className={[
+            "h-12 w-12 rounded-xl border border-gray-200 bg-white text-center text-lg font-semibold text-gray-900",
+            "focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30",
+            disabled ? "opacity-60" : "",
+          ].join(" ")}
+          aria-label={`Digit ${i + 1}`}
+        />
+      ))}
+    </div>
+  );
+}
+
 
 export default function SplitAuthCard() {
   const { executeRecaptcha } = useGoogleReCaptcha();
@@ -284,15 +385,63 @@ export default function SplitAuthCard() {
                       ))}
                     </div>
 
-                    {/* blur + lock overlay */}
-                    <div className="absolute inset-0 backdrop-blur-md bg-white/35 flex items-center justify-center">
-                      <div className="rounded-2xl bg-white shadow px-5 py-4 border border-gray-200 text-center">
-                        <div className="text-gray-900 font-semibold">Verify to unlock</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          Enter the code we sent to <span className="font-medium">{email}</span>
-                        </div>
+                  {/* blur + lock overlay */}
+                  <div className="absolute inset-0 backdrop-blur-md bg-white/35 flex items-center justify-center">
+                    <div className="w-[92%] max-w-sm rounded-2xl bg-white shadow px-5 py-4 border border-gray-200 text-center">
+                      <div className="text-gray-900 font-semibold">Verify to unlock</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Enter the code we sent to <span className="font-medium">{email}</span>
+                      </div>
+
+                      <div className="mt-3">
+                        {/* <input
+                          value={otp}
+                          onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && otp.length === 6 && !loading) {
+                              verifyOtp(); // ✅ unlock from overlay
+                            }
+                          }}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          placeholder="123456"
+                          className="w-full rounded-xl border border-gray-200 px-4 py-3 tracking-[0.35em] text-lg text-black placeholder-black/40 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                        /> */}
+                          <OtpBoxes
+                            value={otp}
+                            onChange={setOtp}
+                            disabled={loading}
+                            onComplete={(code) => {
+                              // optional: auto-submit as soon as 6 digits entered
+                              if (!loading) verifyOtp();
+                            }}
+                          />
+                        <button
+                          type="button"
+                          onClick={verifyOtp}
+                          disabled={otp.length !== 6 || loading}
+                          className={[
+                            "mt-3 w-full rounded-xl py-3 font-semibold text-white transition",
+                            otp.length !== 6 || loading
+                              ? "bg-gray-300 cursor-not-allowed"
+                              : "bg-hirexa-blue hover:bg-hirexa-cyan",
+                          ].join(" ")}
+                        >
+                          {loading ? "Verifying..." : "Unlock now"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={startSignup}
+                          disabled={loading}
+                          className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition"
+                        >
+                          Resend code
+                        </button>
                       </div>
                     </div>
+                  </div>
+
                   </div>
                 </div>
 

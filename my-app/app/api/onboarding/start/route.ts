@@ -6,7 +6,9 @@ import { randomUUID } from "crypto";
 export const runtime = "nodejs";
 
 export async function POST() {
-  const c = await cookies();
+
+  try {
+    const c = await cookies();
   let guestId = c.get("guest_user_id")?.value;
 
   if (!guestId) {
@@ -29,6 +31,13 @@ export async function POST() {
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
   });
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    console.error("❌ /api/onboarding/start failed:", e);
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Unknown error" },
+      { status: 500 }
+    );
+  }
 
-  return res;
 }

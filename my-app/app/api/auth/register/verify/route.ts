@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
 import { hashOtp } from "@/app/lib/security/otp";
+import crypto from "crypto";
+
+function hashCode(code: string) {
+  return crypto.createHash("sha256").update(code).digest("hex");
+}
 
 export async function POST(req: Request) {
   try {
@@ -11,6 +16,13 @@ export async function POST(req: Request) {
     const recaptchaToken = body.recaptchaToken ?? null;
 
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_verify");
+
+      // ✅ Look up latest code record
+    const record = await prisma.emailVerificationCode.findUnique({
+      where: { email },
+      select: { codeHash: true, expiresAt: true },
+    });
+
     if (!rc.ok) {
       return NextResponse.json({ error: rc.error }, { status: 403 });
     }
@@ -28,6 +40,18 @@ export async function POST(req: Request) {
       where: { email },
       data: { attempts: { increment: 1 } },
     });
+
+    // ✅ Mark verified on UserProfile (adjust if you store it elsewhere)
+    await prisma.userProfile.updateMany({
+      where: { email },
+      data: {
+        registrationStatus: "verified",
+        // If you have this field in your schema, keep it; otherwise remove:
+        // emailVerifiedAt: new Date(),
+      },
+    });
+
+     
 
     if (hashOtp(code) !== otp.codeHash) {
       return NextResponse.json({ error: "Invalid code" }, { status: 400 });
@@ -58,6 +82,8 @@ export async function POST(req: Request) {
     });
 
     await prisma.emailOtp.delete({ where: { email } }).catch(() => null);
+    // ✅ burn the code
+    await prisma.emailVerificationCode.delete({ where: { email } });
 
     return NextResponse.json({ ok: true });
   } catch {

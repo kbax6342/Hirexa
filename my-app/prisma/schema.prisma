@@ -40,7 +40,7 @@ model UserProfile {
   // profile fields (keep what you need)
   skills             String[] @default([])
   email              String?
-  registrationStatus String   @default("pending_verification")
+  registrationStatus String?   @default("pending_verification")
   welcomeEmailSentAt DateTime?
 
   workplaceLocations Json?
@@ -182,3 +182,12 @@ model ResumeFile {
 
   @@index([profileId])
 }
+
+model EmailVerificationCode {
+  email     String   @id
+  codeHash  String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+

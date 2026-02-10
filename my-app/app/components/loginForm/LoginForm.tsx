@@ -1,12 +1,11 @@
 // components/login-form.tsx
 "use client";
 
-import { useTransition, useState } from "react";
+import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { loginAction } from "../../login/actions";
+import { signIn } from "next-auth/react";
 
 export default function LoginForm() {
-  const [show, setShow] = useState(false);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -19,10 +18,16 @@ export default function LoginForm() {
 
     startTransition(async () => {
       try {
-        await loginAction(email, password);
-        // signIn() with redirectTo usually redirects automatically,
-        // but keeping these is fine in dev:
-        router.refresh();
+        const result = await signIn("credentials", {
+          email,
+          password,
+          redirect: false,
+        });
+
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+
         router.push("/dashboard");
       } catch (err) {
         //alert("Invalid email or password");

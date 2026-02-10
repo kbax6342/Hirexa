@@ -1,3 +1,5 @@
+// E:\Web Applications\Hirexa\my-app\prisma\schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,45 +10,45 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  name      String?
-  email     String   @unique
-  password  String? // ✅ allow null for guest until they finish
-  isGuest   Boolean  @default(true)
+  id   String  @id @default(cuid())
+  name String?
+
+  // ✅ Guests can exist without email until final signup
+  email    String? @unique
+  password String?
+
+  isGuest Boolean @default(true)
+
+  emailVerifiedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  emailVerifiedAt DateTime? // ✅ add this
 
   userProfile UserProfile?
 }
 
 model UserProfile {
-  id      String  @id @default(cuid())
-  userId  String? @unique
-  guestId String? @unique
-  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id String @id @default(cuid())
 
-  // ...
+  // ✅ guest flow
+  guestId String? @unique
+
+  // ✅ user flow
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // profile fields (keep what you need)
   skills             String[]  @default([])
   email              String?
   welcomeEmailSentAt DateTime?
 
-  // ✅ Newsletter fields
-  newsletterOptIn    Boolean   @default(false)
-  emailVerifiedAt    DateTime? // set when user confirms email (optional)
-  unsubscribedAt     DateTime? // set when user unsubscribes (optional)
-  newsletterSource   String?   // e.g. "onboarding/job-alerts" (optional)
+  workplaceLocations Json?
+  includeRemote      Boolean @default(true)
 
-  // ✅ add these:
-  workplaceLocations Json?     // array of { label, lat, lon }
-  includeRemote      Boolean   @default(true)
-
-  // optional: store extracted resume skills for quick load
   resumeSkills String[] @default([])
 
   minCompensation  Int?
-  compensationType String? // "yearly" | "hourly"
+  compensationType String?
 
   firstName String?
   lastName  String?
@@ -64,13 +66,13 @@ model UserProfile {
   disability   String?
   veteran      String?
 
-  // ✅ moved here:
+  // ✅ Resume is connected through profileId
   resume       Resume?
   jobInterests JobInterest[]
+  resumeFiles  ResumeFile[]
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  resumeFiles ResumeFile[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model JobInterest {
@@ -85,28 +87,35 @@ model JobInterest {
   @@index([userProfileId])
 }
 
+//
+// ✅ Resume table matches your Neon table:
+// - userProfileId NOT NULL
+// - UNIQUE(userProfileId) => 1 resume per profile
+//
 model Resume {
-  id            String      @id @default(cuid())
-  userProfileId String      @unique
-  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
-
-  filename  String?
-  mimeType  String?
+  id        String   @id @default(cuid())
+  filename  String
+  mimeType  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  experiences Experience[]
+  userProfileId String      @unique
+  profile       UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  experiences       Experience[]
+  resumeExperiences ResumeExperience[]
+
+  @@index([userProfileId])
 }
 
 model ResumeExperience {
-  resumeId     String  @id
-  experiences  Json
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  resumeId    String   @id
+  experiences Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  resume       Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  resume Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
 }
-
 
 model Experience {
   id       String @id @default(cuid())

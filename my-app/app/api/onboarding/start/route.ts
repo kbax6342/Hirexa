@@ -1,28 +1,33 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { randomUUID } from "crypto";
 
-export async function POST() {
-  const guestEmail = `guest_${randomUUID()}@guest.hirexa.local`;
+export const runtime = "nodejs";
 
-  const user = await prisma.user.create({
-    data: {
-      email: guestEmail,
-      isGuest: true,
-      userProfile: { create: {} },
-    },
-    select: { id: true },
+export async function POST() {
+  const c = await cookies();
+  let guestId = c.get("guest_user_id")?.value;
+
+  if (!guestId) {
+    guestId = `guest_${randomUUID()}`;
+  }
+
+  // ensure profile exists
+  await prisma.userProfile.upsert({
+    where: { guestId },
+    create: { guestId },
+    update: {},
   });
 
-  const res = NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true, guestId });
 
-  // ✅ cookies().set works HERE
-  res.cookies.set("guest_user_id", user.id, {
+  res.cookies.set("guest_user_id", guestId, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24, // 1 day
+    maxAge: 60 * 60 * 24 * 30,
   });
 
   return res;

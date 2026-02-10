@@ -61,15 +61,36 @@ export const dynamic = "force-dynamic";
 
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const resumeId = url.searchParams.get("resumeId");
-  if (!resumeId) return NextResponse.json({ experiences: [] });
+  try {
+    const url = new URL(req.url);
+    const resumeId = url.searchParams.get("resumeId");
 
-  const resume = await prisma.resume.findUnique({
-    where: { id: resumeId },
-    include: { experiences: true },
-  });
+    if (!resumeId) {
+      return NextResponse.json({ error: "Missing resumeId" }, { status: 400 });
+    }
 
-  return NextResponse.json({ experiences: resume?.experiences ?? [] });
+    const experiences = await prisma.experience.findMany({
+      where: { resumeId },
+      orderBy: { order: "asc" },
+      include: {
+        bullets: { orderBy: { order: "asc" }, select: { text: true } },
+      },
+    });
+
+    // ✅ shape for your UI: bullets: string[]
+    const shaped = experiences.map((e) => ({
+      id: e.id,
+      title: e.title,
+      company: e.company,
+      location: e.location ?? null,
+      dateRange: e.dateRange ?? null,
+      bullets: e.bullets.map((b) => b.text),
+    }));
+
+    return NextResponse.json({ experiences: shaped });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+  }
 }
+
 

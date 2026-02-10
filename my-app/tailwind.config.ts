@@ -111,7 +111,9 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  // Keep empty for now so config always loads, even when optional plugins
+  // are not installed in local/dev environments.
+  plugins: [],
 };
 
 export default config;

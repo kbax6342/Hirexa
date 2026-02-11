@@ -50,8 +50,8 @@ type JobSearchSource = {
 function cacheKeyFromUrl(url: URL) {
   const health = (url.searchParams.get("health") ?? "healthcare").trim();
   const tech = (url.searchParams.get("tech") ?? "software engineer").trim();
-  const trade = (url.searchParams.get("trade") ?? "electrician").trim();
-  return `homeSections|${health}|${tech}|${trade}`;
+  const finance = (url.searchParams.get("finance") ?? "finance").trim(); // ✅ changed
+  return `homeSections|${health}|${tech}|${finance}`; // ✅ changed
 }
 
 async function sleep(ms: number) {
@@ -250,7 +250,11 @@ export async function GET(req: Request) {
   const promise = (async (): Promise<Payload> => {
     const healthTerm = (url.searchParams.get("health") ?? "healthcare").trim();
     const techTerm = (url.searchParams.get("tech") ?? "software engineer").trim();
-    const tradeTerm = (url.searchParams.get("trade") ?? "electrician").trim();
+    const tradeTerm = (
+      url.searchParams.get("trade") ??
+      "electrician OR plumber"
+    ).trim();    
+    const financeTerm = (url.searchParams.get("finance") ?? "finance").trim(); // ✅ changed
 
     const allSeenKeys = new Set<string>();
 
@@ -274,6 +278,12 @@ export async function GET(req: Request) {
       excludedKeys: allSeenKeys,
     });
 
+    const financeJobs = await getUniqueJobsForTerm({
+      term: financeTerm,
+      targetCount: DEFAULT_JOBS_PER_SECTION,
+      excludedKeys: allSeenKeys,
+    });
+
     const sections: CategorySection[] = [
       {
         name: "Healthcare",
@@ -289,6 +299,11 @@ export async function GET(req: Request) {
         name: "Skilled Trades",
         viewAllHref: `/jobs?cat=skilled-trades&q=${encodeURIComponent(tradeTerm)}`,
         jobs: skilledTradeJobs,
+      },
+      {
+        name: "Finance",
+        viewAllHref: `/jobs?cat=finance&q=${encodeURIComponent(financeTerm)}`,
+        jobs: financeJobs,
       },
     ];
 

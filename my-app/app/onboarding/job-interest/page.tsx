@@ -350,7 +350,7 @@ export default function JobSearchPage() {
       <footer className="px-6 py-6 flex justify-between items-center border-t border-gray-200">
         <button
           onClick={handleBack}
-          className="inline-flex items-center gap-2 px-6 py-3 text-gray-700 font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
+          className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />

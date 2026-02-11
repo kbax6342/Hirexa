@@ -456,7 +456,7 @@ export default function SplitAuthCard() {
                 <button
                   type="button"
                   onClick={() => setStep("signup")}
-                  className="mt-3 w-full rounded-xl py-3 font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition"
+                  className="mt-3 w-full rounded-xl py-3 font-semibold text-black border border-gray-200 hover:bg-gray-50 transition"
                 >
                   Back
                 </button>
@@ -502,7 +502,7 @@ export default function SplitAuthCard() {
                     <button
                       type="button"
                       onClick={() => setStep("peek")}
-                      className="text-gray-500 hover:text-gray-900"
+                      className="text-black hover:text-black/80"
                     >
                       ← Back
                     </button>

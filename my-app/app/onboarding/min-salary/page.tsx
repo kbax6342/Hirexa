@@ -314,7 +314,7 @@ export default function MinSalaryPage() {
           <button
             type="button"
             onClick={() => router.back()}
-            className="inline-flex items-center gap-2 rounded-full border border-blue-700 px-5 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50"
+            className="inline-flex items-center gap-2 rounded-full border border-gray-900 px-5 py-2 text-sm font-semibold text-black hover:bg-gray-100"
           >
             <span className="text-base">←</span> Back
           </button>

@@ -113,7 +113,7 @@ export default function Step2Client({
   }
 
   return (
-    <div className="min-h-[70vh] bg-white">
+    <div className="min-h-[70vh] bg-white mt-[50]">
       <div className="mx-auto max-w-5xl px-6 py-14">
         {/* Header */}
         <div className="flex flex-col gap-2">

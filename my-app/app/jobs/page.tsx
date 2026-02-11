@@ -66,14 +66,14 @@ type ApiSectionsResponse = {
 };
 
 const topPills = [
-  { name: "Customer Service", href: "#" },
-  { name: "Nursing", href: "#" },
-  { name: "Accounting", href: "#" },
-  { name: "Sales", href: "#" },
-  { name: "Legal", href: "#" },
-  { name: "UX Design", href: "#" },
-  { name: "Healthcare", href: "#" },
-];
+  "Customer Service",
+  "Nursing",
+  "Accounting",
+  "Sales",
+  "Legal",
+  "UX Design",
+  "Healthcare",
+] as const;
 
 const fallbackSections: CategorySection[] = [
   {
@@ -257,6 +257,10 @@ function Logo({ logoText, logoUrl }: { logoText?: string; logoUrl?: string }) {
 
 function categoryToSlug(category: string) {
   return category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "");
+}
+
+function categoryHref(category: string) {
+  return `/jobs/${categoryToSlug(category)}`;
 }
 
 function formatPostedDate(value: string) {
@@ -453,7 +457,7 @@ function AllJobCategories({
                 {cats.map((cat) => (
                   <Link
                     key={cat}
-                    href="#"
+                    href={categoryHref(cat)}
                     className="rounded-xl border border-border/60 bg-background/20 px-5 py-4 text-muted-foreground hover:text-foreground hover:bg-background/30 transition"
                   >
                     <span className="font-medium">{cat}</span>
@@ -637,8 +641,8 @@ export default function JobsPage() {
               <div className="mt-5 flex flex-wrap gap-2">
                 {topPills.map((pill) => (
                   <Link
-                    key={pill.name}
-                    href={pill.href}
+                    key={pill}
+                    href={categoryHref(pill)}
                     className="
                       inline-flex items-center gap-2 rounded-full
                       border border-border/70 bg-background/30
@@ -649,7 +653,7 @@ export default function JobsPage() {
                     "
                   >
                     <span className="h-2 w-2 rounded-full bg-primary" />
-                    {pill.name}
+                    {pill}
                   </Link>
                 ))}
               </div>

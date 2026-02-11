@@ -1,8 +1,9 @@
+// File: /Hirexa/my-app/app/api/adzuna/route.ts
 import "server-only";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const revalidate = 30;
+export const revalidate = 60; // keeps Next fetch caching benefits
 
 type Job = {
   id: string;
@@ -11,7 +12,7 @@ type Job = {
   location: string;
   posted: string;
   jobUrl: string;
-  salary?: string; // ✅ add salary
+  salary?: string;
   description?: string;
   detailsHref?: string;
 };
@@ -40,18 +41,35 @@ const MAX_PAGES_PER_SOURCE = 4;
 
 type JobSearchSource = {
   name: string;
-  searchJobs: (args: {
-    term: string;
-    page: number;
-    perPage: number;
-  }) => Promise<Job[]>;
+  searchJobs: (args: { term: string; page: number; perPage: number }) => Promise<Job[]>;
 };
+
+/**
+ * ✅ Added: global in-memory cache (5 minutes) to reduce Adzuna calls across Back/Forward
+ * This does NOT replace your 30s section CACHE; it sits above it as a "super cache".
+ */
+type GlobalCached = { expiresAt: number; body: Payload };
+declare global {
+  // eslint-disable-next-line no-var
+  var __adzunaCache: GlobalCached | undefined;
+}
+const GLOBAL_CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
+
+function getGlobalCache() {
+  const c = globalThis.__adzunaCache;
+  if (!c) return null;
+  if (Date.now() > c.expiresAt) return null;
+  return c.body;
+}
+function setGlobalCache(body: Payload) {
+  globalThis.__adzunaCache = { expiresAt: Date.now() + GLOBAL_CACHE_TTL_MS, body };
+}
 
 function cacheKeyFromUrl(url: URL) {
   const health = (url.searchParams.get("health") ?? "healthcare").trim();
   const tech = (url.searchParams.get("tech") ?? "software engineer").trim();
-  const finance = (url.searchParams.get("finance") ?? "finance").trim(); // ✅ changed
-  return `homeSections|${health}|${tech}|${finance}`; // ✅ changed
+  const finance = (url.searchParams.get("finance") ?? "finance").trim();
+  return `homeSections|${health}|${tech}|${finance}`;
 }
 
 async function sleep(ms: number) {
@@ -95,7 +113,6 @@ function formatSalary(j: any): string | undefined {
   const currency = String(j?.salary_currency ?? "USD");
   const interval = String(j?.salary_interval ?? "year"); // year/month/week/day
 
-  // Prefer showing whole dollars (no decimals)
   const nf = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -145,6 +162,7 @@ async function getJobsFromAdzuna(args: {
 
   if (!res.ok) {
     const text = await res.text();
+    // keep your exact error format
     throw new Error(`Adzuna failed (${res.status}): ${text.slice(0, 300)}`);
   }
 
@@ -160,7 +178,7 @@ async function getJobsFromAdzuna(args: {
       location: String(j.location?.display_name ?? "Unknown location"),
       posted: String(j.created ?? ""),
       jobUrl: String(j.redirect_url ?? ""),
-      salary: formatSalary(j), // ✅ IMPORTANT
+      salary: formatSalary(j),
       description: typeof j.description === "string" ? j.description : undefined,
       detailsHref: `/jobs/details/${id}`,
     };
@@ -225,6 +243,15 @@ export async function GET(req: Request) {
   const key = cacheKeyFromUrl(url);
   const now = Date.now();
 
+  /**
+   * ✅ Added: serve from global cache first (protects Adzuna on back button)
+   * This does NOT delete your section cache; it short-circuits before it.
+   */
+  const globalCached = getGlobalCache();
+  if (globalCached) {
+    return NextResponse.json({ ...globalCached, cached: true }, { status: 200 });
+  }
+
   const cached = CACHE.get(key);
 
   // 1) Fresh cache
@@ -250,11 +277,8 @@ export async function GET(req: Request) {
   const promise = (async (): Promise<Payload> => {
     const healthTerm = (url.searchParams.get("health") ?? "healthcare").trim();
     const techTerm = (url.searchParams.get("tech") ?? "software engineer").trim();
-    const tradeTerm = (
-      url.searchParams.get("trade") ??
-      "electrician OR plumber"
-    ).trim();    
-    const financeTerm = (url.searchParams.get("finance") ?? "finance").trim(); // ✅ changed
+    const tradeTerm = (url.searchParams.get("trade") ?? "electrician OR plumber").trim();
+    const financeTerm = (url.searchParams.get("finance") ?? "finance").trim();
 
     const allSeenKeys = new Set<string>();
 
@@ -318,27 +342,52 @@ export async function GET(req: Request) {
   try {
     const payload = await promise;
 
+    // keep your 30s cache + stale window
     CACHE.set(key, {
       expiresAt: now + 30_000,
       staleUntil: now + 5 * 60_000,
       payload,
     });
 
+    // ✅ Added: also store payload in global cache
+    setGlobalCache(payload);
+
     return NextResponse.json(payload, {
       headers: { "X-Cache": "MISS", "Cache-Control": "public, max-age=30" },
     });
   } catch (e: any) {
-    // stale fallback
+    const msg = e?.message ?? "Unknown error";
+
+    /**
+     * ✅ Added: handle Adzuna 429 nicely (don't return 500)
+     * Keeps your stale fallback behavior exactly as-is.
+     */
+    if (msg.includes("(429)") || msg.includes("429 Too Many Requests") || msg.includes("Adzuna failed (429)")) {
+      // if we have stale data, serve it
+      if (cached && cached.staleUntil > now) {
+        return NextResponse.json(cached.payload, {
+          headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
+        });
+      }
+
+      return NextResponse.json(
+        {
+          error:
+            "Adzuna is rate-limiting requests right now. Please wait a moment and try again.",
+          code: "ADZUNA_RATE_LIMIT",
+        },
+        { status: 429 }
+      );
+    }
+
+    // stale fallback (your exact logic)
     if (cached && cached.staleUntil > now) {
       return NextResponse.json(cached.payload, {
         headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
       });
     }
 
-    return NextResponse.json(
-      { error: e?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: msg }, { status: 500 });
   } finally {
     IN_FLIGHT.delete(key);
   }

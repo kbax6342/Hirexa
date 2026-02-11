@@ -1,7 +1,7 @@
 // app/signup/page.tsx
 import Link from "next/link";
-import SignupForm from "@/components/signUp/SignUp";
-import LoginFooter from "@/components/loginFooter/LoginFooter";
+import SignupForm from "../components/signUp/SignUp";
+import LoginFooter from "../components/loginFooter/LoginFooter";
 
 export default function SignupPage() {
   return (

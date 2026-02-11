@@ -87,11 +87,12 @@ export default function LocationSections({
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">{sec.name}</h2>
             <Link
-              href={sec.href}
-              className="text-md font-medium text-white hover:underline"
-            >
-              See all {sec.name} jobs →
-            </Link>
+            href={`/jobs/${encodeURIComponent(sec.name.toLowerCase().replace(/\s+/g, "-"))}?loc=${encodeURIComponent(sec.name)}`}
+            className="text-md font-medium text-white hover:underline"
+          >
+            See all {sec.name} jobs →
+          </Link>
+
           </div>
 
          {/* ✅ Jobs-page-like cards + View job button */}

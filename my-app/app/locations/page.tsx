@@ -1,9 +1,16 @@
 // File: /Hirexa/my-app/app/location-hub/page.tsx
+
+
 import Link from "next/link";
 import { Navbar } from "../components/navbar";
 import { Footer } from "../components/footer";
+
 import LocationSections from "../components/location-hub/LocationSections";
 import LoginFooter from "../components/loginFooter/LoginFooter";
+import { Suspense } from "react";
+import AdzunaSpinner from "../components/spinner/Spinner";
+import ExpandableLocations from "../components/location-hub/ExpandableLocations";
+
 
 const trending = [
   "New York",
@@ -63,18 +70,8 @@ export default async function LocationHubPage() {
       <main className="relative">
         {/* Subtle top divider like homepage sections */}
         <div className="border-b border-border/60">
-          <div className="mx-auto max-w-7xl px-6 pt-10 pb-10">
-            {/* Breadcrumb */}
-            <div className="text-xs text-muted-foreground">
-              <Link
-                href="/"
-                className="font-medium text-foreground/80 hover:text-foreground hover:underline"
-              >
-                Home
-              </Link>{" "}
-              <span className="mx-1 opacity-60">›</span>
-              <span className="text-foreground">Locations</span>
-            </div>
+          <div className="mx-auto max-w-7xl px-6 pt-[60] pb-10">
+         
 
             {/* Heading */}
             <div className="mt-10">
@@ -148,52 +145,24 @@ export default async function LocationHubPage() {
             </p>
           </div>
 
-          <LocationSections states={["California", "Texas", "Florida"]} n={3} />
+          <Suspense
+            fallback={
+              <AdzunaSpinner
+                label="Loading live jobs…"
+                sublabel="Pulling fresh listings by state"
+              />
+            }
+          >
+            <LocationSections states={["California", "Texas", "Florida"]} n={3} />
+          </Suspense>
 
-          {/* All locations (dark style) */}
-          <section className="mt-12 rounded-2xl border border-border/60 bg-card/40 p-6 backdrop-blur-xl md:p-8">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <div className="text-[11px] font-semibold tracking-wider text-accent">
-                  DIRECTORY
-                </div>
-                <h3 className="mt-2 font-heading text-xl font-bold text-foreground">
-                  All locations
-                </h3>
-              </div>
-              <Link
-                href="/locations/all"
-                className="text-sm font-medium text-primary hover:text-primary/90"
-              >
-                View full list →
-              </Link>
-            </div>
 
-            <div className="mt-6 grid gap-8 sm:grid-cols-2 md:grid-cols-4">
-              {Object.entries(allLocations).map(([letter, states]) => (
-                <div key={letter}>
-                  <div className="text-sm font-semibold text-foreground">
-                    {letter}
-                  </div>
+        
+          
 
-                  <ul className="mt-3 space-y-2 text-sm">
-                    {states.map((s) => (
-                      <li key={s}>
-                        <Link
-                          href={`/jobs/${encodeURIComponent(
-                            s.toLowerCase().replace(/\s+/g, "-")
-                          )}`}
-                          className="text-muted-foreground transition-colors hover:text-foreground hover:underline"
-                        >
-                          {s}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </section>
+          <ExpandableLocations allLocations={allLocations} />
+
+
         </div>
       </main>
 

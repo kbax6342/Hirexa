@@ -41,6 +41,7 @@ export default function Step2Client({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [proof, setProof] = useState<UploadProof | null>(null);
+  const [selectedSource, setSelectedSource] = useState<"device" | "google-drive" | "dropbox">("device");
 
   useEffect(() => {
     console.log("✅ Step2Client mounted", { profileId, resumeId });
@@ -53,6 +54,12 @@ export default function Step2Client({
   const accept = useMemo(() => allowed.join(","), [allowed]);
 
   function pickFile() {
+    setSelectedSource("device");
+    inputRef.current?.click();
+  }
+
+  function pickFromCloud(source: "google-drive" | "dropbox") {
+    setSelectedSource(source);
     inputRef.current?.click();
   }
 
@@ -113,13 +120,8 @@ export default function Step2Client({
   }
 
   return (
-    <div className="relative min-h-[70vh] overflow-hidden">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-10 top-20 h-60 w-60 rounded-full bg-primary/20 blur-3xl" />
-        <div className="absolute bottom-8 right-8 h-72 w-72 rounded-full bg-accent/15 blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto max-w-5xl px-6 py-14 text-foreground">
+    <div className="min-h-[70vh] bg-white mt-[50]">
+      <div className="mx-auto max-w-5xl px-6 py-14">
         {/* Header */}
         <div className="flex flex-col gap-2">
           <h1 className="text-3xl font-bold tracking-tight text-foreground">
@@ -215,6 +217,12 @@ export default function Step2Client({
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
                         {(file.size / 1024 / 1024).toFixed(2)} MB •{" "}
+                        {selectedSource === "google-drive"
+                          ? "Google Drive"
+                          : selectedSource === "dropbox"
+                          ? "Dropbox"
+                          : "Device"}
+                        {" "}•{" "}
                         {isSaving
                           ? "Saving…"
                           : proof
@@ -228,6 +236,7 @@ export default function Step2Client({
                       type="button"
                       onClick={() => {
                         setFile(null);
+                        setSelectedSource("device");
                         setProof(null);
                         setSaveError(null);
                         if (inputRef.current)
@@ -263,12 +272,30 @@ export default function Step2Client({
             <div className="text-sm font-semibold text-foreground">
               Import from cloud
             </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              Connect a provider to pick a resume
+            <div className="mt-1 text-xs text-gray-600">
+              Select Google Drive or Dropbox, then choose your resume file.
             </div>
 
-            <div className="mt-6 rounded-xl bg-white/10 p-4 text-xs text-muted-foreground">
-              Uploading PDF usually preserves formatting best.
+            <div className="mt-4 space-y-3">
+              <button
+                type="button"
+                onClick={() => pickFromCloud("google-drive")}
+                className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
+              >
+                Import from Google Drive
+              </button>
+
+              <button
+                type="button"
+                onClick={() => pickFromCloud("dropbox")}
+                className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
+              >
+                Import from Dropbox
+              </button>
+            </div>
+
+            <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs text-gray-600">
+              Tip: On many devices, your file picker can browse Google Drive and Dropbox directly.
             </div>
           </div>
         </div>

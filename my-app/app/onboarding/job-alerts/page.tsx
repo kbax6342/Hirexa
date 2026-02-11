@@ -170,7 +170,7 @@ export default function JobAlertsOnboardingPage() {
         <div className="mt-16 flex items-center justify-between">
           <Link
             href="/onboarding/skills"
-            className="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-6 py-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+            className="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-6 py-3 text-sm font-medium text-black hover:bg-gray-50"
           >
             <span aria-hidden>←</span> Back
           </Link>

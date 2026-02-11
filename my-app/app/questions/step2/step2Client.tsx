@@ -5,6 +5,44 @@ import Link from "next/link";
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
+declare global {
+  interface Window {
+    gapi?: {
+      load: (name: string, callback: () => void) => void;
+      client: {
+        init: (args: { apiKey: string; discoveryDocs: string[] }) => Promise<void>;
+      };
+    };
+    google?: {
+      picker?: {
+        Action: { PICKED: string; CANCEL: string };
+        DocsView: new () => {
+          setIncludeFolders: (include: boolean) => unknown;
+          setSelectFolderEnabled: (enabled: boolean) => unknown;
+        };
+        PickerBuilder: new () => {
+          setDeveloperKey: (key: string) => unknown;
+          setOAuthToken: (token: string) => unknown;
+          addView: (view: unknown) => unknown;
+          setCallback: (
+            callback: (data: { action: string; docs?: Array<{ id: string; name: string; mimeType?: string }> }) => void
+          ) => unknown;
+          build: () => { setVisible: (visible: boolean) => void };
+        };
+      };
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (args: {
+            client_id: string;
+            scope: string;
+            callback: (response: { access_token?: string; error?: string }) => void;
+          }) => { requestAccessToken: (args: { prompt: string }) => void };
+        };
+      };
+    };
+  }
+}
+
 type Step2ClientProps = {
   profileId: string | null;
   resumeId: string | null;
@@ -28,6 +66,28 @@ type UploadProof = {
   };
 };
 
+const GOOGLE_DRIVE_DISCOVERY_DOC =
+  "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
+const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+function loadScript(src: string) {
+  return new Promise<void>((resolve, reject) => {
+    const alreadyLoaded = document.querySelector(`script[src=\"${src}\"]`);
+    if (alreadyLoaded) {
+      resolve();
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+    document.body.appendChild(script);
+  });
+}
+
 export default function Step2Client({
   profileId,
   resumeId,
@@ -42,6 +102,7 @@ export default function Step2Client({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [proof, setProof] = useState<UploadProof | null>(null);
   const [selectedSource, setSelectedSource] = useState<"device" | "google-drive" | "dropbox">("device");
+  const [isGoogleDriveLoading, setIsGoogleDriveLoading] = useState(false);
 
   useEffect(() => {
     console.log("✅ Step2Client mounted", { profileId, resumeId });
@@ -58,12 +119,127 @@ export default function Step2Client({
     inputRef.current?.click();
   }
 
+  async function pickFromGoogleDrive() {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID;
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY;
+
+    if (!clientId || !apiKey) {
+      setSaveError("Google Drive import is not configured yet.");
+      return;
+    }
+
+    setIsGoogleDriveLoading(true);
+    setSaveError(null);
+
+    try {
+      await Promise.all([
+        loadScript("https://apis.google.com/js/api.js"),
+        loadScript("https://accounts.google.com/gsi/client"),
+      ]);
+
+      if (!window.gapi?.load || !window.google?.accounts?.oauth2 || !window.google?.picker) {
+        throw new Error("Google Drive tools are unavailable right now.");
+      }
+
+      await new Promise<void>((resolve) => {
+        window.gapi?.load("client:picker", resolve);
+      });
+
+      await window.gapi.client.init({
+        apiKey,
+        discoveryDocs: [GOOGLE_DRIVE_DISCOVERY_DOC],
+      });
+
+      const accessToken = await new Promise<string>((resolve, reject) => {
+        const tokenClient = window.google?.accounts?.oauth2?.initTokenClient({
+          client_id: clientId,
+          scope: GOOGLE_DRIVE_SCOPE,
+          callback: (response) => {
+            if (response.error || !response.access_token) {
+              reject(new Error(response.error || "Unable to sign in to Google Drive."));
+              return;
+            }
+
+            resolve(response.access_token);
+          },
+        });
+
+        if (!tokenClient) {
+          reject(new Error("Unable to initialize Google sign-in."));
+          return;
+        }
+
+        tokenClient.requestAccessToken({ prompt: "consent" });
+      });
+
+      const selectedDoc = await new Promise<{ id: string; name: string; mimeType?: string }>((resolve, reject) => {
+        const docsView = new window.google!.picker!.DocsView()
+          .setIncludeFolders(true)
+          .setSelectFolderEnabled(false);
+
+        const picker = new window.google!.picker!.PickerBuilder()
+          .setDeveloperKey(apiKey)
+          .setOAuthToken(accessToken)
+          .addView(docsView)
+          .setCallback((data) => {
+            if (data.action === window.google?.picker?.Action.CANCEL) {
+              reject(new Error("Google Drive selection was canceled."));
+              return;
+            }
+
+            if (data.action !== window.google?.picker?.Action.PICKED) return;
+
+            const pickedFile = data.docs?.[0];
+            if (!pickedFile) {
+              reject(new Error("No file was selected."));
+              return;
+            }
+
+            resolve(pickedFile);
+          })
+          .build();
+
+        picker.setVisible(true);
+      });
+
+      const fileResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selectedDoc.id)}?alt=media`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+
+      if (!fileResponse.ok) {
+        throw new Error("Could not download the selected file from Google Drive.");
+      }
+
+      const blob = await fileResponse.blob();
+      const pickedFile = new File([blob], selectedDoc.name, {
+        type: selectedDoc.mimeType || blob.type || "application/octet-stream",
+      });
+
+      setSelectedSource("google-drive");
+      handleFile(pickedFile);
+      await uploadResumeAndContinue(pickedFile);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Google Drive import failed.";
+      setSaveError(errorMessage);
+    } finally {
+      setIsGoogleDriveLoading(false);
+    }
+  }
+
   function pickFromCloud(source: "google-drive" | "dropbox") {
     setSelectedSource(source);
+    if (source === "google-drive") {
+      void pickFromGoogleDrive();
+      return;
+    }
+
     const cloudUrl =
-      source === "google-drive"
-        ? "https://drive.google.com/drive/my-drive"
-        : "https://www.dropbox.com/home";
+      "https://www.dropbox.com/home";
 
     window.open(cloudUrl, "_blank", "noopener,noreferrer");
   }
@@ -86,8 +262,10 @@ export default function Step2Client({
     if (f) handleFile(f);
   }
 
-  async function uploadResumeAndContinue() {
-    if (!file) {
+  async function uploadResumeAndContinue(fileToUpload?: File) {
+    const targetFile = fileToUpload ?? file;
+
+    if (!targetFile) {
       setSaveError("Please choose a resume file first.");
       return;
     }
@@ -98,7 +276,7 @@ export default function Step2Client({
 
     try {
       const fd = new FormData();
-      fd.append("resume", file);
+      fd.append("resume", targetFile);
 
       const res = await fetch("/api/onboarding/resume", {
         method: "POST",
@@ -278,16 +456,17 @@ export default function Step2Client({
               Import from cloud
             </div>
             <div className="mt-1 text-xs text-gray-600">
-              Sign in to your Google Drive or Dropbox account in a new tab, then upload your resume here.
+              Select your resume directly from Google Drive, or open Dropbox in a new tab.
             </div>
 
             <div className="mt-4 space-y-3">
               <button
                 type="button"
                 onClick={() => pickFromCloud("google-drive")}
+                disabled={isGoogleDriveLoading}
                 className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
               >
-                Import from Google Drive
+                {isGoogleDriveLoading ? "Opening Google Drive..." : "Import from Google Drive"}
               </button>
 
               <button
@@ -300,7 +479,7 @@ export default function Step2Client({
             </div>
 
             <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs text-gray-600">
-              After opening your cloud account, download the resume (if needed) and upload it from this page.
+              Google Drive files are downloaded and saved automatically after you pick one.
             </div>
           </div>
         </div>

@@ -41,6 +41,7 @@ export default function Step2Client({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [proof, setProof] = useState<UploadProof | null>(null);
+  const [selectedSource, setSelectedSource] = useState<"device" | "google-drive" | "dropbox">("device");
 
   useEffect(() => {
     console.log("✅ Step2Client mounted", { profileId, resumeId });
@@ -53,6 +54,12 @@ export default function Step2Client({
   const accept = useMemo(() => allowed.join(","), [allowed]);
 
   function pickFile() {
+    setSelectedSource("device");
+    inputRef.current?.click();
+  }
+
+  function pickFromCloud(source: "google-drive" | "dropbox") {
+    setSelectedSource(source);
     inputRef.current?.click();
   }
 
@@ -210,6 +217,12 @@ export default function Step2Client({
                       </div>
                       <div className="mt-1 text-xs text-gray-600">
                         {(file.size / 1024 / 1024).toFixed(2)} MB •{" "}
+                        {selectedSource === "google-drive"
+                          ? "Google Drive"
+                          : selectedSource === "dropbox"
+                          ? "Dropbox"
+                          : "Device"}
+                        {" "}•{" "}
                         {isSaving
                           ? "Saving…"
                           : proof
@@ -223,6 +236,7 @@ export default function Step2Client({
                       type="button"
                       onClick={() => {
                         setFile(null);
+                        setSelectedSource("device");
                         setProof(null);
                         setSaveError(null);
                         if (inputRef.current)
@@ -260,11 +274,29 @@ export default function Step2Client({
               Import from cloud
             </div>
             <div className="mt-1 text-xs text-gray-600">
-              Connect a provider to pick a resume
+              Select Google Drive or Dropbox, then choose your resume file.
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <button
+                type="button"
+                onClick={() => pickFromCloud("google-drive")}
+                className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
+              >
+                Import from Google Drive
+              </button>
+
+              <button
+                type="button"
+                onClick={() => pickFromCloud("dropbox")}
+                className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
+              >
+                Import from Dropbox
+              </button>
             </div>
 
             <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs text-gray-600">
-              Uploading PDF usually preserves formatting best.
+              Tip: On many devices, your file picker can browse Google Drive and Dropbox directly.
             </div>
           </div>
         </div>

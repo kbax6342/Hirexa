@@ -422,7 +422,7 @@ export default function ChooseWorkplacePage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <Link
             href="/onboarding/job-interest"
-            className="rounded-full border border-gray-300 px-6 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+            className="rounded-full border border-gray-300 px-6 py-3 text-sm font-semibold text-black hover:bg-gray-50"
           >
             ← Back
           </Link>

@@ -114,7 +114,7 @@ export default function JobsExplorerClient({
               </div>
               <Link
                 href="/dashboard"
-                className="text-sm font-semibold text-sky-600 hover:text-sky-700"
+                className="text-sm font-semibold text-black hover:text-black/80"
               >
                 Back
               </Link>

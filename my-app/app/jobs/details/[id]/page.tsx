@@ -238,7 +238,7 @@ export default function JobDetailsPage() {
 
             {/* Back */}
             <div className="mt-10">
-              <Link href="/jobs" prefetch={false} className="text-sm text-blue-700 hover:underline">
+              <Link href="/jobs" prefetch={false} className="text-sm text-black hover:underline">
                 ← Back to Jobs
               </Link>
             </div>

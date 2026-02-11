@@ -60,7 +60,12 @@ export default function Step2Client({
 
   function pickFromCloud(source: "google-drive" | "dropbox") {
     setSelectedSource(source);
-    inputRef.current?.click();
+    const cloudUrl =
+      source === "google-drive"
+        ? "https://drive.google.com/drive/my-drive"
+        : "https://www.dropbox.com/home";
+
+    window.open(cloudUrl, "_blank", "noopener,noreferrer");
   }
 
   function handleFile(f: File) {
@@ -273,7 +278,7 @@ export default function Step2Client({
               Import from cloud
             </div>
             <div className="mt-1 text-xs text-gray-600">
-              Select Google Drive or Dropbox, then choose your resume file.
+              Sign in to your Google Drive or Dropbox account in a new tab, then upload your resume here.
             </div>
 
             <div className="mt-4 space-y-3">
@@ -295,7 +300,7 @@ export default function Step2Client({
             </div>
 
             <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs text-gray-600">
-              Tip: On many devices, your file picker can browse Google Drive and Dropbox directly.
+              After opening your cloud account, download the resume (if needed) and upload it from this page.
             </div>
           </div>
         </div>

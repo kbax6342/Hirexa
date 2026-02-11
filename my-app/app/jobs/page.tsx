@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "../components/navbar";
 import LoginFooter from "../components/loginFooter/LoginFooter";
+import Spinner from "../components/spinner/Spinner"
 
 type JobCard = {
   id?: string;
@@ -664,45 +665,60 @@ export default function JobsPage() {
             </div>
           )}
 
+         
           {/* Adzuna sections */}
-          {!adzunaLoading && !adzunaError && adzunaSections.length > 0 && (
-            <>
-              {adzunaSections.map((section) => (
-                <section key={section.name} className="mt-10">
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-heading text-2xl font-bold text-foreground">
-                      {section.name}
-                    </h2>
-                    <Link
-                      href={`/jobs/${categoryToSlug(section.name)}`}
-                      className="text-sm font-semibold text-sky-600 hover:text-sky-700"
-                    >
-                      See all {section.name} jobs →
-                    </Link>                   
-                  </div>
+          <section className="mt-10">
+            {adzunaLoading ? (
+              <Spinner label="Finding the best jobs for you…" />
+            ) : adzunaError ? (
+              <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+                Adzuna feed error: {adzunaError}
+              </div>
+            ) : adzunaSections.length === 0 ? (
+              <div className="rounded-xl border border-slate-200/40 bg-white/5 p-6 text-sm text-muted-foreground">
+                No Adzuna categories returned yet.
+              </div>
+            ) : (
+              <>
+                {adzunaSections.map((section) => (
+                  <section key={section.name} className="mt-10">
+                    <div className="flex items-center justify-between">
+                      <h2 className="font-heading text-2xl font-bold text-foreground">
+                        {section.name}
+                      </h2>
 
-                  <ul className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                    {section.jobs.map((job) => (
-                      <li key={job.id}>
-                        <JobCardItem
-                          job={{
-                            id: job.id,
-                            title: job.title,
-                            company: job.company,
-                            location: job.location,
-                            posted: job.posted,
-                            jobUrl: job.jobUrl,
-                            salary: job.salary, 
-                            logoText: job.company?.[0]?.toUpperCase() ?? "•",
-                          }}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </>
-          )}
+                      <Link
+                        href={`/jobs/${categoryToSlug(section.name)}`}
+                        className="text-sm font-semibold text-sky-600 hover:text-sky-700"
+                      >
+                        See all {section.name} jobs →
+                      </Link>
+                    </div>
+
+                    <ul className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                      {section.jobs.map((job) => (
+                        <li key={job.id}>
+                          <JobCardItem
+                            job={{
+                              id: job.id,
+                              title: job.title,
+                              company: job.company,
+                              location: job.location,
+                              posted: job.posted,
+                              jobUrl: job.jobUrl,
+                              salary: job.salary,
+                              logoText: job.company?.[0]?.toUpperCase() ?? "•",
+                            }}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </>
+            )}
+          </section>
+
 
           {/* All categories */}
           <section id="all-categories" className="mt-14">

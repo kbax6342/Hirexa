@@ -52,6 +52,7 @@ const focusOptions = [
 export default function JobToolsGeneratePage() {
   const [url, setUrl] = useState("");
   const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [pastedJobText, setPastedJobText] = useState("");
 
   const [tone, setTone] = useState<Tone>("professional");
   const [focus, setFocus] = useState<Record<(typeof focusOptions)[number]["key"], boolean>>({
@@ -79,6 +80,8 @@ export default function JobToolsGeneratePage() {
     }
   }, [url]);
 
+  const hasFallbackText = pastedJobText.trim().length >= 150;
+
   function toggleFocus(k: (typeof focusOptions)[number]["key"]) {
     setFocus((prev) => ({ ...prev, [k]: !prev[k] }));
   }
@@ -87,6 +90,7 @@ export default function JobToolsGeneratePage() {
     setUrl("");
     setResumeFile(null);
     setTone("professional");
+    setPastedJobText("");
     setFocus({ technical: true, leadership: false, projects: false });
     setInstructions("");
     setActiveTab("coverLetter");
@@ -177,8 +181,8 @@ export default function JobToolsGeneratePage() {
     setError(null);
     setResult(null);
 
-    if (!canSubmit) {
-      setError("Please paste a valid http(s) job posting link.");
+    if (!canSubmit && !hasFallbackText) {
+      setError("Please paste a valid http(s) job posting link or provide at least 150 characters in the fallback text field.");
       return;
     }
 
@@ -188,31 +192,31 @@ export default function JobToolsGeneratePage() {
         .filter(([, v]) => v)
         .map(([k]) => k);
 
+      const formData = new FormData();
+      formData.set("url", url.trim());
+      formData.set("resumeText", "");
+      formData.set(
+        "tone",
+        tone === "professional" ? "professional" : tone === "conversational" ? "friendly" : "bold"
+      );
+      formData.set("focusAreas", JSON.stringify(selectedFocus));
+      formData.set("instructions", instructions.trim());
+      formData.set("pastedJobText", pastedJobText.trim());
+      if (resumeFile) {
+        formData.set("resumeFile", resumeFile);
+      }
+
       const res = await fetch("/api/job-tools/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: url.trim(),
-          // If your API supports it later, you can send resumeFile via FormData.
-          // For now we keep it consistent with your JSON endpoint:
-          resumeText: null,
-          tone:
-            tone === "professional"
-              ? "professional"
-              : tone === "conversational"
-              ? "friendly"
-              : "bold",
-          focusAreas: selectedFocus,
-          instructions: instructions.trim() || null,
-        }),
+        body: formData,
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Failed to generate");
 
       setResult(data);
-    } catch (e: any) {
-      setError(e?.message ?? "Something went wrong");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
       setLoading(false);
     }
@@ -277,7 +281,7 @@ export default function JobToolsGeneratePage() {
             <button
               type="button"
               onClick={onGenerate}
-              disabled={!canSubmit || loading}
+              disabled={(!canSubmit && !hasFallbackText) || loading}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-sm "
             >
               {loading ? <ArrowPathIcon className="h-5 w-5 animate-spin" /> : <SparklesIcon className="h-5 w-5" />}
@@ -286,7 +290,7 @@ export default function JobToolsGeneratePage() {
           </div>
 
           <div className="mt-2 text-xs text-slate-500">
-            Tip: Some sites block bots. If a link fails, you can add a “paste job description” fallback later.
+            Tip: Some sites block bots. If extraction fails, paste the job description in the fallback field below.
           </div>
 
           {error && (
@@ -294,6 +298,19 @@ export default function JobToolsGeneratePage() {
               {error}
             </div>
           )}
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-semibold text-slate-900">Job Description Fallback (optional)</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Paste the full job description if the URL blocks scraping. This text will be used directly.
+          </div>
+          <textarea
+            value={pastedJobText}
+            onChange={(e) => setPastedJobText(e.target.value)}
+            placeholder="Paste the job description here..."
+            className="mt-3 h-32 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none focus:border-slate-400"
+          />
         </div>
 
         {/* Upload resume */}
@@ -322,7 +339,7 @@ export default function JobToolsGeneratePage() {
               {resumeFile ? resumeFile.name : "Drag & drop your resume here"}
             </div>
             <div className="mt-1 text-xs text-slate-500">
-              {resumeFile ? "Click to replace file" : "or click to browse files"}
+              {resumeFile ? "Upload included in next generate request" : "or click to browse files"}
             </div>
 
             <input
@@ -389,7 +406,7 @@ export default function JobToolsGeneratePage() {
               <button
                 type="button"
                 onClick={onGenerate}
-                disabled={!canSubmit || loading}
+                disabled={(!canSubmit && !hasFallbackText) || loading}
                 className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 <ArrowPathIcon className={["h-4 w-4", loading ? "animate-spin" : ""].join(" ")} />

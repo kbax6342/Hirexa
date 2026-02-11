@@ -35,6 +35,17 @@ type CacheValue = {
 
 const CACHE = new Map<string, CacheValue>();
 const IN_FLIGHT = new Map<string, Promise<Payload>>();
+const DEFAULT_JOBS_PER_SECTION = 3;
+const MAX_PAGES_PER_SOURCE = 4;
+
+type JobSearchSource = {
+  name: string;
+  searchJobs: (args: {
+    term: string;
+    page: number;
+    perPage: number;
+  }) => Promise<Job[]>;
+};
 
 function cacheKeyFromUrl(url: URL) {
   const health = (url.searchParams.get("health") ?? "healthcare").trim();
@@ -100,7 +111,17 @@ function formatSalary(j: any): string | undefined {
   return undefined;
 }
 
-async function getJobs(term: string, perPage = 3): Promise<Job[]> {
+function dedupeKey(job: Job): string {
+  const fallback = `${job.title}|${job.company}|${job.location}`;
+  return String(job.id || fallback).trim().toLowerCase();
+}
+
+async function getJobsFromAdzuna(args: {
+  term: string;
+  page?: number;
+  perPage?: number;
+}): Promise<Job[]> {
+  const { term, page = 1, perPage = DEFAULT_JOBS_PER_SECTION } = args;
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
@@ -109,7 +130,6 @@ async function getJobs(term: string, perPage = 3): Promise<Job[]> {
   }
 
   const country = "us";
-  const page = 1;
 
   const url = new URL(`http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`);
   url.searchParams.set("app_id", appId);
@@ -141,6 +161,54 @@ async function getJobs(term: string, perPage = 3): Promise<Job[]> {
       detailsHref: `/jobs/details/${id}`,
     };
   });
+}
+
+const ATS_JOB_SOURCES: JobSearchSource[] = [
+  {
+    name: "adzuna",
+    searchJobs: ({ term, page, perPage }) => getJobsFromAdzuna({ term, page, perPage }),
+  },
+];
+
+async function getUniqueJobsForTerm(args: {
+  term: string;
+  targetCount?: number;
+  sources?: JobSearchSource[];
+  excludedKeys?: Set<string>;
+}) {
+  const {
+    term,
+    targetCount = DEFAULT_JOBS_PER_SECTION,
+    sources = ATS_JOB_SOURCES,
+    excludedKeys = new Set<string>(),
+  } = args;
+
+  const uniqueJobs: Job[] = [];
+  const seenKeys = new Set<string>(excludedKeys);
+
+  for (const source of sources) {
+    for (let page = 1; page <= MAX_PAGES_PER_SOURCE && uniqueJobs.length < targetCount; page++) {
+      const jobs = await source.searchJobs({
+        term,
+        page,
+        perPage: targetCount * 2,
+      });
+
+      if (!jobs.length) break;
+
+      for (const job of jobs) {
+        const key = dedupeKey(job);
+        if (seenKeys.has(key)) continue;
+
+        seenKeys.add(key);
+        uniqueJobs.push(job);
+
+        if (uniqueJobs.length >= targetCount) break;
+      }
+    }
+  }
+
+  return uniqueJobs;
 }
 
 export async function GET(req: Request) {
@@ -175,11 +243,27 @@ export async function GET(req: Request) {
     const techTerm = (url.searchParams.get("tech") ?? "software engineer").trim();
     const tradeTerm = (url.searchParams.get("trade") ?? "electrician").trim();
 
-    const [healthcareJobs, technologyJobs, skilledTradeJobs] = await Promise.all([
-      getJobs(healthTerm, 3),
-      getJobs(techTerm, 3),
-      getJobs(tradeTerm, 3),
-    ]);
+    const allSeenKeys = new Set<string>();
+
+    const healthcareJobs = await getUniqueJobsForTerm({
+      term: healthTerm,
+      targetCount: DEFAULT_JOBS_PER_SECTION,
+      excludedKeys: allSeenKeys,
+    });
+    healthcareJobs.forEach((job) => allSeenKeys.add(dedupeKey(job)));
+
+    const technologyJobs = await getUniqueJobsForTerm({
+      term: techTerm,
+      targetCount: DEFAULT_JOBS_PER_SECTION,
+      excludedKeys: allSeenKeys,
+    });
+    technologyJobs.forEach((job) => allSeenKeys.add(dedupeKey(job)));
+
+    const skilledTradeJobs = await getUniqueJobsForTerm({
+      term: tradeTerm,
+      targetCount: DEFAULT_JOBS_PER_SECTION,
+      excludedKeys: allSeenKeys,
+    });
 
     const sections: CategorySection[] = [
       {

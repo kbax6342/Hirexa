@@ -1,4 +1,4 @@
-// components/login-footer.tsx
+// File: /Hirexa/my-app/components/login-footer.tsx
 import Link from "next/link";
 
 const columns: Array<{
@@ -35,7 +35,7 @@ const columns: Array<{
     ],
   },
   {
-    title: " ",
+    title: "More",
     links: [
       { label: "Legal Jobs", href: "/jobs/legal" },
       { label: "Marketing Jobs", href: "/jobs/marketing" },
@@ -46,7 +46,7 @@ const columns: Array<{
     ],
   },
   {
-    title: " ",
+    title: "Locations",
     links: [
       { label: "Social Media Jobs", href: "/jobs/social-media" },
       { label: "Teaching Jobs", href: "/jobs/teaching" },
@@ -60,31 +60,43 @@ const columns: Array<{
 
 export default function LoginFooter() {
   return (
-    <footer className="border-t border-gray-200 bg-gray-50">
-      <div className="mx-auto w-full max-w-6xl px-6 py-14">
-        <div className="mb-10 text-4xl font-extrabold tracking-tight text-gray-900">
-          Hirexa
-        </div>
+    <footer className="border-t border-border bg-card">
+      <div className="mx-auto w-full max-w-7xl px-6 py-12">
+        {/* Top: Brand + columns + support */}
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
+          {/* Brand (matches homepage footer) */}
+          <div className="lg:col-span-3">
+            <Link href="/" className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+                <span className="text-xs font-bold text-primary-foreground">
+                  H
+                </span>
+              </div>
+              <span className="font-heading text-lg font-bold tracking-tight text-foreground">
+                Hirexa <span className="text-accent">AI</span>
+              </span>
+            </Link>
 
-        <div className="grid grid-cols-1 gap-10 md:grid-cols-6">
-          <div className="md:col-span-5">
-            <div className="grid grid-cols-2 gap-10 sm:grid-cols-3 lg:grid-cols-5">
-              {columns.map((col, idx) => (
-                <div key={idx}>
-                  {col.title.trim() ? (
-                    <h3 className="text-sm font-semibold text-gray-900">
-                      {col.title}
-                    </h3>
-                  ) : (
-                    <div className="h-5" />
-                  )}
+            <p className="mt-2 text-sm text-muted-foreground">
+              Intelligent job search automation.
+            </p>
+          </div>
+
+          {/* Columns */}
+          <div className="lg:col-span-7">
+            <div className="grid grid-cols-2 gap-8 sm:grid-cols-3 lg:grid-cols-5">
+              {columns.map((col) => (
+                <div key={col.title}>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {col.title}
+                  </h3>
 
                   <ul className="mt-4 space-y-3">
                     {col.links.map((l) => (
                       <li key={l.href}>
                         <Link
                           href={l.href}
-                          className="text-sm text-gray-700 hover:text-gray-900"
+                          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
                         >
                           {l.label}
                         </Link>
@@ -96,44 +108,33 @@ export default function LoginFooter() {
             </div>
           </div>
 
-          <div className="md:col-span-1">
-            <h3 className="text-sm font-semibold text-gray-900">
+          {/* Customer support */}
+          <div className="lg:col-span-2">
+            <h3 className="text-sm font-semibold text-foreground">
               Customer support
             </h3>
-            <div className="mt-4 space-y-4 text-sm text-gray-700">
-              <div className="flex items-start gap-2">
-                <span className="mt-0.5">📞</span>
-                <div>
-                  <div className="font-medium text-gray-900">855-695-3235</div>
-                  <div className="mt-1">Mon–Fri 8 AM – 8 PM CST</div>
-                </div>
+
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <div>
+                <div className="text-foreground font-medium">(855) 965-3235</div>
+                <div className="mt-1">Mon–Fri 8AM–8PM CST</div>
               </div>
 
-              <div className="flex items-start gap-2">
-                <span className="mt-0.5">🗓️</span>
-                <div>
-                  <div className="font-medium text-gray-900">
-                    Sat 8 AM – 5 PM CST
-                  </div>
-                  <div className="mt-1">Sun 10 AM – 6 PM CST</div>
-                </div>
+              <div>
+                <div>Sat 8AM–5PM CST</div>
+                <div>Sun 10AM–6PM CST</div>
               </div>
 
-              <div className="flex items-start gap-2">
-                <span className="mt-0.5">✉️</span>
-                <div>
-                  <a
-                    className="font-medium text-gray-900 hover:underline"
-                    href="mailto:customersupport@Hirexa.ai"
-                  >
-                    customersupport@Hirexa.ai
-                  </a>
-                </div>
-              </div>
+              <a
+                className="inline-flex font-medium text-foreground hover:underline"
+                href="mailto:customersupport@Hirexa.ai"
+              >
+                customersupport@Hirexa.ai
+              </a>
 
               <Link
                 href="/contact"
-                className="inline-flex text-sm font-medium text-blue-700 hover:text-blue-800"
+                className="inline-flex text-sm font-medium text-primary hover:text-primary/90"
               >
                 Contact us
               </Link>
@@ -141,8 +142,14 @@ export default function LoginFooter() {
           </div>
         </div>
 
-        <div className="mt-12 text-xs text-gray-600">
-          © {new Date().getFullYear()}, BA Technology. All rights reserved.
+        {/* Bottom bar (matches homepage footer) */}
+        <div className="mt-8 border-t border-border pt-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            &copy; {new Date().getFullYear()} Hirexa AI. All rights reserved.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            BA Technology
+          </p>
         </div>
       </div>
     </footer>

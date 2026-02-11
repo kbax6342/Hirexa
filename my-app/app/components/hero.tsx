@@ -1,5 +1,9 @@
+"use client"
+
 import { Button } from "../components/ui/button"
 import { ArrowRight, Check } from "lucide-react"
+import { startOnboarding } from "../api/actions/startOnboarding";
+import { useTransition } from "react";
 
 const jobCards = [
   {
@@ -33,6 +37,7 @@ const jobCards = [
 ]
 
 export function Hero() {
+  const [isPending, startTransition] = useTransition();
   return (
     <section className="relative overflow-hidden pt-28 pb-20 md:pt-40 md:pb-32">
       {/* Background glows */}
@@ -58,13 +63,41 @@ export function Hero() {
             </p>
 
             <div className="mt-10">
+            <form
+              action={() =>
+                startTransition(async () => {
+                  await startOnboarding();
+                })
+              }
+            >
               <Button
+                type="submit"
                 size="lg"
-                className="bg-primary text-primary-foreground hover:bg-primary/90 h-13 rounded-full px-8 text-base font-semibold shadow-lg shadow-primary/25"
+                disabled={isPending}
+                className="
+                  bg-sky-500 text-white
+                  hover:bg-sky-400
+                  h-12 rounded-full px-8
+                  text-base font-semibold
+                  shadow-lg shadow-sky-500/25
+                  transition-all duration-200
+                  active:scale-[0.97]
+                  disabled:opacity-70 disabled:cursor-not-allowed
+                "
               >
-                Get Started
-                <ArrowRight className="ml-2 h-4 w-4" />
+                {isPending ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    Getting started…
+                  </span>
+                ) : (
+                  <>
+                    Get Started
+                    <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                  </>
+                )}
               </Button>
+            </form>
             </div>
 
             {/* Stats */}

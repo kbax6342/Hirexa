@@ -85,65 +85,94 @@ export default function LocationSections({
       {sections.map((sec) => (
         <div key={sec.name}>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">{sec.name}</h2>
+            <h2 className="text-lg font-semibold text-white">{sec.name}</h2>
             <Link
               href={sec.href}
-              className="text-xs font-medium text-indigo-700 hover:underline"
+              className="text-md font-medium text-white hover:underline"
             >
               See all {sec.name} jobs →
             </Link>
           </div>
 
-          {/* ✅ Jobs-page-like cards + View job -> details */}
-          <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {sec.jobs.map((job) => (
-              <div
-                key={job.id}
-                className="rounded-xl bg-white ring-1 ring-slate-200 p-5 hover:ring-slate-300 transition"
+         {/* ✅ Jobs-page-like cards + View job button */}
+        <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {sec.jobs.map((job) => (
+            <div
+              key={job.id}
+              className="
+                rounded-xl
+                border border-border/60
+                bg-white
+                p-5
+                backdrop-blur-xl
+                transition
+                
+              "
+            >
+              <Link
+                href={`/jobs/details/${job.id}`}
+                className="block 
+                text-gray-700
+                font-semibold text-foreground hover:underline"
               >
+                {job.title}
+              </Link>
+
+              <div className="mt-2 text-sm text-muted-foreground">
+                {job.company} • {job.location}
+              </div>
+
+              {job.pill ? (
+                <div className="mt-3 inline-flex rounded-md bg-background/40 px-2 py-1 text-xs font-medium text-white">
+                  {job.pill}
+                </div>
+              ) : null}
+
+              {job.posted ? (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  {job.posted}
+                </div>
+              ) : null}
+
+              {/* Footer actions */}
+              <div className="mt-5 flex items-center justify-between">
                 <Link
                   href={`/jobs/details/${job.id}`}
-                  className="block font-semibold text-slate-900 hover:underline"
+                  className="
+                    inline-flex items-center justify-center
+                    rounded-md
+                    bg-primary
+                    px-4 py-2
+                    text-sm font-semibold
+                    text-primary-foreground
+                    transition
+                    hover:bg-primary/90
+                    focus:outline-none focus:ring-2 focus:ring-primary/40
+                  "
                 >
-                  {job.title}
+                  View job
                 </Link>
 
-                <div className="mt-2 text-sm text-slate-600">
-                  {job.company} • {job.location}
-                </div>
-
-                {job.pill ? (
-                  <div className="mt-3 inline-flex rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                    {job.pill}
-                  </div>
-                ) : null}
-
-                {job.posted ? (
-                  <div className="mt-3 text-xs text-slate-500">{job.posted}</div>
-                ) : null}
-
-                <div className="mt-4 flex items-center gap-3">
-                  <Link
-                    href={`/jobs/details/${job.id}`}
-                    className="text-blue-600 hover:underline font-medium text-sm"
+                {job.jobUrl ? (
+                  <a
+                    href={job.jobUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="
+                      text-sm
+                      text-muted-foreground
+                      transition
+                      hover:text-foreground
+                    "
                   >
-                    View job
-                  </Link>
-
-                  {job.jobUrl ? (
-                    <a
-                      href={job.jobUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-slate-500 hover:text-slate-700 text-sm"
-                    >
-                      Open source →
-                    </a>
-                  ) : null}
-                </div>
+                    Open source →
+                  </a>
+                ) : null}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
+        </div>
+
         </div>
       ))}
     </section>

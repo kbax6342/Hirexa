@@ -33,7 +33,7 @@ export function Navbar() {
   const navLinks = isAuthed ? authedNav : guestNav;
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/80 backdrop-blur-xl">
+    <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background backdrop-blur-xl">
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         {/* LEFT: BRAND (no image) */}
         <Link href="/" className="flex items-center gap-2">
@@ -65,16 +65,10 @@ export function Navbar() {
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
           ) : !isAuthed ? (
             <>
-              <Button
-                asChild
-                variant="ghost"
-                className="text-sm text-muted-foreground hover:text-foreground hover:bg-secondary"
-              >
-                <Link href="/login">Sign In</Link>
-              </Button>
+              
 
               <Button asChild className="rounded-full px-6 text-sm font-medium">
-                <Link href="/login">Get Started</Link>
+                <Link href="/login">Sign In</Link>
               </Button>
             </>
           ) : (

@@ -11,6 +11,7 @@ type Job = {
   location: string;
   posted: string;
   jobUrl: string;
+  salary?: string; // ✅ add salary
   description?: string;
   detailsHref?: string;
 };
@@ -27,16 +28,15 @@ type Payload = {
 };
 
 type CacheValue = {
-  expiresAt: number;     // fresh until
-  staleUntil: number;    // serve stale on 429/502/503 until
+  expiresAt: number;
+  staleUntil: number;
   payload: Payload;
 };
 
 const CACHE = new Map<string, CacheValue>();
-//const IN_FLIGHT = new Map<string, Promise<any>>();
+const IN_FLIGHT = new Map<string, Promise<Payload>>();
 
 function cacheKeyFromUrl(url: URL) {
-  // cache by the 3 terms so different terms don’t collide
   const health = (url.searchParams.get("health") ?? "healthcare").trim();
   const tech = (url.searchParams.get("tech") ?? "software engineer").trim();
   const trade = (url.searchParams.get("trade") ?? "electrician").trim();
@@ -62,7 +62,6 @@ async function fetchWithRetry(input: string, tries = 2) {
     lastRes = res;
     if (res.ok) return res;
 
-    // transient retry
     if (res.status === 429 || res.status === 502 || res.status === 503) {
       const retryAfter = res.headers.get("retry-after");
       const waitMs = retryAfter ? Number(retryAfter) * 1000 : 400 * (i + 1);
@@ -76,6 +75,31 @@ async function fetchWithRetry(input: string, tries = 2) {
   return lastRes!;
 }
 
+function formatSalary(j: any): string | undefined {
+  const min = typeof j?.salary_min === "number" ? j.salary_min : null;
+  const max = typeof j?.salary_max === "number" ? j.salary_max : null;
+
+  if (min == null && max == null) return undefined;
+
+  const currency = String(j?.salary_currency ?? "USD");
+  const interval = String(j?.salary_interval ?? "year"); // year/month/week/day
+
+  // Prefer showing whole dollars (no decimals)
+  const nf = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  });
+
+  const left = min != null ? nf.format(min) : null;
+  const right = max != null ? nf.format(max) : null;
+
+  if (left && right) return `${left} – ${right} / ${interval}`;
+  if (left) return `${left} / ${interval}`;
+  if (right) return `${right} / ${interval}`;
+  return undefined;
+}
+
 async function getJobs(term: string, perPage = 3): Promise<Job[]> {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
@@ -87,7 +111,6 @@ async function getJobs(term: string, perPage = 3): Promise<Job[]> {
   const country = "us";
   const page = 1;
 
-  // IMPORTANT: use http://api.adzuna.com to reduce proxy weirdness
   const url = new URL(`http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`);
   url.searchParams.set("app_id", appId);
   url.searchParams.set("app_key", appKey);
@@ -105,6 +128,7 @@ async function getJobs(term: string, perPage = 3): Promise<Job[]> {
 
   return (data.results ?? []).slice(0, perPage).map((j: any, idx: number) => {
     const id = String(j.id ?? `fallback-${term}-${idx}`);
+
     return {
       id,
       title: String(j.title ?? "Untitled role"),
@@ -112,107 +136,12 @@ async function getJobs(term: string, perPage = 3): Promise<Job[]> {
       location: String(j.location?.display_name ?? "Unknown location"),
       posted: String(j.created ?? ""),
       jobUrl: String(j.redirect_url ?? ""),
+      salary: formatSalary(j), // ✅ IMPORTANT
       description: typeof j.description === "string" ? j.description : undefined,
       detailsHref: `/jobs/details/${id}`,
     };
   });
 }
-
-// export async function GET(req: Request) {
-//   const url = new URL(req.url);
-//   const key = cacheKeyFromUrl(url);
-//   const now = Date.now();
-
-//   // ✅ Serve fresh cache
-//   const cached = CACHE.get(key);
-//   if (cached && cached.expiresAt > now) {
-//     return NextResponse.json(cached.payload, {
-//       headers: { "X-Cache": "HIT", "Cache-Control": "public, max-age=30" },
-//     });
-//   }
-
-//   // ✅ De-dupe identical concurrent requests
-//   const existing = IN_FLIGHT.get(key);
-//   if (existing) {
-//     const payload = await existing;          // ✅ payload promise
-//     return NextResponse.json(payload);       // ✅ new response
-//   }
-
-//   const promise = (async () => {
-//     try {
-//       const healthTerm = (url.searchParams.get("health") ?? "healthcare").trim();
-//       const techTerm = (url.searchParams.get("tech") ?? "software engineer").trim();
-//       const tradeTerm = (url.searchParams.get("trade") ?? "electrician").trim();
-
-//       let sections: CategorySection[];
-
-//       try {
-//         const [healthcareJobs, technologyJobs, skilledTradeJobs] = await Promise.all([
-//           getJobs(healthTerm, 3),
-//           getJobs(techTerm, 3),
-//           getJobs(tradeTerm, 3),
-//         ]);
-
-//         sections = [
-//           {
-//             name: "Healthcare",
-//             viewAllHref: `/jobs?cat=healthcare&q=${encodeURIComponent(healthTerm)}`,
-//             jobs: healthcareJobs,
-//           },
-//           {
-//             name: "Technology",
-//             viewAllHref: `/jobs?cat=technology&q=${encodeURIComponent(techTerm)}`,
-//             jobs: technologyJobs,
-//           },
-//           {
-//             name: "Skilled Trades",
-//             viewAllHref: `/jobs?cat=skilled-trades&q=${encodeURIComponent(tradeTerm)}`,
-//             jobs: skilledTradeJobs,
-//           },
-//         ];
-//       } catch (e: any) {
-//         // ✅ If Adzuna rate limits or hiccups, serve stale cache for a few minutes
-//         if (cached && cached.staleUntil > now) {
-//           return NextResponse.json(cached.payload, {
-//             headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
-//           });
-//         }
-//         throw e;
-//       }
-
-//       const payload: Payload = {
-//         sections,
-//         generatedAt: new Date().toISOString(),
-//       };
-
-//       // ✅ cache: fresh 30s, stale allowed 5 min
-//       CACHE.set(key, {
-//         expiresAt: now + 30_000,
-//         staleUntil: now + 5 * 60_000,
-//         payload,
-//       });
-
-//       return NextResponse.json(payload, {
-//         headers: { "X-Cache": "MISS", "Cache-Control": "public, max-age=30" },
-//       });
-//     } finally {
-//       IN_FLIGHT.delete(key);
-//     }
-//   })();
-
-//   IN_FLIGHT.set(key, promise);
-
-//    try {
-//     const payload = await promise;
-//     CACHE.set(key, { expiresAt: now + 30_000, payload });
-//     return NextResponse.json(payload);
-//   } finally {
-//     IN_FLIGHT.delete(key);
-//   }
-// }
-
-//IN_FLIGHT must be Promise<Payload>, not Promise<Response>
-const IN_FLIGHT = new Map<string, Promise<Payload>>();
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -221,14 +150,14 @@ export async function GET(req: Request) {
 
   const cached = CACHE.get(key);
 
-  // 1) Serve fresh cache immediately
+  // 1) Fresh cache
   if (cached && cached.expiresAt > now) {
     return NextResponse.json(cached.payload, {
       headers: { "X-Cache": "HIT", "Cache-Control": "public, max-age=30" },
     });
   }
 
-  // 2) Reuse in-flight payload computation
+  // 2) In-flight
   const existing = IN_FLIGHT.get(key);
   if (existing) {
     try {
@@ -237,11 +166,10 @@ export async function GET(req: Request) {
         headers: { "X-Cache": "IN-FLIGHT", "Cache-Control": "public, max-age=10" },
       });
     } catch {
-      // fall through to rebuild
+      // fall through
     }
   }
 
-  // 3) Build payload (ONLY data)
   const promise = (async (): Promise<Payload> => {
     const healthTerm = (url.searchParams.get("health") ?? "healthcare").trim();
     const techTerm = (url.searchParams.get("tech") ?? "software engineer").trim();
@@ -271,7 +199,6 @@ export async function GET(req: Request) {
       },
     ];
 
-    // ✅ return just the payload object
     return {
       sections,
       generatedAt: new Date().toISOString(),
@@ -283,19 +210,17 @@ export async function GET(req: Request) {
   try {
     const payload = await promise;
 
-    // 4) Cache payload
     CACHE.set(key, {
       expiresAt: now + 30_000,
       staleUntil: now + 5 * 60_000,
       payload,
     });
 
-    // 5) Return a NEW response each request
     return NextResponse.json(payload, {
       headers: { "X-Cache": "MISS", "Cache-Control": "public, max-age=30" },
     });
   } catch (e: any) {
-    // ✅ stale fallback happens OUTSIDE the promise
+    // stale fallback
     if (cached && cached.staleUntil > now) {
       return NextResponse.json(cached.payload, {
         headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
@@ -310,4 +235,3 @@ export async function GET(req: Request) {
     IN_FLIGHT.delete(key);
   }
 }
-

@@ -66,6 +66,11 @@ type UploadProof = {
   };
 };
 
+type GoogleDriveConfig = {
+  clientId: string;
+  apiKey: string;
+};
+
 const GOOGLE_DRIVE_DISCOVERY_DOC =
   "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
@@ -117,11 +122,24 @@ export default function Step2Client({
   }
 
   async function pickFromGoogleDrive() {
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID;
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY;
+    let clientId = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID;
+    let apiKey = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY;
 
     if (!clientId || !apiKey) {
-      setSaveError("Google Drive import is not configured yet.");
+      const configResponse = await fetch("/api/integrations/google-drive/config", {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (configResponse.ok) {
+        const config = (await configResponse.json()) as { config?: GoogleDriveConfig };
+        clientId = config.config?.clientId;
+        apiKey = config.config?.apiKey;
+      }
+    }
+
+    if (!clientId || !apiKey) {
+      setSaveError("Google Drive import is not configured yet. Missing client ID or API key.");
       return;
     }
 

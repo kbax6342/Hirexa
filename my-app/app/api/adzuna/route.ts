@@ -116,6 +116,10 @@ function dedupeKey(job: Job): string {
   return String(job.id || fallback).trim().toLowerCase();
 }
 
+function titleKey(title: string): string {
+  return title.trim().toLowerCase();
+}
+
 async function getJobsFromAdzuna(args: {
   term: string;
   page?: number;
@@ -185,6 +189,7 @@ async function getUniqueJobsForTerm(args: {
 
   const uniqueJobs: Job[] = [];
   const seenKeys = new Set<string>(excludedKeys);
+  const seenTitles = new Set<string>();
 
   for (const source of sources) {
     for (let page = 1; page <= MAX_PAGES_PER_SOURCE && uniqueJobs.length < targetCount; page++) {
@@ -198,9 +203,13 @@ async function getUniqueJobsForTerm(args: {
 
       for (const job of jobs) {
         const key = dedupeKey(job);
+        const normalizedTitle = titleKey(job.title);
+
         if (seenKeys.has(key)) continue;
+        if (!normalizedTitle || seenTitles.has(normalizedTitle)) continue;
 
         seenKeys.add(key);
+        seenTitles.add(normalizedTitle);
         uniqueJobs.push(job);
 
         if (uniqueJobs.length >= targetCount) break;

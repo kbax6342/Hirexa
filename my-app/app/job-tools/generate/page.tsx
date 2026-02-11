@@ -36,6 +36,8 @@ type Result = {
 type Tone = "professional" | "conversational" | "enthusiastic";
 type TabKey = "coverLetter" | "updatedResume" | "preInterview" | "postInterview";
 
+const textEncoder = new TextEncoder();
+
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "coverLetter", label: "Cover Letter" },
   { key: "updatedResume", label: "Revised Resume" },
@@ -142,8 +144,7 @@ export default function JobToolsGeneratePage() {
     }
   }
 
-  function downloadText(filename: string, text: string) {
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  function downloadBlob(filename: string, blob: Blob) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
@@ -153,28 +154,233 @@ export default function JobToolsGeneratePage() {
     URL.revokeObjectURL(a.href);
   }
 
-  function downloadActive() {
+  function getDocumentFileMeta(tab: TabKey): { filename: string; title: string } {
+    if (tab === "coverLetter") return { filename: "cover-letter.pdf", title: "Cover Letter" };
+    if (tab === "updatedResume") return { filename: "revised-resume.pdf", title: "Revised Resume" };
+    if (tab === "preInterview") return { filename: "pre-interview-email.pdf", title: "Pre-Interview Email" };
+    return { filename: "post-interview-email.pdf", title: "Post-Interview Email" };
+  }
+
+  function normalizePdfText(value: string) {
+    return value
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2013\u2014]/g, "-")
+      .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+  }
+
+  function wrapTextToLines(text: string, maxChars = 95) {
+    const normalized = normalizePdfText(text);
+    const finalLines: string[] = [];
+
+    for (const rawLine of normalized.split("\n")) {
+      const line = rawLine.trimEnd();
+      if (!line) {
+        finalLines.push("");
+        continue;
+      }
+
+      let current = "";
+      const words = line.split(/\s+/).filter(Boolean);
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length <= maxChars) {
+          current = next;
+          continue;
+        }
+
+        if (current) finalLines.push(current);
+
+        if (word.length <= maxChars) {
+          current = word;
+          continue;
+        }
+
+        let sliceStart = 0;
+        while (sliceStart < word.length) {
+          const chunk = word.slice(sliceStart, sliceStart + maxChars);
+          if (chunk.length === maxChars) {
+            finalLines.push(chunk);
+          } else {
+            current = chunk;
+          }
+          sliceStart += maxChars;
+        }
+      }
+
+      if (current) finalLines.push(current);
+    }
+
+    return finalLines;
+  }
+
+  function escapePdfLiteral(text: string) {
+    return text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  }
+
+  function createPdfBytes(text: string, title: string): Uint8Array {
+    const allLines = wrapTextToLines(text || " ");
+    const linesPerPage = 50;
+    const pages: string[][] = [];
+
+    for (let i = 0; i < allLines.length; i += linesPerPage) {
+      pages.push(allLines.slice(i, i + linesPerPage));
+    }
+    if (!pages.length) pages.push([""]);
+
+    const objectBodies: string[] = [];
+
+    objectBodies.push("<< /Type /Catalog /Pages 2 0 R >>");
+
+    const pageCount = pages.length;
+    const firstPageObject = 4;
+    const kids = Array.from({ length: pageCount }, (_, i) => `${firstPageObject + i * 2} 0 R`).join(" ");
+    objectBodies.push(`<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`);
+
+    objectBodies.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+
+    for (let i = 0; i < pageCount; i++) {
+      const pageObjectId = firstPageObject + i * 2;
+      const contentObjectId = pageObjectId + 1;
+      objectBodies.push(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectId} 0 R >>`
+      );
+
+      const lines = pages[i];
+      const textParts = lines.map((line, lineIndex) => {
+        const escaped = escapePdfLiteral(line);
+        if (lineIndex === 0) {
+          return `50 742 Td (${escaped}) Tj`;
+        }
+        return `T* (${escaped}) Tj`;
+      });
+
+      const safeTitle = escapePdfLiteral(normalizePdfText(title));
+      const stream = `BT\n/F1 12 Tf\n14 TL\n50 764 Td\n(${safeTitle}) Tj\nT*\nT*\n${textParts.join("\n")}\nET`;
+      objectBodies.push(`<< /Length ${textEncoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
+    }
+
+    let pdf = "%PDF-1.4\n";
+    const offsets: number[] = [0];
+    for (let i = 0; i < objectBodies.length; i++) {
+      offsets.push(textEncoder.encode(pdf).length);
+      pdf += `${i + 1} 0 obj\n${objectBodies[i]}\nendobj\n`;
+    }
+
+    const xrefOffset = textEncoder.encode(pdf).length;
+    pdf += `xref\n0 ${objectBodies.length + 1}\n`;
+    pdf += "0000000000 65535 f \n";
+    for (let i = 1; i < offsets.length; i++) {
+      pdf += `${offsets[i].toString().padStart(10, "0")} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objectBodies.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    return textEncoder.encode(pdf);
+  }
+
+  function crc32(bytes: Uint8Array) {
+    let crc = -1;
+    for (let i = 0; i < bytes.length; i++) {
+      crc ^= bytes[i];
+      for (let j = 0; j < 8; j++) {
+        const mask = -(crc & 1);
+        crc = (crc >>> 1) ^ (0xedb88320 & mask);
+      }
+    }
+    return (crc ^ -1) >>> 0;
+  }
+
+  function buildZip(files: Array<{ filename: string; bytes: Uint8Array }>): Blob {
+    const localEntries: Uint8Array[] = [];
+    const centralEntries: Uint8Array[] = [];
+    let offset = 0;
+
+    for (const file of files) {
+      const nameBytes = textEncoder.encode(file.filename);
+      const crc = crc32(file.bytes);
+
+      const localHeader = new Uint8Array(30 + nameBytes.length + file.bytes.length);
+      const localView = new DataView(localHeader.buffer);
+      localView.setUint32(0, 0x04034b50, true);
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, 0, true);
+      localView.setUint16(8, 0, true);
+      localView.setUint16(10, 0, true);
+      localView.setUint16(12, 0, true);
+      localView.setUint32(14, crc, true);
+      localView.setUint32(18, file.bytes.length, true);
+      localView.setUint32(22, file.bytes.length, true);
+      localView.setUint16(26, nameBytes.length, true);
+      localView.setUint16(28, 0, true);
+      localHeader.set(nameBytes, 30);
+      localHeader.set(file.bytes, 30 + nameBytes.length);
+      localEntries.push(localHeader);
+
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const centralView = new DataView(centralHeader.buffer);
+      centralView.setUint32(0, 0x02014b50, true);
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, 0, true);
+      centralView.setUint16(10, 0, true);
+      centralView.setUint16(12, 0, true);
+      centralView.setUint16(14, 0, true);
+      centralView.setUint32(16, crc, true);
+      centralView.setUint32(20, file.bytes.length, true);
+      centralView.setUint32(24, file.bytes.length, true);
+      centralView.setUint16(28, nameBytes.length, true);
+      centralView.setUint16(30, 0, true);
+      centralView.setUint16(32, 0, true);
+      centralView.setUint16(34, 0, true);
+      centralView.setUint16(36, 0, true);
+      centralView.setUint32(38, 0, true);
+      centralView.setUint32(42, offset, true);
+      centralHeader.set(nameBytes, 46);
+      centralEntries.push(centralHeader);
+
+      offset += localHeader.length;
+    }
+
+    const centralSize = centralEntries.reduce((sum, entry) => sum + entry.length, 0);
+    const endRecord = new Uint8Array(22);
+    const endView = new DataView(endRecord.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, files.length, true);
+    endView.setUint16(10, files.length, true);
+    endView.setUint32(12, centralSize, true);
+    endView.setUint32(16, offset, true);
+    endView.setUint16(20, 0, true);
+
+    return new Blob([...localEntries, ...centralEntries, endRecord], { type: "application/zip" });
+  }
+
+  async function downloadActive() {
     const text = getActiveDocText(result, activeTab);
     if (!text) return;
 
-    const name =
-      activeTab === "coverLetter"
-        ? "cover-letter.txt"
-        : activeTab === "updatedResume"
-        ? "resume-updates.txt"
-        : activeTab === "preInterview"
-        ? "pre-interview-email.txt"
-        : "post-interview-email.txt";
-
-    downloadText(name, text);
+    const { filename, title } = getDocumentFileMeta(activeTab);
+    const bytes = createPdfBytes(text, title);
+    downloadBlob(filename, new Blob([bytes], { type: "application/pdf" }));
   }
 
   function downloadAll() {
     if (!result) return;
-    downloadText("cover-letter.txt", getActiveDocText(result, "coverLetter"));
-    downloadText("resume-updates.txt", getActiveDocText(result, "updatedResume"));
-    downloadText("pre-interview-email.txt", getActiveDocText(result, "preInterview"));
-    downloadText("post-interview-email.txt", getActiveDocText(result, "postInterview"));
+
+    const allTabs: TabKey[] = ["coverLetter", "updatedResume", "preInterview", "postInterview"];
+    const files = allTabs.map((tab) => {
+      const text = getActiveDocText(result, tab);
+      const meta = getDocumentFileMeta(tab);
+      return {
+        filename: meta.filename,
+        bytes: createPdfBytes(text, meta.title),
+      };
+    });
+
+    const zipBlob = buildZip(files);
+    downloadBlob("application-documents.zip", zipBlob);
   }
 
   async function onGenerate() {

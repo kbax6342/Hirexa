@@ -124,28 +124,28 @@ export default function Step2Client({
       <div className="mx-auto max-w-5xl px-6 py-14">
         {/* Header */}
         <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">
             Upload your resume
           </h1>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-muted-foreground">
             Drag & drop a file or import it from your cloud storage. We’ll extract
             your work experience automatically.
           </p>
         </div>
 
         {/* Status */}
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-4">
+        <div className="mt-6 rounded-2xl border border-white/15 bg-white/5 p-4 backdrop-blur-sm">
           {isSaving ? (
-            <div className="text-sm text-gray-700">Saving resume…</div>
+            <div className="text-sm text-foreground">Saving resume…</div>
           ) : saveError ? (
-            <div className="text-sm text-red-700">
+            <div className="text-sm text-red-300">
               <div className="font-semibold">Not saved</div>
               <div className="mt-1">{saveError}</div>
             </div>
           ) : proof ? (
-            <div className="text-sm text-emerald-700">
+            <div className="text-sm text-emerald-300">
               <div className="font-semibold">Saved ✅</div>
-              <div className="mt-1 text-xs text-gray-600">
+              <div className="mt-1 text-xs text-muted-foreground">
                 Resume ID:{" "}
                 <span className="font-mono">{proof.resume.id}</span> • Profile
                 ID:{" "}
@@ -153,7 +153,7 @@ export default function Step2Client({
                   {proof.savedTo?.profileId ?? proof.resume.profileId ?? proof.resume.userProfileId ?? "N/A"}
                 </span>
               </div>
-              <div className="mt-1 text-xs text-gray-600">
+              <div className="mt-1 text-xs text-muted-foreground">
                 File:{" "}
                 <span className="font-semibold">
                   {proof.resume.fileName ?? proof.resume.filename ?? "Uploaded resume"}
@@ -164,7 +164,7 @@ export default function Step2Client({
               </div>
             </div>
           ) : (
-            <div className="text-sm text-gray-600">
+            <div className="text-sm text-muted-foreground">
               Choose a file, then click Next to save it.
             </div>
           )}
@@ -175,10 +175,10 @@ export default function Step2Client({
           {/* Dropzone */}
           <div
             className={[
-              "relative overflow-hidden rounded-2xl border bg-gradient-to-br from-gray-50 to-white shadow-sm",
+              "relative overflow-hidden rounded-2xl border bg-gradient-to-br from-white/10 to-white/5 shadow-lg shadow-black/20 backdrop-blur-sm",
               dragOver
-                ? "border-blue-500 ring-4 ring-blue-100"
-                : "border-gray-200",
+                ? "border-primary ring-4 ring-primary/20"
+                : "border-white/15",
             ].join(" ")}
             onDragOver={(e) => {
               e.preventDefault();
@@ -190,16 +190,16 @@ export default function Step2Client({
             <div className="p-7">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  <div className="inline-flex items-center gap-2 rounded-full bg-primary/15 px-3 py-1 text-xs font-semibold text-sky-200">
                     Resume
-                    <span className="h-1 w-1 rounded-full bg-blue-300" />
+                    <span className="h-1 w-1 rounded-full bg-sky-300" />
                     PDF / DOCX
                   </div>
 
-                  <h2 className="mt-3 text-lg font-semibold text-gray-900">
+                  <h2 className="mt-3 text-lg font-semibold text-foreground">
                     {file ? "File ready to upload" : "Drop your file here"}
                   </h2>
-                  <p className="mt-1 text-sm text-gray-600">
+                  <p className="mt-1 text-sm text-muted-foreground">
                     {file
                       ? "Click Next to save it."
                       : "Or choose a file from your device."}
@@ -208,14 +208,14 @@ export default function Step2Client({
               </div>
 
               {/* File row */}
-              <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
+              <div className="mt-6 rounded-xl border border-white/15 bg-black/20 p-4">
                 {file ? (
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-gray-900">
+                      <div className="truncate text-sm font-semibold text-foreground">
                         {file.name}
                       </div>
-                      <div className="mt-1 text-xs text-gray-600">
+                      <div className="mt-1 text-xs text-muted-foreground">
                         {(file.size / 1024 / 1024).toFixed(2)} MB •{" "}
                         {selectedSource === "google-drive"
                           ? "Google Drive"
@@ -242,7 +242,7 @@ export default function Step2Client({
                         if (inputRef.current)
                           inputRef.current.value = "";
                       }}
-                      className="rounded-full border border-gray-200 bg-white px-4 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
+                      className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-semibold text-foreground transition hover:bg-white/20"
                     >
                       Change
                     </button>
@@ -251,7 +251,7 @@ export default function Step2Client({
                   <button
                     type="button"
                     onClick={pickFile}
-                    className="inline-flex w-full items-center justify-center rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                    className="inline-flex w-full items-center justify-center rounded-full bg-sky-500 px-5 py-2 text-sm font-semibold text-white transition hover:bg-sky-400"
                   >
                     Choose file
                   </button>
@@ -268,9 +268,8 @@ export default function Step2Client({
             </div>
           </div>
 
-          {/* Cloud imports (unchanged visually) */}
-          <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="text-sm font-semibold text-gray-900">
+          <div className="rounded-2xl border border-white/15 bg-white/5 p-6 shadow-lg shadow-black/20 backdrop-blur-sm">
+            <div className="text-sm font-semibold text-foreground">
               Import from cloud
             </div>
             <div className="mt-1 text-xs text-gray-600">
@@ -305,7 +304,7 @@ export default function Step2Client({
         <div className="mt-8 flex items-center justify-between">
           <Link
             href="/onboarding/job-interest"
-            className="text-sm font-semibold underline underline-offset-4"
+            className="text-sm font-semibold text-foreground underline underline-offset-4"
           >
             Skip for now
           </Link>
@@ -315,10 +314,10 @@ export default function Step2Client({
             onClick={uploadResumeAndContinue}
             disabled={!file || isSaving}
             className={[
-              "rounded-full px-8 py-3 font-medium text-white",
+              "rounded-full px-8 py-3 font-medium text-white transition",
               !file || isSaving
-                ? "cursor-not-allowed bg-gray-400"
-                : "bg-black",
+                ? "cursor-not-allowed bg-white/30"
+                : "bg-sky-500 hover:bg-sky-400",
             ].join(" ")}
           >
             {isSaving ? "Saving..." : "Next"}

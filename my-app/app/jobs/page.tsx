@@ -254,6 +254,10 @@ function Logo({ logoText, logoUrl }: { logoText?: string; logoUrl?: string }) {
   );
 }
 
+function categoryToSlug(category: string) {
+  return category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "");
+}
+
 function formatPostedDate(value: string) {
   const date = new Date(value);
   if (isNaN(date.getTime())) return value; // fallback if Adzuna sends text
@@ -670,7 +674,7 @@ export default function JobsPage() {
                       {section.name}
                     </h2>
                     <Link
-                      href={`/jobs/${section.name}/`}
+                      href={`/jobs/${categoryToSlug(section.name)}`}
                       className="text-sm font-semibold text-sky-600 hover:text-sky-700"
                     >
                       See all {section.name} jobs →

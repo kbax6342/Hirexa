@@ -10,9 +10,10 @@ function titleize(slug: string) {
 export default async function Page({
   params,
 }: {
-  params: { category: string };
+  params: Promise<{ category: string }>;
 }) {
-  const categorySlug = (params.category ?? "all").toLowerCase();
+  const { category } = await params;
+  const categorySlug = (category ?? "all").toLowerCase();
   const categoryLabel = titleize(categorySlug);
 
   // ✅ for now, pass empty jobs so the client will fetch from /api/jobs

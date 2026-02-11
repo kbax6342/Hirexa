@@ -38,7 +38,8 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
   const limit = Math.min(Number(searchParams.get("limit") ?? 20), 50);
-  const q = (searchParams.get("q") ?? "software engineer").trim();
+  const rawCategory = (searchParams.get("category") ?? "").trim().toLowerCase();
+  const q = (searchParams.get("q") ?? mapCategoryToQuery(rawCategory)).trim();
 
   const cursor = decodeCursor(searchParams.get("cursor"));
 
@@ -66,7 +67,25 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({
+    jobs: merged,
     items: merged,
     nextCursor,
   });
+}
+
+function mapCategoryToQuery(category: string) {
+  if (!category) return "software engineer";
+
+  const normalized = category.replace(/[-_]+/g, " ").trim();
+
+  const queryByCategory: Record<string, string> = {
+    healthcare: "healthcare",
+    technology: "software engineer",
+    "tech": "software engineer",
+    "skilled trades": "electrician OR plumber OR hvac technician",
+    "skill trades": "electrician OR plumber OR hvac technician",
+    finance: "finance",
+  };
+
+  return queryByCategory[normalized] ?? normalized;
 }

@@ -62,9 +62,9 @@ export default function JobsExplorerClient({
       setLoading(true);
       try {
         const res = await fetch(`/api/jobs?category=${encodeURIComponent(categorySlug)}`);
-        const data = (await res.json()) as { jobs?: Job[] };
+        const data = (await res.json()) as { jobs?: Job[]; items?: Job[] };
         if (!ignore) {
-          const nextJobs = data.jobs ?? [];
+          const nextJobs = data.jobs ?? data.items ?? [];
           setJobs(nextJobs);
           setSelectedId(nextJobs?.[0]?.id ?? null);
         }

@@ -9,12 +9,14 @@ const CLIENT_ID_KEYS = [
 const API_KEY_KEYS = [
   "NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY",
   "GOOGLE_DRIVE_API_KEY",
-  "GOOGLE_API_KEY",
 ] as const;
 
 function getFirstConfiguredEnv(keys: readonly string[]) {
   for (const key of keys) {
-    const value = process.env[key];
+    const rawValue = process.env[key];
+    if (!rawValue) continue;
+
+    const value = rawValue.trim().replace(/^['\"]|['\"]$/g, "");
     if (value) return value;
   }
 

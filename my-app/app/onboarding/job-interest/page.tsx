@@ -17,7 +17,7 @@ export default function JobSearchPage() {
   const [selectedJobs, setSelectedJobs] = useState<Job[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [draftSelectedIds, setDraftSelectedIds] = useState<Set<string>>(new Set());
+  const [draftSelectedJobs, setDraftSelectedJobs] = useState<Job[]>([]);
   const [saving, setSaving] = useState(false);
 
   const router = useRouter();
@@ -26,8 +26,8 @@ export default function JobSearchPage() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const draftRemaining = useMemo(
-    () => Math.max(0, 5 - (selectedJobs.length + draftSelectedIds.size)),
-    [selectedJobs.length, draftSelectedIds.size],
+    () => Math.max(0, 5 - (selectedJobs.length + draftSelectedJobs.length)),
+    [selectedJobs.length, draftSelectedJobs.length],
   );
 
     
@@ -36,8 +36,6 @@ export default function JobSearchPage() {
   useEffect(() => {
     // If user is typing, show dropdown & fetch debounced
     if (!showDropdown) return;
-    // Every time the user changes the query, we treat it as a new search session
-    setDraftSelectedIds(new Set());
     const term = query.trim();
     const effectiveTerm = term.length > 0 ? term : DEFAULT_TERM;
 
@@ -90,30 +88,27 @@ export default function JobSearchPage() {
   };
 
   const toggleDraftJob = (job: Job) => {
-    setDraftSelectedIds((prev) => {
-      const next = new Set(prev);
+    setDraftSelectedJobs((prev) => {
+      const exists = prev.some((selected) => selected.uuid === job.uuid);
 
-      if (next.has(job.uuid)) {
-        next.delete(job.uuid);
-        return next;
+      if (exists) {
+        return prev.filter((selected) => selected.uuid !== job.uuid);
       }
 
-      if (selectedJobs.length + next.size >= 5) {
+      if (selectedJobs.length + prev.length >= 5) {
         return prev;
       }
 
-      next.add(job.uuid);
-      return next;
+      return [...prev, job];
     });
   };
 
   const handleDone = () => {
-    if (draftSelectedIds.size > 0) {
+    if (draftSelectedJobs.length > 0) {
       setSelectedJobs((prev) => {
         const next = [...prev];
 
-        for (const job of results) {
-          if (!draftSelectedIds.has(job.uuid)) continue;
+        for (const job of draftSelectedJobs) {
           if (next.some((selected) => selected.uuid === job.uuid)) continue;
           if (next.length >= 5) break;
           next.push(job);
@@ -123,7 +118,7 @@ export default function JobSearchPage() {
       });
     }
 
-    setDraftSelectedIds(new Set());
+    setDraftSelectedJobs([]);
     setShowDropdown(false);
   };
   
@@ -257,8 +252,8 @@ export default function JobSearchPage() {
 
                   {!loading &&
                     results.map((job) => {
-                      const isSelected = draftSelectedIds.has(job.uuid);
-                      const isDisabled = !isSelected && selectedJobs.length + draftSelectedIds.size >= 5;
+                      const isSelected = draftSelectedJobs.some((selected) => selected.uuid === job.uuid);
+                      const isDisabled = !isSelected && selectedJobs.length + draftSelectedJobs.length >= 5;
                       return (
                         <label
                           key={job.uuid}
@@ -284,7 +279,7 @@ export default function JobSearchPage() {
                 <div className="p-3 border-t border-gray-200 bg-gray-50">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-gray-600">{draftRemaining} more recommended</span>
-                    {selectedJobs.length + draftSelectedIds.size >= 5 && (
+                    {selectedJobs.length + draftSelectedJobs.length >= 5 && (
                       <span className="text-xs text-amber-600 font-medium">Maximum reached</span>
                     )}
                   </div>
@@ -294,7 +289,7 @@ export default function JobSearchPage() {
                       type="button"
                       onClick={() => {
                         setQuery("");
-                        setDraftSelectedIds(new Set());
+                        setDraftSelectedJobs([]);
                         // keep dropdown open showing defaults
                         setShowDropdown(true);
                       }}

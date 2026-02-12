@@ -8,7 +8,17 @@ import { useRouter } from "next/navigation";
 declare global {
   interface Window {
     gapi?: {
-      load: (name: string, callback: () => void) => void;
+      load: (
+        name: string,
+        callbackOrConfig:
+          | (() => void)
+          | {
+              callback?: () => void;
+              onerror?: () => void;
+              timeout?: number;
+              ontimeout?: () => void;
+            }
+      ) => void;
       client: {
         init: (args: { apiKey: string; discoveryDocs: string[] }) => Promise<void>;
       };
@@ -75,6 +85,12 @@ const GOOGLE_DRIVE_DISCOVERY_DOC =
   "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
+function sanitizeGoogleConfigValue(value?: string | null) {
+  if (!value) return undefined;
+  const sanitized = value.trim().replace(/^['\"]|['\"]$/g, "");
+  return sanitized || undefined;
+}
+
 function loadScript(src: string) {
   return new Promise<void>((resolve, reject) => {
     const alreadyLoaded = document.querySelector(`script[src=\"${src}\"]`);
@@ -122,8 +138,8 @@ export default function Step2Client({
   }
 
   async function pickFromGoogleDrive() {
-    let clientId = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID;
-    let apiKey = process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY;
+    let clientId = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID);
+    let apiKey = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY);
 
     if (!clientId || !apiKey) {
       const configResponse = await fetch("/api/integrations/google-drive/config", {
@@ -133,8 +149,8 @@ export default function Step2Client({
 
       if (configResponse.ok) {
         const config = (await configResponse.json()) as { config?: GoogleDriveConfig };
-        clientId = config.config?.clientId;
-        apiKey = config.config?.apiKey;
+        clientId = sanitizeGoogleConfigValue(config.config?.clientId);
+        apiKey = sanitizeGoogleConfigValue(config.config?.apiKey);
       }
     }
 
@@ -163,7 +179,7 @@ export default function Step2Client({
         onerror: () => reject(new Error("Failed to load Google Picker module.")),
         timeout: 10000,
         ontimeout: () => reject(new Error("Google Picker module load timed out.")),
-      } as any);
+      });
     });
 
     // NOW check google identity + picker objects
@@ -255,7 +271,13 @@ export default function Step2Client({
       await uploadResumeAndContinue(pickedFile);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Google Drive import failed.";
-      setSaveError(errorMessage);
+      const maybeInvalidApiKey = /developer key|api key|invalid/i.test(errorMessage);
+
+      setSaveError(
+        maybeInvalidApiKey
+          ? "Google Drive API key is invalid. Use a Browser key with Google Picker API and Drive API enabled."
+          : errorMessage
+      );
     } finally {
       setIsGoogleDriveLoading(false);
     }

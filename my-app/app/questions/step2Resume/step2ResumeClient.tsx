@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
 
 type Experience = {
   id: string;
@@ -65,6 +66,7 @@ export default function Step2ResumeClient() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const hasResults = experiences.length > 0;
+
 
   useEffect(() => {
     if (!resumeId) {
@@ -150,7 +152,9 @@ export default function Step2ResumeClient() {
     );
   }, []);
 
-  return (
+  return loading ? (
+    <ResumeParsingLoadingScreen />
+  ) : (
     <div className="min-h-screen bg-white">
       <main className="mx-auto max-w-5xl px-6 pb-16">
         {stepBar}
@@ -163,12 +167,6 @@ export default function Step2ResumeClient() {
             </div>
           )}
         </div>
-
-        {loading && (
-          <div className="mt-4 rounded-lg border bg-gray-50 px-4 py-3 text-sm">
-            Loading resume…
-          </div>
-        )}
 
         {error && (
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

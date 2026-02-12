@@ -4,6 +4,7 @@
 import Link from "next/link";
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
 
 declare global {
   interface Window {
@@ -403,6 +404,10 @@ export default function Step2Client({
     }
   }
   console.log("KEY VALUE:", process.env.NEXT_PUBLIC_GOOGLE_API_KEY);
+
+  if (isSaving) {
+    return <ResumeParsingLoadingScreen />;
+  }
 
 
   return (

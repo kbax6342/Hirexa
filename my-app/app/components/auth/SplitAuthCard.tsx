@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react";
 
 type Step = "signup" | "peek" | "verify";
 
@@ -40,7 +41,7 @@ function OtpBoxes({
 }: {
   value: string; // digits only, up to 6
   onChange: (next: string) => void;
-  onComplete?: (code: string) => void;
+  onComplete?: () => void;
   disabled?: boolean;
 }) {
   const refs = useRef<Array<HTMLInputElement | null>>([]);
@@ -57,7 +58,7 @@ function OtpBoxes({
     if (clean && index < 5) refs.current[index + 1]?.focus();
 
     if (next.length === 6 && !next.includes("") && onComplete) {
-      onComplete(next);
+      onComplete();
     }
   }
 
@@ -101,7 +102,7 @@ function OtpBoxes({
     const nextIndex = Math.min(only.length, 6) - 1;
     refs.current[nextIndex]?.focus();
 
-    if (only.length === 6 && onComplete) onComplete(only);
+    if (only.length === 6 && onComplete) onComplete();
   }
 
   return (
@@ -211,6 +212,16 @@ export default function SplitAuthCard() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Verification failed");
+
+      const login = await signIn("credentials", {
+        email,
+        password: pw,
+        redirect: false,
+      });
+
+      if (login?.error) {
+        throw new Error("Email verified, but automatic sign-in failed. Please log in.");
+      }
 
       router.push("/onboarding/profile")
     } catch (e: unknown) {
@@ -412,7 +423,7 @@ export default function SplitAuthCard() {
                             value={otp}
                             onChange={setOtp}
                             disabled={loading}
-                            onComplete={(code) => {
+                            onComplete={() => {
                               // optional: auto-submit as soon as 6 digits entered
                               if (!loading) verifyOtp();
                             }}

@@ -177,8 +177,8 @@ export default function JobSearchPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-20">
-        <div className="w-full max-w-xl">
+      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-[150]">
+        <div className="w-full max-w-xl ">
           <h1 className="text-4xl font-bold text-center text-gray-900 mb-3">
             What kind of jobs are you looking for?
           </h1>
@@ -348,6 +348,7 @@ export default function JobSearchPage() {
 
       {/* Footer Navigation */}
       <footer className="px-6 py-6 flex justify-between items-center border-t border-gray-200">
+        <div className="mx-auto min-w-9/12  md:min-w-11/12 flex justify-between ">
         <button
           onClick={handleBack}
           className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
@@ -366,6 +367,8 @@ export default function JobSearchPage() {
           {saving ? "Saving..." : "Next"}
         </button>
 
+        </div>
+     
       </footer>
     </div>
   );

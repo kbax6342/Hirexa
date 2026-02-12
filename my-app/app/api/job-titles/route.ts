@@ -29,8 +29,10 @@ Only output a valid JSON array of strings, no extra text.
 
     //console.log(response)
 
-    // Claude returns text in response.completion
-    const text = response.content[0].text || "[]";
+    const text = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n") || "[]";
 
     console.log(text)
 

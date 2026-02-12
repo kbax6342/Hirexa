@@ -152,13 +152,28 @@ export default function Step2Client({
         loadScript("https://accounts.google.com/gsi/client"),
       ]);
 
-      if (!window.gapi?.load || !window.google?.accounts?.oauth2 || !window.google?.picker) {
+      if (!window.gapi?.load) {
         throw new Error("Google Drive tools are unavailable right now.");
       }
 
-      await new Promise<void>((resolve) => {
-        window.gapi?.load("client:picker", resolve);
-      });
+     // Load the modules first
+    await new Promise<void>((resolve, reject) => {
+      window.gapi!.load("client:picker", {
+        callback: () => resolve(),
+        onerror: () => reject(new Error("Failed to load Google Picker module.")),
+        timeout: 10000,
+        ontimeout: () => reject(new Error("Google Picker module load timed out.")),
+      } as any);
+    });
+
+    // NOW check google identity + picker objects
+    if (!window.google?.accounts?.oauth2) {
+      throw new Error("Google Identity Services failed to load.");
+    }
+
+    if (!window.google?.picker) {
+      throw new Error("Google Picker failed to initialize.");
+    }
 
       await window.gapi.client.init({
         apiKey,

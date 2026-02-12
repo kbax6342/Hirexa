@@ -1,15 +1,52 @@
 // /Hirexa/my-app/app/api/profile/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
-// import { getServerSession } from "next-auth"; // if you use next-auth
-// import { authOptions } from "@/app/lib/auth"; // adjust path
+import { auth } from "@/app/lib/auth";
+
+type ProfileBody = {
+  firstName?: string;
+  lastName?: string;
+  dob?: string;
+  address?: string;
+  city?: string;
+  postalCode?: string;
+  state?: string;
+  linkedinUrl?: string;
+  phone?: string;
+  email?: string;
+};
+
+function normalizeText(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text.length > 0 ? text : null;
+}
+
+function parseDob(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const normalized = raw.includes("/")
+    ? (() => {
+        const [mm, dd, yyyy] = raw.split("/");
+        if (!mm || !dd || !yyyy) return null;
+        return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+      })()
+    : raw;
+
+  if (!normalized) return null;
+
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date;
+}
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const body = (await req.json()) as ProfileBody;
 
-    const firstName = String(body.firstName ?? "").trim();
-    const lastName = String(body.lastName ?? "").trim();
+    const firstName = normalizeText(body.firstName);
+    const lastName = normalizeText(body.lastName);
 
     if (!firstName || !lastName) {
       return NextResponse.json(
@@ -18,49 +55,59 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Replace this with YOUR auth/guest logic
-    // If logged in:
-    // const session = await getServerSession(authOptions);
-    // const userId = session?.user?.id ?? null;
+    const session = await auth();
+    const userId = session?.user?.id ?? null;
 
-    const userId = body.userId ? String(body.userId) : null; // TEMP fallback if you're passing it
-    const guestId = body.guestId ? String(body.guestId) : null;
-
-    // Prefer userId since it's unique in your Prisma error output
-    if (userId) {
-      const profile = await prisma.userProfile.upsert({
-        where: { userId }, // ✅ unique
-        create: { userId, firstName, lastName },
-        update: { firstName, lastName },
-        select: { id: true, userId: true, firstName: true, lastName: true },
-      });
-
-      return NextResponse.json({ ok: true, profile });
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // If you have a unique guestId, you can use it too
-    if (guestId) {
-      const profile = await prisma.userProfile.upsert({
-        where: { guestId }, // ✅ unique
-        create: { guestId, firstName, lastName },
-        update: { firstName, lastName },
-        select: { id: true, guestId: true, firstName: true, lastName: true },
-      });
-
-      return NextResponse.json({ ok: true, profile });
-    }
-
-    // Otherwise just create a record (no upsert)
-    const profile = await prisma.userProfile.create({
-      data: { firstName, lastName },
-      select: { id: true, firstName: true, lastName: true },
+    const profile = await prisma.userProfile.upsert({
+      where: { userId },
+      create: {
+        userId,
+        firstName,
+        lastName,
+        email: normalizeText(body.email) ?? session?.user?.email ?? null,
+        phone: normalizeText(body.phone),
+        dob: parseDob(body.dob),
+        address: normalizeText(body.address),
+        city: normalizeText(body.city),
+        postalCode: normalizeText(body.postalCode),
+        state: normalizeText(body.state),
+        linkedinUrl: normalizeText(body.linkedinUrl),
+      },
+      update: {
+        firstName,
+        lastName,
+        email: normalizeText(body.email) ?? session?.user?.email ?? undefined,
+        phone: normalizeText(body.phone),
+        dob: parseDob(body.dob),
+        address: normalizeText(body.address),
+        city: normalizeText(body.city),
+        postalCode: normalizeText(body.postalCode),
+        state: normalizeText(body.state),
+        linkedinUrl: normalizeText(body.linkedinUrl),
+      },
+      select: {
+        id: true,
+        userId: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        dob: true,
+        address: true,
+        city: true,
+        postalCode: true,
+        state: true,
+        linkedinUrl: true,
+      },
     });
 
     return NextResponse.json({ ok: true, profile });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "Server error" },
-      { status: 500 }
-    );
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

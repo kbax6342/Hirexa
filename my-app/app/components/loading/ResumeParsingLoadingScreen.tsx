@@ -142,10 +142,10 @@ export default function ResumeParsingLoadingScreen() {
         <div className="absolute inset-0 overflow-hidden">
           <div className="absolute top-20 left-40 w-96 h-96 bg-blue-600 rounded-full mix-blend-multiply filter blur-3xl opacity-10 float-element" />
           <div
-            className="absolute bottom-20 right-40 w-96 h-96 bg-violet-600 rounded-full mix-blend-multiply filter blur-3xl opacity-10 float-element"
+            className="absolute bottom-20 right-40 w-96 h-96 bg-sky-500 rounded-full mix-blend-multiply filter blur-3xl opacity-10 float-element"
             style={{ animationDelay: "1s" }}
           />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-600 rounded-full mix-blend-multiply filter blur-3xl opacity-5" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-sky-600 rounded-full mix-blend-multiply filter blur-3xl opacity-5" />
         </div>
 
         {/* Star-ish dots */}
@@ -159,11 +159,11 @@ export default function ResumeParsingLoadingScreen() {
 
         <div className="relative z-10 flex flex-col items-center">
           {/* Header */}
-          <div className="mb-16">
+          {/* <div className="mb-16">
             <div className="flex items-center gap-3">
               <div className="relative">
                 <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-violet-600 rounded-xl flex items-center justify-center shadow-2xl shadow-violet-500/30">
-                  <BrainIcon className="h-7 w-7 text-white" />
+                  {/* <BrainIcon className="h-7 w-7 text-white" />  <span>H</span>
                 </div>
                 <div className="absolute -top-1 -right-1 w-4 h-4 bg-violet-400 rounded-full pulse-glow" />
               </div>
@@ -173,7 +173,7 @@ export default function ResumeParsingLoadingScreen() {
                 <p className="text-blue-300 text-sm font-medium mt-0.5">Intelligent Job Matching</p>
               </div>
             </div>
-          </div>
+          </div> */}
 
           {/* Spinner */}
           <div className="relative w-80 h-80 mb-12">
@@ -295,9 +295,7 @@ export default function ResumeParsingLoadingScreen() {
           </div>
         </div>
 
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-blue-400/40 text-xs font-medium">
-          Powered by Advanced AI Technology
-        </div>
+      
       </div>
     </div>
   );

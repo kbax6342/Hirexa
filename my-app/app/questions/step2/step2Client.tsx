@@ -361,48 +361,100 @@ export default function Step2Client({
     if (f) handleFile(f);
   }
 
-  async function uploadResumeAndContinue(fileToUpload?: File) {
-    const targetFile = fileToUpload ?? file;
+  // async function uploadResumeAndContinue(fileToUpload?: File) {
+  //   const targetFile = fileToUpload ?? file;
 
-    if (!targetFile) {
-      setSaveError("Please choose a resume file first.");
-      return;
-    }
+  //   if (!targetFile) {
+  //     setSaveError("Please choose a resume file first.");
+  //     return;
+  //   }
 
-    setIsSaving(true);
-    setSaveError(null);
-    setProof(null);
+  //   setIsSaving(true);
+  //   setSaveError(null);
+  //   setProof(null);
 
-    try {
-      const fd = new FormData();
-      fd.append("resume", targetFile);
+  //   try {
+  //     const fd = new FormData();
+  //     fd.append("resume", targetFile);
 
-      const res = await fetch("/api/onboarding/resume", {
-        method: "POST",
-        body: fd,
-      });
+  //     const res = await fetch("/api/onboarding/resume", {
+  //       method: "POST",
+  //       body: fd,
+  //     });
 
-      const data = await res.json().catch(() => null);
+  //     const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.resume?.id) {
-        throw new Error(data?.error || "Upload failed");
-      }
+  //     if (!res.ok || !data?.resume?.id) {
+  //       throw new Error(data?.error || "Upload failed");
+  //     }
 
-      setProof({ savedTo: data.savedTo, resume: data.resume });
+  //     setProof({ savedTo: data.savedTo, resume: data.resume });
 
-      router.push(
-        `/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`
-      );
-    } catch (e: unknown) {
-      const errorMessage =
-        e instanceof Error
-          ? e.message
-          : "Something went wrong while saving your resume.";
-      setSaveError(errorMessage);
-    } finally {
-      setIsSaving(false);
-    }
+  //     router.push(
+  //       `/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`
+  //     );
+  //   } catch (e: unknown) {
+  //     const errorMessage =
+  //       e instanceof Error
+  //         ? e.message
+  //         : "Something went wrong while saving your resume.";
+  //     setSaveError(errorMessage);
+  //   } finally {
+  //     setIsSaving(false);
+  //   }
+  // }
+
+// /app/questions/step2/step2Client.tsx
+
+// /app/questions/step2/step2Client.tsx
+
+async function uploadResumeAndContinue(fileToUpload?: File) {
+  const candidate = fileToUpload ?? file;
+
+  // ✅ Guard: must be a real File/Blob
+  if (!(candidate instanceof File)) {
+    console.error("UPLOAD ERROR: candidate is not a File", {
+      candidate,
+      type: typeof candidate,
+      isBlob: candidate instanceof Blob,
+      isFile: candidate instanceof File,
+    });
+    setSaveError("Please choose a valid resume file (PDF/DOCX) and try again.");
+    return;
   }
+
+  setIsSaving(true);
+  setSaveError(null);
+  setProof(null);
+
+  try {
+    const fd = new FormData();
+
+    // ✅ candidate is guaranteed a real File now
+    fd.append("resume", candidate, candidate.name);
+
+    const res = await fetch("/api/onboarding/resume", {
+      method: "POST",
+      body: fd,
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok || !data?.resume?.id) {
+      throw new Error(data?.error || "Upload failed");
+    }
+
+    setProof({ savedTo: data.savedTo, resume: data.resume });
+
+    router.push(`/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`);
+  } catch (e: unknown) {
+    setSaveError(e instanceof Error ? e.message : "Something went wrong while saving your resume.");
+  } finally {
+    setIsSaving(false);
+  }
+}
+
+
   console.log("KEY VALUE:", process.env.NEXT_PUBLIC_GOOGLE_API_KEY);
 
   if (isSaving) {
@@ -629,7 +681,7 @@ export default function Step2Client({
 
           <button
             type="button"
-            onClick={uploadResumeAndContinue}
+            onClick={() => uploadResumeAndContinue()}
             disabled={!file || isSaving}
             className={[
               "rounded-full px-8 py-3 font-medium text-white transition",

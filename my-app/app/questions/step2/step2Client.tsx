@@ -127,6 +127,11 @@ export default function Step2Client({
 
   useEffect(() => {
     console.log("✅ Step2Client mounted", { profileId, resumeId });
+    console.log("ENV CHECK:", {
+      driveClientId: process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID ? "present" : "missing",
+      driveApiKey: process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY ? "present" : "missing",
+    });
+    
   }, [profileId, resumeId]);
 
   const allowed = useMemo(() => [".pdf", ".doc", ".docx", ".txt", ".rtf", ".html"], []);
@@ -137,9 +142,19 @@ export default function Step2Client({
     inputRef.current?.click();
   }
 
+  async function testGoogleApiKey(apiKey: string) {
+    // This endpoint accepts API keys (no OAuth), returns 400 if missing params, 403 if key blocked/invalid
+    const url = `https://www.googleapis.com/drive/v3/files?fields=files(id)&pageSize=1&key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
+    const text = await res.text();
+    console.log("KEY TEST 2 status:", res.status);
+    console.log("KEY TEST 2 body:", text.slice(0, 500));
+  }
   async function pickFromGoogleDrive() {
     let clientId = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID);
     let apiKey = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY);
+
+    //await testGoogleApiKey(apiKey);
 
     if (!clientId || !apiKey) {
       const configResponse = await fetch("/api/integrations/google-drive/config", {
@@ -154,10 +169,17 @@ export default function Step2Client({
       }
     }
 
-    if (!clientId || !apiKey) {
+      if (!clientId || !apiKey) {
       setSaveError("Google Drive import is not configured yet. Missing client ID or API key.");
       return;
     }
+
+    // 🔐 Tell TypeScript these are definitely strings
+    apiKey = apiKey!;
+    clientId = clientId!;
+
+    // Now this is OK
+    await testGoogleApiKey(apiKey);
 
     setIsGoogleDriveLoading(true);
     setSaveError(null);
@@ -217,6 +239,13 @@ export default function Step2Client({
 
         tokenClient.requestAccessToken({ prompt: "consent" });
       });
+      console.log("ACCESS TOKEN:", accessToken ? "present" : "missing");
+      console.log("ACCESS TOKEN LEN:", accessToken?.length);
+      console.log("DEV KEY DEBUG:", {
+        startsWithAIza: apiKey.startsWith("AIza"),
+        apiKeyLen: apiKey.length,
+        apiKeyPreview: `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`,
+      });
 
       const selectedDoc = await new Promise<{ id: string; name: string; mimeType?: string }>((resolve, reject) => {
         const docsView = new window.google!.picker!.DocsView()
@@ -248,14 +277,14 @@ export default function Step2Client({
         picker.setVisible(true);
       });
 
-      const fileResponse = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selectedDoc.id)}?alt=media`,
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        }
-      );
+      const downloadUrl =
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selectedDoc.id)}` +
+      `?alt=media&supportsAllDrives=true`;
+    
+    const fileResponse = await fetch(downloadUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    
 
       if (!fileResponse.ok) {
         throw new Error("Could not download the selected file from Google Drive.");
@@ -356,6 +385,8 @@ export default function Step2Client({
       setIsSaving(false);
     }
   }
+  console.log("KEY VALUE:", process.env.NEXT_PUBLIC_GOOGLE_API_KEY);
+
 
   return (
     <div className="relative min-h-[70vh] overflow-hidden mt-[50]">

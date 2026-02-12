@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 
@@ -20,31 +19,18 @@ export default function JobSearchPage() {
   const [loading, setLoading] = useState(false);
   const [draftSelectedIds, setDraftSelectedIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
-  const [debug, setDebug] = useState<string>("");
 
   const router = useRouter();
 
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const remaining = useMemo(() => Math.max(0, 5 - selectedJobs.length), [selectedJobs.length]);
+  const draftRemaining = useMemo(
+    () => Math.max(0, 5 - (selectedJobs.length + draftSelectedIds.size)),
+    [selectedJobs.length, draftSelectedIds.size],
+  );
 
     
-
-  // ---- helper: fetch jobs by term, tolerant of API response shape ----
-  async function fetchJobs(term: string) {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/job-titles?q=${encodeURIComponent(term)}`);
-      const data = await res.json().catch(() => null);
-
-      // Support either: array OR {results: array}
-      const list: Job[] = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
-      setResults(list);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   // ---- search behavior (debounced) ----
   useEffect(() => {
@@ -56,18 +42,21 @@ export default function JobSearchPage() {
     const effectiveTerm = term.length > 0 ? term : DEFAULT_TERM;
 
     // If empty query, we still fetch default list (manager)
-    const timeout = setTimeout(async() => {
-      //fetchJobs(effectiveTerm);
-      const res = await fetch(`/api/job-titles?q=${encodeURIComponent(effectiveTerm)}`);
-      const data = await res.json();
+    const timeout = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/job-titles?q=${encodeURIComponent(effectiveTerm)}`);
+        const data = await res.json().catch(() => null);
 
-       // supports array OR {results: []}
-      const list = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
-      setResults(list);
+        // supports array OR {results: []}
+        const list: Job[] = Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [];
+        setResults(list);
+      } finally {
+        setLoading(false);
+      }
     }, term.length > 0 ? 300 : 0);
 
     return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, showDropdown]);
 
   useEffect(() => {
@@ -98,6 +87,44 @@ export default function JobSearchPage() {
   
       return [...prev, job];
     });
+  };
+
+  const toggleDraftJob = (job: Job) => {
+    setDraftSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      if (next.has(job.uuid)) {
+        next.delete(job.uuid);
+        return next;
+      }
+
+      if (selectedJobs.length + next.size >= 5) {
+        return prev;
+      }
+
+      next.add(job.uuid);
+      return next;
+    });
+  };
+
+  const handleDone = () => {
+    if (draftSelectedIds.size > 0) {
+      setSelectedJobs((prev) => {
+        const next = [...prev];
+
+        for (const job of results) {
+          if (!draftSelectedIds.has(job.uuid)) continue;
+          if (next.some((selected) => selected.uuid === job.uuid)) continue;
+          if (next.length >= 5) break;
+          next.push(job);
+        }
+
+        return next;
+      });
+    }
+
+    setDraftSelectedIds(new Set());
+    setShowDropdown(false);
   };
   
 
@@ -140,8 +167,6 @@ export default function JobSearchPage() {
   const handleNext = async () => {
     try {
       setSaving(true);
-      setDebug("");
-  
       const res = await fetch("/api/job-interests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,18 +177,16 @@ export default function JobSearchPage() {
       const text = await res.text();
   
       console.log("Step save response:", { ok: res.ok, status: res.status, body: text });
-      setDebug(text); // ✅ shows you proof on the page too
-  
       if (!res.ok) {
-        let parsed: any = null;
+        let parsed: { error?: string; message?: string } | null = null;
         try { parsed = text ? JSON.parse(text) : null; } catch {}
         throw new Error(parsed?.error ?? parsed?.message ?? text ?? "Save failed");
       }
   
       router.push("/onboarding/time-saved");
-    } catch (e: any) {
-      console.error("handleNext failed:", e?.message ?? e, e);
-      setDebug(JSON.stringify({ ok: false, error: e?.message ?? "Unknown error" }, null, 2));
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      console.error("handleNext failed:", message, error);
     } finally {
       setSaving(false);
     }
@@ -197,33 +220,7 @@ export default function JobSearchPage() {
                 id="job-search"
                 type="text"
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-
-                  const next = new Set(draftSelectedIds);
-
-                  // If already selected → remove
-                  if (next.has(job.uuid)) {
-                    next.delete(job.uuid);
-
-                    // Draft behavior:
-                    // Unchecking does NOT remove from pills.
-                    // To remove from pills as well, call toggleJob(job) here.
-
-                    setDraftSelectedIds(next);
-                    return;
-                  }
-
-                  // Adding (limit to 5)
-                  if (selectedJobs.length >= 5) return;
-
-                  next.add(job.uuid);
-
-                  // Add to pills (persistent state)
-                  toggleJob(job);
-
-                  setDraftSelectedIds(next);
-                }}
+                onChange={(e) => setQuery(e.target.value)}
                 onFocus={() => {
                   // ✅ show dropdown even with empty input; will fetch DEFAULT_TERM
                   setShowDropdown(true);
@@ -260,8 +257,8 @@ export default function JobSearchPage() {
 
                   {!loading &&
                     results.map((job) => {
-                      const isSelected = selectedJobs.some((j) => j.uuid === job.uuid);
-                      const isDisabled = !isSelected && selectedJobs.length >= 5;
+                      const isSelected = draftSelectedIds.has(job.uuid);
+                      const isDisabled = !isSelected && selectedJobs.length + draftSelectedIds.size >= 5;
                       return (
                         <label
                           key={job.uuid}
@@ -272,7 +269,7 @@ export default function JobSearchPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                             onChange={() => !isDisabled && toggleJob(job)}
+                            onChange={() => !isDisabled && toggleDraftJob(job)}
                             // onChange={(e) => setQuery(e.target.value)}
                             disabled={isDisabled}
                             className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
@@ -286,8 +283,8 @@ export default function JobSearchPage() {
                 {/* Footer controls */}
                 <div className="p-3 border-t border-gray-200 bg-gray-50">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-gray-600">{remaining} more recommended</span>
-                    {selectedJobs.length >= 5 && (
+                    <span className="text-sm text-gray-600">{draftRemaining} more recommended</span>
+                    {selectedJobs.length + draftSelectedIds.size >= 5 && (
                       <span className="text-xs text-amber-600 font-medium">Maximum reached</span>
                     )}
                   </div>
@@ -297,6 +294,7 @@ export default function JobSearchPage() {
                       type="button"
                       onClick={() => {
                         setQuery("");
+                        setDraftSelectedIds(new Set());
                         // keep dropdown open showing defaults
                         setShowDropdown(true);
                       }}
@@ -307,7 +305,7 @@ export default function JobSearchPage() {
 
                     <button
                       type="button"
-                      onClick={() => setShowDropdown(false)}
+                      onClick={handleDone}
                       className="flex-1 px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
                     >
                       Done

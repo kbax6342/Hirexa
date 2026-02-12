@@ -248,32 +248,49 @@ export default function Step2Client({
       });
 
       const selectedDoc = await new Promise<{ id: string; name: string; mimeType?: string }>((resolve, reject) => {
-        const docsView = new window.google!.picker!.DocsView()
-          .setIncludeFolders(true)
-          .setSelectFolderEnabled(false);
+        const pickerAny = window.google!.picker as any;
+        // ✅ Use DOCS view id explicitly
+        const docsView = new pickerAny.DocsView(pickerAny.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(false)
+        // ✅ IMPORTANT: show resumes (PDF/DOC/DOCX/etc)
+        .setMimeTypes(
+          [
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/plain",
+            "application/rtf",
+            "text/rtf",
+            "text/html",
+          ].join(",")
+        );
 
-        const picker = new window.google!.picker!.PickerBuilder()
+
+
+          const picker = new window.google!.picker!.PickerBuilder()
           .setDeveloperKey(apiKey)
           .setOAuthToken(accessToken)
+          // helps picker know your exact origin (localhost / prod)
+          // @ts-expect-error setOrigin exists at runtime on PickerBuilder
+          .setOrigin(window.location.origin)
           .addView(docsView)
           .setCallback((data) => {
             if (data.action === window.google?.picker?.Action.CANCEL) {
               reject(new Error("Google Drive selection was canceled."));
               return;
             }
-
             if (data.action !== window.google?.picker?.Action.PICKED) return;
-
+        
             const pickedFile = data.docs?.[0];
             if (!pickedFile) {
               reject(new Error("No file was selected."));
               return;
             }
-
             resolve(pickedFile);
           })
           .build();
-
+        
         picker.setVisible(true);
       });
 

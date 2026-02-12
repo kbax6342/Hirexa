@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
+import { useRouter } from "next/navigation";
 
 type Step = "signup" | "peek" | "verify";
 
@@ -155,6 +156,7 @@ export default function SplitAuthCard() {
   ]);
 
   const pwScore = useMemo(() => scorePassword(pw), [pw]);
+  const router = useRouter();
 
   const canContinue = email.includes("@") && pwScore.passed >= 4 && pw === pw2;
 
@@ -210,7 +212,7 @@ export default function SplitAuthCard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Verification failed");
 
-      window.location.href = "/dashboard";
+      router.push("/onboarding/profile")
     } catch (e: unknown) {
       setMsg(getErrorMessage(e));
     } finally {

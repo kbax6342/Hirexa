@@ -1,12 +1,8 @@
+// /app/api/auth/signup/verify/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
 import { hashOtp } from "@/app/lib/security/otp";
-import crypto from "crypto";
-
-function hashCode(code: string) {
-  return crypto.createHash("sha256").update(code).digest("hex");
-}
 
 export async function POST(req: Request) {
   try {
@@ -15,20 +11,30 @@ export async function POST(req: Request) {
     const code = String(body.code ?? "").trim();
     const recaptchaToken = body.recaptchaToken ?? null;
 
+    if (!email.includes("@") || code.length !== 6) {
+      return NextResponse.json({ error: "Invalid email or code" }, { status: 400 });
+    }
+
+    // ✅ reCAPTCHA first
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_verify");
-
-      // ✅ Look up latest code record
-    const record = await prisma.emailVerificationCode.findUnique({
-      where: { email },
-      select: { codeHash: true, expiresAt: true },
-    });
-
     if (!rc.ok) {
       return NextResponse.json({ error: rc.error }, { status: 403 });
     }
 
-    const otp = await prisma.emailOtp.findUnique({ where: { email } });
-    if (!otp || otp.expiresAt < new Date()) {
+    // ✅ Use ONE source of truth for OTP: emailOtp
+    const otp = await prisma.emailOtp.findUnique({
+      where: { email },
+      select: { codeHash: true, expiresAt: true, attempts: true },
+    });
+
+    if (!otp) {
+      return NextResponse.json({ error: "Code expired" }, { status: 400 });
+    }
+
+    if (otp.expiresAt.getTime() < Date.now()) {
+      // safe burn even if nothing exists
+      await prisma.emailOtp.deleteMany({ where: { email } });
+      await prisma.emailVerificationCode.deleteMany({ where: { email } }); // safe even if table exists but empty
       return NextResponse.json({ error: "Code expired" }, { status: 400 });
     }
 
@@ -36,57 +42,57 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Too many attempts" }, { status: 429 });
     }
 
-    await prisma.emailOtp.update({
-      where: { email },
-      data: { attempts: { increment: 1 } },
-    });
+    // ✅ Validate code BEFORE marking verified
+    const ok = hashOtp(code) === otp.codeHash;
 
-    // ✅ Mark verified on UserProfile (adjust if you store it elsewhere)
-    await prisma.userProfile.updateMany({
-      where: { email },
-      data: {
-        registrationStatus: "verified",
-        // If you have this field in your schema, keep it; otherwise remove:
-        // emailVerifiedAt: new Date(),
-      },
-    });
-
-     
-
-    if (hashOtp(code) !== otp.codeHash) {
+    if (!ok) {
+      await prisma.emailOtp.update({
+        where: { email },
+        data: { attempts: { increment: 1 } },
+      });
       return NextResponse.json({ error: "Invalid code" }, { status: 400 });
     }
 
-    const user = await prisma.user.update({
-      where: { email },
-      data: {
-        emailVerifiedAt: new Date(),
-        isGuest: false,
-      },
-      select: {
-        id: true,
-      },
-    });
+    // ✅ If valid, mark verified + burn codes atomically
+    await prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { email },
+        data: {
+          emailVerifiedAt: new Date(),
+          isGuest: false,
+        },
+        select: { id: true },
+      });
 
-    await prisma.userProfile.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        email,
-        registrationStatus: "registered",
-      },
-      update: {
-        email,
-        registrationStatus: "registered",
-      },
-    });
+      // Keep your statuses consistent (verified -> registered)
+      await tx.userProfile.updateMany({
+        where: { email },
+        data: { registrationStatus: "verified" },
+      });
 
-    await prisma.emailOtp.delete({ where: { email } }).catch(() => null);
-    // ✅ burn the code
-    await prisma.emailVerificationCode.delete({ where: { email } });
+      await tx.userProfile.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          email,
+          registrationStatus: "registered",
+        },
+        update: {
+          email,
+          registrationStatus: "registered",
+        },
+      });
+
+      // ✅ burn codes (NEVER throws)
+      await tx.emailOtp.deleteMany({ where: { email } });
+
+      // If this model/table still exists in your schema, this is safe:
+      await tx.emailVerificationCode.deleteMany({ where: { email } });
+    });
 
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (e) {
+    console.error("signup verify error:", e);
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
 }

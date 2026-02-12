@@ -1,3 +1,4 @@
+// /app/onboarding/job-alerts/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -95,16 +96,16 @@ export default function JobAlertsOnboardingPage() {
 
       if (!res.ok) {
         let parsed: any = null;
-        try { parsed = text ? JSON.parse(text) : null; } catch {}
+        try {
+          parsed = text ? JSON.parse(text) : null;
+        } catch {}
         setSaveError(parsed?.error ?? parsed?.message ?? text ?? "Failed to save email");
-        setSaving(false);
         return;
       }
 
       const parsed = text ? JSON.parse(text) : { ok: true };
       console.log("✅ PROOF email/newsletter saved:", parsed?.proof ?? parsed);
 
-      // ✅ only navigate AFTER save succeeds
       router.push("/onboarding/choose-workplace");
     } catch (e: any) {
       console.error("❌ onNext failed:", e?.message ?? e);
@@ -115,10 +116,12 @@ export default function JobAlertsOnboardingPage() {
   }
 
   return (
-    <main className="min-h-[calc(100vh-64px)] bg-white">
-      <div className="mx-auto w-full max-w-5xl px-6 py-10">
+    // ✅ Same structure as the Skills page: flex column + sticky footer
+    <div className="min-h-screen bg-white flex flex-col">
+      {/* ✅ Content grows; footer stays bottom */}
+      <main className="mx-auto w-full max-w-5xl px-6 pb-24 pt-[100px] flex-1">
         <div className="flex flex-col items-center text-center">
-          <h1 className="text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
             Don’t miss out on new openings
           </h1>
 
@@ -131,7 +134,7 @@ export default function JobAlertsOnboardingPage() {
           </p>
         </div>
 
-        <div className="mt-7 w-full max-w-2xl text-left">
+        <div className="mt-7 w-full max-w-2xl text-left mx-auto">
           <label htmlFor="email" className="block text-xs font-medium text-gray-700">
             *Email Address
           </label>
@@ -151,7 +154,7 @@ export default function JobAlertsOnboardingPage() {
           )}
         </div>
 
-        <div className="mt-10 w-full max-w-3xl rounded-xl bg-[#0B1F4B] px-6 py-8 text-left text-white shadow-sm">
+        <div className="mt-10 w-full max-w-3xl mx-auto rounded-xl bg-[#0B1F4B] px-6 py-8 text-left text-white shadow-sm">
           <h2 className="text-center text-xl font-semibold sm:text-2xl">
             Cast a wider net while saving time
           </h2>
@@ -166,30 +169,42 @@ export default function JobAlertsOnboardingPage() {
             <Bullet>Reclaim your time by letting our AI handle the grunt work of job searching.</Bullet>
           </div>
         </div>
+      </main>
 
-        <div className="mt-16 flex items-center justify-between">
-          <Link
-            href="/onboarding/skills"
-            className="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-6 py-3 text-sm font-medium text-black hover:bg-gray-50"
-          >
-            <span aria-hidden>←</span> Back
-          </Link>
+      {/* ✅ Footer matches the previous page */}
+      <footer className="sticky bottom-0 w-full border-t border-gray-200 bg-white">
+        <div className="mx-auto w-full max-w-5xl px-6 py-6">
+          <div className="mx-auto w-9/12 md:w-11/12 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                />
+              </svg>
+              Back
+            </button>
 
-          <button
-            type="button"
-            disabled={!emailLooksValid || saving}
-            onClick={onNext}
-            className={[
-              "inline-flex items-center justify-center rounded-full px-8 py-3 text-sm font-semibold",
-              emailLooksValid && !saving
-                ? "bg-[#1E40FF] text-white hover:brightness-95"
-                : "cursor-not-allowed bg-gray-200 text-gray-500",
-            ].join(" ")}
-          >
-            {saving ? "Saving..." : "Next"}
-          </button>
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!emailLooksValid || saving}
+              className={[
+                "px-8 py-3 rounded-full font-medium text-white disabled:opacity-50 transition",
+                emailLooksValid && !saving ? "bg-black hover:bg-black/90" : "bg-gray-300 text-gray-600",
+              ].join(" ")}
+            >
+              {saving ? "Saving..." : "Next"}
+            </button>
+          </div>
         </div>
-      </div>
-    </main>
+      </footer>
+    </div>
   );
 }

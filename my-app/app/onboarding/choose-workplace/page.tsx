@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type LocationOption = {
   id: string; // stable id for list rendering
@@ -43,6 +44,7 @@ export default function ChooseWorkplacePage() {
     () => new Set(selected.map((s) => s.label.toLowerCase())),
     [selected]
   );
+  const router = useRouter();
 
   function removePill(label: string) {
     setSelected((prev) => prev.filter((x) => x.label !== label));
@@ -420,13 +422,22 @@ export default function ChooseWorkplacePage() {
       {/* bottom nav */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-white">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link
-            href="/onboarding/job-interest"
-            className="rounded-full border border-gray-300 px-6 py-3 text-sm font-semibold text-black hover:bg-gray-50"
-          >
-            ← Back
-          </Link>
-
+        <button
+              type="button"
+              onClick={() => router.back()}
+              className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                />
+              </svg>
+              Back
+            </button>
+           
           <button
             type="button"
             onClick={async () => {
@@ -438,8 +449,9 @@ export default function ChooseWorkplacePage() {
                 setError(e?.message ?? "Failed to save locations");
               }
             }}
-            className="rounded-full bg-blue-600 px-8 py-3 text-sm font-semibold text-white hover:bg-blue-700"
-          >
+            className={
+              "px-8 py-3 rounded-full font-medium text-white disabled:opacity-50 transition bg-black text-gray-600"
+            }>
             Next
         </button>
 

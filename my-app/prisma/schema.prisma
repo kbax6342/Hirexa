@@ -61,6 +61,13 @@ model UserProfile {
   firstName String?
   lastName  String?
   phone     String?
+  dob       DateTime?
+  address    String?
+  city       String?
+  postalCode String?
+  state      String?
+
+  linkedinUrl String?
 
   authorizedUS String?
   sponsorship  String?
@@ -81,6 +88,8 @@ model UserProfile {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([email])
 }
 
 model JobInterest {

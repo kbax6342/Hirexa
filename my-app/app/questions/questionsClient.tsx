@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Footer } from "../components/footer";
 
 type FormState = {
   authorizedUS: string;
@@ -40,36 +41,9 @@ export default function QuestionsClient() {
     <div className="min-h-screen bg-white text-black flex flex-col">
       {/* CONTENT */}
       <main className="flex-1">
-        <div className="max-w-3xl mx-auto px-6 py-12">
+        <div className="max-w-3xl mx-auto px-6 pb-12 pt-[100]">
           {/* STEPS */}
-          <div className="flex items-center justify-between mb-12">
-            {[
-              { step: 1, label: "Key questions", active: true },
-              { step: 2, label: "Resume review" },
-              { step: 3, label: "Finalize" },
-            ].map((s, i) => (
-              <div key={s.step} className="flex-1 flex items-center">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                    s.active
-                      ? "bg-green-500 text-white"
-                      : "border text-gray-400"
-                  }`}
-                >
-                  {s.step}
-                </div>
-                <span
-                  className={`ml-3 text-sm ${
-                    s.active ? "text-black font-medium" : "text-gray-400"
-                  }`}
-                >
-                  STEP {s.step}
-                  <div className="text-xs">{s.label}</div>
-                </span>
-                {i < 2 && <div className="flex-1 h-px bg-gray-200 mx-4" />}
-              </div>
-            ))}
-          </div>
+         
 
           {/* TITLE */}
           <h1 className="text-2xl font-semibold mb-2">Key questions</h1>
@@ -151,36 +125,7 @@ export default function QuestionsClient() {
         </div>
       </main>
 
-      {/* FOOTER */}
-      <footer className="border-t bg-gray-50">
-        <div className="max-w-6xl mx-auto px-6 py-10 grid grid-cols-4 gap-8 text-sm">
-          <div className="font-bold text-xl">Hirexa</div>
-
-          <div>
-            <p className="font-medium mb-2">Product</p>
-            <ul className="space-y-1 text-gray-600">
-              <li>How it works</li>
-              <li>Fraud Awareness</li>
-            </ul>
-          </div>
-
-          <div>
-            <p className="font-medium mb-2">Company</p>
-            <ul className="space-y-1 text-gray-600">
-              <li>Blog</li>
-              <li>Terms & Conditions</li>
-              <li>Privacy Policy</li>
-              <li>Accessibility</li>
-            </ul>
-          </div>
-
-          <div>
-            <p className="font-medium mb-2">Customer support</p>
-            <p className="text-gray-600">855-695-3235</p>
-            <p className="text-gray-600">support@Hirexa.ai</p>
-          </div>
-        </div>
-      </footer>
+    
 
       {/* NEXT BUTTON */}
       <div className="fixed bottom-6 right-6">

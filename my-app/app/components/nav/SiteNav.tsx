@@ -35,7 +35,7 @@ export default function SiteHeaderClient() {
           <Link href="/dashboard" className="hover:text-blue-600">
             Smart Matches
           </Link>
-          <Link href="/dashboard/applications" className="hover:text-blue-600">
+          <Link href="/applications" className="hover:text-blue-600">
             Applications
           </Link>
           <Link href="/profile" className="hover:text-blue-600">

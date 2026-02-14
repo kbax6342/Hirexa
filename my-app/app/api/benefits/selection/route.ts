@@ -1,56 +1,78 @@
+// my-app/app/api/benefits/selection/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-
-import { auth } from "@/app/lib/auth";
+import { getStripeClient } from "@/app/lib/stripeClient";
 import { prisma } from "@/app/lib/prisma";
+
+export const runtime = "nodejs";
+
+type Body = {
+  selectedPlan: "trial" | "annual";
+  benefits: string[];
+  source?: string | null;
+  jobId?: string | null;
+};
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    const userId = session?.user?.id ?? null;
+    const body = (await req.json()) as Body;
 
-    const cookieStore = await cookies();
-    const guestId = cookieStore.get("guest_user_id")?.value ?? null;
-
-    if (!userId && !guestId) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
-
-    const body = await req.json().catch(() => null);
-    const selectedPlan = typeof body?.selectedPlan === "string" ? body.selectedPlan.trim() : "";
-    const benefits = Array.isArray(body?.benefits)
-      ? body.benefits.filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
-      : [];
-
+    const selectedPlan = body?.selectedPlan;
     if (!selectedPlan) {
-      return NextResponse.json({ ok: false, error: "selectedPlan is required" }, { status: 400 });
+      return NextResponse.json({ error: "Missing selectedPlan." }, { status: 400 });
     }
 
-    const profile = await prisma.userProfile.upsert({
-      where: userId ? { userId } : { guestId: guestId! },
-      create: userId ? { userId } : { guestId: guestId! },
-      update: {},
-      select: { id: true },
-    });
+    // ✅ pick correct Stripe Price ID by plan
+    const priceId =
+      selectedPlan === "trial"
+        ? process.env.STRIPE_TRIAL_PRICE_ID
+        : process.env.STRIPE_ANNUAL_PRICE_ID;
 
-    const savedSelection = await prisma.benefitSelection.create({
+    if (!priceId) {
+      return NextResponse.json(
+        { error: `Missing Stripe price id for plan "${selectedPlan}".` },
+        { status: 500 }
+      );
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (!appUrl) {
+      return NextResponse.json(
+        { error: "Missing NEXT_PUBLIC_APP_URL in my-app/.env.local" },
+        { status: 500 }
+      );
+    }
+
+    // ✅ OPTIONAL: save selection to DB (customize to your schema)
+    // If you don’t have a model for this, you can remove this block.
+    await prisma.planSelection.create({
       data: {
-        userProfileId: profile.id,
-        guestId,
-        selectedPlan,
-        benefits,
-      },
-      select: {
-        id: true,
-        selectedPlan: true,
-        benefits: true,
-        createdAt: true,
+        plan: selectedPlan,
+        perks: body.benefits ?? [],
+        source: body.source ?? null,
+        jobId: body.jobId ?? null,
       },
     });
 
-    return NextResponse.json({ ok: true, savedSelection });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Failed to save benefits";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    // ✅ Create checkout session
+    const stripe = getStripeClient();
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/plans`,
+      allow_promotion_codes: true,
+    });
+
+    if (!session.url) {
+      return NextResponse.json({ error: "Stripe did not return a checkout url." }, { status: 500 });
+    }
+
+    return NextResponse.json({ url: session.url });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message || "Failed to create checkout session." },
+      { status: 500 }
+    );
   }
 }

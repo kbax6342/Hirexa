@@ -88,11 +88,36 @@ model UserProfile {
   jobInterests JobInterest[]
   benefitSelections BenefitSelection[]
   resumeFiles  ResumeFile[]
+  jobApplications JobApplication[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([email])
+}
+
+enum ApplicationStatus {
+  IN_PREPARATION
+  READY_TO_SEND
+  IN_PROGRESS
+  SENT
+}
+
+model JobApplication {
+  id String @id @default(cuid())
+
+  userProfileId String
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  jobTitle String
+  company  String
+  status   ApplicationStatus @default(IN_PREPARATION)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userProfileId])
+  @@index([userProfileId, status])
 }
 
 model BenefitSelection {

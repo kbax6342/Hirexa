@@ -86,12 +86,30 @@ model UserProfile {
   // ✅ Resume is connected through profileId
   resume       Resume?
   jobInterests JobInterest[]
+  benefitSelections BenefitSelection[]
   resumeFiles  ResumeFile[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([email])
+}
+
+model BenefitSelection {
+  id String @id @default(cuid())
+
+  userProfileId String?
+  userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  guestId      String?
+  selectedPlan String
+  benefits     String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userProfileId])
+  @@index([guestId])
 }
 
 model JobInterest {
@@ -201,4 +219,3 @@ model EmailVerificationCode {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-

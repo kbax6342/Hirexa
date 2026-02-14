@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
 import { Bars3Icon, XMarkIcon, ChevronDownIcon, UserCircleIcon } from "@heroicons/react/24/outline";
@@ -27,8 +28,10 @@ const authedNav: NavItem[] = [
 
 export function Navbar() {
   const { data: session, status } = useSession();
+  const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const [mobileOpen, setMobileOpen] = useState(false);
+  const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(pathname || "/")}`;
 
   const navLinks = isAuthed ? authedNav : guestNav;
 
@@ -68,7 +71,7 @@ export function Navbar() {
               
 
               <Button asChild className="rounded-full px-6 text-sm font-medium">
-                <Link href="/login">Sign In</Link>
+                <Link href={signInHref}>Sign In</Link>
               </Button>
             </>
           ) : (
@@ -152,13 +155,13 @@ export function Navbar() {
                     variant="ghost"
                     className="justify-start text-sm text-muted-foreground hover:bg-secondary"
                   >
-                    <Link href="/login" onClick={() => setMobileOpen(false)}>
+                    <Link href={signInHref} onClick={() => setMobileOpen(false)}>
                       Sign In
                     </Link>
                   </Button>
 
                   <Button asChild className="rounded-full text-sm font-medium">
-                    <Link href="/login" onClick={() => setMobileOpen(false)}>
+                    <Link href={signInHref} onClick={() => setMobileOpen(false)}>
                       Get Started
                     </Link>
                   </Button>

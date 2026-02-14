@@ -4,6 +4,67 @@ import { cookies } from "next/headers";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 
+type BenefitSelectionRecord = {
+  id: string;
+  selectedPlan: string;
+  benefits: string[];
+  createdAt: Date;
+};
+
+async function createBenefitSelection(params: {
+  userProfileId: string;
+  guestId: string | null;
+  selectedPlan: string;
+  benefits: string[];
+}): Promise<BenefitSelectionRecord> {
+  const benefitSelectionModel = (prisma as unknown as {
+    benefitSelection?: {
+      create?: (args: {
+        data: {
+          userProfileId: string;
+          guestId: string | null;
+          selectedPlan: string;
+          benefits: string[];
+        };
+        select: {
+          id: true;
+          selectedPlan: true;
+          benefits: true;
+          createdAt: true;
+        };
+      }) => Promise<BenefitSelectionRecord>;
+    };
+  }).benefitSelection;
+
+  // Keep the regular Prisma delegate path when the generated client includes BenefitSelection.
+  if (benefitSelectionModel?.create) {
+    return benefitSelectionModel.create({
+      data: params,
+      select: {
+        id: true,
+        selectedPlan: true,
+        benefits: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  // Fallback for environments with a stale generated Prisma client.
+  const insertedRows = await prisma.$queryRaw<BenefitSelectionRecord[]>`
+    INSERT INTO "BenefitSelection" ("userProfileId", "guestId", "selectedPlan", "benefits", "createdAt", "updatedAt")
+    VALUES (${params.userProfileId}, ${params.guestId}, ${params.selectedPlan}, ${params.benefits}, NOW(), NOW())
+    RETURNING "id", "selectedPlan", "benefits", "createdAt"
+  `;
+
+  const inserted = insertedRows[0];
+
+  if (!inserted) {
+    throw new Error("Failed to save benefits");
+  }
+
+  return inserted;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await auth();
@@ -33,19 +94,11 @@ export async function POST(req: Request) {
       select: { id: true },
     });
 
-    const savedSelection = await prisma.benefitSelection.create({
-      data: {
-        userProfileId: profile.id,
-        guestId,
-        selectedPlan,
-        benefits,
-      },
-      select: {
-        id: true,
-        selectedPlan: true,
-        benefits: true,
-        createdAt: true,
-      },
+    const savedSelection = await createBenefitSelection({
+      userProfileId: profile.id,
+      guestId,
+      selectedPlan,
+      benefits,
     });
 
     return NextResponse.json({ ok: true, savedSelection });

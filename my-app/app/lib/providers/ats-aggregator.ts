@@ -235,7 +235,26 @@ export async function fetchIcimsJobs(args: { query: string; page: number; limit:
 }
 
 export function getGreenhouseBoards() {
-  return parseCsvEnv("GREENHOUSE_BOARD_TOKENS");
+  const configuredBoards = parseCsvEnv("GREENHOUSE_BOARD_TOKENS");
+
+  // Greenhouse Job Board API is public, so we can still return jobs
+  // without requiring an API key or env configuration.
+  if (configuredBoards.length > 0) {
+    return configuredBoards;
+  }
+
+  return [
+    "airbnb",
+    "coinbase",
+    "doordash",
+    "duolingo",
+    "lyft",
+    "openai",
+    "reddit",
+    "robinhood",
+    "shopify",
+    "stripe",
+  ];
 }
 
 export function getWorkdayBoards() {

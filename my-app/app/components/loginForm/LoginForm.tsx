@@ -1,87 +1,59 @@
-// components/login-form.tsx
 "use client";
 
-import { useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
+import React from "react";
+import { Button } from "../ui/button";
 
-export default function LoginForm() {
-  const [pending, startTransition] = useTransition();
-  const router = useRouter();
+type Props = {
+  isSigningIn: boolean;
+  signInError?: string | null;
+};
 
-  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-
-    const form = new FormData(e.currentTarget);
-    const email = String(form.get("email") || "").toLowerCase().trim();
-    const password = String(form.get("password") || "");
-
-    startTransition(async () => {
-      try {
-        const result = await signIn("credentials", {
-          email,
-          password,
-          redirect: false,
-        });
-
-        if (result?.error) {
-          throw new Error(result.error);
-        }
-
-        router.push("/dashboard");
-      } catch (err) {
-        //alert("Invalid email or password");
-        console.log(err)
-      }
-    });
-  }
-
+export default function LoginForm({ isSigningIn, signInError }: Props) {
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
-    {/* Email */}
-    <div>
-      <label
-        htmlFor="email"
-        className="block text-sm font-medium text-gray-700"
+    <div className="space-y-4">
+      {/* Email */}
+      <div>
+        <label className="block text-sm font-medium text-slate-700">
+          Email
+        </label>
+        <input
+          name="email"
+          type="email"
+          autoComplete="email"
+          required
+          className="mt-1 text-black h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none ring-sky-500/20 focus:border-sky-400 focus:ring-4"
+        />
+      </div>
+
+      {/* Password */}
+      <div>
+        <label className="block text-sm font-medium text-slate-700">
+          Password
+        </label>
+        <input
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          required
+          className="mt-1 text-black h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none ring-sky-500/20 focus:border-sky-400 focus:ring-4"
+        />
+      </div>
+
+      {signInError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {signInError}
+        </div>
+      ) : null}
+
+      {/* Sign in button */}
+      <Button
+        type="submit"
+        size="lg"
+        disabled={isSigningIn}
+        className="h-12 w-full bg-slate-900 text-white hover:bg-slate-800"
       >
-        Email
-      </label>
-      <input
-        id="email"
-        name="email"
-        type="email"
-        autoComplete="email"
-        required
-        className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-      />
+        {isSigningIn ? "Signing in…" : "Sign in"}
+      </Button>
     </div>
-  
-    {/* Password */}
-    <div>
-      <label
-        htmlFor="password"
-        className="block text-sm font-medium text-gray-700"
-      >
-        Password
-      </label>
-      <input
-        id="password"
-        name="password"
-        type="password"
-        autoComplete="current-password"
-        required
-        className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
-      />
-    </div>
-  
-    <button
-      type="submit"
-      disabled={pending}
-      className="w-full rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
-    >
-      {pending ? "Signing in..." : "Sign in"}
-    </button>
-  </form>
-  
   );
 }

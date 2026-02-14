@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
@@ -30,18 +31,20 @@ const US_STATES = [
 ];
 
 export default function ProfileForm() {
-    const [form, setForm] = useState<FormState>({
-        firstName: "",
-        lastName: "",
-        dob: "",
-        address: "",
-        city: "",
-        postalCode: "",
-        state: "",
-        linkedinUrl: "",
-        phone: "",
-        email: "",
-      });
+  const router = useRouter();
+
+  const [form, setForm] = useState<FormState>({
+    firstName: "",
+    lastName: "",
+    dob: "",
+    address: "",
+    city: "",
+    postalCode: "",
+    state: "",
+    linkedinUrl: "",
+    phone: "",
+    email: "",
+  });
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,17 +64,11 @@ export default function ProfileForm() {
     setForm((p) => ({ ...p, [key]: value }));
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSaved(false);
-
+  async function saveProfile(): Promise<{ ok: true } | { ok: false; message: string }> {
     if (!requiredOk) {
-      setError("Please fill in First name, Last name, and Email.");
-      return;
+      return { ok: false, message: "Please fill in First name, Last name, and Email." };
     }
 
-    setSaving(true);
     try {
       const res = await fetch("/api/profile", {
         method: "POST",
@@ -79,15 +76,46 @@ export default function ProfileForm() {
         body: JSON.stringify(form),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to save profile.");
+      // Be defensive: some errors return empty body
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
 
-      setSaved(true);
-    } catch (err: any) {
-      setError(err?.message || "Something went wrong.");
-    } finally {
-      setSaving(false);
+      if (!res.ok) {
+        return { ok: false, message: data?.error || "Failed to save profile." };
+      }
+
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, message: e?.message || "Network error. Please try again." };
     }
+  }
+
+  // This replaces formAction. It's client-safe and handles errors.
+  async function handleNext(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (saving) return;
+
+    setError(null);
+    setSaved(false);
+    setSaving(true);
+
+    const result = await saveProfile();
+
+    if (!result.ok) {
+      setError(result.message);
+      setSaving(false);
+      return;
+    }
+
+    setSaved(true);
+    setSaving(false);
+
+    // ✅ Only navigate when save succeeds
+    router.push("/benefits");
   }
 
   const inputBase =
@@ -98,13 +126,11 @@ export default function ProfileForm() {
   const requiredStar = <span className="text-rose-500">*</span>;
 
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
+    <form onSubmit={handleNext} className="space-y-5">
       {/* Row 1 */}
       <div className="grid gap-4 md:grid-cols-2">
         <div>
-          <label className={labelBase}>
-            First name {requiredStar}
-          </label>
+          <label className={labelBase}>First name {requiredStar}</label>
           <div className="relative mt-1">
             <input
               className={inputBase + " pr-10"}
@@ -120,9 +146,7 @@ export default function ProfileForm() {
         </div>
 
         <div>
-          <label className={labelBase}>
-            Last name {requiredStar}
-          </label>
+          <label className={labelBase}>Last name {requiredStar}</label>
           <div className="relative mt-1">
             <input
               className={inputBase + " pr-10"}
@@ -212,9 +236,7 @@ export default function ProfileForm() {
             >
               <option value="">Select…</option>
               {US_STATES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
+                <option key={s} value={s}>{s}</option>
               ))}
             </select>
           </div>
@@ -253,9 +275,7 @@ export default function ProfileForm() {
         </div>
 
         <div>
-          <label className={labelBase}>
-            Email address {requiredStar}
-          </label>
+          <label className={labelBase}>Email address {requiredStar}</label>
           <div className="relative mt-1">
             <input
               className={inputBase + " pr-10"}
@@ -290,8 +310,13 @@ export default function ProfileForm() {
       <div className="pt-2">
         <button
           type="submit"
-          disabled={saving}
-          className="inline-flex h-11 items-center justify-center rounded-md bg-sky-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={saving === true}
+          className={[
+            "inline-flex h-11 items-center justify-center rounded-md px-5 text-sm font-semibold text-white shadow-sm transition",
+            saving
+              ? "bg-sky-400 cursor-not-allowed opacity-60"
+              : "bg-sky-600 hover:bg-sky-700 cursor-pointer",
+          ].join(" ")}
         >
           {saving ? "Saving..." : "Continue"}
         </button>

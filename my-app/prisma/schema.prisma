@@ -42,6 +42,7 @@ model UserProfile {
   email              String?
   registrationStatus String?   @default("pending_verification")
   welcomeEmailSentAt DateTime?
+  keyQuestions       Json?
 
   workplaceLocations Json?
   includeRemote      Boolean @default(true)
@@ -51,6 +52,7 @@ model UserProfile {
 
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?
+ 
 
 
   resumeSkills String[] @default([])

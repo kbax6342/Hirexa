@@ -1,13 +1,47 @@
-"use client"
+"use client";
+
 import Link from "next/link";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import LoginForm from "../components/loginForm/LoginForm";
 import { startOnboarding } from "../api/actions/startOnboarding";
-import { useTransition } from "react";
-import { Button } from "../components/ui/button"
+import { useTransition, useState } from "react";
+import { Button } from "../components/ui/button";
+import { signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  const [isPending, startTransition] = useTransition(); // for signup action
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setSignInError(null);
+    setIsSigningIn(true);
+
+    const fd = new FormData(e.currentTarget);
+    const email = String(fd.get("email") ?? "");
+    const password = String(fd.get("password") ?? "");
+
+    const res = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+    });
+
+    setIsSigningIn(false);
+
+    if (res?.error) {
+      setSignInError("Incorrect email or password.");
+      return;
+    }
+
+    router.push("/questions");
+    router.refresh();
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* soft background like the rest of your app */}
@@ -39,26 +73,24 @@ export default function LoginPage() {
               </p>
             </div>
 
-            {/* Your existing form */}
-            <div className="mt-6">
-              <LoginForm />
-                {/* Sign up */}
-            <form
-              action={() =>
-                startTransition(async () => {
-                  await startOnboarding();
-                })
-              }
-            >
+            {/* ✅ ONE form only */}
+            <form className="mt-6" onSubmit={onSubmit}>
+              <LoginForm isSigningIn={isSigningIn} signInError={signInError} />
+
+              {/* Sign up for free (secondary action, NOT another form) */}
               <Button
-                type="submit"
+                type="button"
                 size="lg"
-                disabled={isPending}
+                disabled={isPending || isSigningIn}
+                onClick={() =>
+                  startTransition(async () => {
+                    await startOnboarding();
+                  })
+                }
                 className="
+                  mt-3 h-12 w-full
                   bg-sky-500 text-white
-                  w-[390px]
                   hover:bg-sky-400
-                  h-12 mt-3 px-8
                   text-base font-semibold
                   shadow-lg shadow-sky-500/25
                   transition-all duration-200
@@ -67,20 +99,15 @@ export default function LoginPage() {
                 "
               >
                 {isPending ? (
-                  <span className="flex items-center gap-2">
-                    <span className="h-4 w-10 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
                     Getting started…
                   </span>
                 ) : (
-                  <>
-                     Sign up for free
-                   
-                  </>
+                  "Sign up for free"
                 )}
               </Button>
             </form>
-            </div>
-
 
             {/* Divider */}
             <div className="my-6 flex items-center gap-3">
@@ -108,9 +135,6 @@ export default function LoginPage() {
               </a>
             </div>
 
-          
-            
-
             {/* Terms row */}
             <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-slate-500">
               <Link href="/terms" className="hover:text-slate-700">
@@ -127,13 +151,11 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* keep your existing footer */}
-         
-        </div>
-      </main>
-      <div className="mt-10">
+          <div className="mt-10">
             <LoginFooter />
           </div>
+        </div>
+      </main>
     </div>
   );
 }

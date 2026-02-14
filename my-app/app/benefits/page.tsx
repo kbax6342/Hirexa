@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import SiteNav from "../components/nav/SiteNav";
 
 /**
  * NOTE:
@@ -108,50 +109,19 @@ export default function JobBenefitsSelectionPage() {
     setSelected(new Set());
   }
 
-  const statusText = selectedCount > 0 ? "Great choices!" : "Select at least 1 benefit";
+  const statusText =
+      selectedCount > 0 ? "" : "Select at least 1 benefit";
+
   const statusTextClass = selectedCount > 0 ? "text-green-600" : "text-slate-500";
   const nextEnabled = selectedCount > 0;
 
   return (
-    <div className="flex min-h-screen flex-col bg-white text-slate-800">
-      {/* Header */}
-      <header className="sticky top-0 z-50 flex items-center justify-between bg-[#0B1120] px-8 py-4 text-white">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-blue-500 text-lg font-bold">
-            H
-          </div>
-          <span className="text-xl font-bold tracking-tight">
-            Hirexa <span className="text-blue-400">AI</span>
-          </span>
-        </div>
-
-        <nav className="hidden gap-8 text-sm font-medium text-gray-300 md:flex">
-          <a href="#" className="transition-colors hover:text-white">
-            Features
-          </a>
-          <a href="#" className="transition-colors hover:text-white">
-            How It Works
-          </a>
-          <a href="#" className="transition-colors hover:text-white">
-            Find Jobs
-          </a>
-          <a href="#" className="transition-colors hover:text-white">
-            Job Locations
-          </a>
-          <div className="group relative cursor-pointer">
-            <span className="flex items-center gap-1 transition-colors hover:text-white">
-              Job Resources <i className="fa-solid fa-chevron-down mt-0.5 text-xs" />
-            </span>
-          </div>
-        </nav>
-
-        <button className="rounded-full bg-blue-500 px-6 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-600">
-          Sign In
-        </button>
-      </header>
+    <div className="flex min-h-screen text-black flex-col bg-white text-slate-800">
+     
+     
 
       {/* Main */}
-      <main className="mx-auto flex w-full max-w-4xl flex-grow flex-col items-center px-4 pb-32 pt-16">
+      <main className="mx-auto mt-[40] flex w-full max-w-4xl flex-grow flex-col items-center px-4 pb-32 pt-16">
         <div className="mb-10 text-center">
           <h1 className="mb-3 text-4xl font-bold text-slate-900">What benefits matter most to you?</h1>
           <p className="text-lg text-slate-500">

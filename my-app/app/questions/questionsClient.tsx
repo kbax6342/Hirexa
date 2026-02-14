@@ -161,7 +161,7 @@ export default function QuestionsClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to save");
 
-      router.push("/questions/step2");
+      router.push("/dashboard");
     } catch (e: any) {
       setError(e?.message || "Something went wrong.");
     } finally {
@@ -186,7 +186,7 @@ export default function QuestionsClient() {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
+    <div className="min-h-screen bg-white flex text-black flex-col">
       <main className="flex-1">
         <div className="max-w-3xl mx-auto px-6 pt-24 pb-36">
           <h1 className="text-2xl font-semibold mb-2">Key questions</h1>
@@ -216,8 +216,7 @@ export default function QuestionsClient() {
         </div>
       </main>
 
-      {/* FOOTER CONTENT (not fixed) */}
-      <Footer />
+    
 
       {/* STICKY NAV */}
       <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white">

@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   CheckCircleIcon,
   DocumentTextIcon,
-  EnvelopeIcon,
   MagnifyingGlassIcon,
   ShieldCheckIcon,
   SparklesIcon,
@@ -24,23 +23,6 @@ type Plan = {
   recommended?: boolean;
   perks: string[];
 };
-
-async function goToStripeCheckout(planId: "trial" | "annual") {
-    const endpoint =
-      planId === "annual"
-        ? "/api/stripe/checkout/subscription-annual"
-        : "/api/stripe/checkout/subscription-trial";
-  
-    const res = await fetch(endpoint, { method: "POST" });
-    const data = await res.json();
-  
-    if (!res.ok) {
-      alert(data?.error ?? "Unable to start checkout");
-      return;
-    }
-  
-    window.location.href = data.url;
-  }
 
 export default function PlansPage() {
   const router = useRouter();
@@ -85,18 +67,43 @@ export default function PlansPage() {
   );
 
   const [selected, setSelected] = useState<PlanId>("trial");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const selectedPlan = plans.find((p) => p.id === selected)!;
 
-  function onNext() {
-    // ✅ for now just route to your payment step
-    // Create this later: app/plans/payment/page.tsx
-    const qs = new URLSearchParams();
-    qs.set("plan", selectedPlan.id);
-    if (source) qs.set("source", source);
-    if (jobId) qs.set("jobId", jobId);
+  async function onNext() {
+    if (saving) return;
 
-    router.push(`/plans/payment`);
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      const res = await fetch("/api/benefits/selection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          selectedPlan: selectedPlan.id,
+          benefits: selectedPlan.perks,
+          source,
+          jobId,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setSaveError(data?.error ?? "Failed to save your selected benefits.");
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch {
+      setSaveError("Failed to save your selected benefits.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -195,14 +202,18 @@ export default function PlansPage() {
 
               <button
                 type="button"
-                onClick={() => goToStripeCheckout(selected)}
-                className="mt-10 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-6 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                onClick={onNext}
+                disabled={saving}
+                className="mt-10 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-6 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                Next
+                {saving ? "Saving..." : "Next"}
                 <ArrowRightIcon className="h-5 w-5" />
               </button>
 
-             
+              {saveError && (
+                <p className="mt-4 text-center text-sm text-red-600">{saveError}</p>
+              )}
+
               <p className="text-center text-xs text-gray-400 pt-5">
                 You may cancel by email or online
               </p>

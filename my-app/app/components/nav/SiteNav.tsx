@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import Image from "next/image";
 import { UserCircleIcon } from "@heroicons/react/24/outline";
@@ -8,7 +9,9 @@ import { UserCircleIcon } from "@heroicons/react/24/outline";
 
 export default function SiteHeaderClient() {
   const { data: session, status } = useSession();
+  const pathname = usePathname();
   const isAuthed = status === "authenticated";
+  const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(pathname || "/")}`;
 
   return (
     <nav className="relative flex items-center border-b px-10 py-6">
@@ -63,7 +66,7 @@ export default function SiteHeaderClient() {
               Job Resources
             </Link>
             <Link
-              href="/login"
+              href={signInHref}
               className="rounded-full border px-4 py-2 hover:bg-gray-100"
             >
               Sign In

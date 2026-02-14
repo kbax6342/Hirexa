@@ -51,7 +51,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
     }
 
-    if (!body.authorizedUS || !body.sponsorship || !body.felony) {
+    const payload = {
+      authorizedUS: String(body.authorizedUS ?? "").trim(),
+      sponsorship: String(body.sponsorship ?? "").trim(),
+      felony: String(body.felony ?? "").trim(),
+      startDate: String(body.startDate ?? "").trim(),
+      screening: String(body.screening ?? "").trim(),
+      relocate: String(body.relocate ?? "").trim(),
+      gender: String(body.gender ?? "").trim(),
+      pronouns: String(body.pronouns ?? "").trim(),
+      ethnicity: String(body.ethnicity ?? "").trim(),
+      disability: String(body.disability ?? "").trim(),
+      veteran: String(body.veteran ?? "").trim(),
+    };
+
+    if (!payload.authorizedUS || !payload.sponsorship || !payload.felony) {
       return NextResponse.json(
         { error: "Please answer the required questions." },
         { status: 400 }
@@ -64,11 +78,13 @@ export async function POST(req: Request) {
       create: {
         userId,
         registrationStatus: "KEY_QUESTIONS_COMPLETE",
-        keyQuestions: body,
+        keyQuestions: payload,
+        ...payload,
       },
       update: {
         registrationStatus: "KEY_QUESTIONS_COMPLETE",
-        keyQuestions: body,
+        keyQuestions: payload,
+        ...payload,
       },
       select: { id: true },
     });

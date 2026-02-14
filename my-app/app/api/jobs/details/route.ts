@@ -1,7 +1,6 @@
 import { parseJobDescription } from "@/app/lib/jobs/parse-job";
 import { NextResponse } from "next/server";
-import { fetchAdzunaJobDetails } from "../../../lib/providers/adzuna"; // <-- update path to your file
-
+import { fetchAdzunaJobDetails } from "../../../lib/providers/adzuna";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -17,33 +16,32 @@ export async function GET(req: Request) {
       { error: "Invalid id format. Expected source:providerId" },
       { status: 400 }
     );
-  }``
+  }
 
-  // ✅ REQUIRED for server-side fetch
   const origin = new URL(req.url).origin;
 
   try {
     if (source === "adzuna") {
-      // 👇 PASS BOTH ARGUMENTS
       const job = await fetchAdzunaJobDetails(fullId, origin);
-      const pretty = parseJobDescription(job?.description?? " ");
 
       if (!job) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
       }
 
+      const pretty = parseJobDescription(job.description ?? " ");
       return NextResponse.json({ job, pretty });
     }
 
     return NextResponse.json(
-      { error: `Unsupported source: ${source}` },
+      {
+        error: `Details are currently supported for Adzuna jobs only. Got: ${source}`,
+      },
       { status: 400 }
     );
-  } catch (e: any) {
+  } catch (e: unknown) {
     return NextResponse.json(
-      { error: e?.message ?? "Failed to load details" },
+      { error: e instanceof Error ? e.message : "Failed to load details" },
       { status: 500 }
     );
   }
 }
-

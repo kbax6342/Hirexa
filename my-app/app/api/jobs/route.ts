@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import type { Job } from "../../lib/jobs/types";
 import { fetchAdzunaJobs } from "../../lib/providers/adzuna";
+import {
+  fetchGreenhouseJobs,
+  fetchIcimsJobs,
+  fetchJazzHrJobs,
+  fetchWorkdayJobs,
+  getGreenhouseBoards,
+  getWorkdayBoards,
+} from "../../lib/providers/ats-aggregator";
 
 function shuffle<T>(arr: T[]) {
   // Fisher–Yates
@@ -14,18 +22,26 @@ function shuffle<T>(arr: T[]) {
 type Cursor = {
   // per-provider pagination state
   adzunaPage: number;
+  greenhousePage: number;
+  jazzhrPage: number;
+  icimsPage: number;
+  workdayOffset: number;
 };
 
 function decodeCursor(raw: string | null): Cursor {
-  if (!raw) return { adzunaPage: 1 };
+  if (!raw) return { adzunaPage: 1, greenhousePage: 1, jazzhrPage: 1, icimsPage: 1, workdayOffset: 0 };
   try {
     const json = Buffer.from(raw, "base64url").toString("utf8");
     const parsed = JSON.parse(json);
     return {
       adzunaPage: typeof parsed.adzunaPage === "number" ? parsed.adzunaPage : 1,
+      greenhousePage: typeof parsed.greenhousePage === "number" ? parsed.greenhousePage : 1,
+      jazzhrPage: typeof parsed.jazzhrPage === "number" ? parsed.jazzhrPage : 1,
+      icimsPage: typeof parsed.icimsPage === "number" ? parsed.icimsPage : 1,
+      workdayOffset: typeof parsed.workdayOffset === "number" ? parsed.workdayOffset : 0,
     };
   } catch {
-    return { adzunaPage: 1 };
+    return { adzunaPage: 1, greenhousePage: 1, jazzhrPage: 1, icimsPage: 1, workdayOffset: 0 };
   }
 }
 
@@ -43,19 +59,46 @@ export async function GET(req: Request) {
 
   const cursor = decodeCursor(searchParams.get("cursor"));
 
-  // --- Start with Adzuna only ---
-  const adzunaJobs = await fetchAdzunaJobs({
-    query: q,
-    page: cursor.adzunaPage,
-    limit,
-  });
+  const greenhouseBoards = getGreenhouseBoards();
+  const workdayBoards = getWorkdayBoards();
 
-  // later, you’ll also do:
-  // const greenhouseJobs = await fetchGreenhouseJobs(...)
-  // const leverJobs = await fetchLeverJobs(...)
-  // const merged = [...adzunaJobs, ...greenhouseJobs, ...leverJobs]
+  const providerResults = await Promise.allSettled([
+    fetchAdzunaJobs({ query: q, page: cursor.adzunaPage, limit }),
+    greenhouseBoards.length > 0
+      ? fetchGreenhouseJobs({
+          boardTokens: greenhouseBoards,
+          query: q,
+          page: cursor.greenhousePage,
+          limit,
+        })
+      : Promise.resolve([]),
+    fetchJazzHrJobs({ query: q, page: cursor.jazzhrPage, limit }),
+    fetchIcimsJobs({ query: q, page: cursor.icimsPage, limit }),
+    workdayBoards.length > 0
+      ? fetchWorkdayJobs({
+          boards: workdayBoards,
+          query: q,
+          limit,
+          offset: cursor.workdayOffset,
+        })
+      : Promise.resolve([]),
+  ]);
 
-  const merged: Job[] = [...adzunaJobs];
+  const [adzunaResult, greenhouseResult, jazzhrResult, icimsResult, workdayResult] = providerResults;
+
+  const adzunaJobs = adzunaResult.status === "fulfilled" ? adzunaResult.value : [];
+  const greenhouseJobs = greenhouseResult.status === "fulfilled" ? greenhouseResult.value : [];
+  const jazzhrJobs = jazzhrResult.status === "fulfilled" ? jazzhrResult.value : [];
+  const icimsJobs = icimsResult.status === "fulfilled" ? icimsResult.value : [];
+  const workdayJobs = workdayResult.status === "fulfilled" ? workdayResult.value : [];
+
+  const merged: Job[] = [
+    ...adzunaJobs,
+    ...greenhouseJobs,
+    ...jazzhrJobs,
+    ...icimsJobs,
+    ...workdayJobs,
+  ];
 
   // shuffle so sources mix visually
   shuffle(merged);
@@ -64,11 +107,33 @@ export async function GET(req: Request) {
   const nextCursor = encodeCursor({
     ...cursor,
     adzunaPage: cursor.adzunaPage + 1,
+    greenhousePage: cursor.greenhousePage + 1,
+    jazzhrPage: cursor.jazzhrPage + 1,
+    icimsPage: cursor.icimsPage + 1,
+    workdayOffset: cursor.workdayOffset + limit,
   });
 
+  const providerErrors = providerResults
+    .map((r, index) => ({
+      source: ["adzuna", "greenhouse", "jazzhr", "icims", "workday"][index],
+      reason: r.status === "rejected" ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : null,
+    }))
+    .filter((v) => v.reason);
+
   return NextResponse.json({
+    ok: true,
+    query: q,
     jobs: merged,
     items: merged,
+    bySource: {
+      adzuna: adzunaJobs,
+      greenhouse: greenhouseJobs,
+      jazzhr: jazzhrJobs,
+      icims: icimsJobs,
+      workday: workdayJobs,
+    },
+    count: merged.length,
+    providerErrors,
     nextCursor,
   });
 }

@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import SiteNav from "../components/nav/SiteNav";
+import { useRouter } from "next/navigation";
 
 /**
  * NOTE:
@@ -71,8 +71,11 @@ const CATEGORIES: BenefitCategory[] = [
 ];
 
 export default function JobBenefitsSelectionPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const selectedCount = selected.size;
 
@@ -109,11 +112,39 @@ export default function JobBenefitsSelectionPage() {
     setSelected(new Set());
   }
 
-  const statusText =
-      selectedCount > 0 ? "" : "Select at least 1 benefit";
-
-  const statusTextClass = selectedCount > 0 ? "text-green-600" : "text-slate-500";
   const nextEnabled = selectedCount > 0;
+
+  async function handleNext() {
+    if (!nextEnabled || saving) return;
+
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      const res = await fetch("/api/benefits/selection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          selectedPlan: "custom-benefits",
+          benefits: Array.from(selected),
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to save benefits.");
+      }
+
+      router.push("/onboarding/job-interest");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to save benefits.";
+      setSaveError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="flex min-h-screen text-black flex-col bg-white text-slate-800">
@@ -263,27 +294,22 @@ export default function JobBenefitsSelectionPage() {
           </div>
 
           <div className="flex items-center gap-4">
-            <span className={`hidden text-sm sm:inline ${statusTextClass}`}>{statusText}</span>
-
             <button
               type="button"
-              disabled={!nextEnabled}
-              onClick={() => {
-                // TODO: route to next step
-                // Example: router.push("/questions/stepX");
-                alert(`Selected: ${Array.from(selected).join(", ")}`);
-              }}
+              disabled={!nextEnabled || saving}
+              onClick={handleNext}
               className={[
                 "rounded-full px-8 py-2.5 font-semibold text-white transition-all",
-                nextEnabled
+                nextEnabled && !saving
                   ? "cursor-pointer bg-slate-800 hover:bg-slate-900"
                   : "cursor-not-allowed bg-slate-500 opacity-50",
               ].join(" ")}
             >
-              Next Step
+              {saving ? "Saving..." : "Next Step"}
             </button>
           </div>
         </div>
+        {saveError ? <p className="mt-2 text-center text-sm text-red-600">{saveError}</p> : null}
       </footer>
 
       {/* Component-scoped styles to match your HTML behavior */}

@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
+import { cookies } from "next/headers";
 
 type ProfileBody = {
   firstName?: string;
@@ -102,6 +103,61 @@ export async function POST(req: Request) {
         postalCode: true,
         state: true,
         linkedinUrl: true,
+      },
+    });
+
+    return NextResponse.json({ ok: true, profile });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function GET() {
+  try {
+    const session = await auth();
+    const userId = session?.user?.id ?? null;
+
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
+
+    if (!userId && !guestId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const profile = await prisma.userProfile.findFirst({
+      where: userId ? { userId } : { guestId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        resume: {
+          select: {
+            id: true,
+            filename: true,
+            mimeType: true,
+            updatedAt: true,
+            experiences: {
+              orderBy: { order: "asc" },
+              select: {
+                id: true,
+                title: true,
+                company: true,
+                location: true,
+                dateRange: true,
+                bullets: {
+                  orderBy: { order: "asc" },
+                  select: {
+                    id: true,
+                    text: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 

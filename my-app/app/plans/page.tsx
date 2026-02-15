@@ -103,7 +103,11 @@ export default function PlansPage() {
         return;
       }
   
-      window.location.href = data.url;
+      if (data?.url) {
+        window.location.href = data.url; // ✅ go to Stripe Checkout
+        return;
+      }
+      router.push("/dashboard");
     } catch {
       setSaveError("Failed to continue.");
     } finally {

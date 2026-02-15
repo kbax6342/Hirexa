@@ -137,6 +137,67 @@ model BenefitSelection {
   @@index([guestId])
 }
 
+model PlanSelection {
+  id        String   @id @default(cuid())
+  userId    String?  // optional if you support guests
+  guestId   String?  // optional if you support guests
+
+  plan      String
+  perks     Json?
+  source    String?
+  jobId     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([guestId])
+}
+
+model ApplicationDraft {
+  id          String   @id @default(cuid())
+  userId      String?
+  guestId     String?
+  profileId   String?
+  jobId       String
+  jobUrl      String?
+  status      String   @default("DRAFT") // DRAFT | READY | SUBMITTED
+
+  // snapshot fields (optional but recommended)
+  fullName    String?
+  email       String?
+  phone       String?
+  location    String?
+  workAuth    String?
+  linkedin    String?
+  portfolio   String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  answers     ApplicationAnswer[]
+
+  @@index([jobId])
+  @@index([userId])
+  @@index([guestId])
+}
+
+model ApplicationAnswer {
+  id        String @id @default(cuid())
+  draftId   String
+  draft     ApplicationDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  key       String
+  value     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([draftId])
+  @@index([draftId, key])
+}
+
+
+
 model JobInterest {
   id            String @id @default(cuid())
   userProfileId String

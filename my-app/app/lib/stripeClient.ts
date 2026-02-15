@@ -5,9 +5,7 @@ let stripe: Stripe | null = null;
 
 export function getStripeClient() {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) {
-    throw new Error('Missing STRIPE_SECRET_KEY in my-app/.env.local');
-  }
+  if (!key) throw new Error("Missing STRIPE_SECRET_KEY in my-app/.env.local");
 
   if (!stripe) {
     stripe = new Stripe(key, {

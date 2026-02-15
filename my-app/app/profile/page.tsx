@@ -5,7 +5,6 @@ import Image from "next/image";
 import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
-  StarIcon,
   ShieldCheckIcon,
   BriefcaseIcon,
   CurrencyDollarIcon,
@@ -22,6 +21,17 @@ type Stat = {
   sub?: string;
   icon: React.ReactNode;
   accent: "peach" | "yellow" | "blue";
+};
+
+type ProfileInsightsResponse = {
+  ok: boolean;
+  insights?: {
+    majorTheme?: string;
+    majorThemeReason?: string;
+    profileStrength?: string;
+    profileStrengthReason?: string;
+  };
+  error?: string;
 };
 
 type Chip = {
@@ -76,6 +86,8 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insights, setInsights] = useState<ProfileInsightsResponse["insights"] | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -152,27 +164,35 @@ export default function ProfilePage() {
     () => [
       {
         label: "Total experience",
-        value: "Database-driven",
-        sub: "resume experience loaded from database",
+        value: insightsLoading
+          ? "Analyzing"
+          : insights?.majorTheme || "Generalist experience",
+        sub:
+          insights?.majorThemeReason ||
+          "Theme inferred from resume experience with an LLM.",
         icon: <ShieldCheckIcon className="h-5 w-5" />,
         accent: "peach",
       },
       {
-        label: "Ratings",
-        value: "4 Stars",
-        sub: "static placeholder",
-        icon: <StarIcon className="h-5 w-5" />,
+        label: "Experience records",
+        value: String(experience.length),
+        sub: "roles parsed from resume",
+        icon: <BriefcaseIcon className="h-5 w-5" />,
         accent: "yellow",
       },
       {
         label: "Profile strength",
-        value: profile ? "Loaded" : "Pending",
-        sub: "computed in UI",
+        value: insightsLoading
+          ? "Reviewing"
+          : insights?.profileStrength || "Developing",
+        sub:
+          insights?.profileStrengthReason ||
+          "Completion level assessed from profile and resume details.",
         icon: <ShieldCheckIcon className="h-5 w-5" />,
         accent: "blue",
       },
     ],
-    [profile]
+    [experience.length, insights, insightsLoading]
   );
 
 

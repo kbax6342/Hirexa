@@ -133,6 +133,7 @@ export async function GET() {
         lastName: true,
         email: true,
         phone: true,
+        keyQuestions: true,
         profileImage: true,
         profileImageMimeType: true,
         resume: {
@@ -166,6 +167,15 @@ export async function GET() {
     const responseProfile = profile
       ? {
           ...profile,
+          expertise:
+            profile.keyQuestions &&
+            typeof profile.keyQuestions === "object" &&
+            !Array.isArray(profile.keyQuestions)
+              ? Array.isArray((profile.keyQuestions as Record<string, unknown>).expertise)
+                ? (profile.keyQuestions as Record<string, unknown>).expertise
+                    .map((item) => String(item))
+                : []
+              : [],
           profileImageUrl:
             profile.profileImage && profile.profileImageMimeType
               ? `data:${profile.profileImageMimeType};base64,${Buffer.from(profile.profileImage).toString("base64")}`

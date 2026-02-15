@@ -74,10 +74,10 @@ export default function PlansPage() {
 
   async function onNext() {
     if (saving) return;
-
+  
     setSaving(true);
     setSaveError(null);
-
+  
     try {
       const res = await fetch("/api/benefits/selection", {
         method: "POST",
@@ -90,21 +90,27 @@ export default function PlansPage() {
           jobId,
         }),
       });
-
+  
       const data = await res.json().catch(() => ({}));
-
+  
       if (!res.ok) {
-        setSaveError(data?.error ?? "Failed to save your selected benefits.");
+        setSaveError(data?.error ?? "Failed to continue.");
         return;
       }
-
-      router.push("/dashboard");
+  
+      if (!data?.url) {
+        setSaveError("Checkout URL missing from server.");
+        return;
+      }
+  
+      window.location.href = data.url;
     } catch {
-      setSaveError("Failed to save your selected benefits.");
+      setSaveError("Failed to continue.");
     } finally {
       setSaving(false);
     }
   }
+  
 
   return (
     <div className="min-h-screen bg-white">

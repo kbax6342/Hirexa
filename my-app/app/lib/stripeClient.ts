@@ -1,24 +1,19 @@
+// my-app/app/lib/stripeClient.ts
 import Stripe from "stripe";
 
-/**
- * Stripe Client singleton.
- * - Uses the SDK’s pinned API version automatically (you do NOT set apiVersion).
- * - Throws a helpful error if STRIPE_SECRET_KEY is missing.
- */
-let stripeClient: Stripe | null = null;
+let stripe: Stripe | null = null;
 
-export function getStripeClient(): Stripe {
+export function getStripeClient() {
   const key = process.env.STRIPE_SECRET_KEY;
-
   if (!key) {
-    throw new Error(
-      "Missing STRIPE_SECRET_KEY. Add it to /Hirexa/my-app/.env.local (e.g., STRIPE_SECRET_KEY=sk_test_***)"
-    );
+    throw new Error('Missing STRIPE_SECRET_KEY in my-app/.env.local');
   }
 
-  if (!stripeClient) {
-    stripeClient = new Stripe(key);
+  if (!stripe) {
+    stripe = new Stripe(key, {
+      apiVersion: "2025-01-27.acacia",
+    });
   }
 
-  return stripeClient;
+  return stripe;
 }

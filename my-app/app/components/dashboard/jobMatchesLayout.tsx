@@ -9,9 +9,10 @@ import { useRouter } from "next/navigation";
 export default function JobMatchesLayout() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
+  const [appliedJobs, setAppliedJobs] = useState<Job[]>([]);
+  const [showAppliedPanel, setShowAppliedPanel] = useState(false);
 
   const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // If you still want page for analytics/UI you can keep it,
@@ -20,7 +21,7 @@ export default function JobMatchesLayout() {
 
   // details
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [selectedDetails, setSelectedDetails] = useState<any>(null); // or type JobDetails
+  const [selectedDetails, setSelectedDetails] = useState<(Job & { fullDescriptionHtml?: string }) | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
@@ -38,9 +39,9 @@ export default function JobMatchesLayout() {
   // Optional infinite scroll: observe a sentinel div
   //const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const selected = useMemo(
-    () => jobs.find((j) => j.id === selectedId) ?? jobs[0],
-    [jobs, selectedId]
+  const appliedJobIds = useMemo(
+    () => new Set(appliedJobs.map((job) => job.id)),
+    [appliedJobs]
   );
 
 
@@ -133,9 +134,10 @@ export default function JobMatchesLayout() {
         setPretty(fallbackPretty);
   
        
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!cancelled) {
-          setDetailsError(e?.message ?? "Failed to load details");
+          const message = e instanceof Error ? e.message : "Failed to load details";
+          setDetailsError(message);
           setPretty({ sections: [], highlights: [] });
         }
       } finally {
@@ -149,8 +151,19 @@ export default function JobMatchesLayout() {
   }, [selectedId]);
   const router = useRouter();
 
+  const addAppliedJob = (job: Job) => {
+    setAppliedJobs((prev) => {
+      if (prev.some((appliedJob) => appliedJob.id === job.id)) {
+        return prev;
+      }
+
+      return [job, ...prev];
+    });
+    setShowAppliedPanel(true);
+  };
+
   return (
-    <div>
+    <div className="pb-36">
   {/* ... your header stays the same ... */}
 
   <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -230,11 +243,12 @@ export default function JobMatchesLayout() {
                     <button
                       type="button"
                       onClick={() => {
-                        // apply tool action here
+                        addAppliedJob(job);
                       }}
-                      className="rounded-md border px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                      disabled={appliedJobIds.has(job.id)}
+                      className="rounded-md border px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Apply Tool
+                      {appliedJobIds.has(job.id) ? "Applied" : "Apply Tool"}
                     </button>
                   </div>
                 </div>
@@ -294,6 +308,44 @@ export default function JobMatchesLayout() {
       </div>
     </section>
   </div>
+  {appliedJobs.length > 0 && (
+    <>
+      {showAppliedPanel && (
+        <div className="fixed bottom-24 right-4 z-40 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900">Applied jobs</h3>
+            <button
+              type="button"
+              onClick={() => setShowAppliedPanel(false)}
+              className="rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+            {appliedJobs.map((job) => (
+              <div key={job.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <p className="text-xs font-semibold text-gray-800">{job.title}</p>
+                <p className="text-[11px] text-gray-600">
+                  {job.company} • {job.location}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowAppliedPanel((prev) => !prev)}
+        className="fixed bottom-5 right-4 z-50 inline-flex min-w-[110px] flex-col items-center rounded-full bg-blue-600 px-5 py-3 text-white shadow-lg transition hover:bg-blue-700"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wide">Applied Jobs</span>
+        <span className="text-xl font-bold leading-none">{appliedJobs.length}</span>
+      </button>
+    </>
+  )}
 </div>
 
   );

@@ -20,7 +20,7 @@ const guestNav: NavItem[] = [
 
 const authedNav: NavItem[] = [
   { label: "Smart Matches", href: "/dashboard" },
-  { label: "Applications", href: "/dashboard/applications" },
+  { label: "Applications", href: "/applications" },
   { label: "Profile", href: "/profile" },
   { label: "Job Tools", href: "/job-tools/generate" },
   { label: "Events", href: "/job-tools/events" },

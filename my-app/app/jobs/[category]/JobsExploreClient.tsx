@@ -46,6 +46,10 @@ export default function JobsExplorerClient({
     initialJobs?.[0]?.id ?? null
   );
   const [loading, setLoading] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string>("");
+  const [savingApplicationId, setSavingApplicationId] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     let ignore = false;
@@ -90,9 +94,40 @@ export default function JobsExplorerClient({
     }
   }, [jobs, selectedId]);
 
+  async function applyToSelectedJob(job: Job) {
+    setSaveMessage("");
+    setSavingApplicationId(job.id);
+
+    try {
+      const res = await fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceJobId: job.id,
+          jobTitle: job.title,
+          company: job.company,
+          location: job.location,
+          jobUrl: job.jobUrl,
+          status: "IN_PROGRESS",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveMessage(data?.error ?? "Could not save this application.");
+        return;
+      }
+
+      setSaveMessage("Application saved. You can track it on /applications.");
+    } catch {
+      setSaveMessage("Could not save this application right now.");
+    } finally {
+      setSavingApplicationId(null);
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-[90] lg:px-6">
-      {/* Top copy (like screenshot headline) */}
       <div className="max-w-4xl mb-4">
         <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
           Discover the Best {categoryLabel} Jobs. Apply Smarter.
@@ -103,9 +138,7 @@ export default function JobsExplorerClient({
         </p>
       </div>
 
-      {/* Layout */}
       <div className="grid gap-5 lg:grid-cols-12">
-        {/* Left: list */}
         <aside className="lg:col-span-5">
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm h-[70vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -195,7 +228,6 @@ export default function JobsExplorerClient({
           </div>
         </aside>
 
-        {/* Right: details (fixed height + bottom anchored sections) */}
         <section className="lg:col-span-7">
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm h-[70vh] flex flex-col">
             <div className="p-5 sm:p-6 flex-1 flex flex-col min-h-0">
@@ -210,9 +242,7 @@ export default function JobsExplorerClient({
                 </div>
               ) : (
                 <>
-                  {/* TOP: scroll area */}
                   <div className="flex-1 min-h-0 overflow-auto pr-1">
-                    {/* header */}
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <h2 className="truncate text-xl font-semibold text-slate-900">
@@ -236,9 +266,13 @@ export default function JobsExplorerClient({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700"
+                          onClick={() => applyToSelectedJob(selected)}
+                          disabled={savingApplicationId === selected.id}
+                          className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700 disabled:opacity-50"
                         >
-                          Apply with Hirexa
+                          {savingApplicationId === selected.id
+                            ? "Saving..."
+                            : "Apply with Hirexa"}
                         </button>
 
                         {selected.jobUrl ? (
@@ -255,7 +289,10 @@ export default function JobsExplorerClient({
                       </div>
                     </div>
 
-                    {/* value callout */}
+                    {saveMessage ? (
+                      <p className="mt-3 text-sm text-slate-700">{saveMessage}</p>
+                    ) : null}
+
                     <div className="mt-6 rounded-2xl border border-sky-200 bg-gradient-to-b from-sky-50 to-white p-5">
                       <div className="text-sm font-semibold text-slate-900">
                         Automate your job search with Hirexa.
@@ -293,9 +330,7 @@ export default function JobsExplorerClient({
                     </div>
                   </div>
 
-                  {/* BOTTOM: anchored */}
                   <div className="pt-5">
-                    {/* Overview */}
                     <div className="rounded-2xl border border-slate-200 p-4">
                       <div className="flex items-center justify-between">
                         <div className="text-sm font-semibold text-slate-900">
@@ -339,7 +374,6 @@ export default function JobsExplorerClient({
                       </div>
                     </div>
 
-                    {/* Job Description */}
                     <div className="mt-5">
                       <div className="text-sm font-semibold text-slate-900">
                         Job Description

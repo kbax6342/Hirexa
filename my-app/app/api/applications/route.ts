@@ -14,6 +14,9 @@ type ApplicationStatus = (typeof ALLOWED_STATUSES)[number];
 type CreateApplicationBody = {
   jobTitle?: string;
   company?: string;
+  location?: string;
+  jobUrl?: string;
+  sourceJobId?: string;
   status?: ApplicationStatus;
 };
 
@@ -44,8 +47,11 @@ export async function GET() {
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
+        sourceJobId: true,
         jobTitle: true,
         company: true,
+        location: true,
+        jobUrl: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -71,6 +77,9 @@ export async function POST(req: Request) {
     const body = (await req.json()) as CreateApplicationBody;
     const jobTitle = normalizeText(body.jobTitle);
     const company = normalizeText(body.company);
+    const location = normalizeText(body.location) || null;
+    const jobUrl = normalizeText(body.jobUrl) || null;
+    const sourceJobId = normalizeText(body.sourceJobId) || null;
     const status = ALLOWED_STATUSES.includes(body.status as ApplicationStatus)
       ? (body.status as ApplicationStatus)
       : "IN_PREPARATION";
@@ -89,22 +98,63 @@ export async function POST(req: Request) {
       select: { id: true },
     });
 
-    const application = await prisma.jobApplication.create({
-      data: {
-        userProfileId: profile.id,
-        jobTitle,
-        company,
-        status,
-      },
-      select: {
-        id: true,
-        jobTitle: true,
-        company: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    const application = sourceJobId
+      ? await prisma.jobApplication.upsert({
+          where: {
+            userProfileId_sourceJobId: {
+              userProfileId: profile.id,
+              sourceJobId,
+            },
+          },
+          create: {
+            userProfileId: profile.id,
+            sourceJobId,
+            jobTitle,
+            company,
+            location,
+            jobUrl,
+            status,
+          },
+          update: {
+            jobTitle,
+            company,
+            location,
+            jobUrl,
+            status,
+          },
+          select: {
+            id: true,
+            sourceJobId: true,
+            jobTitle: true,
+            company: true,
+            location: true,
+            jobUrl: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        })
+      : await prisma.jobApplication.create({
+          data: {
+            userProfileId: profile.id,
+            jobTitle,
+            company,
+            location,
+            jobUrl,
+            status,
+          },
+          select: {
+            id: true,
+            sourceJobId: true,
+            jobTitle: true,
+            company: true,
+            location: true,
+            jobUrl: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
 
     return NextResponse.json({ ok: true, application });
   } catch (e: unknown) {

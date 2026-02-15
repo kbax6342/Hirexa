@@ -133,6 +133,8 @@ export async function GET() {
         lastName: true,
         email: true,
         phone: true,
+        profileImage: true,
+        profileImageMimeType: true,
         resume: {
           select: {
             id: true,
@@ -161,7 +163,17 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ ok: true, profile });
+    const responseProfile = profile
+      ? {
+          ...profile,
+          profileImageUrl:
+            profile.profileImage && profile.profileImageMimeType
+              ? `data:${profile.profileImageMimeType};base64,${Buffer.from(profile.profileImage).toString("base64")}`
+              : null,
+        }
+      : null;
+
+    return NextResponse.json({ ok: true, profile: responseProfile });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });

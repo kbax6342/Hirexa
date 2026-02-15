@@ -47,7 +47,7 @@ export async function POST() {
         hirexa_intro_days: "14",
       },
     },
-    success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    success_url: `${appUrl}/dashboard`,
     cancel_url: `${appUrl}/plans?canceled=1`,
   });
 

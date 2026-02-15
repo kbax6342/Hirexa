@@ -267,8 +267,8 @@ export function JobDescription({ pretty }: { pretty?: JobPretty | null }) {
         </div>
       ) : null}
 
-      {safePretty.sections.map((s) => (
-        <section key={s.title}>
+      {safePretty.sections.map((s, idx) => (
+        <section key={`${s.title}-${idx}`}>
           <h3 className="mb-4 text-base font-semibold text-gray-900">{s.title}</h3>
 
           {s.kind === "paragraphs" && (
@@ -300,7 +300,7 @@ export function JobDescription({ pretty }: { pretty?: JobPretty | null }) {
 
           {s.kind === "smallprint" &&
             s.paragraphs?.map((p, i) => (
-              <p key={i} className="text-xs leading-6 text-gray-500" key={i}>
+              <p key={i} className="text-xs leading-6 text-gray-500">
                 {p}
               </p>
             ))}

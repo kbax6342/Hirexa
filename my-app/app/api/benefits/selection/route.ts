@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { getStripeClient } from "@/app/lib/stripeClient";
 import { prisma } from "@/app/lib/prisma";
+import { auth } from "@/app/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,9 @@ type Body = {
 
 export async function POST(req: Request) {
   try {
+    const session = await auth();
+    const email = session?.user?.email ?? undefined;
+
     const body = (await req.json()) as Body;
 
     const selectedPlan = body?.selectedPlan;
@@ -56,22 +60,25 @@ export async function POST(req: Request) {
     // ✅ Create checkout session
     const stripe = getStripeClient();
 
-    const session = await stripe.checkout.sessions.create({
+    const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appUrl}/dashboard`,
+      customer_email: email,
+      success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/plans`,
       allow_promotion_codes: true,
     });
 
-    if (!session.url) {
+    if (!checkoutSession.url) {
       return NextResponse.json({ error: "Stripe did not return a checkout url." }, { status: 500 });
     }
 
-    return NextResponse.json({ url: session.url });
-  } catch (e: any) {
+    return NextResponse.json({ url: checkoutSession.url });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to create checkout session.";
+
     return NextResponse.json(
-      { error: e?.message || "Failed to create checkout session." },
+      { error: message },
       { status: 500 }
     );
   }

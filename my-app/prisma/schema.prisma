@@ -50,6 +50,15 @@ model UserProfile {
   newsletterOptIn   Boolean  @default(false)
   newsletterSource  String?
 
+  trialSubscriber   Boolean  @default(false)
+  monthlySubscriber Boolean  @default(false)
+  yearlySubscriber  Boolean  @default(false)
+
+  trialPlanStatus   String?
+  monthlyPlanStatus String?
+  yearlyPlanStatus  String?
+  lastPaymentReceivedAt DateTime?
+
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?
  

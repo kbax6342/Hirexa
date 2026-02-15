@@ -6,36 +6,6 @@ import type Stripe from "stripe";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-function resolvePlanName(subscription: Stripe.Subscription) {
-  const metadataPlan = subscription.metadata?.hirexa_plan;
-  if (metadataPlan) return metadataPlan;
-
-  const interval = subscription.items.data[0]?.price?.recurring?.interval;
-  if (interval === "year") return "annual";
-  if (interval === "month") return "monthly";
-
-  return "trial";
-}
-
-async function syncStripeSubscriptionSnapshot(
-  userProfileId: string,
-  subscription: Stripe.Subscription
-) {
-  const firstPrice = subscription.items.data[0]?.price;
-
-  await prisma.userProfile.update({
-    where: { id: userProfileId },
-    data: {
-      stripeSubscriptionId: subscription.id,
-      stripePlanName: resolvePlanName(subscription),
-      stripePriceCents: firstPrice?.unit_amount ?? null,
-      stripePriceInterval: firstPrice?.recurring?.interval ?? null,
-      stripeStatus: subscription.status,
-      stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
-    },
-  });
-}
-
 async function getUserProfileIdFromSubscription(
   stripeClient: Stripe,
   subscriptionId: string
@@ -169,7 +139,6 @@ export async function POST(req: Request) {
               : "monthly";
 
         await applyPaymentStatus(userProfileId, planType, "payment approved", new Date());
-        await syncStripeSubscriptionSnapshot(userProfileId, sub);
       }
 
       if (introPriceId && fullPriceId) {
@@ -200,14 +169,12 @@ export async function POST(req: Request) {
       const userProfileId = await getUserProfileIdFromSubscription(stripeClient, subscriptionId);
 
       if (userProfileId) {
-        const sub = await stripeClient.subscriptions.retrieve(subscriptionId);
         const line = invoice.lines.data[0];
         const interval = line?.price?.recurring?.interval;
         const paidAt = new Date((invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000);
 
         const planType = interval === "year" ? "yearly" : "monthly";
         await applyPaymentStatus(userProfileId, planType, "payed", paidAt);
-        await syncStripeSubscriptionSnapshot(userProfileId, sub);
       }
     }
   }

@@ -86,10 +86,10 @@ export default function ProfilePage() {
         setError(null);
 
         const res = await fetch("/api/profile", { cache: "no-store" });
-        const data = (await res.json()) as ProfileApiResponse;
+        const data = (await readJsonResponse<ProfileApiResponse>(res)) ?? null;
 
         if (!res.ok) {
-          const message = typeof (data as { error?: unknown }).error === "string"
+          const message = typeof (data as { error?: unknown } | null)?.error === "string"
             ? (data as { error?: string }).error
             : "Failed to load profile";
           throw new Error(message);
@@ -185,7 +185,8 @@ export default function ProfilePage() {
         body: formData,
       });
 
-      const data = (await res.json()) as { ok?: boolean; error?: string; profileImageUrl?: string | null };
+      const data =
+        (await readJsonResponse<{ ok?: boolean; error?: string; profileImageUrl?: string | null }>(res)) ?? {};
 
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to upload profile photo");
@@ -457,6 +458,23 @@ export default function ProfilePage() {
       </main>
     </div>
   );
+}
+
+async function readJsonResponse<T>(res: Response): Promise<T | null> {
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+
+  if (!body) return null;
+
+  if (!contentType.toLowerCase().includes("application/json")) {
+    throw new Error(res.ok ? "Unexpected server response." : "Server returned a non-JSON response.");
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error("Invalid JSON response from server.");
+  }
 }
 
 function Card({

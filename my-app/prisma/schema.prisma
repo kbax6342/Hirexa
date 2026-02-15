@@ -38,7 +38,7 @@ model UserProfile {
   user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // profile fields (keep what you need)
-  skills             String[] @default([])
+  skills             String[]  @default([])
   email              String?
   registrationStatus String?   @default("pending_verification")
   welcomeEmailSentAt DateTime?
@@ -47,36 +47,37 @@ model UserProfile {
   workplaceLocations Json?
   includeRemote      Boolean @default(true)
 
-  newsletterOptIn   Boolean  @default(false)
-  newsletterSource  String?
+  newsletterOptIn  Boolean @default(false)
+  newsletterSource String?
 
-  trialSubscriber   Boolean  @default(false)
-  monthlySubscriber Boolean  @default(false)
-  yearlySubscriber  Boolean  @default(false)
+  trialSubscriber   Boolean @default(false)
+  monthlySubscriber Boolean @default(false)
+  yearlySubscriber  Boolean @default(false)
 
-  trialPlanStatus   String?
-  monthlyPlanStatus String?
-  yearlyPlanStatus  String?
+  trialPlanStatus       String?
+  monthlyPlanStatus     String?
+  yearlyPlanStatus      String?
   lastPaymentReceivedAt DateTime?
 
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?
- 
-
 
   resumeSkills String[] @default([])
 
   minCompensation  Int?
   compensationType String?
 
-  firstName String?
-  lastName  String?
-  phone     String?
-  dob       DateTime?
-  address    String?
-  city       String?
-  postalCode String?
-  state      String?
+  firstName            String?
+  lastName             String?
+  phone                String?
+  profileImage         Bytes?
+  profileImageMimeType String?
+  profileImageFilename String?
+  dob                  DateTime?
+  address              String?
+  city                 String?
+  postalCode           String?
+  state                String?
 
   linkedinUrl String?
 
@@ -93,11 +94,11 @@ model UserProfile {
   veteran      String?
 
   // ✅ Resume is connected through profileId
-  resume       Resume?
-  jobInterests JobInterest[]
+  resume            Resume?
+  jobInterests      JobInterest[]
   benefitSelections BenefitSelection[]
-  resumeFiles  ResumeFile[]
-  jobApplications JobApplication[]
+  resumeFiles       ResumeFile[]
+  jobApplications   JobApplication[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

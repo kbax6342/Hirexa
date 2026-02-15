@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
@@ -45,6 +46,7 @@ type ProfileApiResponse = {
     lastName: string | null;
     email: string | null;
     phone: string | null;
+    profileImageUrl?: string | null;
     resume: {
       id: string;
       filename: string;
@@ -72,6 +74,8 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +170,43 @@ export default function ProfilePage() {
     [profile]
   );
 
+
+
+  async function uploadPhoto(file: File) {
+    try {
+      setUploadingPhoto(true);
+      setError(null);
+
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const res = await fetch("/api/profile/photo", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = (await res.json()) as { ok?: boolean; error?: string; profileImageUrl?: string | null };
+
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to upload profile photo");
+      }
+
+      setProfile((prev) => (prev ? { ...prev, profileImageUrl: data.profileImageUrl ?? null } : prev));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to upload profile photo");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    await uploadPhoto(file);
+    event.target.value = "";
+  }
+
   function toggleExp(id: string) {
     setExpandedExp((p) => ({ ...p, [id]: !p[id] }));
   }
@@ -193,9 +234,19 @@ export default function ProfilePage() {
               <div className="flex items-center gap-4">
                 <div className="relative">
                   <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
-                    <div className="flex h-full w-full items-center justify-center text-sm font-bold text-indigo-950">
-                      {name.slice(0, 1).toUpperCase()}
-                    </div>
+                    {profile?.profileImageUrl ? (
+                      <Image
+                        src={profile.profileImageUrl}
+                        alt="Profile"
+                        width={64}
+                        height={64}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-sm font-bold text-indigo-950">
+                        {name.slice(0, 1).toUpperCase()}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -203,11 +254,21 @@ export default function ProfilePage() {
 
                 <button
                   type="button"
-                  className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingPhoto}
+                  className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
                 >
                   <ArrowUpTrayIcon className="h-4 w-4" />
-                  Upload Photo
+                  {uploadingPhoto ? "Uploading…" : "Upload Photo"}
                 </button>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handlePhotoChange}
+                />
               </div>
 
               <div className="mt-6 space-y-4">

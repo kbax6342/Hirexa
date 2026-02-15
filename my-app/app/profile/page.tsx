@@ -56,6 +56,7 @@ type ProfileApiResponse = {
     lastName: string | null;
     email: string | null;
     phone: string | null;
+    expertise?: string[];
     profileImageUrl?: string | null;
     resume: {
       id: string;
@@ -98,10 +99,10 @@ export default function ProfilePage() {
         setError(null);
 
         const res = await fetch("/api/profile", { cache: "no-store" });
-        const data = (await res.json()) as ProfileApiResponse;
+        const data = (await readJsonResponse<ProfileApiResponse>(res)) ?? null;
 
         if (!res.ok) {
-          const message = typeof (data as { error?: unknown }).error === "string"
+          const message = typeof (data as { error?: unknown } | null)?.error === "string"
             ? (data as { error?: string }).error
             : "Failed to load profile";
           throw new Error(message);
@@ -155,55 +156,9 @@ export default function ProfilePage() {
     []
   );
 
-  useEffect(() => {
-    if (!profile) return;
-
-    let cancelled = false;
-
-    async function loadInsights() {
-      try {
-        setInsightsLoading(true);
-
-        const res = await fetch("/api/profile/insights", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            firstName: profile.firstName,
-            lastName: profile.lastName,
-            email: profile.email,
-            phone: profile.phone,
-            experiences: (profile.resume?.experiences ?? []).map((exp) => ({
-              title: exp.title,
-              company: exp.company,
-              location: exp.location,
-              dateRange: exp.dateRange,
-              bullets: exp.bullets.map((b) => b.text),
-            })),
-          }),
-        });
-
-        const data = (await res.json()) as ProfileInsightsResponse;
-
-        if (!cancelled && data.ok) {
-          setInsights(data.insights ?? null);
-        }
-      } catch {
-        if (!cancelled) {
-          setInsights(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setInsightsLoading(false);
-        }
-      }
-    }
-
-    loadInsights();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [profile]);
+  const [selectedExpertise, setSelectedExpertise] = useState<string[]>([]);
+  const [savingExpertise, setSavingExpertise] = useState(false);
+  const [expertiseError, setExpertiseError] = useState<string | null>(null);
 
   const stats: Stat[] = useMemo(
     () => [
@@ -242,6 +197,53 @@ export default function ProfilePage() {
 
 
 
+
+  useEffect(() => {
+    setSelectedExpertise(Array.isArray(profile?.expertise) ? profile.expertise : []);
+  }, [profile?.expertise]);
+
+  async function persistExpertise(nextExpertise: string[]) {
+    try {
+      setSavingExpertise(true);
+      setExpertiseError(null);
+
+      const res = await fetch("/api/profile/expertise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expertise: nextExpertise }),
+      });
+
+      const data = (await res.json()) as { error?: string; expertise?: string[] };
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to save expertise.");
+      }
+
+      setSelectedExpertise(Array.isArray(data.expertise) ? data.expertise : nextExpertise);
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              expertise: Array.isArray(data.expertise) ? data.expertise : nextExpertise,
+            }
+          : prev
+      );
+    } catch (e) {
+      setExpertiseError(e instanceof Error ? e.message : "Failed to save expertise.");
+      setSelectedExpertise(Array.isArray(profile?.expertise) ? profile.expertise : []);
+    } finally {
+      setSavingExpertise(false);
+    }
+  }
+
+  function toggleExpertise(label: string) {
+    const next = selectedExpertise.includes(label)
+      ? selectedExpertise.filter((item) => item !== label)
+      : [...selectedExpertise, label];
+
+    setSelectedExpertise(next);
+    void persistExpertise(next);
+  }
+
   async function uploadPhoto(file: File) {
     try {
       setUploadingPhoto(true);
@@ -255,7 +257,8 @@ export default function ProfilePage() {
         body: formData,
       });
 
-      const data = (await res.json()) as { ok?: boolean; error?: string; profileImageUrl?: string | null };
+      const data =
+        (await readJsonResponse<{ ok?: boolean; error?: string; profileImageUrl?: string | null }>(res)) ?? {};
 
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to upload profile photo");
@@ -481,16 +484,29 @@ export default function ProfilePage() {
                   <div className={`text-xs font-semibold ${NON_DB_TEXT_CLASS}`}>Expertise in</div>
 
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {chips.map((c) => (
-                      <span
-                        key={c.label}
-                        className={`inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold shadow-[0_1px_0_rgba(15,23,42,0.03)] ${NON_DB_TEXT_CLASS}`}
-                      >
-                        <span className={NON_DB_TEXT_CLASS}>{c.icon}</span>
-                        {c.label}
-                      </span>
-                    ))}
+                    {chips.map((c) => {
+                      const isSelected = selectedExpertise.includes(c.label);
+
+                      return (
+                        <button
+                          type="button"
+                          key={c.label}
+                          disabled={savingExpertise}
+                          onClick={() => toggleExpertise(c.label)}
+                          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-[0_1px_0_rgba(15,23,42,0.03)] transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                            isSelected
+                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                              : `border-slate-200 bg-white ${NON_DB_TEXT_CLASS}`
+                          }`}
+                          aria-pressed={isSelected}
+                        >
+                          <span className={isSelected ? "text-indigo-700" : NON_DB_TEXT_CLASS}>{c.icon}</span>
+                          {c.label}
+                        </button>
+                      );
+                    })}
                   </div>
+                  {expertiseError ? <p className="mt-2 text-xs text-red-600">{expertiseError}</p> : null}
                 </div>
               </Card>
 
@@ -527,6 +543,23 @@ export default function ProfilePage() {
       </main>
     </div>
   );
+}
+
+async function readJsonResponse<T>(res: Response): Promise<T | null> {
+  const contentType = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+
+  if (!body) return null;
+
+  if (!contentType.toLowerCase().includes("application/json")) {
+    throw new Error(res.ok ? "Unexpected server response." : "Server returned a non-JSON response.");
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error("Invalid JSON response from server.");
+  }
 }
 
 function Card({

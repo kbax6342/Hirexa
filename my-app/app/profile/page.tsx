@@ -45,6 +45,11 @@ type ProfileApiResponse = {
     lastName: string | null;
     email: string | null;
     phone: string | null;
+    stripePlanName: string | null;
+    stripePriceCents: number | null;
+    stripePriceInterval: string | null;
+    stripeStatus: string | null;
+    stripeCurrentPeriodEnd: string | null;
     resume: {
       id: string;
       filename: string;
@@ -115,6 +120,17 @@ export default function ProfilePage() {
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
   const email = profile?.email || "Not provided in database";
   const phone = profile?.phone || "Not provided in database";
+
+  const planName = profile?.stripePlanName || "Not provided in database";
+  const amount =
+    typeof profile?.stripePriceCents === "number"
+      ? (profile.stripePriceCents / 100).toFixed(2)
+      : "Not provided in database";
+  const interval = profile?.stripePriceInterval || "Not provided in database";
+  const status = profile?.stripeStatus || "Not provided in database";
+  const nextBillingDate = profile?.stripeCurrentPeriodEnd
+    ? new Date(profile.stripeCurrentPeriodEnd).toLocaleDateString()
+    : "Not provided in database";
 
   const experience: ExperienceItem[] = useMemo(() => {
     if (!profile?.resume?.experiences?.length) return [];
@@ -214,6 +230,13 @@ export default function ProfilePage() {
                 <FieldRow label="Your Name" value={name} />
                 <FieldRow label="Email" value={email} />
                 <FieldRow label="Phone Number" value={phone} />
+                <FieldRow label="Plan" value={planName} />
+                <FieldRow
+                  label="Price"
+                  value={amount === "Not provided in database" ? amount : `$${amount} / ${interval}`}
+                />
+                <FieldRow label="Status" value={status} />
+                <FieldRow label="Next Billing Date" value={nextBillingDate} />
               </div>
 
               {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}

@@ -59,6 +59,13 @@ model UserProfile {
   yearlyPlanStatus  String?
   lastPaymentReceivedAt DateTime?
 
+  stripeSubscriptionId  String?
+  stripePlanName        String?
+  stripePriceCents      Int?
+  stripePriceInterval   String?
+  stripeStatus          String?
+  stripeCurrentPeriodEnd DateTime?
+
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?
  

@@ -111,6 +111,9 @@ model JobApplication {
 
   jobTitle String
   company  String
+  location String?
+  jobUrl   String?
+  sourceJobId String?
   status   ApplicationStatus @default(IN_PREPARATION)
 
   createdAt DateTime @default(now())
@@ -118,6 +121,7 @@ model JobApplication {
 
   @@index([userProfileId])
   @@index([userProfileId, status])
+  @@unique([userProfileId, sourceJobId])
 }
 
 model BenefitSelection {

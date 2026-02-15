@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircleIcon,
@@ -18,6 +18,23 @@ type FormState = {
   linkedinUrl: string;
   phone: string;
   email: string;
+};
+
+
+type ExistingProfileResponse = {
+  profile?: {
+    firstName?: string | null;
+    lastName?: string | null;
+    dob?: string | null;
+    address?: string | null;
+    city?: string | null;
+    postalCode?: string | null;
+    state?: string | null;
+    linkedinUrl?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  } | null;
+  error?: string;
 };
 
 const US_STATES = [
@@ -47,8 +64,64 @@ export default function ProfileForm() {
   });
 
   const [saving, setSaving] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      try {
+        setLoadingProfile(true);
+
+        const res = await fetch("/api/profile", { cache: "no-store" });
+        const data = (await res.json()) as ExistingProfileResponse;
+
+        if (!res.ok) {
+          throw new Error(data?.error || "Failed to load existing profile.");
+        }
+
+        const profile = data?.profile;
+        if (!profile || cancelled) return;
+
+        setForm((prev) => ({
+          ...prev,
+          firstName: profile.firstName ?? prev.firstName,
+          lastName: profile.lastName ?? prev.lastName,
+          dob: profile.dob
+            ? new Date(profile.dob).toLocaleDateString("en-US", {
+                month: "2-digit",
+                day: "2-digit",
+                year: "numeric",
+              })
+            : prev.dob,
+          address: profile.address ?? prev.address,
+          city: profile.city ?? prev.city,
+          postalCode: profile.postalCode ?? prev.postalCode,
+          state: profile.state ?? prev.state,
+          linkedinUrl: profile.linkedinUrl ?? prev.linkedinUrl,
+          phone: profile.phone ?? prev.phone,
+          email: profile.email ?? prev.email,
+        }));
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : "Failed to load existing profile.";
+          setError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingProfile(false);
+        }
+      }
+    }
+
+    loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const requiredOk = useMemo(() => {
     return (
@@ -77,7 +150,7 @@ export default function ProfileForm() {
       });
 
       // Be defensive: some errors return empty body
-      let data: any = null;
+      let data: { error?: string } | null = null;
       try {
         data = await res.json();
       } catch {
@@ -89,8 +162,9 @@ export default function ProfileForm() {
       }
 
       return { ok: true };
-    } catch (e: any) {
-      return { ok: false, message: e?.message || "Network error. Please try again." };
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Network error. Please try again.";
+      return { ok: false, message };
     }
   }
 
@@ -310,15 +384,15 @@ export default function ProfileForm() {
       <div className="pt-2">
         <button
           type="submit"
-          disabled={saving === true}
+          disabled={saving === true || loadingProfile}
           className={[
             "inline-flex h-11 items-center justify-center rounded-md px-5 text-sm font-semibold text-white shadow-sm transition",
-            saving
+            saving || loadingProfile
               ? "bg-sky-400 cursor-not-allowed opacity-60"
               : "bg-sky-600 hover:bg-sky-700 cursor-pointer",
           ].join(" ")}
         >
-          {saving ? "Saving..." : "Continue"}
+          {loadingProfile ? "Loading..." : saving ? "Saving..." : "Continue"}
         </button>
       </div>
     </form>

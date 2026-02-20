@@ -320,3 +320,53 @@ model EmailVerificationCode {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model AutofillProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Basics
+  firstName   String?
+  lastName    String?
+  email       String?
+  phone       String?
+
+  // Address
+  address1    String?
+  address2    String?
+  city        String?
+  state       String?
+  zip         String?
+  country     String?
+
+  // Work eligibility
+  workAuthUS  Boolean?
+  needSponsorship Boolean?
+
+  // Links
+  linkedinUrl String?
+  portfolioUrl String?
+  githubUrl   String?
+
+  // Free-form defaults for common questions
+  defaultAnswers Json?
+
+  user        UserProfile @relation(fields: [userId], references: [userId])
+}
+
+model ApplyQueue {
+  id        String   @id @default(cuid())
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobUrl    String
+  jobTitle  String?
+  company   String?
+  status    String   @default("queued") // queued | opened | submitted | failed | skipped
+  notes     String?
+
+  user      UserProfile @relation(fields: [userId], references: [userId])
+}

@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
+import { getStripeClient } from "@/app/lib/stripeClient";
+import type Stripe from "stripe";
 
 type ProfileBody = {
   firstName?: string;
@@ -40,6 +42,111 @@ function parseDob(value: unknown) {
   if (Number.isNaN(date.getTime())) return null;
 
   return date;
+}
+
+function planTypeFromSubscription(subscription: Stripe.Subscription): "trial" | "monthly" | "yearly" {
+  const hirexaPlan = subscription.metadata?.hirexa_plan;
+  if (hirexaPlan === "trial") return "trial";
+  if (hirexaPlan === "annual") return "yearly";
+
+  const recurringInterval = subscription.items.data[0]?.price?.recurring?.interval;
+  return recurringInterval === "year" ? "yearly" : "monthly";
+}
+
+function planStatusFromSubscription(subscription: Stripe.Subscription): string {
+  return subscription.status ?? "unknown";
+}
+
+async function syncStripeSubscriptionStatus(params: {
+  userId: string;
+  sessionEmail: string | null;
+  profileEmail: string | null;
+}) {
+  const checkedAt = new Date();
+  const emailToLookup = normalizeText(params.profileEmail) ?? normalizeText(params.sessionEmail);
+
+  if (!emailToLookup) {
+    await prisma.userProfile.updateMany({
+      where: { userId: params.userId },
+      data: { subscriptionCheckedAt: checkedAt },
+    });
+    return;
+  }
+
+  const stripeClient = getStripeClient();
+  const customers = await stripeClient.customers.list({ email: emailToLookup, limit: 1 });
+  const customer = customers.data[0] ?? null;
+
+  if (!customer) {
+    await prisma.userProfile.updateMany({
+      where: { userId: params.userId },
+      data: {
+        trialSubscriber: false,
+        monthlySubscriber: false,
+        yearlySubscriber: false,
+        trialPlanStatus: null,
+        monthlyPlanStatus: null,
+        yearlyPlanStatus: null,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        subscriptionEmail: emailToLookup,
+        subscriptionCheckedAt: checkedAt,
+      },
+    });
+    return;
+  }
+
+  const subscriptions = await stripeClient.subscriptions.list({
+    customer: customer.id,
+    status: "all",
+    limit: 10,
+  });
+
+  const latestSubscription = subscriptions.data.sort((a, b) => b.created - a.created)[0] ?? null;
+
+  if (!latestSubscription) {
+    await prisma.userProfile.updateMany({
+      where: { userId: params.userId },
+      data: {
+        trialSubscriber: false,
+        monthlySubscriber: false,
+        yearlySubscriber: false,
+        trialPlanStatus: null,
+        monthlyPlanStatus: null,
+        yearlyPlanStatus: null,
+        stripeCustomerId: customer.id,
+        stripeSubscriptionId: null,
+        subscriptionEmail: emailToLookup,
+        subscriptionCheckedAt: checkedAt,
+      },
+    });
+    return;
+  }
+
+  const planType = planTypeFromSubscription(latestSubscription);
+  const status = planStatusFromSubscription(latestSubscription);
+  const isActiveStatus = ["active", "trialing", "past_due", "unpaid"].includes(status);
+
+  await prisma.userProfile.updateMany({
+    where: { userId: params.userId },
+    data: {
+      trialSubscriber: planType === "trial" ? isActiveStatus : false,
+      monthlySubscriber: planType === "monthly" ? isActiveStatus : false,
+      yearlySubscriber: planType === "yearly" ? isActiveStatus : false,
+      trialPlanStatus: planType === "trial" ? status : null,
+      monthlyPlanStatus: planType === "monthly" ? status : null,
+      yearlyPlanStatus: planType === "yearly" ? status : null,
+      stripeCustomerId: customer.id,
+      stripeSubscriptionId: latestSubscription.id,
+      subscriptionEmail: emailToLookup,
+      subscriptionCheckedAt: checkedAt,
+      subscriptionPurchasedAt: new Date(latestSubscription.created * 1000),
+      lastPaymentReceivedAt:
+        latestSubscription.status === "active" || latestSubscription.status === "trialing"
+          ? checkedAt
+          : undefined,
+    },
+  });
 }
 
 export async function POST(req: Request) {
@@ -125,6 +232,26 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    if (userId) {
+      const currentProfile = await prisma.userProfile.findFirst({
+        where: { userId },
+        select: { email: true },
+      });
+
+      try {
+        await syncStripeSubscriptionStatus({
+          userId,
+          sessionEmail: session?.user?.email ?? null,
+          profileEmail: currentProfile?.email ?? null,
+        });
+      } catch {
+        await prisma.userProfile.updateMany({
+          where: { userId },
+          data: { subscriptionCheckedAt: new Date() },
+        });
+      }
+    }
+
     const profile = await prisma.userProfile.findFirst({
       where: userId ? { userId } : { guestId },
       select: {
@@ -150,6 +277,11 @@ export async function GET() {
         monthlyPlanStatus: true,
         yearlyPlanStatus: true,
         lastPaymentReceivedAt: true,
+        subscriptionCheckedAt: true,
+        subscriptionPurchasedAt: true,
+        stripeCustomerId: true,
+        stripeSubscriptionId: true,
+        subscriptionEmail: true,
         emailVerifiedAt: true,
         unsubscribedAt: true,
         resumeSkills: true,

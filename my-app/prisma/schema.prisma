@@ -58,6 +58,11 @@ model UserProfile {
   monthlyPlanStatus     String?
   yearlyPlanStatus      String?
   lastPaymentReceivedAt DateTime?
+  subscriptionCheckedAt DateTime?
+  subscriptionPurchasedAt DateTime?
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  subscriptionEmail     String?
 
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?

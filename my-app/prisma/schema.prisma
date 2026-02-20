@@ -99,11 +99,40 @@ model UserProfile {
   benefitSelections BenefitSelection[]
   resumeFiles       ResumeFile[]
   jobApplications   JobApplication[]
+  stripePayments    StripePayment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([email])
+}
+
+model StripePayment {
+  id String @id @default(cuid())
+
+  userProfileId String?
+  userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
+
+  stripeEventId       String @unique
+  stripeCustomerId    String?
+  stripeSubscriptionId String?
+  stripeCheckoutSessionId String?
+  stripeInvoiceId     String?
+  stripePaymentIntentId String?
+
+  planType  String?
+  status    String?
+  amount    Int?
+  currency  String?
+  paidAt    DateTime?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userProfileId])
+  @@index([stripeSubscriptionId])
+  @@index([stripeCheckoutSessionId])
 }
 
 enum ApplicationStatus {

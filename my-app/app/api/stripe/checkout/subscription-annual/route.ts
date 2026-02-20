@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { getStripeClient } from "../../../../lib/stripeClient";
 
-export async function POST() {
+export async function POST(req: Request) {
   const stripeClient = getStripeClient();
+
+  const body = await req.json().catch(() => ({}));
+  const userId = String(body.userId ?? "").trim();
+  const guestId = String(body.guestId ?? "").trim();
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) {
@@ -17,23 +21,23 @@ export async function POST() {
     return NextResponse.json(
       {
         error:
-          "Missing STRIPE_ANNUAL_PRICE_ID. Add your $59.40/year Price ID to /Hirexa/my-app/.env.local",
+          "Missing STRIPE_ANNUAL_PRICE_ID. Add your yearly Price ID to /Hirexa/my-app/.env.local",
       },
       { status: 500 }
     );
   }
 
-  // ✅ Annual checkout: shows $59.40 due today (yearly recurring)
   const session = await stripeClient.checkout.sessions.create({
     mode: "subscription",
     line_items: [{ price: annualPriceId, quantity: 1 }],
     allow_promotion_codes: true,
     billing_address_collection: "auto",
 
-    // Optional metadata for your DB/webhook logic
     subscription_data: {
       metadata: {
         hirexa_plan: "annual",
+        ...(userId ? { userId } : {}),
+        ...(guestId ? { guestId } : {}),
       },
     },
 

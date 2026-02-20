@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { getStripeClient } from "../../../../lib/stripeClient";
 
-export async function POST() {
+export async function POST(req: Request) {
   const stripeClient = getStripeClient();
+
+  const body = await req.json().catch(() => ({}));
+  const userId = String(body.userId ?? "").trim();
+  const guestId = String(body.guestId ?? "").trim();
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) {
@@ -28,25 +32,30 @@ export async function POST() {
     return NextResponse.json(
       {
         error:
-          "Missing STRIPE_FULL_PRICE_ID. Add your $18.95 Price ID to /Hirexa/my-app/.env.local",
+          "Missing STRIPE_FULL_PRICE_ID. Add your $18.95 recurring Price ID to /Hirexa/my-app/.env.local",
       },
       { status: 500 }
     );
   }
 
-  // ✅ Checkout shows $1.95 due today
   const session = await stripeClient.checkout.sessions.create({
     mode: "subscription",
-    line_items: [{ price: trialPriceId, quantity: 1 }],
+    line_items: [
+      { price: trialPriceId, quantity: 1 }, // $1.95 today
+      { price: fullPriceId, quantity: 1 },  // recurring
+    ],
     allow_promotion_codes: true,
     billing_address_collection: "auto",
+
     subscription_data: {
+      trial_period_days: 14,
       metadata: {
-        hirexa_intro_price_id: trialPriceId,
-        hirexa_full_price_id: fullPriceId,
-        hirexa_intro_days: "14",
+        hirexa_plan: "trial_to_monthly",
+        ...(userId ? { userId } : {}),
+        ...(guestId ? { guestId } : {}),
       },
     },
+
     success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${appUrl}/plans?canceled=1`,
   });

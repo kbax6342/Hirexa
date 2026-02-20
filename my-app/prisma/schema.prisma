@@ -93,6 +93,21 @@ model UserProfile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // -------------------------------
+  // Stripe / Billing
+  // -------------------------------
+  stripeCustomerId      String?
+  stripeSubscriptionId  String?
+  stripePriceId         String? // current recurring price id (monthly or annual)
+  planType              String? // "trial_to_monthly" | "annual" | "monthly" etc
+  planStatus            String? // "trialing" | "active" | "past_due" | "canceled" ...
+  cancelAtPeriodEnd     Boolean @default(false)
+  currentPeriodEnd      DateTime?
+  stripeCheckoutSessionId String?
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+
   @@index([email])
 }
 

@@ -6,6 +6,8 @@ import type Stripe from "stripe";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+type PlanType = "trial" | "monthly" | "yearly";
+
 async function getUserProfileIdFromSubscription(
   stripeClient: Stripe,
   subscriptionId: string
@@ -28,7 +30,7 @@ async function getUserProfileIdFromSubscription(
 
 async function applyPaymentStatus(
   userProfileId: string,
-  planType: "trial" | "monthly" | "yearly",
+  planType: PlanType,
   status: "payment approved" | "payed",
   paidAt = new Date()
 ) {
@@ -66,6 +68,60 @@ async function applyPaymentStatus(
     where: { id: userProfileId },
     data,
   });
+}
+
+async function saveStripePayment(data: {
+  stripeEventId: string;
+  userProfileId?: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  stripeInvoiceId?: string | null;
+  stripePaymentIntentId?: string | null;
+  planType?: PlanType | null;
+  status?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  paidAt?: Date | null;
+  metadata?: Record<string, unknown>;
+}) {
+  await prisma.stripePayment.upsert({
+    where: { stripeEventId: data.stripeEventId },
+    create: {
+      stripeEventId: data.stripeEventId,
+      userProfileId: data.userProfileId ?? null,
+      stripeCustomerId: data.stripeCustomerId ?? null,
+      stripeSubscriptionId: data.stripeSubscriptionId ?? null,
+      stripeCheckoutSessionId: data.stripeCheckoutSessionId ?? null,
+      stripeInvoiceId: data.stripeInvoiceId ?? null,
+      stripePaymentIntentId: data.stripePaymentIntentId ?? null,
+      planType: data.planType ?? null,
+      status: data.status ?? null,
+      amount: data.amount ?? null,
+      currency: data.currency ?? null,
+      paidAt: data.paidAt ?? null,
+      metadata: data.metadata ?? undefined,
+    },
+    update: {
+      userProfileId: data.userProfileId ?? null,
+      stripeCustomerId: data.stripeCustomerId ?? null,
+      stripeSubscriptionId: data.stripeSubscriptionId ?? null,
+      stripeCheckoutSessionId: data.stripeCheckoutSessionId ?? null,
+      stripeInvoiceId: data.stripeInvoiceId ?? null,
+      stripePaymentIntentId: data.stripePaymentIntentId ?? null,
+      planType: data.planType ?? null,
+      status: data.status ?? null,
+      amount: data.amount ?? null,
+      currency: data.currency ?? null,
+      paidAt: data.paidAt ?? null,
+      metadata: data.metadata ?? undefined,
+    },
+  });
+}
+
+function normalizeCustomerId(customer: string | Stripe.Customer | Stripe.DeletedCustomer | null): string | null {
+  if (!customer) return null;
+  return typeof customer === "string" ? customer : customer.id;
 }
 
 export async function POST(req: Request) {
@@ -130,16 +186,35 @@ export async function POST(req: Request) {
         sub.metadata?.hirexa_user_profile_id ??
         null;
 
-      if (userProfileId) {
-        const planType =
-          planFromMetadata === "annual"
-            ? "yearly"
-            : planFromMetadata === "trial"
-              ? "trial"
-              : "monthly";
+      const planType: PlanType =
+        planFromMetadata === "annual"
+          ? "yearly"
+          : planFromMetadata === "trial"
+            ? "trial"
+            : "monthly";
 
+      if (userProfileId) {
         await applyPaymentStatus(userProfileId, planType, "payment approved", new Date());
       }
+
+      await saveStripePayment({
+        stripeEventId: event.id,
+        userProfileId,
+        stripeCustomerId: normalizeCustomerId(session.customer),
+        stripeSubscriptionId: subscriptionId,
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id,
+        planType,
+        status: session.payment_status,
+        amount: session.amount_total ?? null,
+        currency: session.currency ?? null,
+        paidAt: new Date(),
+        metadata: {
+          sessionMetadata: session.metadata,
+          subscriptionMetadata: sub.metadata,
+        },
+      });
 
       if (introPriceId && fullPriceId) {
         await stripeClient.subscriptionSchedules.create({
@@ -167,15 +242,36 @@ export async function POST(req: Request) {
 
     if (subscriptionId) {
       const userProfileId = await getUserProfileIdFromSubscription(stripeClient, subscriptionId);
+      const line = invoice.lines.data[0];
+      const interval = line?.price?.recurring?.interval;
+      const paidAt = new Date(
+        (invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
+      );
+
+      const planType: PlanType = interval === "year" ? "yearly" : "monthly";
 
       if (userProfileId) {
-        const line = invoice.lines.data[0];
-        const interval = line?.price?.recurring?.interval;
-        const paidAt = new Date((invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000);
-
-        const planType = interval === "year" ? "yearly" : "monthly";
         await applyPaymentStatus(userProfileId, planType, "payed", paidAt);
       }
+
+      await saveStripePayment({
+        stripeEventId: event.id,
+        userProfileId,
+        stripeCustomerId: normalizeCustomerId(invoice.customer),
+        stripeSubscriptionId: subscriptionId,
+        stripeInvoiceId: invoice.id,
+        stripePaymentIntentId:
+          typeof invoice.payment_intent === "string" ? invoice.payment_intent : invoice.payment_intent?.id,
+        planType,
+        status: invoice.status,
+        amount: invoice.amount_paid ?? null,
+        currency: invoice.currency ?? null,
+        paidAt,
+        metadata: {
+          invoiceNumber: invoice.number,
+          billingReason: invoice.billing_reason,
+        },
+      });
     }
   }
 

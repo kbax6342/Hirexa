@@ -52,12 +52,58 @@ type ProfileApiResponse = {
   ok: boolean;
   profile: {
     id: string;
+    userId?: string | null;
+    guestId?: string | null;
     firstName: string | null;
     lastName: string | null;
     email: string | null;
     phone: string | null;
+    skills?: string[];
+    registrationStatus?: string | null;
+    welcomeEmailSentAt?: string | null;
+    workplaceLocations?: unknown;
+    includeRemote?: boolean;
+    newsletterOptIn?: boolean;
+    newsletterSource?: string | null;
+    trialSubscriber?: boolean;
+    monthlySubscriber?: boolean;
+    yearlySubscriber?: boolean;
+    trialPlanStatus?: string | null;
+    monthlyPlanStatus?: string | null;
+    yearlyPlanStatus?: string | null;
+    lastPaymentReceivedAt?: string | null;
+    emailVerifiedAt?: string | null;
+    unsubscribedAt?: string | null;
+    resumeSkills?: string[];
+    minCompensation?: number | null;
+    compensationType?: string | null;
     expertise?: string[];
     profileImageUrl?: string | null;
+    profileImageFilename?: string | null;
+    dob?: string | null;
+    address?: string | null;
+    city?: string | null;
+    postalCode?: string | null;
+    state?: string | null;
+    linkedinUrl?: string | null;
+    authorizedUS?: string | null;
+    sponsorship?: string | null;
+    felony?: string | null;
+    startDate?: string | null;
+    screening?: string | null;
+    relocate?: string | null;
+    gender?: string | null;
+    pronouns?: string | null;
+    ethnicity?: string | null;
+    disability?: string | null;
+    veteran?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+    jobInterests?: unknown[];
+    benefitSelections?: unknown[];
+    resumeFiles?: unknown[];
+    jobApplications?: unknown[];
+    stripePayments?: unknown[];
     resume: {
       id: string;
       filename: string;
@@ -132,6 +178,10 @@ export default function ProfilePage() {
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
   const email = profile?.email || "Not provided in database";
   const phone = profile?.phone || "Not provided in database";
+  const databaseSnapshot = useMemo(() => {
+    if (!profile) return "No profile row found in database.";
+    return JSON.stringify(profile, null, 2);
+  }, [profile]);
 
   const experience: ExperienceItem[] = useMemo(() => {
     if (!profile?.resume?.experiences?.length) return [];
@@ -515,6 +565,16 @@ export default function ProfilePage() {
                   <StatCard key={s.label} stat={s} />
                 ))}
               </div>
+
+              <Card className="p-6">
+                <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
+                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                  Live data returned from <code>/api/profile</code> for the logged-in user.
+                </p>
+                <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
+                  {databaseSnapshot}
+                </pre>
+              </Card>
 
               <Card className="p-6">
                 <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>

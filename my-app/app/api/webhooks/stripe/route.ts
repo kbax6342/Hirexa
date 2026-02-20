@@ -32,7 +32,9 @@ async function applyPaymentStatus(
   userProfileId: string,
   planType: PlanType,
   status: "payment approved" | "payed",
-  paidAt = new Date()
+  paidAt = new Date(),
+  subscriptionId?: string | null,
+  customerId?: string | null
 ) {
   const current = await prisma.userProfile.findUnique({
     where: { id: userProfileId },
@@ -51,17 +53,29 @@ async function applyPaymentStatus(
           trialSubscriber: true,
           trialPlanStatus: resolvedStatus,
           lastPaymentReceivedAt: paidAt,
+          subscriptionPurchasedAt: paidAt,
+          subscriptionCheckedAt: new Date(),
+          stripeSubscriptionId: subscriptionId ?? undefined,
+          stripeCustomerId: customerId ?? undefined,
         }
       : planType === "monthly"
         ? {
             monthlySubscriber: true,
             monthlyPlanStatus: resolvedStatus,
             lastPaymentReceivedAt: paidAt,
+            subscriptionPurchasedAt: paidAt,
+            subscriptionCheckedAt: new Date(),
+            stripeSubscriptionId: subscriptionId ?? undefined,
+            stripeCustomerId: customerId ?? undefined,
           }
         : {
             yearlySubscriber: true,
             yearlyPlanStatus: resolvedStatus,
             lastPaymentReceivedAt: paidAt,
+            subscriptionPurchasedAt: paidAt,
+            subscriptionCheckedAt: new Date(),
+            stripeSubscriptionId: subscriptionId ?? undefined,
+            stripeCustomerId: customerId ?? undefined,
           };
 
   await prisma.userProfile.update({
@@ -194,7 +208,14 @@ export async function POST(req: Request) {
             : "monthly";
 
       if (userProfileId) {
-        await applyPaymentStatus(userProfileId, planType, "payment approved", new Date());
+        await applyPaymentStatus(
+          userProfileId,
+          planType,
+          "payment approved",
+          new Date(),
+          subscriptionId,
+          normalizeCustomerId(session.customer)
+        );
       }
 
       await saveStripePayment({
@@ -251,7 +272,14 @@ export async function POST(req: Request) {
       const planType: PlanType = interval === "year" ? "yearly" : "monthly";
 
       if (userProfileId) {
-        await applyPaymentStatus(userProfileId, planType, "payed", paidAt);
+        await applyPaymentStatus(
+          userProfileId,
+          planType,
+          "payed",
+          paidAt,
+          subscriptionId,
+          normalizeCustomerId(invoice.customer)
+        );
       }
 
       await saveStripePayment({

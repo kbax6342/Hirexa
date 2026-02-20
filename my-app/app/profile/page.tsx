@@ -72,6 +72,11 @@ type ProfileApiResponse = {
     monthlyPlanStatus?: string | null;
     yearlyPlanStatus?: string | null;
     lastPaymentReceivedAt?: string | null;
+    subscriptionCheckedAt?: string | null;
+    subscriptionPurchasedAt?: string | null;
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
+    subscriptionEmail?: string | null;
     emailVerifiedAt?: string | null;
     unsubscribedAt?: string | null;
     resumeSkills?: string[];
@@ -182,6 +187,33 @@ export default function ProfilePage() {
     if (!profile) return "No profile row found in database.";
     return JSON.stringify(profile, null, 2);
   }, [profile]);
+
+  const subscriptionSummary = useMemo(
+    () => ({
+      email: profile?.subscriptionEmail ?? profile?.email ?? "Not found",
+      isSubscribed: Boolean(
+        profile?.trialSubscriber || profile?.monthlySubscriber || profile?.yearlySubscriber
+      )
+        ? "Yes"
+        : "No",
+      planStatus:
+        profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
+      purchasedAt: profile?.subscriptionPurchasedAt ?? "Not found",
+      checkedAt: profile?.subscriptionCheckedAt ?? "Not found",
+    }),
+    [
+      profile?.email,
+      profile?.monthlyPlanStatus,
+      profile?.monthlySubscriber,
+      profile?.subscriptionCheckedAt,
+      profile?.subscriptionEmail,
+      profile?.subscriptionPurchasedAt,
+      profile?.trialPlanStatus,
+      profile?.trialSubscriber,
+      profile?.yearlyPlanStatus,
+      profile?.yearlySubscriber,
+    ]
+  );
 
   const experience: ExperienceItem[] = useMemo(() => {
     if (!profile?.resume?.experiences?.length) return [];
@@ -565,6 +597,20 @@ export default function ProfilePage() {
                   <StatCard key={s.label} stat={s} />
                 ))}
               </div>
+
+              <Card className="p-6">
+                <div className="text-sm font-semibold text-slate-900">Subscription check</div>
+                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                  Stripe-backed subscription status for the logged-in profile.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FieldRow label="Subscription email" value={subscriptionSummary.email} />
+                  <FieldRow label="Subscribed" value={subscriptionSummary.isSubscribed} />
+                  <FieldRow label="Current plan status" value={subscriptionSummary.planStatus} />
+                  <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
+                  <FieldRow label="Checked at" value={subscriptionSummary.checkedAt} />
+                </div>
+              </Card>
 
               <Card className="p-6">
                 <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>

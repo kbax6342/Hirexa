@@ -85,6 +85,7 @@ model UserProfile {
   state                String?
 
   linkedinUrl String?
+  portfolioUrl String?
 
   authorizedUS String?
   sponsorship  String?

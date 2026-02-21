@@ -5,7 +5,6 @@ import Image from "next/image";
 import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
-  ShieldCheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   TrashIcon,
@@ -18,6 +17,19 @@ type ExperienceItem = {
   location: string;
   dateRange: string;
   bullets: string[];
+};
+
+type PersonalDetailsForm = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  linkedinUrl: string;
+  portfolioUrl: string;
 };
 
 type PreferenceForm = {
@@ -75,6 +87,7 @@ type ProfileApiResponse = {
     postalCode?: string | null;
     state?: string | null;
     linkedinUrl?: string | null;
+    portfolioUrl?: string | null;
     authorizedUS?: string | null;
     sponsorship?: string | null;
     felony?: string | null;
@@ -125,6 +138,19 @@ export default function ProfilePage() {
   const [resumeUploadError, setResumeUploadError] = useState<string | null>(null);
   const [resumeUploadSuccess, setResumeUploadSuccess] = useState<string | null>(null);
   const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
+  const [savingPersonalDetails, setSavingPersonalDetails] = useState(false);
+  const [personalDetailsForm, setPersonalDetailsForm] = useState<PersonalDetailsForm>({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    address: "",
+    city: "",
+    state: "",
+    postalCode: "",
+    linkedinUrl: "",
+    portfolioUrl: "",
+  });
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
   const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
@@ -167,9 +193,22 @@ export default function ProfilePage() {
     void loadProfile();
   }, [loadProfile]);
 
+  useEffect(() => {
+    setPersonalDetailsForm({
+      firstName: profile?.firstName ?? "",
+      lastName: profile?.lastName ?? "",
+      email: profile?.email ?? "",
+      phone: profile?.phone ?? "",
+      address: profile?.address ?? "",
+      city: profile?.city ?? "",
+      state: profile?.state ?? "",
+      postalCode: profile?.postalCode ?? "",
+      linkedinUrl: profile?.linkedinUrl ?? "",
+      portfolioUrl: profile?.portfolioUrl ?? "",
+    });
+  }, [profile]);
+
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
-  const email = profile?.email || "Not provided in database";
-  const phone = profile?.phone || "Not provided in database";
   const databaseSnapshot = useMemo(() => {
     if (!profile) return "No profile row found in database.";
     return JSON.stringify(profile, null, 2);
@@ -251,6 +290,37 @@ export default function ProfilePage() {
         : [],
     });
   }, [profile]);
+
+  async function savePersonalDetails() {
+    try {
+      setSavingPersonalDetails(true);
+      setError(null);
+
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(personalDetailsForm),
+      });
+
+      const data = await readJsonResponse<{
+        ok?: boolean;
+        error?: string;
+        profile?: ProfileApiResponse["profile"];
+      }>(res);
+
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Failed to save personal details.");
+      }
+
+      if (data?.profile) {
+        setProfile((prev) => (prev ? { ...prev, ...data.profile } : data.profile));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save personal details.");
+    } finally {
+      setSavingPersonalDetails(false);
+    }
+  }
 
   async function savePreferences() {
     try {
@@ -451,10 +521,17 @@ export default function ProfilePage() {
                 />
               </div>
 
-              <div className="mt-6 space-y-4">
-                <FieldRow label="Your Name" value={name} />
-                <FieldRow label="Email" value={email} />
-                <FieldRow label="Phone Number" value={phone} />
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                <TextField label="First name" value={personalDetailsForm.firstName} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, firstName: value }))} />
+                <TextField label="Last name" value={personalDetailsForm.lastName} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, lastName: value }))} />
+                <TextField label="Email" value={personalDetailsForm.email} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, email: value }))} />
+                <TextField label="Phone number" value={personalDetailsForm.phone} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, phone: value }))} />
+                <TextField label="Address" value={personalDetailsForm.address} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, address: value }))} />
+                <TextField label="City" value={personalDetailsForm.city} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, city: value }))} />
+                <TextField label="State" value={personalDetailsForm.state} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, state: value }))} />
+                <TextField label="Postal code" value={personalDetailsForm.postalCode} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, postalCode: value }))} />
+                <TextField label="LinkedIn" value={personalDetailsForm.linkedinUrl} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, linkedinUrl: value }))} />
+                <TextField label="Portfolio" value={personalDetailsForm.portfolioUrl} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, portfolioUrl: value }))} />
               </div>
 
               {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
@@ -463,9 +540,11 @@ export default function ProfilePage() {
               <div className="mt-6">
                 <button
                   type="button"
-                  className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 ${NON_DB_TEXT_CLASS}`}
+                  onClick={() => void savePersonalDetails()}
+                  disabled={savingPersonalDetails}
+                  className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
                 >
-                  Save changes
+                  {savingPersonalDetails ? "Saving changes..." : "Save changes"}
                 </button>
               </div>
             </Card>
@@ -809,6 +888,27 @@ function FieldRow({ label, value }: { label: string; value: string }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-slate-700">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+      />
+    </label>
   );
 }
 

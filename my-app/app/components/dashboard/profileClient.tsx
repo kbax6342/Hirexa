@@ -36,7 +36,7 @@ export default function AutofillButton({ job }: AutofillButtonProps) {
         return;
       }
 
-      const applyRes = await fetch("/api/auto-apply", {
+      const applyRes = await fetch("/api/applications/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(job),

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Job, JobPretty } from "@/app/lib/jobs/types";
 import {
   extractCompanyLocationFromDescription,
@@ -90,6 +91,7 @@ function greenhouseToJob(j: GreenhouseApiJob): Job {
 }
 
 export default function JobMatchesLayout() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
 
@@ -280,21 +282,38 @@ export default function JobMatchesLayout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, selectedId]);
 
-  const addAppliedJob = (job: Job) => {
-    setAppliedJobs((prev) => {
-      if (prev.some((appliedJob) => appliedJob.id === job.id)) return prev;
-      return [job, ...prev];
-    });
-    setShowAppliedPanel(true);
+  const addAppliedJob = async (job: Job) => {
+    try {
+      const res = await fetch("/api/applications/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceJobId: job.id,
+          jobTitle: job.title,
+          company: job.company,
+          location: job.location,
+          jobUrl: job.jobUrl ?? null,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data?.applicationId) {
+        throw new Error("Could not create application.");
+      }
+
+      setAppliedJobs((prev) => {
+        if (prev.some((appliedJob) => appliedJob.id === job.id)) return prev;
+        return [job, ...prev];
+      });
+      setShowAppliedPanel(true);
+      router.push(`/dashboard/application/${data.applicationId}/audit`);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
-  const htmlToRender = decodeHtml(
-    String(
-      (selectedDetails as any)?.fullDescriptionHtml ||
-        selectedDetails?.description ||
-        ""
-    )
-  );
+  const htmlToRender = decodeHtml(String(selectedDetails?.description || ""));
 
   
   const parsedSections = splitSections(cleanJobText(htmlToRender));

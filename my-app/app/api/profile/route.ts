@@ -22,6 +22,7 @@ type ProfileBody = {
   postalCode?: string;
   state?: string;
   linkedinUrl?: string;
+  portfolioUrl?: string;
   phone?: string;
   email?: string;
 };
@@ -198,6 +199,7 @@ export async function POST(req: Request) {
         postalCode: normalizeText(body.postalCode),
         state: normalizeText(body.state),
         linkedinUrl: normalizeText(body.linkedinUrl),
+        portfolioUrl: normalizeText(body.portfolioUrl),
       },
       update: {
         firstName,
@@ -210,6 +212,7 @@ export async function POST(req: Request) {
         postalCode: normalizeText(body.postalCode),
         state: normalizeText(body.state),
         linkedinUrl: normalizeText(body.linkedinUrl),
+        portfolioUrl: normalizeText(body.portfolioUrl),
       },
       select: {
         id: true,
@@ -224,6 +227,7 @@ export async function POST(req: Request) {
         postalCode: true,
         state: true,
         linkedinUrl: true,
+        portfolioUrl: true,
       },
     });
 
@@ -370,6 +374,7 @@ function buildProfileSelect() {
     postalCode: true,
     state: true,
     linkedinUrl: true,
+    portfolioUrl: true,
 
     authorizedUS: true,
     sponsorship: true,

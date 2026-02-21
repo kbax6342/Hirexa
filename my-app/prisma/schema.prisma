@@ -160,6 +160,9 @@ model JobApplication {
   jobUrl      String?
   sourceJobId String?
   status      ApplicationStatus @default(IN_PREPARATION)
+  auditJson   Json?
+  answersJson Json?
+  submittedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

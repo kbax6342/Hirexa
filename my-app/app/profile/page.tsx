@@ -127,6 +127,17 @@ export default function ProfilePage() {
   const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [savingProfessional, setSavingProfessional] = useState(false);
+  const [professionalSuccess, setProfessionalSuccess] = useState<string | null>(null);
+  const [professionalForm, setProfessionalForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    address: "",
+    linkedinUrl: "",
+    portfolioUrl: "",
+  });
   const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
     roleFocus: "",
     availability: "asap",
@@ -168,12 +179,55 @@ export default function ProfilePage() {
   }, [loadProfile]);
 
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
-  const email = profile?.email || "Not provided in database";
-  const phone = profile?.phone || "Not provided in database";
   const databaseSnapshot = useMemo(() => {
     if (!profile) return "No profile row found in database.";
     return JSON.stringify(profile, null, 2);
   }, [profile]);
+
+  useEffect(() => {
+    setProfessionalForm({
+      firstName: profile?.firstName ?? "",
+      lastName: profile?.lastName ?? "",
+      email: profile?.email ?? "",
+      phone: profile?.phone ?? "",
+      address: profile?.address ?? "",
+      linkedinUrl: profile?.linkedinUrl ?? "",
+      portfolioUrl: "",
+    });
+  }, [profile]);
+
+  async function saveProfessionalDetails() {
+    try {
+      setSavingProfessional(true);
+      setProfessionalSuccess(null);
+      setError(null);
+
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firstName: professionalForm.firstName,
+          lastName: professionalForm.lastName,
+          email: professionalForm.email,
+          phone: professionalForm.phone,
+          address: professionalForm.address,
+          linkedinUrl: professionalForm.linkedinUrl,
+        }),
+      });
+
+      const data = await readJsonResponse<{ error?: string }>(res);
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Failed to save professional details.");
+      }
+
+      setProfessionalSuccess("Professional details saved.");
+      await loadProfile();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save professional details.");
+    } finally {
+      setSavingProfessional(false);
+    }
+  }
 
   const subscriptionSummary = useMemo(
     () => ({
@@ -408,6 +462,13 @@ export default function ProfilePage() {
         <div className="mt-6 grid gap-6 lg:grid-cols-12">
           <section className="lg:col-span-5">
             <Card className="p-6">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Professional Details</div>
+                <p className={`mt-1 text-sm ${NON_DB_TEXT_CLASS}`}>
+                  Non-database helper copy is shown in green.
+                </p>
+              </div>
+
               <div className="flex items-center gap-4">
                 <div className="relative">
                   <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
@@ -448,10 +509,25 @@ export default function ProfilePage() {
                 />
               </div>
 
-              <div className="mt-6 space-y-4">
-                <FieldRow label="Your Name" value={name} />
-                <FieldRow label="Email" value={email} />
-                <FieldRow label="Phone Number" value={phone} />
+              <div className="mt-6 grid gap-3 md:grid-cols-2">
+                <InputField label="First Name" value={professionalForm.firstName} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, firstName: value }))} />
+                <InputField label="Last Name" value={professionalForm.lastName} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, lastName: value }))} />
+                <InputField label="Email" value={professionalForm.email} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, email: value }))} />
+                <InputField label="Phone" value={professionalForm.phone} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, phone: value }))} />
+                <div className="md:col-span-2">
+                  <InputField label="Address" value={professionalForm.address} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, address: value }))} />
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-xs font-semibold text-slate-700">Links</div>
+                <div className="mt-3 space-y-3">
+                  <InputField label="LinkedIn" value={professionalForm.linkedinUrl} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, linkedinUrl: value }))} />
+                  <InputField label="Portfolio" value={professionalForm.portfolioUrl} onChange={(value) => setProfessionalForm((prev) => ({ ...prev, portfolioUrl: value }))} placeholder="Portfolio URL" />
+                </div>
+                <p className={`mt-2 text-xs ${NON_DB_TEXT_CLASS}`}>
+                  Portfolio is currently helper-only and not persisted to the database.
+                </p>
               </div>
 
               {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
@@ -460,11 +536,14 @@ export default function ProfilePage() {
               <div className="mt-6">
                 <button
                   type="button"
+                  onClick={() => void saveProfessionalDetails()}
+                  disabled={savingProfessional}
                   className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 ${NON_DB_TEXT_CLASS}`}
                 >
-                  Save changes
+                  {savingProfessional ? "Saving..." : "Save changes"}
                 </button>
               </div>
+              {professionalSuccess ? <p className="mt-3 text-sm text-emerald-700">{professionalSuccess}</p> : null}
             </Card>
           </section>
 
@@ -473,7 +552,7 @@ export default function ProfilePage() {
               <Card className="p-6">
                 <div className="flex-col items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">Professional Details</div>
+                    <div className="text-sm font-semibold text-slate-900">Resume & Experience</div>
                     <p className={`mt-1 text-sm ${NON_DB_TEXT_CLASS}`}>
                       Non-database helper copy is shown in green.
                     </p>
@@ -807,6 +886,31 @@ function FieldRow({ label, value }: { label: string; value: string }) {
         </div>
       </div>
     </div>
+  );
+}
+
+
+function InputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-slate-700">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder ?? label}
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+      />
+    </label>
   );
 }
 

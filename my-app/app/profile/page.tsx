@@ -6,38 +6,10 @@ import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
   ShieldCheckIcon,
-  BriefcaseIcon,
-  CurrencyDollarIcon,
-  AcademicCapIcon,
-  BuildingOffice2Icon,
   ChevronDownIcon,
   ChevronUpIcon,
   TrashIcon,
 } from "@heroicons/react/24/outline";
-
-type Stat = {
-  label: string;
-  value: string;
-  sub?: string;
-  icon: React.ReactNode;
-  accent: "peach" | "yellow" | "blue";
-};
-
-type ProfileInsightsResponse = {
-  ok: boolean;
-  insights?: {
-    majorTheme?: string;
-    majorThemeReason?: string;
-    profileStrength?: string;
-    profileStrengthReason?: string;
-  };
-  error?: string;
-};
-
-type Chip = {
-  label: string;
-  icon: React.ReactNode;
-};
 
 type ExperienceItem = {
   id: string;
@@ -46,6 +18,17 @@ type ExperienceItem = {
   location: string;
   dateRange: string;
   bullets: string[];
+};
+
+type PreferenceForm = {
+  roleFocus: string;
+  availability: string;
+  compensationType: "yearly" | "hourly";
+  minCompensation: number;
+  includeRemote: boolean;
+  workplaceLocations: string[];
+  selectedPlan: "trial" | "annual";
+  benefits: string[];
 };
 
 type ProfileApiResponse = {
@@ -61,6 +44,7 @@ type ProfileApiResponse = {
     skills?: string[];
     registrationStatus?: string | null;
     welcomeEmailSentAt?: string | null;
+    keyQuestions?: unknown;
     workplaceLocations?: unknown;
     includeRemote?: boolean;
     newsletterOptIn?: boolean;
@@ -137,8 +121,19 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const [insightsLoading, setInsightsLoading] = useState(false);
-  const [insights, setInsights] = useState<ProfileInsightsResponse["insights"] | null>(null);
+  const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
+  const [savingPreferences, setSavingPreferences] = useState(false);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
+    roleFocus: "",
+    availability: "asap",
+    compensationType: "yearly",
+    minCompensation: 50000,
+    includeRemote: true,
+    workplaceLocations: [],
+    selectedPlan: "trial",
+    benefits: [],
+  });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -228,102 +223,103 @@ export default function ProfilePage() {
     }));
   }, [profile]);
 
-  const chips: Chip[] = useMemo(
-    () => [
-      { label: "Career", icon: <BriefcaseIcon className="h-4 w-4" /> },
-      { label: "Money", icon: <CurrencyDollarIcon className="h-4 w-4" /> },
-      { label: "Skills", icon: <AcademicCapIcon className="h-4 w-4" /> },
-      { label: "Company", icon: <BuildingOffice2Icon className="h-4 w-4" /> },
-    ],
-    []
-  );
-
-  const [selectedExpertise, setSelectedExpertise] = useState<string[]>([]);
-  const [savingExpertise, setSavingExpertise] = useState(false);
-  const [expertiseError, setExpertiseError] = useState<string | null>(null);
-
-  const stats: Stat[] = useMemo(
-    () => [
-      {
-        label: "Total experience",
-        value: insightsLoading
-          ? "Analyzing"
-          : insights?.majorTheme || "Generalist experience",
-        sub:
-          insights?.majorThemeReason ||
-          "Theme inferred from resume experience with an LLM.",
-        icon: <ShieldCheckIcon className="h-5 w-5" />,
-        accent: "peach",
-      },
-      {
-        label: "Experience records",
-        value: String(experience.length),
-        sub: "roles parsed from resume",
-        icon: <BriefcaseIcon className="h-5 w-5" />,
-        accent: "yellow",
-      },
-      {
-        label: "Profile strength",
-        value: insightsLoading
-          ? "Reviewing"
-          : insights?.profileStrength || "Developing",
-        sub:
-          insights?.profileStrengthReason ||
-          "Completion level assessed from profile and resume details.",
-        icon: <ShieldCheckIcon className="h-5 w-5" />,
-        accent: "blue",
-      },
-    ],
-    [experience.length, insights, insightsLoading]
-  );
-
-
-
-
   useEffect(() => {
-    setSelectedExpertise(Array.isArray(profile?.expertise) ? profile.expertise : []);
-  }, [profile?.expertise]);
+    const keyQuestions =
+      profile?.keyQuestions && typeof profile.keyQuestions === "object" && !Array.isArray(profile.keyQuestions)
+        ? (profile.keyQuestions as Record<string, unknown>)
+        : {};
 
-  async function persistExpertise(nextExpertise: string[]) {
+    const existingBenefits = Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
+      ? (profile.benefitSelections[0] as { selectedPlan?: unknown; benefits?: unknown[] })
+      : null;
+
+    const rawLocations = Array.isArray(profile?.workplaceLocations)
+      ? profile.workplaceLocations
+      : [];
+
+    const workplaceLocations = rawLocations
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        return String((item as { label?: unknown }).label ?? "").trim();
+      })
+      .filter((item): item is string => Boolean(item));
+
+    setPreferencesForm({
+      roleFocus: String(keyQuestions.roleFocus ?? "").trim(),
+      availability: String(keyQuestions.availability ?? "asap").trim() || "asap",
+      compensationType: profile?.compensationType === "hourly" ? "hourly" : "yearly",
+      minCompensation: Math.max(0, profile?.minCompensation ?? 50000),
+      includeRemote: profile?.includeRemote ?? true,
+      workplaceLocations,
+      selectedPlan: existingBenefits?.selectedPlan === "annual" ? "annual" : "trial",
+      benefits: Array.isArray(existingBenefits?.benefits)
+        ? existingBenefits.benefits.map((item) => String(item)).filter(Boolean)
+        : [],
+    });
+  }, [profile]);
+
+  async function savePreferences() {
     try {
-      setSavingExpertise(true);
-      setExpertiseError(null);
+      setSavingPreferences(true);
+      setPreferencesError(null);
 
-      const res = await fetch("/api/profile/expertise", {
+      const res = await fetch("/api/profile/preferences", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expertise: nextExpertise }),
+        body: JSON.stringify({
+          roleFocus: preferencesForm.roleFocus,
+          availability: preferencesForm.availability,
+          compensationType: preferencesForm.compensationType,
+          minCompensation: preferencesForm.minCompensation,
+          includeRemote: preferencesForm.includeRemote,
+          workplaceLocations: preferencesForm.workplaceLocations.length
+            ? preferencesForm.workplaceLocations.map((label) => ({ label }))
+            : null,
+          selectedPlan: preferencesForm.selectedPlan,
+          benefits: preferencesForm.benefits,
+        }),
       });
 
-      const data = (await res.json()) as { error?: string; expertise?: string[] };
+      const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error ?? "Failed to save expertise.");
+        throw new Error(data?.error ?? "Failed to save preferences.");
       }
 
-      setSelectedExpertise(Array.isArray(data.expertise) ? data.expertise : nextExpertise);
-      setProfile((prev) =>
-        prev
-          ? {
-              ...prev,
-              expertise: Array.isArray(data.expertise) ? data.expertise : nextExpertise,
-            }
-          : prev
-      );
+      setProfile((prev) => {
+        if (!prev) return prev;
+
+        return {
+          ...prev,
+          minCompensation: preferencesForm.minCompensation,
+          compensationType: preferencesForm.compensationType,
+          includeRemote: preferencesForm.includeRemote,
+          workplaceLocations: preferencesForm.workplaceLocations.map((label) => ({ label })),
+          keyQuestions: {
+            roleFocus: preferencesForm.roleFocus,
+            availability: preferencesForm.availability,
+          },
+          benefitSelections: [
+            {
+              selectedPlan: preferencesForm.selectedPlan,
+              benefits: preferencesForm.benefits,
+            },
+          ],
+        };
+      });
     } catch (e) {
-      setExpertiseError(e instanceof Error ? e.message : "Failed to save expertise.");
-      setSelectedExpertise(Array.isArray(profile?.expertise) ? profile.expertise : []);
+      setPreferencesError(e instanceof Error ? e.message : "Failed to save preferences.");
     } finally {
-      setSavingExpertise(false);
+      setSavingPreferences(false);
     }
   }
 
-  function toggleExpertise(label: string) {
-    const next = selectedExpertise.includes(label)
-      ? selectedExpertise.filter((item) => item !== label)
-      : [...selectedExpertise, label];
-
-    setSelectedExpertise(next);
-    void persistExpertise(next);
+  function toggleBenefit(benefit: string) {
+    setPreferencesForm((prev) => ({
+      ...prev,
+      benefits: prev.benefits.includes(benefit)
+        ? prev.benefits.filter((item) => item !== benefit)
+        : [...prev.benefits, benefit],
+    }));
   }
 
   async function uploadPhoto(file: File) {
@@ -562,42 +558,7 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
-                <div className="mt-5">
-                  <div className={`text-xs font-semibold ${NON_DB_TEXT_CLASS}`}>Expertise in</div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {chips.map((c) => {
-                      const isSelected = selectedExpertise.includes(c.label);
-
-                      return (
-                        <button
-                          type="button"
-                          key={c.label}
-                          disabled={savingExpertise}
-                          onClick={() => toggleExpertise(c.label)}
-                          className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold shadow-[0_1px_0_rgba(15,23,42,0.03)] transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                            isSelected
-                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                              : `border-slate-200 bg-white ${NON_DB_TEXT_CLASS}`
-                          }`}
-                          aria-pressed={isSelected}
-                        >
-                          <span className={isSelected ? "text-indigo-700" : NON_DB_TEXT_CLASS}>{c.icon}</span>
-                          {c.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {expertiseError ? <p className="mt-2 text-xs text-red-600">{expertiseError}</p> : null}
-                </div>
               </Card>
-
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {stats.map((s) => (
-                  <StatCard key={s.label} stat={s} />
-                ))}
-              </div>
-
               <Card className="p-6">
                 <div className="text-sm font-semibold text-slate-900">Subscription check</div>
                 <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
@@ -631,17 +592,123 @@ export default function ProfilePage() {
                 <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                   <button
                     type="button"
-                    className={`flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 ${NON_DB_TEXT_CLASS}`}
+                    onClick={() => setShowPreferenceEditor((prev) => !prev)}
+                    className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
                   >
-                    Update Preferences
-                  </button>
-                  <button
-                    type="button"
-                    className={`flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
-                  >
-                    Review Key Questions
+                    {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
                   </button>
                 </div>
+
+                {showPreferenceEditor ? (
+                  <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <SelectField
+                        label="Role focus"
+                        value={preferencesForm.roleFocus}
+                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
+                        options={["Software Engineer", "Product Manager", "Data Analyst", "Project Coordinator"]}
+                      />
+
+                      <SelectField
+                        label="Availability"
+                        value={preferencesForm.availability}
+                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
+                        options={["asap", "2-weeks", "30-days", "not-looking"]}
+                      />
+
+                      <SelectField
+                        label="Salary type"
+                        value={preferencesForm.compensationType}
+                        onChange={(value) =>
+                          setPreferencesForm((prev) => ({
+                            ...prev,
+                            compensationType: value === "hourly" ? "hourly" : "yearly",
+                          }))
+                        }
+                        options={["yearly", "hourly"]}
+                      />
+
+                      <SelectField
+                        label="Minimum salary"
+                        value={String(preferencesForm.minCompensation)}
+                        onChange={(value) =>
+                          setPreferencesForm((prev) => ({
+                            ...prev,
+                            minCompensation: Number(value) || 0,
+                          }))
+                        }
+                        options={["40000", "50000", "70000", "90000", "120000"]}
+                      />
+
+                      <SelectField
+                        label="Workplace location"
+                        value={preferencesForm.workplaceLocations[0] ?? "none"}
+                        onChange={(value) =>
+                          setPreferencesForm((prev) => ({
+                            ...prev,
+                            workplaceLocations: value === "none" ? [] : [value],
+                          }))
+                        }
+                        options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
+                      />
+
+                      <SelectField
+                        label="Remote preference"
+                        value={preferencesForm.includeRemote ? "include" : "exclude"}
+                        onChange={(value) =>
+                          setPreferencesForm((prev) => ({
+                            ...prev,
+                            includeRemote: value === "include",
+                          }))
+                        }
+                        options={["include", "exclude"]}
+                      />
+
+                      <SelectField
+                        label="Benefits plan"
+                        value={preferencesForm.selectedPlan}
+                        onChange={(value) =>
+                          setPreferencesForm((prev) => ({
+                            ...prev,
+                            selectedPlan: value === "annual" ? "annual" : "trial",
+                          }))
+                        }
+                        options={["trial", "annual"]}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
+                      <div className="flex flex-wrap gap-2">
+                        {["Health", "Dental", "Vision", "401k", "PTO"].map((benefit) => (
+                          <button
+                            key={benefit}
+                            type="button"
+                            onClick={() => toggleBenefit(benefit)}
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                              preferencesForm.benefits.includes(benefit)
+                                ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                : "border-slate-300 bg-white text-slate-700"
+                            }`}
+                          >
+                            {benefit}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {preferencesError ? <p className="text-xs text-red-600">{preferencesError}</p> : null}
+
+                    <button
+                      type="button"
+                      onClick={() => void savePreferences()}
+                      disabled={savingPreferences}
+                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {savingPreferences ? "Saving..." : "Save Preferences"}
+                    </button>
+                  </div>
+                ) : null}
               </Card>
             </div>
           </section>
@@ -693,31 +760,31 @@ function FieldRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatCard({
-  stat,
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
 }: {
-  stat: { label: string; value: string; sub?: string; icon: React.ReactNode; accent: "peach" | "yellow" | "blue" };
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
 }) {
-  const accent = stat.accent;
-
-  const accentClasses =
-    accent === "peach"
-      ? "bg-orange-50 ring-orange-100 text-orange-700"
-      : accent === "yellow"
-      ? "bg-amber-50 ring-amber-100 text-amber-700"
-      : "bg-sky-50 ring-sky-100 text-sky-700";
-
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className={`text-xs font-semibold ${NON_DB_TEXT_CLASS}`}>{stat.label}</div>
-          <div className={`mt-2 text-lg font-extrabold ${NON_DB_TEXT_CLASS}`}>{stat.value}</div>
-          {stat.sub ? <div className={`mt-1 text-xs ${NON_DB_TEXT_CLASS}`}>{stat.sub}</div> : null}
-        </div>
-
-        <div className={["rounded-2xl p-3 ring-1", accentClasses].join(" ")}>{stat.icon}</div>
-      </div>
-    </div>
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-slate-700">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

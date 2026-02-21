@@ -54,15 +54,15 @@ model UserProfile {
   monthlySubscriber Boolean @default(false)
   yearlySubscriber  Boolean @default(false)
 
-  trialPlanStatus       String?
-  monthlyPlanStatus     String?
-  yearlyPlanStatus      String?
-  lastPaymentReceivedAt DateTime?
-  subscriptionCheckedAt DateTime?
+  trialPlanStatus         String?
+  monthlyPlanStatus       String?
+  yearlyPlanStatus        String?
+  lastPaymentReceivedAt   DateTime?
+  subscriptionCheckedAt   DateTime?
   subscriptionPurchasedAt DateTime?
-  stripeCustomerId      String?
-  stripeSubscriptionId  String?
-  subscriptionEmail     String?
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
+  subscriptionEmail       String?
 
   emailVerifiedAt DateTime?
   unsubscribedAt  DateTime?
@@ -118,19 +118,19 @@ model StripePayment {
   userProfileId String?
   userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
 
-  stripeEventId       String @unique
-  stripeCustomerId    String?
-  stripeSubscriptionId String?
+  stripeEventId           String  @unique
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
   stripeCheckoutSessionId String?
-  stripeInvoiceId     String?
-  stripePaymentIntentId String?
+  stripeInvoiceId         String?
+  stripePaymentIntentId   String?
 
-  planType  String?
-  status    String?
-  amount    Int?
-  currency  String?
-  paidAt    DateTime?
-  metadata  Json?
+  planType String?
+  status   String?
+  amount   Int?
+  currency String?
+  paidAt   DateTime?
+  metadata Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -153,19 +153,19 @@ model JobApplication {
   userProfileId String
   userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
-  jobTitle String
-  company  String
-  location String?
-  jobUrl   String?
+  jobTitle    String
+  company     String
+  location    String?
+  jobUrl      String?
   sourceJobId String?
-  status   ApplicationStatus @default(IN_PREPARATION)
+  status      ApplicationStatus @default(IN_PREPARATION)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([userProfileId, sourceJobId])
   @@index([userProfileId])
   @@index([userProfileId, status])
-  @@unique([userProfileId, sourceJobId])
 }
 
 model BenefitSelection {

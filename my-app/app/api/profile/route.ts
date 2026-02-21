@@ -6,6 +6,8 @@ import { cookies } from "next/headers";
 import { getStripeClient } from "@/app/lib/stripeClient";
 import type Stripe from "stripe";
 
+export const runtime = "nodejs";
+
 type ProfileBody = {
   firstName?: string;
   lastName?: string;
@@ -44,7 +46,9 @@ function parseDob(value: unknown) {
   return date;
 }
 
-function planTypeFromSubscription(subscription: Stripe.Subscription): "trial" | "monthly" | "yearly" {
+function planTypeFromSubscription(
+  subscription: Stripe.Subscription
+): "trial" | "monthly" | "yearly" {
   const hirexaPlan = subscription.metadata?.hirexa_plan;
   if (hirexaPlan === "trial") return "trial";
   if (hirexaPlan === "annual") return "yearly";
@@ -57,6 +61,19 @@ function planStatusFromSubscription(subscription: Stripe.Subscription): string {
   return subscription.status ?? "unknown";
 }
 
+/**
+ * ✅ Always use upsert (NOT updateMany) so:
+ * - we never depend on the row existing
+ * - we avoid silent "0 rows updated" issues
+ */
+async function upsertUserProfileByUserId(userId: string, data: Record<string, any>) {
+  await prisma.userProfile.upsert({
+    where: { userId },
+    create: { userId, ...data },
+    update: data,
+  });
+}
+
 async function syncStripeSubscriptionStatus(params: {
   userId: string;
   sessionEmail: string | null;
@@ -65,11 +82,9 @@ async function syncStripeSubscriptionStatus(params: {
   const checkedAt = new Date();
   const emailToLookup = normalizeText(params.profileEmail) ?? normalizeText(params.sessionEmail);
 
+  // If we have no email, just mark checkedAt and exit
   if (!emailToLookup) {
-    await prisma.userProfile.updateMany({
-      where: { userId: params.userId },
-      data: { subscriptionCheckedAt: checkedAt },
-    });
+    await upsertUserProfileByUserId(params.userId, { subscriptionCheckedAt: checkedAt });
     return;
   }
 
@@ -78,20 +93,17 @@ async function syncStripeSubscriptionStatus(params: {
   const customer = customers.data[0] ?? null;
 
   if (!customer) {
-    await prisma.userProfile.updateMany({
-      where: { userId: params.userId },
-      data: {
-        trialSubscriber: false,
-        monthlySubscriber: false,
-        yearlySubscriber: false,
-        trialPlanStatus: null,
-        monthlyPlanStatus: null,
-        yearlyPlanStatus: null,
-        stripeCustomerId: null,
-        stripeSubscriptionId: null,
-        subscriptionEmail: emailToLookup,
-        subscriptionCheckedAt: checkedAt,
-      },
+    await upsertUserProfileByUserId(params.userId, {
+      trialSubscriber: false,
+      monthlySubscriber: false,
+      yearlySubscriber: false,
+      trialPlanStatus: null,
+      monthlyPlanStatus: null,
+      yearlyPlanStatus: null,
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionEmail: emailToLookup,
+      subscriptionCheckedAt: checkedAt,
     });
     return;
   }
@@ -102,23 +114,21 @@ async function syncStripeSubscriptionStatus(params: {
     limit: 10,
   });
 
-  const latestSubscription = subscriptions.data.sort((a, b) => b.created - a.created)[0] ?? null;
+  const latestSubscription =
+    subscriptions.data.sort((a, b) => b.created - a.created)[0] ?? null;
 
   if (!latestSubscription) {
-    await prisma.userProfile.updateMany({
-      where: { userId: params.userId },
-      data: {
-        trialSubscriber: false,
-        monthlySubscriber: false,
-        yearlySubscriber: false,
-        trialPlanStatus: null,
-        monthlyPlanStatus: null,
-        yearlyPlanStatus: null,
-        stripeCustomerId: customer.id,
-        stripeSubscriptionId: null,
-        subscriptionEmail: emailToLookup,
-        subscriptionCheckedAt: checkedAt,
-      },
+    await upsertUserProfileByUserId(params.userId, {
+      trialSubscriber: false,
+      monthlySubscriber: false,
+      yearlySubscriber: false,
+      trialPlanStatus: null,
+      monthlyPlanStatus: null,
+      yearlyPlanStatus: null,
+      stripeCustomerId: customer.id,
+      stripeSubscriptionId: null,
+      subscriptionEmail: emailToLookup,
+      subscriptionCheckedAt: checkedAt,
     });
     return;
   }
@@ -127,25 +137,22 @@ async function syncStripeSubscriptionStatus(params: {
   const status = planStatusFromSubscription(latestSubscription);
   const isActiveStatus = ["active", "trialing", "past_due", "unpaid"].includes(status);
 
-  await prisma.userProfile.updateMany({
-    where: { userId: params.userId },
-    data: {
-      trialSubscriber: planType === "trial" ? isActiveStatus : false,
-      monthlySubscriber: planType === "monthly" ? isActiveStatus : false,
-      yearlySubscriber: planType === "yearly" ? isActiveStatus : false,
-      trialPlanStatus: planType === "trial" ? status : null,
-      monthlyPlanStatus: planType === "monthly" ? status : null,
-      yearlyPlanStatus: planType === "yearly" ? status : null,
-      stripeCustomerId: customer.id,
-      stripeSubscriptionId: latestSubscription.id,
-      subscriptionEmail: emailToLookup,
-      subscriptionCheckedAt: checkedAt,
-      subscriptionPurchasedAt: new Date(latestSubscription.created * 1000),
-      lastPaymentReceivedAt:
-        latestSubscription.status === "active" || latestSubscription.status === "trialing"
-          ? checkedAt
-          : undefined,
-    },
+  await upsertUserProfileByUserId(params.userId, {
+    trialSubscriber: planType === "trial" ? isActiveStatus : false,
+    monthlySubscriber: planType === "monthly" ? isActiveStatus : false,
+    yearlySubscriber: planType === "yearly" ? isActiveStatus : false,
+    trialPlanStatus: planType === "trial" ? status : null,
+    monthlyPlanStatus: planType === "monthly" ? status : null,
+    yearlyPlanStatus: planType === "yearly" ? status : null,
+    stripeCustomerId: customer.id,
+    stripeSubscriptionId: latestSubscription.id,
+    subscriptionEmail: emailToLookup,
+    subscriptionCheckedAt: checkedAt,
+    subscriptionPurchasedAt: new Date(latestSubscription.created * 1000),
+    // Only set when active/trialing; otherwise do not touch existing value
+    ...(latestSubscription.status === "active" || latestSubscription.status === "trialing"
+      ? { lastPaymentReceivedAt: checkedAt }
+      : {}),
   });
 }
 
@@ -164,7 +171,7 @@ export async function POST(req: Request) {
     }
 
     const session = await auth();
-    const userId = session?.user?.id ?? null;
+    const userId = (session?.user as any)?.id ?? null;
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -176,7 +183,7 @@ export async function POST(req: Request) {
         userId,
         firstName,
         lastName,
-        email: normalizeText(body.email) ?? session?.user?.email ?? null,
+        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? null,
         phone: normalizeText(body.phone),
         dob: parseDob(body.dob),
         address: normalizeText(body.address),
@@ -188,7 +195,7 @@ export async function POST(req: Request) {
       update: {
         firstName,
         lastName,
-        email: normalizeText(body.email) ?? session?.user?.email ?? undefined,
+        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? undefined,
         phone: normalizeText(body.phone),
         dob: parseDob(body.dob),
         address: normalizeText(body.address),
@@ -223,7 +230,7 @@ export async function POST(req: Request) {
 export async function GET() {
   try {
     const session = await auth();
-    const userId = session?.user?.id ?? null;
+    const userId = (session?.user as any)?.id ?? null;
 
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
@@ -232,8 +239,9 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // If logged in, sync Stripe status (never let it kill the profile response)
     if (userId) {
-      const currentProfile = await prisma.userProfile.findFirst({
+      const currentProfile = await prisma.userProfile.findUnique({
         where: { userId },
         select: { email: true },
       });
@@ -241,158 +249,29 @@ export async function GET() {
       try {
         await syncStripeSubscriptionStatus({
           userId,
-          sessionEmail: session?.user?.email ?? null,
+          sessionEmail: (session?.user as any)?.email ?? null,
           profileEmail: currentProfile?.email ?? null,
         });
       } catch {
-        await prisma.userProfile.updateMany({
-          where: { userId },
-          data: { subscriptionCheckedAt: new Date() },
-        });
+        // Best-effort mark checkedAt; ignore if DB isn’t ready
+        try {
+          await upsertUserProfileByUserId(userId, { subscriptionCheckedAt: new Date() });
+        } catch {
+          // swallow
+        }
       }
     }
 
-    const profile = await prisma.userProfile.findFirst({
-      where: userId ? { userId } : { guestId },
-      select: {
-        id: true,
-        userId: true,
-        guestId: true,
-        skills: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
-        registrationStatus: true,
-        welcomeEmailSentAt: true,
-        keyQuestions: true,
-        workplaceLocations: true,
-        includeRemote: true,
-        newsletterOptIn: true,
-        newsletterSource: true,
-        trialSubscriber: true,
-        monthlySubscriber: true,
-        yearlySubscriber: true,
-        trialPlanStatus: true,
-        monthlyPlanStatus: true,
-        yearlyPlanStatus: true,
-        lastPaymentReceivedAt: true,
-        subscriptionCheckedAt: true,
-        subscriptionPurchasedAt: true,
-        stripeCustomerId: true,
-        stripeSubscriptionId: true,
-        subscriptionEmail: true,
-        emailVerifiedAt: true,
-        unsubscribedAt: true,
-        resumeSkills: true,
-        minCompensation: true,
-        compensationType: true,
-        profileImage: true,
-        profileImageMimeType: true,
-        profileImageFilename: true,
-        dob: true,
-        address: true,
-        city: true,
-        postalCode: true,
-        state: true,
-        linkedinUrl: true,
-        authorizedUS: true,
-        sponsorship: true,
-        felony: true,
-        startDate: true,
-        screening: true,
-        relocate: true,
-        gender: true,
-        pronouns: true,
-        ethnicity: true,
-        disability: true,
-        veteran: true,
-        createdAt: true,
-        updatedAt: true,
-        jobInterests: {
-          select: {
-            id: true,
-            uuid: true,
-            title: true,
-          },
-        },
-        benefitSelections: {
-          select: {
-            id: true,
-            selectedPlan: true,
-            benefits: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        },
-        jobApplications: {
-          select: {
-            id: true,
-            jobTitle: true,
-            company: true,
-            location: true,
-            jobUrl: true,
-            sourceJobId: true,
-            status: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        },
-        stripePayments: {
-          select: {
-            id: true,
-            stripeEventId: true,
-            stripeCustomerId: true,
-            stripeSubscriptionId: true,
-            stripeCheckoutSessionId: true,
-            stripeInvoiceId: true,
-            stripePaymentIntentId: true,
-            planType: true,
-            status: true,
-            amount: true,
-            currency: true,
-            paidAt: true,
-            metadata: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        },
-        resumeFiles: {
-          select: {
-            id: true,
-            fileName: true,
-            mimeType: true,
-            sizeBytes: true,
-            createdAt: true,
-          },
-        },
-        resume: {
-          select: {
-            id: true,
-            filename: true,
-            mimeType: true,
-            updatedAt: true,
-            experiences: {
-              orderBy: { order: "asc" },
-              select: {
-                id: true,
-                title: true,
-                company: true,
-                location: true,
-                dateRange: true,
-                bullets: {
-                  orderBy: { order: "asc" },
-                  select: {
-                    id: true,
-                    text: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    // Fetch the profile (unique queries where possible)
+    const profile = userId
+      ? await prisma.userProfile.findUnique({
+          where: { userId },
+          select: buildProfileSelect(),
+        })
+      : await prisma.userProfile.findUnique({
+          where: { guestId: guestId as string },
+          select: buildProfileSelect(),
+        });
 
     const responseProfile = profile
       ? {
@@ -402,13 +281,16 @@ export async function GET() {
             typeof profile.keyQuestions === "object" &&
             !Array.isArray(profile.keyQuestions)
               ? Array.isArray((profile.keyQuestions as Record<string, unknown>).expertise)
-                ? (profile.keyQuestions as Record<string, unknown>).expertise
-                    .map((item) => String(item))
+                ? (profile.keyQuestions as Record<string, unknown>).expertise.map((item) =>
+                    String(item)
+                  )
                 : []
               : [],
           profileImageUrl:
             profile.profileImage && profile.profileImageMimeType
-              ? `data:${profile.profileImageMimeType};base64,${Buffer.from(profile.profileImage).toString("base64")}`
+              ? `data:${profile.profileImageMimeType};base64,${Buffer.from(
+                  profile.profileImage
+                ).toString("base64")}`
               : null,
         }
       : null;
@@ -418,4 +300,153 @@ export async function GET() {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+function buildProfileSelect() {
+  return {
+    id: true,
+    userId: true,
+    guestId: true,
+    skills: true,
+    firstName: true,
+    lastName: true,
+    email: true,
+    phone: true,
+    registrationStatus: true,
+    welcomeEmailSentAt: true,
+    keyQuestions: true,
+    workplaceLocations: true,
+    includeRemote: true,
+    newsletterOptIn: true,
+    newsletterSource: true,
+
+    trialSubscriber: true,
+    monthlySubscriber: true,
+    yearlySubscriber: true,
+    trialPlanStatus: true,
+    monthlyPlanStatus: true,
+    yearlyPlanStatus: true,
+    lastPaymentReceivedAt: true,
+    subscriptionCheckedAt: true,
+    subscriptionPurchasedAt: true,
+    stripeCustomerId: true,
+    stripeSubscriptionId: true,
+    subscriptionEmail: true,
+
+    emailVerifiedAt: true,
+    unsubscribedAt: true,
+
+    resumeSkills: true,
+    minCompensation: true,
+    compensationType: true,
+
+    profileImage: true,
+    profileImageMimeType: true,
+    profileImageFilename: true,
+
+    dob: true,
+    address: true,
+    city: true,
+    postalCode: true,
+    state: true,
+    linkedinUrl: true,
+
+    authorizedUS: true,
+    sponsorship: true,
+    felony: true,
+    startDate: true,
+    screening: true,
+    relocate: true,
+    gender: true,
+    pronouns: true,
+    ethnicity: true,
+    disability: true,
+    veteran: true,
+
+    createdAt: true,
+    updatedAt: true,
+
+    jobInterests: {
+      select: {
+        id: true,
+        uuid: true,
+        title: true,
+      },
+    },
+    benefitSelections: {
+      select: {
+        id: true,
+        selectedPlan: true,
+        benefits: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    },
+    jobApplications: {
+      select: {
+        id: true,
+        jobTitle: true,
+        company: true,
+        location: true,
+        jobUrl: true,
+        sourceJobId: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    },
+    stripePayments: {
+      select: {
+        id: true,
+        stripeEventId: true,
+        stripeCustomerId: true,
+        stripeSubscriptionId: true,
+        stripeCheckoutSessionId: true,
+        stripeInvoiceId: true,
+        stripePaymentIntentId: true,
+        planType: true,
+        status: true,
+        amount: true,
+        currency: true,
+        paidAt: true,
+        metadata: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    },
+    resumeFiles: {
+      select: {
+        id: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        createdAt: true,
+      },
+    },
+    resume: {
+      select: {
+        id: true,
+        filename: true,
+        mimeType: true,
+        updatedAt: true,
+        experiences: {
+          orderBy: { order: "asc" as const },
+          select: {
+            id: true,
+            title: true,
+            company: true,
+            location: true,
+            dateRange: true,
+            bullets: {
+              orderBy: { order: "asc" as const },
+              select: {
+                id: true,
+                text: true,
+              },
+            },
+          },
+        },
+      },
+    },
+  };
 }

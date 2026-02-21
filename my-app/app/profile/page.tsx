@@ -412,6 +412,7 @@ export default function ProfilePage() {
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
+                  <div className="text-black text-md mb-2">Personal Information:</div>
                   <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
                     {profile?.profileImageUrl ? (
                       <Image
@@ -468,178 +469,7 @@ export default function ProfilePage() {
                 </button>
               </div>
             </Card>
-          </section>
-
-          <section className="lg:col-span-7">
-            <div className="space-y-6">
-              <Card className="p-6">
-                <div className="flex-col items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">Professional Details</div>
-                    <p className={`mt-1 text-sm ${NON_DB_TEXT_CLASS}`}>
-                      Non-database helper copy is shown in green.
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-indigo-50 p-3 ring-1 ring-indigo-100">
-                    <ShieldCheckIcon className="h-6 w-6 text-indigo-700" />
-                  </div>
-
-                  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs font-semibold text-slate-700">Resume (from database)</div>
-                      <button
-                        type="button"
-                        onClick={() => resumeInputRef.current?.click()}
-                        disabled={uploadingResume}
-                        className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
-                      >
-                        <ArrowUpTrayIcon className="h-4 w-4" />
-                        {uploadingResume ? "Uploading…" : "Upload resume"}
-                      </button>
-                      <input
-                        ref={resumeInputRef}
-                        type="file"
-                        accept="application/pdf"
-                        className="hidden"
-                        onChange={handleResumeChange}
-                      />
-                    </div>
-                    {profile?.resume ? (
-                      <div className="mt-2 space-y-1 text-sm text-slate-700">
-                        <p>
-                          <span className="font-semibold">File:</span> {profile.resume.filename}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Type:</span> {profile.resume.mimeType}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
-                    )}
-                    {resumeUploadSuccess ? (
-                      <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p>
-                    ) : null}
-                    {resumeUploadError ? (
-                      <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-6">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs font-semibold text-slate-700">Experience (from resume records)</div>
-
-                      <button
-                        type="button"
-                        className={`rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
-                      >
-                        + Add experience
-                      </button>
-                    </div>
-
-                    <div className="mt-3 space-y-3">
-                      {experience.length > 4 ? (
-                        <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
-                      ) : null}
-
-                      {recentExperience.length === 0 ? (
-                        <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>No experience rows found in database.</p>
-                      ) : null}
-
-                      {recentExperience.map((exp) => {
-                        const open = !!expandedExp[exp.id];
-                        const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
-                        const showToggle = exp.bullets.length > 2;
-
-                        return (
-                          <div key={exp.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                  <div className="text-sm font-semibold text-slate-900">{exp.title}</div>
-                                  <span className="text-sm text-slate-300">|</span>
-                                  <div className="text-sm font-semibold text-slate-700">{exp.company}</div>
-                                </div>
-
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {exp.location} • {exp.dateRange}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  aria-label="Edit experience"
-                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
-                                  onClick={() => alert("Edit flow is not yet database-wired.")}
-                                >
-                                  <PencilSquareIcon className="h-5 w-5" />
-                                </button>
-
-                                <button
-                                  type="button"
-                                  aria-label="Delete experience"
-                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
-                                  onClick={() => removeFromList(exp.id)}
-                                >
-                                  <TrashIcon className="h-5 w-5" />
-                                </button>
-                              </div>
-                            </div>
-
-                            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                              {bullets.map((b, i) => (
-                                <li key={i}>{b}</li>
-                              ))}
-                            </ul>
-
-                            {showToggle ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleExp(exp.id)}
-                                className={`mt-3 inline-flex items-center gap-1 text-xs font-semibold hover:text-green-900 ${NON_DB_TEXT_CLASS}`}
-                              >
-                                {open ? "Show less" : "Show more"}
-                                {open ? (
-                                  <ChevronUpIcon className="h-4 w-4" />
-                                ) : (
-                                  <ChevronDownIcon className="h-4 w-4" />
-                                )}
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-              </Card>
-              <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Subscription check</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Stripe-backed subscription status for the logged-in profile.
-                </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldRow label="Subscription email" value={subscriptionSummary.email} />
-                  <FieldRow label="Subscribed" value={subscriptionSummary.isSubscribed} />
-                  <FieldRow label="Current plan status" value={subscriptionSummary.planStatus} />
-                  <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
-                  <FieldRow label="Checked at" value={subscriptionSummary.checkedAt} />
-                </div>
-              </Card>
-
-              <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Live data returned from <code>/api/profile</code> for the logged-in user.
-                </p>
-                <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
-                  {databaseSnapshot}
-                </pre>
-              </Card>
-
-              <Card className="p-6">
+            <Card className="p-6 mt-2">
                 <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
                 <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
                   Add more details (roles, locations, salary, availability) to boost match quality.
@@ -766,6 +596,172 @@ export default function ProfilePage() {
                   </div>
                 ) : null}
               </Card>
+            <Card className="p-6">
+                <div className="text-sm font-semibold text-slate-900">Subscription check</div>
+                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                  Stripe-backed subscription status for the logged-in profile.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FieldRow label="Subscription email" value={subscriptionSummary.email} />
+                  <FieldRow label="Subscribed" value={subscriptionSummary.isSubscribed} />
+                  <FieldRow label="Current plan status" value={subscriptionSummary.planStatus} />
+                  <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
+                  <FieldRow label="Checked at" value={subscriptionSummary.checkedAt} />
+                </div>
+              </Card>
+
+              <Card className="p-6">
+                <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
+                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                  Live data returned from <code>/api/profile</code> for the logged-in user.
+                </p>
+                <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
+                  {databaseSnapshot}
+                </pre>
+              </Card>
+
+             
+          </section>
+
+          <section className="lg:col-span-7">
+            <div className="space-y-6">
+              <Card className="p-6">
+                <div className="flex-col items-start justify-between gap-4">
+                
+
+                 
+
+                  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-md font-semibold text-slate-700">Resume:</div>
+                      <button
+                        type="button"
+                        onClick={() => resumeInputRef.current?.click()}
+                        disabled={uploadingResume}
+                        className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                      >
+                        <ArrowUpTrayIcon className="h-4 w-4" />
+                        {uploadingResume ? "Uploading…" : "Upload resume"}
+                      </button>
+                      <input
+                        ref={resumeInputRef}
+                        type="file"
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={handleResumeChange}
+                      />
+                    </div>
+                    {profile?.resume ? (
+                      <div className="mt-2 space-y-1 text-sm text-slate-700">
+                        <p>
+                          <span className="font-semibold">File:</span> {profile.resume.filename}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Type:</span> {profile.resume.mimeType}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
+                    )}
+                    {resumeUploadSuccess ? (
+                      <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p>
+                    ) : null}
+                    {resumeUploadError ? (
+                      <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-6">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-md font-semibold text-slate-700">Experience: </div>
+
+                      <button
+                        type="button"
+                        className={`rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
+                      >
+                        + Add experience
+                      </button>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {experience.length > 4 ? (
+                        <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
+                      ) : null}
+
+                      {recentExperience.length === 0 ? (
+                        <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>No experience rows found in database.</p>
+                      ) : null}
+
+                      {recentExperience.map((exp) => {
+                        const open = !!expandedExp[exp.id];
+                        const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
+                        const showToggle = exp.bullets.length > 2;
+
+                        return (
+                          <div key={exp.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                  <div className="text-sm font-semibold text-slate-900">{exp.title}</div>
+                                  <span className="text-sm text-slate-300">|</span>
+                                  <div className="text-sm font-semibold text-slate-700">{exp.company}</div>
+                                </div>
+
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {exp.location} • {exp.dateRange}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  aria-label="Edit experience"
+                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
+                                  onClick={() => alert("Edit flow is not yet database-wired.")}
+                                >
+                                  <PencilSquareIcon className="h-5 w-5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  aria-label="Delete experience"
+                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
+                                  onClick={() => removeFromList(exp.id)}
+                                >
+                                  <TrashIcon className="h-5 w-5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                              {bullets.map((b, i) => (
+                                <li key={i}>{b}</li>
+                              ))}
+                            </ul>
+
+                            {showToggle ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleExp(exp.id)}
+                                className={`mt-3 inline-flex items-center gap-1 text-xs font-semibold hover:text-green-900 ${NON_DB_TEXT_CLASS}`}
+                              >
+                                {open ? "Show less" : "Show more"}
+                                {open ? (
+                                  <ChevronUpIcon className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDownIcon className="h-4 w-4" />
+                                )}
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+              </Card>
+            
             </div>
           </section>
         </div>

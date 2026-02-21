@@ -50,6 +50,13 @@ function encodeCursor(c: Cursor) {
   return Buffer.from(json, "utf8").toString("base64url");
 }
 
+function isHiringEventJob(job: Job) {
+  const title = (job.title ?? "").toLowerCase();
+  const description = (job.description ?? "").toLowerCase();
+
+  return title.includes("hiring event") || description.includes("hiring event");
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
@@ -98,7 +105,7 @@ export async function GET(req: Request) {
     ...jazzhrJobs,
     ...icimsJobs,
     ...workdayJobs,
-  ];
+  ].filter((job) => !isHiringEventJob(job));
 
   // shuffle so sources mix visually
   shuffle(merged);

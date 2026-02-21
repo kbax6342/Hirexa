@@ -171,7 +171,7 @@ export default function JobMatchesLayout() {
     <aside className="lg:col-span-5">
       {/* ... your missing info banner stays the same ... */}
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-5 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
       <div className="text-black">
         <h2 className="text-lg font-semibold">
           Smart Matches
@@ -182,7 +182,7 @@ export default function JobMatchesLayout() {
           searching. Simply select your favorites — we’ll fill out the applications.
         </p>
       </div>
-        {jobs.slice(0, 5).map((job) => {
+        {jobs.map((job) => {
           const active = job.id === selectedId;
 
           return (

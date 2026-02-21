@@ -169,10 +169,9 @@ export default function JobMatchesLayout() {
 
   <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
     <aside className="lg:col-span-5">
-      {/* ... your missing info banner stays the same ... */}
-
-      <div className="mt-5 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
-      <div className="text-black">
+      <div className="mt-8">
+        <div>
+        <div className="text-black">
         <h2 className="text-lg font-semibold">
           Smart Matches
         </h2>
@@ -182,6 +181,11 @@ export default function JobMatchesLayout() {
           searching. Simply select your favorites — we’ll fill out the applications.
         </p>
       </div>
+        </div>
+   {/* ... your missing info banner stays the same ... */}
+
+   <div className="mt-5 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+     
         {jobs.map((job) => {
           const active = job.id === selectedId;
 
@@ -270,6 +274,8 @@ export default function JobMatchesLayout() {
         {/* infinite scroll sentinel */}
         {/* <div ref={sentinelRef} className="h-6" /> */}
       </div>
+      </div>
+   
     </aside>
 
     <section className="lg:col-span-7 pt-4">

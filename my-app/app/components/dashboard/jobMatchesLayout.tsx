@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Job, JobPretty } from "@/app/lib/jobs/types";
 import { JobDescription } from "../description/DashboardDescription";
-import { extractCompanyLocationFromDescription, prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
+import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
+import { useRouter } from "next/navigation";
 import AutofillButton from './profileClient';
 
 export default function JobMatchesLayout() {
@@ -32,21 +33,6 @@ export default function JobMatchesLayout() {
   );
 
   const right = selectedDetails ?? selectedSummary;
-  const descriptionSource = String(
-    selectedDetails?.fullDescriptionHtml ?? selectedDetails?.description ?? ""
-  );
-  const parsedMeta = useMemo(
-    () => extractCompanyLocationFromDescription(descriptionSource),
-    [descriptionSource]
-  );
-  const displayCompany =
-    right?.company && right.company !== "Unknown company"
-      ? right.company
-      : parsedMeta.company ?? "Unknown company";
-  const displayLocation =
-    right?.location && right.location !== "Unknown location"
-      ? right.location
-      : parsedMeta.location ?? "Unknown location";
 
   // optional: dedupe so you don’t show repeats unless you want to
   const seen = useRef<Set<string>>(new Set());
@@ -164,6 +150,8 @@ export default function JobMatchesLayout() {
       cancelled = true;
     };
   }, [selectedId]);
+  const router = useRouter();
+
   const addAppliedJob = (job: Job) => {
     setAppliedJobs((prev) => {
       if (prev.some((appliedJob) => appliedJob.id === job.id)) {
@@ -299,9 +287,9 @@ export default function JobMatchesLayout() {
 
           <div className="mt-1 text-xs text-gray-600">
             <span className="font-medium text-gray-700">
-              {displayCompany}
+              {right?.company ?? "Unknown company"}
             </span>
-            <> • {displayLocation}</>
+            {right?.location ? <> • {right.location}</> : <> • Unknown location</>}
           </div>
 
           <div className="mt-3">

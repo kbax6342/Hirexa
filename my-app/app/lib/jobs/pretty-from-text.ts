@@ -82,56 +82,10 @@ function htmlToPrettyText(html: string) {
   );
 }
 
-function toPlainDescription(description: string) {
-  return description.includes("<") ? htmlToPrettyText(description) : description;
-}
-
-function trimAfterApplyCta(lines: string[]) {
-  const stopIndex = lines.findIndex((line) => /\bapply for this job\b/i.test(line));
-  return stopIndex >= 0 ? lines.slice(0, stopIndex) : lines;
-}
-
-function looksLikeLocationLine(line: string) {
-  if (/^location\s*:/i.test(line)) return true;
-  if (/\bremote\b/i.test(line)) return true;
-  return /,\s*[A-Z]{2}\b/.test(line);
-}
-
-export function extractCompanyLocationFromDescription(description: string) {
-  const normalized = toPlainDescription(description);
-  const lines = trimAfterApplyCta(splitLines(normalized)).slice(0, 24);
-
-  let company: string | undefined;
-  let location: string | undefined;
-
-  for (const line of lines) {
-    if (!company) {
-      const companyMatch = line.match(/^company\s*:\s*(.+)$/i);
-      if (companyMatch?.[1]) company = companyMatch[1].trim();
-    }
-
-    if (!location) {
-      const locationMatch = line.match(/^location\s*:\s*(.+)$/i);
-      if (locationMatch?.[1]) {
-        location = locationMatch[1].trim();
-        continue;
-      }
-
-      if (looksLikeLocationLine(line) && !isHeading(line)) {
-        location = line.replace(/^location\s*:\s*/i, "").trim();
-      }
-    }
-
-    if (company && location) break;
-  }
-
-  return { company, location };
-}
-
 export function prettyFromDescription(description: string): JobPretty {
-  const normalized = toPlainDescription(description);
+  const normalized = description.includes("<") ? htmlToPrettyText(description) : description;
 
-  const lines = trimAfterApplyCta(splitLines(normalized));
+  const lines = splitLines(normalized);
   if (!lines.length) return { sections: [], highlights: [] };
  
 

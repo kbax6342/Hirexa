@@ -4,20 +4,13 @@ import { auth } from "@/app/lib/auth";
 
 export const runtime = "nodejs";
 
-function isActivePlan(planStatus: string | null) {
-  // Stripe subscription statuses you care about
-  // You can tweak this list based on how you bill users
-  return (
-    planStatus === "active" ||
-    planStatus === "trialing"
-    // optionally treat past_due as "still allowed" if you want:
-    // || planStatus === "past_due"
-  );
+function isActivePlanStatus(planStatus: string | null | undefined) {
+  return planStatus === "active" || planStatus === "trialing";
 }
 
 export async function GET() {
   const session = await auth();
-  const userId = (session?.user as any)?.id ?? null;
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
   if (!userId) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -26,10 +19,12 @@ export async function GET() {
   const profile = await prisma.userProfile.findUnique({
     where: { userId },
     select: {
-      planStatus: true,
-      planType: true,
-      currentPeriodEnd: true,
-      cancelAtPeriodEnd: true,
+      trialSubscriber: true,
+      monthlySubscriber: true,
+      yearlySubscriber: true,
+      trialPlanStatus: true,
+      monthlyPlanStatus: true,
+      yearlyPlanStatus: true,
     },
   });
 
@@ -37,14 +32,29 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "Profile not found" }, { status: 404 });
   }
 
-  const active = isActivePlan(profile.planStatus ?? null);
+  const active =
+    profile.trialSubscriber ||
+    profile.monthlySubscriber ||
+    profile.yearlySubscriber ||
+    isActivePlanStatus(profile.trialPlanStatus) ||
+    isActivePlanStatus(profile.monthlyPlanStatus) ||
+    isActivePlanStatus(profile.yearlyPlanStatus);
+
+  const planStatus =
+    profile.trialPlanStatus ?? profile.monthlyPlanStatus ?? profile.yearlyPlanStatus ?? null;
+
+  const planType = profile.trialSubscriber
+    ? "trial"
+    : profile.monthlySubscriber
+      ? "monthly"
+      : profile.yearlySubscriber
+        ? "yearly"
+        : null;
 
   return NextResponse.json({
     ok: true,
     active,
-    planStatus: profile.planStatus,
-    planType: profile.planType,
-    currentPeriodEnd: profile.currentPeriodEnd,
-    cancelAtPeriodEnd: profile.cancelAtPeriodEnd,
+    planStatus,
+    planType,
   });
 }

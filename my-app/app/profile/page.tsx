@@ -215,6 +215,8 @@ export default function ProfilePage() {
     }));
   }, [profile]);
 
+  const recentExperience = useMemo(() => experience.slice(0, 4), [experience]);
+
   useEffect(() => {
     const keyQuestions =
       profile?.keyQuestions && typeof profile.keyQuestions === "object" && !Array.isArray(profile.keyQuestions)
@@ -536,11 +538,15 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="mt-3 space-y-3">
-                      {experience.length === 0 ? (
+                      {experience.length > 4 ? (
+                        <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
+                      ) : null}
+
+                      {recentExperience.length === 0 ? (
                         <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>No experience rows found in database.</p>
                       ) : null}
 
-                      {experience.map((exp) => {
+                      {recentExperience.map((exp) => {
                         const open = !!expandedExp[exp.id];
                         const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
                         const showToggle = exp.bullets.length > 2;

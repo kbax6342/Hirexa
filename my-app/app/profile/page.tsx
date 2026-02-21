@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ArrowUpTrayIcon,
@@ -121,6 +121,9 @@ export default function ProfilePage() {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [uploadingResume, setUploadingResume] = useState(false);
+  const [resumeUploadError, setResumeUploadError] = useState<string | null>(null);
+  const [resumeUploadSuccess, setResumeUploadSuccess] = useState<string | null>(null);
   const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
@@ -135,45 +138,34 @@ export default function ProfilePage() {
     benefits: [],
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const resumeInputRef = useRef<HTMLInputElement | null>(null);
+
+  const loadProfile = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const res = await fetch("/api/profile", { cache: "no-store" });
+      const data = (await readJsonResponse<ProfileApiResponse>(res)) ?? null;
+
+      if (!res.ok) {
+        const message = typeof (data as { error?: unknown } | null)?.error === "string"
+          ? (data as { error?: string }).error
+          : "Failed to load profile";
+        throw new Error(message);
+      }
+
+      setProfile(data.profile ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load profile");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadProfile() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const res = await fetch("/api/profile", { cache: "no-store" });
-        const data = (await readJsonResponse<ProfileApiResponse>(res)) ?? null;
-
-        if (!res.ok) {
-          const message = typeof (data as { error?: unknown } | null)?.error === "string"
-            ? (data as { error?: string }).error
-            : "Failed to load profile";
-          throw new Error(message);
-        }
-
-        if (!cancelled) {
-          setProfile(data.profile ?? null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load profile");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadProfile();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadProfile();
+  }, [loadProfile]);
 
   const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
   const email = profile?.email || "Not provided in database";
@@ -358,6 +350,40 @@ export default function ProfilePage() {
     event.target.value = "";
   }
 
+  async function handleResumeChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploadingResume(true);
+      setResumeUploadError(null);
+      setResumeUploadSuccess(null);
+
+      const formData = new FormData();
+      formData.append("resume", file);
+
+      const res = await fetch("/api/onboarding/resume", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await readJsonResponse<{ ok?: boolean; error?: string; parsed?: { experienceCount?: number } }>(res);
+
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Failed to upload resume.");
+      }
+
+      const count = data?.parsed?.experienceCount ?? 0;
+      setResumeUploadSuccess(`Resume uploaded and parsed. ${count} experience record${count === 1 ? "" : "s"} saved.`);
+      await loadProfile();
+    } catch (e) {
+      setResumeUploadError(e instanceof Error ? e.message : "Failed to upload resume.");
+    } finally {
+      setUploadingResume(false);
+      event.target.value = "";
+    }
+  }
+
   function toggleExp(id: string) {
     setExpandedExp((p) => ({ ...p, [id]: !p[id] }));
   }
@@ -458,7 +484,25 @@ export default function ProfilePage() {
                   </div>
 
                   <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs font-semibold text-slate-700">Resume (from database)</div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold text-slate-700">Resume (from database)</div>
+                      <button
+                        type="button"
+                        onClick={() => resumeInputRef.current?.click()}
+                        disabled={uploadingResume}
+                        className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                      >
+                        <ArrowUpTrayIcon className="h-4 w-4" />
+                        {uploadingResume ? "Uploading…" : "Upload resume"}
+                      </button>
+                      <input
+                        ref={resumeInputRef}
+                        type="file"
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={handleResumeChange}
+                      />
+                    </div>
                     {profile?.resume ? (
                       <div className="mt-2 space-y-1 text-sm text-slate-700">
                         <p>
@@ -471,6 +515,12 @@ export default function ProfilePage() {
                     ) : (
                       <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
                     )}
+                    {resumeUploadSuccess ? (
+                      <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p>
+                    ) : null}
+                    {resumeUploadError ? (
+                      <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p>
+                    ) : null}
                   </div>
 
                   <div className="mt-6">

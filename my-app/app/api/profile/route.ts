@@ -19,6 +19,7 @@ type ProfileBody = {
   linkedinUrl?: string;
   phone?: string;
   email?: string;
+  portfolioUrl?: string;
 };
 
 function normalizeText(value: unknown) {
@@ -177,6 +178,29 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const currentProfile = await prisma.userProfile.findUnique({
+      where: { userId },
+      select: { keyQuestions: true },
+    });
+
+    const existingKeyQuestions =
+      currentProfile?.keyQuestions &&
+      typeof currentProfile.keyQuestions === "object" &&
+      !Array.isArray(currentProfile.keyQuestions)
+        ? (currentProfile.keyQuestions as Record<string, unknown>)
+        : {};
+
+    const portfolioUrl = normalizeText(body.portfolioUrl);
+    const nextKeyQuestions: Record<string, unknown> = {
+      ...existingKeyQuestions,
+    };
+
+    if (portfolioUrl) {
+      nextKeyQuestions.portfolioUrl = portfolioUrl;
+    } else {
+      delete nextKeyQuestions.portfolioUrl;
+    }
+
     const profile = await prisma.userProfile.upsert({
       where: { userId },
       create: {
@@ -191,6 +215,7 @@ export async function POST(req: Request) {
         postalCode: normalizeText(body.postalCode),
         state: normalizeText(body.state),
         linkedinUrl: normalizeText(body.linkedinUrl),
+        keyQuestions: nextKeyQuestions,
       },
       update: {
         firstName,
@@ -203,6 +228,7 @@ export async function POST(req: Request) {
         postalCode: normalizeText(body.postalCode),
         state: normalizeText(body.state),
         linkedinUrl: normalizeText(body.linkedinUrl),
+        keyQuestions: nextKeyQuestions,
       },
       select: {
         id: true,

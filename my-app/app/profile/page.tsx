@@ -1,35 +1,14 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
-  ShieldCheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   TrashIcon,
 } from "@heroicons/react/24/outline";
-
-type ExperienceItem = {
-  id: string;
-  title: string;
-  company: string;
-  location: string;
-  dateRange: string;
-  bullets: string[];
-};
-
-type PreferenceForm = {
-  roleFocus: string;
-  availability: string;
-  compensationType: "yearly" | "hourly";
-  minCompensation: number;
-  includeRemote: boolean;
-  workplaceLocations: string[];
-  selectedPlan: "trial" | "annual";
-  benefits: string[];
-};
 
 type ProfileApiResponse = {
   ok: boolean;
@@ -113,7 +92,17 @@ type ProfileApiResponse = {
   } | null;
 };
 
-const NON_DB_TEXT_CLASS = "text-green-700";
+const NON_DB_TEXT_CLASS = "text-slate-600";
+
+type ProfessionalDetailsForm = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  address: string;
+  linkedinUrl: string;
+  portfolioUrl: string;
+};
 
 export default function ProfilePage() {
   const [expandedExp, setExpandedExp] = useState<Record<string, boolean>>({});
@@ -124,18 +113,17 @@ export default function ProfilePage() {
   const [uploadingResume, setUploadingResume] = useState(false);
   const [resumeUploadError, setResumeUploadError] = useState<string | null>(null);
   const [resumeUploadSuccess, setResumeUploadSuccess] = useState<string | null>(null);
-  const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
-  const [savingPreferences, setSavingPreferences] = useState(false);
-  const [preferencesError, setPreferencesError] = useState<string | null>(null);
-  const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
-    roleFocus: "",
-    availability: "asap",
-    compensationType: "yearly",
-    minCompensation: 50000,
-    includeRemote: true,
-    workplaceLocations: [],
-    selectedPlan: "trial",
-    benefits: [],
+  const [savingProfessionalDetails, setSavingProfessionalDetails] = useState(false);
+  const [professionalDetailsError, setProfessionalDetailsError] = useState<string | null>(null);
+  const [professionalDetailsSuccess, setProfessionalDetailsSuccess] = useState<string | null>(null);
+  const [professionalDetailsForm, setProfessionalDetailsForm] = useState<ProfessionalDetailsForm>({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    address: "",
+    linkedinUrl: "",
+    portfolioUrl: "",
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
@@ -164,156 +152,69 @@ export default function ProfilePage() {
   }, []);
 
   useEffect(() => {
-    void loadProfile();
-  }, [loadProfile]);
-
-  const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
-  const email = profile?.email || "Not provided in database";
-  const phone = profile?.phone || "Not provided in database";
-  const databaseSnapshot = useMemo(() => {
-    if (!profile) return "No profile row found in database.";
-    return JSON.stringify(profile, null, 2);
-  }, [profile]);
-
-  const subscriptionSummary = useMemo(
-    () => ({
-      email: profile?.subscriptionEmail ?? profile?.email ?? "Not found",
-      isSubscribed: Boolean(
-        profile?.trialSubscriber || profile?.monthlySubscriber || profile?.yearlySubscriber
-      )
-        ? "Yes"
-        : "No",
-      planStatus:
-        profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
-      purchasedAt: profile?.subscriptionPurchasedAt ?? "Not found",
-      checkedAt: profile?.subscriptionCheckedAt ?? "Not found",
-    }),
-    [
-      profile?.email,
-      profile?.monthlyPlanStatus,
-      profile?.monthlySubscriber,
-      profile?.subscriptionCheckedAt,
-      profile?.subscriptionEmail,
-      profile?.subscriptionPurchasedAt,
-      profile?.trialPlanStatus,
-      profile?.trialSubscriber,
-      profile?.yearlyPlanStatus,
-      profile?.yearlySubscriber,
-    ]
-  );
-
-  const experience: ExperienceItem[] = useMemo(() => {
-    if (!profile?.resume?.experiences?.length) return [];
-
-    return profile.resume.experiences.map((exp) => ({
-      id: exp.id,
-      title: exp.title,
-      company: exp.company,
-      location: exp.location ?? "Location not provided in database",
-      dateRange: exp.dateRange ?? "Date range not provided in database",
-      bullets: exp.bullets.map((b) => b.text),
-    }));
-  }, [profile]);
-
-  const recentExperience = useMemo(() => experience.slice(0, 4), [experience]);
-
-  useEffect(() => {
     const keyQuestions =
       profile?.keyQuestions && typeof profile.keyQuestions === "object" && !Array.isArray(profile.keyQuestions)
         ? (profile.keyQuestions as Record<string, unknown>)
         : {};
 
-    const existingBenefits = Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
-      ? (profile.benefitSelections[0] as { selectedPlan?: unknown; benefits?: unknown[] })
-      : null;
-
-    const rawLocations = Array.isArray(profile?.workplaceLocations)
-      ? profile.workplaceLocations
-      : [];
-
-    const workplaceLocations = rawLocations
-      .map((item) => {
-        if (!item || typeof item !== "object") return null;
-        return String((item as { label?: unknown }).label ?? "").trim();
-      })
-      .filter((item): item is string => Boolean(item));
-
-    setPreferencesForm({
-      roleFocus: String(keyQuestions.roleFocus ?? "").trim(),
-      availability: String(keyQuestions.availability ?? "asap").trim() || "asap",
-      compensationType: profile?.compensationType === "hourly" ? "hourly" : "yearly",
-      minCompensation: Math.max(0, profile?.minCompensation ?? 50000),
-      includeRemote: profile?.includeRemote ?? true,
-      workplaceLocations,
-      selectedPlan: existingBenefits?.selectedPlan === "annual" ? "annual" : "trial",
-      benefits: Array.isArray(existingBenefits?.benefits)
-        ? existingBenefits.benefits.map((item) => String(item)).filter(Boolean)
-        : [],
+    setProfessionalDetailsForm({
+      firstName: profile?.firstName ?? "",
+      lastName: profile?.lastName ?? "",
+      email: profile?.email ?? "",
+      phone: profile?.phone ?? "",
+      address: profile?.address ?? "",
+      linkedinUrl: profile?.linkedinUrl ?? "",
+      portfolioUrl: String(keyQuestions.portfolioUrl ?? ""),
     });
   }, [profile]);
 
-  async function savePreferences() {
-    try {
-      setSavingPreferences(true);
-      setPreferencesError(null);
+  const avatarInitial = (professionalDetailsForm.firstName || professionalDetailsForm.lastName || "?")
+    .trim()
+    .slice(0, 1)
+    .toUpperCase();
 
-      const res = await fetch("/api/profile/preferences", {
+  const experience = (profile?.resume?.experiences ?? []).map((exp) => ({
+    id: exp.id,
+    title: exp.title,
+    company: exp.company,
+    location: exp.location ?? "Location not provided",
+    dateRange: exp.dateRange ?? "Date range not provided",
+    bullets: exp.bullets.map((item) => item.text),
+  }));
+  const recentExperience = experience.slice(0, 4);
+
+  async function saveProfessionalDetails() {
+    try {
+      setSavingProfessionalDetails(true);
+      setProfessionalDetailsError(null);
+      setProfessionalDetailsSuccess(null);
+
+      const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          roleFocus: preferencesForm.roleFocus,
-          availability: preferencesForm.availability,
-          compensationType: preferencesForm.compensationType,
-          minCompensation: preferencesForm.minCompensation,
-          includeRemote: preferencesForm.includeRemote,
-          workplaceLocations: preferencesForm.workplaceLocations.length
-            ? preferencesForm.workplaceLocations.map((label) => ({ label }))
-            : null,
-          selectedPlan: preferencesForm.selectedPlan,
-          benefits: preferencesForm.benefits,
+          firstName: professionalDetailsForm.firstName,
+          lastName: professionalDetailsForm.lastName,
+          email: professionalDetailsForm.email,
+          phone: professionalDetailsForm.phone,
+          address: professionalDetailsForm.address,
+          linkedinUrl: professionalDetailsForm.linkedinUrl,
+          portfolioUrl: professionalDetailsForm.portfolioUrl,
         }),
       });
 
-      const data = await res.json();
+      const data = await readJsonResponse<{ ok?: boolean; error?: string }>(res);
       if (!res.ok) {
-        throw new Error(data?.error ?? "Failed to save preferences.");
+        throw new Error(data?.error ?? "Failed to save professional details.");
       }
 
-      setProfile((prev) => {
-        if (!prev) return prev;
-
-        return {
-          ...prev,
-          minCompensation: preferencesForm.minCompensation,
-          compensationType: preferencesForm.compensationType,
-          includeRemote: preferencesForm.includeRemote,
-          workplaceLocations: preferencesForm.workplaceLocations.map((label) => ({ label })),
-          keyQuestions: {
-            roleFocus: preferencesForm.roleFocus,
-            availability: preferencesForm.availability,
-          },
-          benefitSelections: [
-            {
-              selectedPlan: preferencesForm.selectedPlan,
-              benefits: preferencesForm.benefits,
-            },
-          ],
-        };
-      });
+      setProfessionalDetailsSuccess("Professional details updated.");
+      await loadProfile();
     } catch (e) {
-      setPreferencesError(e instanceof Error ? e.message : "Failed to save preferences.");
+      setProfessionalDetailsError(e instanceof Error ? e.message : "Failed to save professional details.");
     } finally {
-      setSavingPreferences(false);
+      setSavingProfessionalDetails(false);
     }
-  }
-
-  function toggleBenefit(benefit: string) {
-    setPreferencesForm((prev) => ({
-      ...prev,
-      benefits: prev.benefits.includes(benefit)
-        ? prev.benefits.filter((item) => item !== benefit)
-        : [...prev.benefits, benefit],
-    }));
   }
 
   async function uploadPhoto(file: File) {
@@ -412,7 +313,7 @@ export default function ProfilePage() {
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
-                  <div className="text-black text-md mb-2">Personal Information:</div>
+                  <div className="text-black text-md mb-2">Professional Details:</div>
                   <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
                     {profile?.profileImageUrl ? (
                       <Image
@@ -424,7 +325,7 @@ export default function ProfilePage() {
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-sm font-bold text-indigo-950">
-                        {name.slice(0, 1).toUpperCase()}
+                        {avatarInitial}
                       </div>
                     )}
                   </div>
@@ -436,7 +337,7 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploadingPhoto}
-                  className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                  className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <ArrowUpTrayIcon className="h-4 w-4" />
                   {uploadingPhoto ? "Uploading…" : "Upload Photo"}
@@ -452,175 +353,65 @@ export default function ProfilePage() {
               </div>
 
               <div className="mt-6 space-y-4">
-                <FieldRow label="Your Name" value={name} />
-                <FieldRow label="Email" value={email} />
-                <FieldRow label="Phone Number" value={phone} />
+                <InputField
+                  label="First Name"
+                  value={professionalDetailsForm.firstName}
+                  onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, firstName: value }))}
+                />
+                <InputField
+                  label="Last Name"
+                  value={professionalDetailsForm.lastName}
+                  onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, lastName: value }))}
+                />
+                <InputField
+                  label="Email"
+                  value={professionalDetailsForm.email}
+                  onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, email: value }))}
+                />
+                <InputField
+                  label="Phone"
+                  value={professionalDetailsForm.phone}
+                  onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, phone: value }))}
+                />
+                <InputField
+                  label="Address"
+                  value={professionalDetailsForm.address}
+                  onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, address: value }))}
+                />
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold text-slate-700">Links</div>
+                  <div className="mt-3 space-y-3">
+                    <InputField
+                      label="LinkedIn"
+                      value={professionalDetailsForm.linkedinUrl}
+                      onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, linkedinUrl: value }))}
+                    />
+                    <InputField
+                      label="Portfolio"
+                      value={professionalDetailsForm.portfolioUrl}
+                      onChange={(value) => setProfessionalDetailsForm((prev) => ({ ...prev, portfolioUrl: value }))}
+                    />
+                  </div>
+                </div>
               </div>
 
-              {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
+              {loading ? <p className="mt-4 text-sm text-slate-600">Loading profile…</p> : null}
               {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+              {professionalDetailsError ? <p className="mt-4 text-sm text-red-600">{professionalDetailsError}</p> : null}
+              {professionalDetailsSuccess ? <p className="mt-4 text-sm text-emerald-700">{professionalDetailsSuccess}</p> : null}
 
               <div className="mt-6">
                 <button
                   type="button"
-                  className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 ${NON_DB_TEXT_CLASS}`}
+                  onClick={() => void saveProfessionalDetails()}
+                  disabled={savingProfessionalDetails}
+                  className="w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Save changes
+                  {savingProfessionalDetails ? "Saving..." : "Save changes"}
                 </button>
               </div>
             </Card>
-            <Card className="p-6 mt-2">
-                <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Add more details (roles, locations, salary, availability) to boost match quality.
-                </p>
 
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => setShowPreferenceEditor((prev) => !prev)}
-                    className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
-                  >
-                    {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
-                  </button>
-                </div>
-
-                {showPreferenceEditor ? (
-                  <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <SelectField
-                        label="Role focus"
-                        value={preferencesForm.roleFocus}
-                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
-                        options={["Software Engineer", "Product Manager", "Data Analyst", "Project Coordinator"]}
-                      />
-
-                      <SelectField
-                        label="Availability"
-                        value={preferencesForm.availability}
-                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
-                        options={["asap", "2-weeks", "30-days", "not-looking"]}
-                      />
-
-                      <SelectField
-                        label="Salary type"
-                        value={preferencesForm.compensationType}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            compensationType: value === "hourly" ? "hourly" : "yearly",
-                          }))
-                        }
-                        options={["yearly", "hourly"]}
-                      />
-
-                      <SelectField
-                        label="Minimum salary"
-                        value={String(preferencesForm.minCompensation)}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            minCompensation: Number(value) || 0,
-                          }))
-                        }
-                        options={["40000", "50000", "70000", "90000", "120000"]}
-                      />
-
-                      <SelectField
-                        label="Workplace location"
-                        value={preferencesForm.workplaceLocations[0] ?? "none"}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            workplaceLocations: value === "none" ? [] : [value],
-                          }))
-                        }
-                        options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
-                      />
-
-                      <SelectField
-                        label="Remote preference"
-                        value={preferencesForm.includeRemote ? "include" : "exclude"}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            includeRemote: value === "include",
-                          }))
-                        }
-                        options={["include", "exclude"]}
-                      />
-
-                      <SelectField
-                        label="Benefits plan"
-                        value={preferencesForm.selectedPlan}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            selectedPlan: value === "annual" ? "annual" : "trial",
-                          }))
-                        }
-                        options={["trial", "annual"]}
-                      />
-                    </div>
-
-                    <div>
-                      <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
-                      <div className="flex flex-wrap gap-2">
-                        {["Health", "Dental", "Vision", "401k", "PTO"].map((benefit) => (
-                          <button
-                            key={benefit}
-                            type="button"
-                            onClick={() => toggleBenefit(benefit)}
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                              preferencesForm.benefits.includes(benefit)
-                                ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                : "border-slate-300 bg-white text-slate-700"
-                            }`}
-                          >
-                            {benefit}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {preferencesError ? <p className="text-xs text-red-600">{preferencesError}</p> : null}
-
-                    <button
-                      type="button"
-                      onClick={() => void savePreferences()}
-                      disabled={savingPreferences}
-                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingPreferences ? "Saving..." : "Save Preferences"}
-                    </button>
-                  </div>
-                ) : null}
-              </Card>
-            <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Subscription check</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Stripe-backed subscription status for the logged-in profile.
-                </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldRow label="Subscription email" value={subscriptionSummary.email} />
-                  <FieldRow label="Subscribed" value={subscriptionSummary.isSubscribed} />
-                  <FieldRow label="Current plan status" value={subscriptionSummary.planStatus} />
-                  <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
-                  <FieldRow label="Checked at" value={subscriptionSummary.checkedAt} />
-                </div>
-              </Card>
-
-              <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Live data returned from <code>/api/profile</code> for the logged-in user.
-                </p>
-                <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
-                  {databaseSnapshot}
-                </pre>
-              </Card>
-
-             
           </section>
 
           <section className="lg:col-span-7">
@@ -797,46 +588,24 @@ function Card({
   return <div className={["rounded-3xl border border-slate-200 bg-white shadow-sm", className].join(" ")}>{children}</div>;
 }
 
-function FieldRow({ label, value }: { label: string; value: string }) {
-  const isDbFallback = value.includes("Not provided in database");
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-slate-600">{label}</div>
-          <div className={`mt-1 truncate text-sm font-semibold ${isDbFallback ? NON_DB_TEXT_CLASS : "text-slate-900"}`}>{value}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SelectField({
+function InputField({
   label,
   value,
-  options,
   onChange,
 }: {
   label: string;
   value: string;
-  options: string[];
   onChange: (value: string) => void;
 }) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs font-semibold text-slate-700">{label}</span>
-      <select
+      <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      />
     </label>
   );
 }
+

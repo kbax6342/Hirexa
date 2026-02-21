@@ -316,7 +316,15 @@ export default function JobMatchesLayout() {
           </div>
 
           <div className="mt-3">
-          <AutofillButton />
+          <AutofillButton
+            job={{
+              sourceJobId: right?.id ?? null,
+              jobTitle: right?.title ?? "Untitled role",
+              company: displayCompany,
+              location: displayLocation,
+              jobUrl: right?.jobUrl ?? null,
+            }}
+          />
           </div>
         </div>
 

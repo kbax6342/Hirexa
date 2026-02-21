@@ -181,22 +181,22 @@ export default function JobMatchesLayout() {
 
   <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
     <aside className="lg:col-span-5">
-      <div className="mt-8">
-        <div>
-        <div className="text-black">
-        <h2 className="text-lg font-semibold">
-          Smart Matches
-        </h2>
+          <div className="mt-8">
+            <div>
+            <div className="text-black">
+            <h2 className="text-lg font-semibold">
+              Smart Matches
+            </h2>
 
-        <p className="mt-1 text-sm text-gray-700">
-          We’ve scanned millions of jobs to find your best matches, saving you hours of
-          searching. Simply select your favorites — we’ll fill out the applications.
-        </p>
-      </div>
+            <p className="mt-1 text-sm text-gray-700">
+              We’ve scanned millions of jobs to find your best matches, saving you hours of
+              searching. Simply select your favorites — we’ll fill out the applications.
+            </p>
+          </div>
         </div>
    {/* ... your missing info banner stays the same ... */}
 
-   <div className="mt-5 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+   <div className="mt-5 max-h-[90vh] space-y-4 overflow-y-auto pr-1">
      
         {jobs.map((job) => {
           const active = job.id === selectedId;
@@ -274,7 +274,13 @@ export default function JobMatchesLayout() {
           );
         })}
 
-        <button
+       
+
+        {/* infinite scroll sentinel */}
+        {/* <div ref={sentinelRef} className="h-6" /> */}
+      </div>
+      </div>
+      <button
           type="button"
           onClick={loadMore}
           disabled={loadingMore || !cursor}
@@ -282,12 +288,6 @@ export default function JobMatchesLayout() {
         >
           {loadingMore ? "Loading..." : "Load more"}
         </button>
-
-        {/* infinite scroll sentinel */}
-        {/* <div ref={sentinelRef} className="h-6" /> */}
-      </div>
-      </div>
-   
     </aside>
 
     <section className="lg:col-span-7 pt-4">

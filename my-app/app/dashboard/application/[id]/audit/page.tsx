@@ -60,10 +60,9 @@ export default async function ApplicationAuditPage({
       sponsorship: true,
       startDate: true,
       relocate: true,
-      resumeFiles: {
-        select: { id: true },
-        take: 1,
-      },
+  
+      resume: { select: { id: true } }, // Resumes table
+      resumeFiles: { select: { id: true }, take: 1 }, // ResumeFiles table
     },
   });
 
@@ -95,7 +94,7 @@ export default async function ApplicationAuditPage({
     return !hasValue(value);
   });
 
-  const isResumeMissing = profile.resumeFiles.length === 0;
+  const isResumeMissing = !profile.resume && profile.resumeFiles.length === 0;
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">

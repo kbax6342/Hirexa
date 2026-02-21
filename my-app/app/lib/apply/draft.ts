@@ -5,6 +5,10 @@ import { getActor } from "@/app/lib/apply/getActor";
 export async function getOrCreateDraft(jobId: string, jobUrl?: string | null) {
   const actor = await getActor();
 
+  if (!actor.userId && !actor.guestId) {
+    throw new Error("Cannot create an application draft without an authenticated or guest actor.");
+  }
+
   const existing = await prisma.applicationDraft.findFirst({
     where: {
       jobId,

@@ -1,10 +1,15 @@
 import { prisma } from "@/app/lib/prisma";
+import { getActorOwnershipWhere } from "@/app/lib/apply/ownership";
 import SubmitClient from "./ui/SubmitClient";
 
 export default async function ReviewPage({ params }: { params: { jobId: string } }) {
-  // NOTE: In production, scope this to the current user/guest too
+  const ownershipWhere = await getActorOwnershipWhere();
+  if (!ownershipWhere) {
+    return <div className="p-8">Unauthorized.</div>;
+  }
+
   const draft = await prisma.applicationDraft.findFirst({
-    where: { jobId: params.jobId },
+    where: { jobId: params.jobId, ...ownershipWhere },
     orderBy: { updatedAt: "desc" },
   });
 

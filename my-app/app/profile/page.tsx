@@ -383,7 +383,7 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <main className="mx-auto w-full max-w-6xl px-4 py-12">
-        <div className="-mt-6 grid gap-6 lg:grid-cols-12">
+        <div className="mt-6 grid gap-6 lg:grid-cols-12">
           <section className="lg:col-span-5">
             <Card className="p-6">
               <div className="flex items-center gap-4">

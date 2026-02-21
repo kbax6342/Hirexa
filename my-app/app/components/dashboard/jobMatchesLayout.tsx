@@ -5,6 +5,7 @@ import type { Job, JobPretty } from "@/app/lib/jobs/types";
 import { JobDescription } from "../description/DashboardDescription";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { useRouter } from "next/navigation";
+import AutofillButton from './profileClient';
 
 export default function JobMatchesLayout() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -286,13 +287,7 @@ export default function JobMatchesLayout() {
           </div>
 
           <div className="mt-3">
-            <button
-            type="button"
-            onClick={() => router.push("/plans")}
-            className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition"
-          >
-            + Auto-fill application
-          </button>
+          <AutofillButton />
           </div>
         </div>
 

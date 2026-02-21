@@ -256,6 +256,17 @@ export default function JobMatchesLayout() {
                   <div className="mt-2 flex items-center gap-2 text-[11px] text-gray-500">
                     <span>{job.posted}</span>
 
+                    {job.jobUrl ? (
+                      <a
+                        href={job.jobUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-md border px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        View Posting
+                      </a>
+                    ) : null}
+
                     {/* ✅ Separate button (no nesting now) */}
                     <button
                       type="button"

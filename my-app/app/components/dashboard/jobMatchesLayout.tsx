@@ -88,6 +88,7 @@ export default function JobMatchesLayout() {
       // dedupe
       const filtered = incoming.filter((j) => {
         if (!j?.id) return false;
+        if (j.source !== "greenhouse") return false;
         if (seen.current.has(j.id)) return false;
         seen.current.add(j.id);
         return true;
@@ -129,6 +130,17 @@ export default function JobMatchesLayout() {
       setDetailsError(null);
   
       try {
+        const [source] = selectedId.split(":");
+
+        if (source !== "adzuna") {
+          const selected = jobs.find((job) => job.id === selectedId) ?? null;
+          if (!cancelled) {
+            setSelectedDetails(selected);
+            setPretty(prettyFromDescription(String(selected?.description ?? "")));
+          }
+          return;
+        }
+
         // 1) Fetch job details
         const res = await fetch(`/api/jobs/details?id=${encodeURIComponent(selectedId)}`, {
           cache: "no-store",
@@ -163,7 +175,7 @@ export default function JobMatchesLayout() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [jobs, selectedId]);
   const addAppliedJob = (job: Job) => {
     setAppliedJobs((prev) => {
       if (prev.some((appliedJob) => appliedJob.id === job.id)) {

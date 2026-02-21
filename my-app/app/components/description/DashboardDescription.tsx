@@ -1,7 +1,5 @@
 "use client";
 
-import DOMPurify from "isomorphic-dompurify";
-
 // function prettifyJobHtml(raw: string) {
 //     if (!raw) return "";
   
@@ -250,7 +248,7 @@ export function JobDescription({ pretty }: { pretty?: JobPretty | null }) {
   const safePretty: JobPretty = pretty ?? { sections: [], highlights: [] };
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-6">
       {safePretty.highlights?.length ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {safePretty.highlights.map((h) => (
@@ -268,8 +266,8 @@ export function JobDescription({ pretty }: { pretty?: JobPretty | null }) {
       ) : null}
 
       {safePretty.sections.map((s, idx) => (
-        <section key={`${s.title}-${idx}`}>
-          <h3 className="mb-4 text-base font-semibold text-gray-900">{s.title}</h3>
+        <section key={`${s.title}-${idx}`} className="space-y-3">
+          <h3 className="text-base font-semibold text-gray-900">{s.title}</h3>
 
           {s.kind === "paragraphs" && (
             <div className="space-y-4">

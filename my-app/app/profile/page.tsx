@@ -189,6 +189,9 @@ export default function ProfilePage() {
 
   // ✅ show all experiences toggle
   const [showAllExperiences, setShowAllExperiences] = useState(false);
+  const [editingExperienceId, setEditingExperienceId] = useState<string | null>(null);
+  const [editingBullets, setEditingBullets] = useState<string[]>([]);
+  const [savingExperience, setSavingExperience] = useState(false);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -293,6 +296,8 @@ export default function ProfilePage() {
       profile?.keyQuestions && typeof profile.keyQuestions === "object" && !Array.isArray(profile.keyQuestions)
         ? (profile.keyQuestions as Record<string, unknown>)
         : {};
+    const roleFocus = String(keyQuestions.roleFocus ?? "").trim();
+    const availability = String(keyQuestions.availability ?? "asap").trim() || "asap";
 
     const existingBenefits =
       Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
@@ -309,8 +314,8 @@ export default function ProfilePage() {
       .filter((item): item is string => Boolean(item));
 
     setPreferencesForm({
-      roleFocus: String((keyQuestions as any).roleFocus ?? "").trim(),
-      availability: String((keyQuestions as any).availability ?? "asap").trim() || "asap",
+      roleFocus,
+      availability,
       compensationType: profile?.compensationType === "hourly" ? "hourly" : "yearly",
       minCompensation: Math.max(0, profile?.minCompensation ?? 50000),
       includeRemote: profile?.includeRemote ?? true,
@@ -507,6 +512,81 @@ export default function ProfilePage() {
         },
       };
     });
+  }
+
+  function startEditExperience(exp: ExperienceItem) {
+    setEditingExperienceId(exp.id);
+    setEditingBullets(exp.bullets.length ? exp.bullets : [""]);
+  }
+
+  function cancelEditExperience() {
+    setEditingExperienceId(null);
+    setEditingBullets([]);
+  }
+
+  function updateEditingBullet(index: number, value: string) {
+    setEditingBullets((prev) => prev.map((item, i) => (i === index ? value : item)));
+  }
+
+  function addEditingBullet() {
+    setEditingBullets((prev) => [...prev, ""]);
+  }
+
+  function removeEditingBullet(index: number) {
+    setEditingBullets((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function saveExperienceBullets() {
+    if (!editingExperienceId) return;
+
+    const nextBullets = editingBullets.map((item) => item.trim()).filter(Boolean);
+
+    try {
+      setSavingExperience(true);
+      setError(null);
+
+      const res = await fetch("/api/resume/experience", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          experienceId: editingExperienceId,
+          bullets: nextBullets,
+        }),
+      });
+
+      const data = await readJsonResponse<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Failed to save experience bullets.");
+      }
+
+      setProfile((prev) => {
+        if (!prev?.resume) return prev;
+
+        return {
+          ...prev,
+          resume: {
+            ...prev.resume,
+            experiences: prev.resume.experiences.map((exp) => {
+              if (exp.id !== editingExperienceId) return exp;
+
+              return {
+                ...exp,
+                bullets: nextBullets.map((text, index) => ({
+                  id: `${exp.id}-bullet-${index}`,
+                  text,
+                })),
+              };
+            }),
+          },
+        };
+      });
+
+      cancelEditExperience();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save experience bullets.");
+    } finally {
+      setSavingExperience(false);
+    }
   }
 
   function startEditPersonal() {
@@ -989,6 +1069,7 @@ function ToggleField({
                         const open = !!expandedExp[exp.id];
                         const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
                         const showToggle = exp.bullets.length > 2;
+                        const isEditing = editingExperienceId === exp.id;
 
                         return (
                           <div key={exp.id} className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -1010,7 +1091,7 @@ function ToggleField({
                                   type="button"
                                   aria-label="Edit experience"
                                   className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
-                                  onClick={() => alert("Edit flow is not yet database-wired.")}
+                                  onClick={() => startEditExperience(exp)}
                                 >
                                   <PencilSquareIcon className="h-5 w-5" />
                                 </button>
@@ -1026,13 +1107,60 @@ function ToggleField({
                               </div>
                             </div>
 
-                            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                              {bullets.map((b, i) => (
-                                <li key={i}>{b}</li>
-                              ))}
-                            </ul>
+                            {isEditing ? (
+                              <div className="mt-3 space-y-2">
+                                {editingBullets.map((bullet, index) => (
+                                  <div key={`${exp.id}-edit-${index}`} className="space-y-1">
+                                    <textarea
+                                      value={bullet}
+                                      onChange={(event) => updateEditingBullet(index, event.target.value)}
+                                      rows={2}
+                                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
+                                      placeholder="Enter bullet"
+                                    />
+                                    {editingBullets.length > 1 ? (
+                                      <button
+                                        type="button"
+                                        className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                        onClick={() => removeEditingBullet(index)}
+                                      >
+                                        Remove bullet
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ))}
 
-                            {showToggle ? (
+                                <button
+                                  type="button"
+                                  onClick={addEditingBullet}
+                                  className="text-xs font-semibold text-sky-600 hover:text-sky-700"
+                                >
+                                  + Add bullet
+                                </button>
+
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={saveExperienceBullets}
+                                    disabled={savingExperience}
+                                    className={SKY_BTN_SOFT_SM}
+                                  >
+                                    {savingExperience ? "Saving…" : "Save"}
+                                  </button>
+                                  <button type="button" onClick={cancelEditExperience} className={SKY_BTN_MUTED}>
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                                {bullets.map((b, i) => (
+                                  <li key={i}>{b}</li>
+                                ))}
+                              </ul>
+                            )}
+
+                            {showToggle && !isEditing ? (
                               <button
                                 type="button"
                                 onClick={() => toggleExp(exp.id)}

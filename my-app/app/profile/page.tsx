@@ -127,7 +127,18 @@ type ProfileApiResponse = {
   } | null;
 };
 
-const NON_DB_TEXT_CLASS = "text-green-700";
+// ✅ Change your accent text color to sky-500
+const NON_DB_TEXT_CLASS = "text-sky-500";
+
+// ✅ Reusable button classes (sky-500 vibe)
+const SKY_BTN_PRIMARY =
+  "rounded-2xl bg-sky-500 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60";
+const SKY_BTN_SOFT =
+  "rounded-full bg-sky-50 px-4 py-2 text-xs font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60";
+const SKY_BTN_SOFT_SM =
+  "inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100";
+const SKY_BTN_MUTED =
+  "inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50";
 
 export default function ProfilePage() {
   const [expandedExp, setExpandedExp] = useState<Record<string, boolean>>({});
@@ -514,6 +525,58 @@ export default function ProfilePage() {
     setIsEditingPersonal(true);
   }
 
+// ✅ Replace your ToggleField with this version (fixes the thumb alignment + looks like a real switch)
+
+function ToggleField({
+  label,
+  checked,
+  onChange,
+  checkedLabel = "Include remote",
+  uncheckedLabel = "Exclude remote",
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  checkedLabel?: string;
+  uncheckedLabel?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-xs font-semibold text-slate-700">{label}</div>
+
+      <div
+        className={[
+          "flex items-center justify-between gap-3 rounded-xl border px-3 py-2",
+          checked ? "border-sky-300 bg-sky-50" : "border-slate-300 bg-white",
+        ].join(" ")}
+      >
+        <span className={checked ? "text-sky-700 text-sm font-semibold" : "text-slate-700 text-sm font-semibold"}>
+          {checked ? checkedLabel : uncheckedLabel}
+        </span>
+
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          onClick={() => onChange(!checked)}
+          className={[
+            "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+            "focus:outline-none focus:ring-2 focus:ring-sky-300 focus:ring-offset-2 focus:ring-offset-white",
+            checked ? "bg-sky-500" : "bg-slate-300",
+          ].join(" ")}
+        >
+          <span
+            className={[
+              "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform",
+              checked ? "translate-x-5" : "translate-x-1",
+            ].join(" ")}
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
   function cancelEditPersonal() {
     setIsEditingPersonal(false);
     setError(null);
@@ -566,7 +629,7 @@ export default function ProfilePage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploadingPhoto}
-                  className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                  className={`${SKY_BTN_SOFT} inline-flex items-center gap-2`}
                 >
                   <ArrowUpTrayIcon className="h-4 w-4" />
                   {uploadingPhoto ? "Uploading…" : "Upload Photo"}
@@ -586,20 +649,12 @@ export default function ProfilePage() {
                 <div className="text-sm font-semibold text-slate-900">Personal details</div>
 
                 {!isEditingPersonal ? (
-                  <button
-                    type="button"
-                    onClick={startEditPersonal}
-                    className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
-                  >
+                  <button type="button" onClick={startEditPersonal} className={SKY_BTN_SOFT_SM}>
                     <PencilSquareIcon className="h-4 w-4" />
                     Edit
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={cancelEditPersonal}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
-                  >
+                  <button type="button" onClick={cancelEditPersonal} className={SKY_BTN_MUTED}>
                     Cancel
                   </button>
                 )}
@@ -694,7 +749,7 @@ export default function ProfilePage() {
                     type="button"
                     onClick={() => void savePersonalDetails()}
                     disabled={savingPersonalDetails}
-                    className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                    className={`${SKY_BTN_PRIMARY} w-full`}
                   >
                     {savingPersonalDetails ? "Saving changes..." : "Save changes"}
                   </button>
@@ -750,16 +805,16 @@ export default function ProfilePage() {
                       options={["yearly", "hourly"]}
                     />
 
-                    <SelectField
+                    <TextField
                       label="Minimum salary"
                       value={String(preferencesForm.minCompensation)}
                       onChange={(value) =>
                         setPreferencesForm((prev) => ({
                           ...prev,
-                          minCompensation: Number(value) || 0,
+                          // keep only digits, then convert
+                          minCompensation: Number(value.replace(/[^\d]/g, "")) || 0,
                         }))
                       }
-                      options={["40000", "50000", "70000", "90000", "120000"]}
                     />
 
                     <SelectField
@@ -774,19 +829,20 @@ export default function ProfilePage() {
                       options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
                     />
 
-                    <SelectField
-                      label="Remote preference"
-                      value={preferencesForm.includeRemote ? "include" : "exclude"}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          includeRemote: value === "include",
-                        }))
-                      }
-                      options={["include", "exclude"]}
-                    />
+              <ToggleField
+                label="Remote preference"
+                checked={preferencesForm.includeRemote}
+                checkedLabel="Remote"
+                uncheckedLabel="Remote"
+                onChange={(checked) =>
+                  setPreferencesForm((prev) => ({
+                    ...prev,
+                    includeRemote: checked,
+                  }))
+                }
+              />
 
-                    <SelectField
+                    {/* <SelectField
                       label="Benefits plan"
                       value={preferencesForm.selectedPlan}
                       onChange={(value) =>
@@ -796,7 +852,7 @@ export default function ProfilePage() {
                         }))
                       }
                       options={["trial", "annual"]}
-                    />
+                    /> */}
                   </div>
 
                   <div>
@@ -809,7 +865,7 @@ export default function ProfilePage() {
                           onClick={() => toggleBenefit(benefit)}
                           className={`rounded-full border px-3 py-1 text-xs font-semibold ${
                             preferencesForm.benefits.includes(benefit)
-                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                              ? "border-sky-300 bg-sky-50 text-sky-700"
                               : "border-slate-300 bg-white text-slate-700"
                           }`}
                         >
@@ -825,7 +881,7 @@ export default function ProfilePage() {
                     type="button"
                     onClick={() => void savePreferences()}
                     disabled={savingPreferences}
-                    className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {savingPreferences ? "Saving..." : "Save Preferences"}
                   </button>
@@ -836,7 +892,7 @@ export default function ProfilePage() {
             {/* =======================
                 SUBSCRIPTION
                ======================= */}
-           <Card className="p-6 mt-2">
+            <Card className="p-6 mt-2">
               <div className="text-sm font-semibold text-slate-900">Subscription Status</div>
 
               <div className="mt-4">
@@ -845,16 +901,14 @@ export default function ProfilePage() {
 
                   <div
                     className={`mt-2 text-lg font-bold ${
-                      subscriptionSummary.planStatus === "active"
-                        ? "text-green-600"
-                        : "text-red-500"
+                      subscriptionSummary.planStatus === "active" ? "text-sky-500" : "text-red-500"
                     }`}
                   >
                     {subscriptionSummary.planStatus === "active" ? "Active" : "Inactive"}
                   </div>
                 </div>
               </div>
-          </Card>
+            </Card>
 
             {/* =======================
                 SNAPSHOT
@@ -884,7 +938,7 @@ export default function ProfilePage() {
                         type="button"
                         onClick={() => resumeInputRef.current?.click()}
                         disabled={uploadingResume}
-                        className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                        className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
                       >
                         <ArrowUpTrayIcon className="h-4 w-4" />
                         {uploadingResume ? "Uploading…" : "Upload resume"}
@@ -909,7 +963,7 @@ export default function ProfilePage() {
                     ) : (
                       <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
                     )}
-                    {resumeUploadSuccess ? <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p> : null}
+                    {resumeUploadSuccess ? <p className="mt-2 text-xs text-sky-500">{resumeUploadSuccess}</p> : null}
                     {resumeUploadError ? <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p> : null}
                   </div>
 
@@ -917,10 +971,7 @@ export default function ProfilePage() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-md font-semibold text-slate-700">Experience: </div>
 
-                      <button
-                        type="button"
-                        className={`rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
-                      >
+                      <button type="button" className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}>
                         + Add experience
                       </button>
                     </div>
@@ -958,7 +1009,7 @@ export default function ProfilePage() {
                                 <button
                                   type="button"
                                   aria-label="Edit experience"
-                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
+                                  className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
                                   onClick={() => alert("Edit flow is not yet database-wired.")}
                                 >
                                   <PencilSquareIcon className="h-5 w-5" />
@@ -967,7 +1018,7 @@ export default function ProfilePage() {
                                 <button
                                   type="button"
                                   aria-label="Delete experience"
-                                  className={`rounded-xl p-2 hover:bg-slate-50 ${NON_DB_TEXT_CLASS}`}
+                                  className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
                                   onClick={() => removeFromList(exp.id)}
                                 >
                                   <TrashIcon className="h-5 w-5" />
@@ -985,7 +1036,7 @@ export default function ProfilePage() {
                               <button
                                 type="button"
                                 onClick={() => toggleExp(exp.id)}
-                                className={`mt-3 inline-flex items-center gap-1 text-xs font-semibold hover:text-green-900 ${NON_DB_TEXT_CLASS}`}
+                                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-sky-500 hover:text-sky-600"
                               >
                                 {open ? "Show less" : "Show more"}
                                 {open ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
@@ -1001,7 +1052,7 @@ export default function ProfilePage() {
                           <button
                             type="button"
                             onClick={() => setShowAllExperiences((prev) => !prev)}
-                            className={`w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold ring-1 ring-slate-200 hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
+                            className="w-full rounded-2xl bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
                           >
                             {showAllExperiences ? `Show less` : `Show more (${experience.length - 4} more)`}
                           </button>
@@ -1052,7 +1103,7 @@ function FieldRow({ label, value }: { label: string; value: string }) {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-semibold text-slate-600">{label}</div>
-          <div className={`mt-1 truncate text-sm font-semibold ${isDbFallback ? NON_DB_TEXT_CLASS : "text-slate-900"}`}>
+          <div className={`mt-1 truncate text-sm font-semibold ${isDbFallback ? "text-sky-500" : "text-slate-900"}`}>
             {value}
           </div>
         </div>
@@ -1068,7 +1119,7 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       />
     </label>
   );
@@ -1091,7 +1142,7 @@ function SelectField({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       >
         {options.map((option) => (
           <option key={option} value={option}>

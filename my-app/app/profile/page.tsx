@@ -406,7 +406,7 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-slate-50">
       <main className="mx-auto w-full max-w-6xl px-4 py-12">
         <div className="mt-6 grid gap-6 lg:grid-cols-12">
-          <section className="lg:col-span-5">
+          <section className="lg:col-span-5 lg:order-2">
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
@@ -468,7 +468,7 @@ export default function ProfilePage() {
             </Card>
           </section>
 
-          <section className="lg:col-span-7">
+          <section className="lg:col-span-7 lg:order-1">
             <div className="space-y-6">
               <Card className="p-6">
                 <div className="flex-col items-start justify-between gap-4">

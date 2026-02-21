@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import type { Prisma } from "@prisma/client";
+import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 type PreferencesBody = {
   minCompensation?: number | null;
@@ -105,6 +106,8 @@ export async function POST(req: Request) {
         },
       });
     }
+
+    invalidateCachedProfile({ userId, guestId });
 
     return NextResponse.json({
       ok: true,

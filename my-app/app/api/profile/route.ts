@@ -4,6 +4,11 @@ import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 import { getStripeClient } from "@/app/lib/stripeClient";
+import {
+  getCachedProfile,
+  invalidateCachedProfile,
+  setCachedProfile,
+} from "@/app/lib/profile-cache";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -172,6 +177,8 @@ export async function POST(req: Request) {
 
     const session = await auth();
     const userId = (session?.user as any)?.id ?? null;
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -220,6 +227,8 @@ export async function POST(req: Request) {
       },
     });
 
+    invalidateCachedProfile({ userId, guestId });
+
     return NextResponse.json({ ok: true, profile });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
@@ -237,6 +246,14 @@ export async function GET() {
 
     if (!userId && !guestId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const cachedProfile = getCachedProfile<{ ok: boolean; profile: unknown }>({
+      userId,
+      guestId,
+    });
+    if (cachedProfile) {
+      return NextResponse.json(cachedProfile);
     }
 
     // If logged in, sync Stripe status (never let it kill the profile response)
@@ -295,7 +312,10 @@ export async function GET() {
         }
       : null;
 
-    return NextResponse.json({ ok: true, profile: responseProfile });
+    const responseData = { ok: true, profile: responseProfile };
+    setCachedProfile({ userId, guestId, data: responseData });
+
+    return NextResponse.json(responseData);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });

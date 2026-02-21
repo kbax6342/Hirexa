@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { cookies } from "next/headers";
+import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
@@ -72,6 +73,8 @@ export async function POST(req: Request) {
             profileImage: true,
           },
         });
+
+    invalidateCachedProfile({ userId, guestId });
 
     const profileImageUrl =
       profile.profileImage && profile.profileImageMimeType

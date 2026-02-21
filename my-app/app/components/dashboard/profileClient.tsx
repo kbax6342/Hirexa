@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 
+const extensionUrl = process.env.NEXT_PUBLIC_AUTOFILL_EXTENSION_URL;
+
 export default function AutofillButton() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -14,23 +16,19 @@ export default function AutofillButton() {
       const res = await fetch("/api/billing/plan-status", { method: "GET" });
       const data = await res.json();
 
-      if (!data?.ok) {
-        // if session expired or error, send to login or plans
-        router.push("/plans");
+      if (!data?.ok || !data.active) {
+        router.push("/plans?source=autofill");
         return;
       }
 
-      if (!data.active) {
-        // no paid plan -> upsell
-        router.push("/plans");
+      if (extensionUrl) {
+        window.open(extensionUrl, "_blank", "noopener,noreferrer");
         return;
       }
 
-      // ✅ Active plan: go to your Auto-Apply dashboard / flow
-      router.push("/auto-apply"); 
-      // (or if you have a specific page for autofill setup: router.push("/autofill"))
-    } catch (e) {
-      router.push("/plans");
+      router.push("/auto-apply");
+    } catch {
+      router.push("/plans?source=autofill");
     } finally {
       setLoading(false);
     }
@@ -42,7 +40,7 @@ export default function AutofillButton() {
         type="button"
         onClick={handleAutofill}
         disabled={loading}
-        className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+        className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? "Checking plan..." : "+ Auto-fill application"}
       </button>

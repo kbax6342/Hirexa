@@ -8,6 +8,7 @@ import { cookies } from "next/headers";
 import OpenAI from "openai";
 import crypto from "crypto";
 import { z } from "zod";
+import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -343,6 +344,8 @@ export async function POST(req: Request) {
         create: { resumeId: resume.id, experiences: parsedExperiences },
       });
     });
+
+    invalidateCachedProfile({ userId, guestId });
 
     return NextResponse.json({
       ok: true,

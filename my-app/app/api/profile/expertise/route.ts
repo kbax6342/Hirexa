@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
+import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 const ALLOWED_EXPERTISE = ["Career", "Money", "Skills", "Company"] as const;
 
@@ -63,6 +64,8 @@ export async function POST(req: Request) {
           },
           select: { id: true, keyQuestions: true },
         });
+
+    invalidateCachedProfile({ userId, guestId });
 
     return NextResponse.json({
       ok: true,

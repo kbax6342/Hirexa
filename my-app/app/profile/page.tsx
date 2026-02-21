@@ -1,3 +1,4 @@
+// E:\Web Applications\Hirexa\my-app\app\profile\page.tsx
 "use client";
 
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -133,12 +134,18 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
+
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
   const [resumeUploadError, setResumeUploadError] = useState<string | null>(null);
   const [resumeUploadSuccess, setResumeUploadSuccess] = useState<string | null>(null);
+
   const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
+
+  // ✅ Personal details edit mode
+  const [isEditingPersonal, setIsEditingPersonal] = useState(false);
   const [savingPersonalDetails, setSavingPersonalDetails] = useState(false);
+
   const [personalDetailsForm, setPersonalDetailsForm] = useState<PersonalDetailsForm>({
     firstName: "",
     lastName: "",
@@ -151,8 +158,10 @@ export default function ProfilePage() {
     linkedinUrl: "",
     portfolioUrl: "",
   });
+
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
+
   const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
     roleFocus: "",
     availability: "asap",
@@ -163,8 +172,12 @@ export default function ProfilePage() {
     selectedPlan: "trial",
     benefits: [],
   });
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ✅ show all experiences toggle
+  const [showAllExperiences, setShowAllExperiences] = useState(false);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -175,9 +188,10 @@ export default function ProfilePage() {
       const data = (await readJsonResponse<ProfileApiResponse>(res)) ?? null;
 
       if (!res.ok) {
-        const message = typeof (data as { error?: unknown } | null)?.error === "string"
-          ? (data as { error?: string }).error
-          : "Failed to load profile";
+        const message =
+          typeof (data as { error?: unknown } | null)?.error === "string"
+            ? (data as { error?: string }).error
+            : "Failed to load profile";
         throw new Error(message);
       }
 
@@ -193,7 +207,10 @@ export default function ProfilePage() {
     void loadProfile();
   }, [loadProfile]);
 
+  // keep form synced from DB, but don't clobber while editing
   useEffect(() => {
+    if (isEditingPersonal) return;
+
     setPersonalDetailsForm({
       firstName: profile?.firstName ?? "",
       lastName: profile?.lastName ?? "",
@@ -206,9 +223,11 @@ export default function ProfilePage() {
       linkedinUrl: profile?.linkedinUrl ?? "",
       portfolioUrl: profile?.portfolioUrl ?? "",
     });
-  }, [profile]);
+  }, [profile, isEditingPersonal]);
 
-  const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
+  const name =
+    [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
+
   const databaseSnapshot = useMemo(() => {
     if (!profile) return "No profile row found in database.";
     return JSON.stringify(profile, null, 2);
@@ -217,13 +236,10 @@ export default function ProfilePage() {
   const subscriptionSummary = useMemo(
     () => ({
       email: profile?.subscriptionEmail ?? profile?.email ?? "Not found",
-      isSubscribed: Boolean(
-        profile?.trialSubscriber || profile?.monthlySubscriber || profile?.yearlySubscriber
-      )
+      isSubscribed: Boolean(profile?.trialSubscriber || profile?.monthlySubscriber || profile?.yearlySubscriber)
         ? "Yes"
         : "No",
-      planStatus:
-        profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
+      planStatus: profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
       purchasedAt: profile?.subscriptionPurchasedAt ?? "Not found",
       checkedAt: profile?.subscriptionCheckedAt ?? "Not found",
     }),
@@ -256,19 +272,23 @@ export default function ProfilePage() {
 
   const recentExperience = useMemo(() => experience.slice(0, 4), [experience]);
 
+  // ✅ decide what to render in the list
+  const visibleExperience = useMemo(() => {
+    return showAllExperiences ? experience : recentExperience;
+  }, [experience, recentExperience, showAllExperiences]);
+
   useEffect(() => {
     const keyQuestions =
       profile?.keyQuestions && typeof profile.keyQuestions === "object" && !Array.isArray(profile.keyQuestions)
         ? (profile.keyQuestions as Record<string, unknown>)
         : {};
 
-    const existingBenefits = Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
-      ? (profile.benefitSelections[0] as { selectedPlan?: unknown; benefits?: unknown[] })
-      : null;
+    const existingBenefits =
+      Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
+        ? (profile.benefitSelections[0] as { selectedPlan?: unknown; benefits?: unknown[] })
+        : null;
 
-    const rawLocations = Array.isArray(profile?.workplaceLocations)
-      ? profile.workplaceLocations
-      : [];
+    const rawLocations = Array.isArray(profile?.workplaceLocations) ? profile.workplaceLocations : [];
 
     const workplaceLocations = rawLocations
       .map((item) => {
@@ -278,8 +298,8 @@ export default function ProfilePage() {
       .filter((item): item is string => Boolean(item));
 
     setPreferencesForm({
-      roleFocus: String(keyQuestions.roleFocus ?? "").trim(),
-      availability: String(keyQuestions.availability ?? "asap").trim() || "asap",
+      roleFocus: String((keyQuestions as any).roleFocus ?? "").trim(),
+      availability: String((keyQuestions as any).availability ?? "asap").trim() || "asap",
       compensationType: profile?.compensationType === "hourly" ? "hourly" : "yearly",
       minCompensation: Math.max(0, profile?.minCompensation ?? 50000),
       includeRemote: profile?.includeRemote ?? true,
@@ -315,6 +335,8 @@ export default function ProfilePage() {
       if (data?.profile) {
         setProfile((prev) => (prev ? { ...prev, ...data.profile } : data.profile));
       }
+
+      setIsEditingPersonal(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save personal details.");
     } finally {
@@ -446,7 +468,9 @@ export default function ProfilePage() {
       }
 
       const count = data?.parsed?.experienceCount ?? 0;
-      setResumeUploadSuccess(`Resume uploaded and parsed. ${count} experience record${count === 1 ? "" : "s"} saved.`);
+      setResumeUploadSuccess(
+        `Resume uploaded and parsed. ${count} experience record${count === 1 ? "" : "s"} saved.`
+      );
       await loadProfile();
     } catch (e) {
       setResumeUploadError(e instanceof Error ? e.message : "Failed to upload resume.");
@@ -474,11 +498,47 @@ export default function ProfilePage() {
     });
   }
 
+  function startEditPersonal() {
+    setPersonalDetailsForm({
+      firstName: profile?.firstName ?? "",
+      lastName: profile?.lastName ?? "",
+      email: profile?.email ?? "",
+      phone: profile?.phone ?? "",
+      address: profile?.address ?? "",
+      city: profile?.city ?? "",
+      state: profile?.state ?? "",
+      postalCode: profile?.postalCode ?? "",
+      linkedinUrl: profile?.linkedinUrl ?? "",
+      portfolioUrl: profile?.portfolioUrl ?? "",
+    });
+    setIsEditingPersonal(true);
+  }
+
+  function cancelEditPersonal() {
+    setIsEditingPersonal(false);
+    setError(null);
+    setPersonalDetailsForm({
+      firstName: profile?.firstName ?? "",
+      lastName: profile?.lastName ?? "",
+      email: profile?.email ?? "",
+      phone: profile?.phone ?? "",
+      address: profile?.address ?? "",
+      city: profile?.city ?? "",
+      state: profile?.state ?? "",
+      postalCode: profile?.postalCode ?? "",
+      linkedinUrl: profile?.linkedinUrl ?? "",
+      portfolioUrl: profile?.portfolioUrl ?? "",
+    });
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       <main className="mx-auto w-full max-w-6xl px-4 py-12">
         <div className="mt-6 grid gap-6 lg:grid-cols-12">
           <section className="lg:col-span-5">
+            {/* =======================
+                PERSONAL DETAILS
+               ======================= */}
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
@@ -521,195 +581,302 @@ export default function ProfilePage() {
                 />
               </div>
 
-              <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <TextField label="First name" value={personalDetailsForm.firstName} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, firstName: value }))} />
-                <TextField label="Last name" value={personalDetailsForm.lastName} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, lastName: value }))} />
-                <TextField label="Email" value={personalDetailsForm.email} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, email: value }))} />
-                <TextField label="Phone number" value={personalDetailsForm.phone} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, phone: value }))} />
-                <TextField label="Address" value={personalDetailsForm.address} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, address: value }))} />
-                <TextField label="City" value={personalDetailsForm.city} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, city: value }))} />
-                <TextField label="State" value={personalDetailsForm.state} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, state: value }))} />
-                <TextField label="Postal code" value={personalDetailsForm.postalCode} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, postalCode: value }))} />
-                <TextField label="LinkedIn" value={personalDetailsForm.linkedinUrl} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, linkedinUrl: value }))} />
-                <TextField label="Portfolio" value={personalDetailsForm.portfolioUrl} onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, portfolioUrl: value }))} />
-              </div>
+              {/* Header row */}
+              <div className="mt-6 flex items-center justify-between">
+                <div className="text-sm font-semibold text-slate-900">Personal details</div>
 
-              {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
-              {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
-
-              <div className="mt-6">
-                <button
-                  type="button"
-                  onClick={() => void savePersonalDetails()}
-                  disabled={savingPersonalDetails}
-                  className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
-                >
-                  {savingPersonalDetails ? "Saving changes..." : "Save changes"}
-                </button>
-              </div>
-            </Card>
-            <Card className="p-6 mt-2">
-                <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Add more details (roles, locations, salary, availability) to boost match quality.
-                </p>
-
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                {!isEditingPersonal ? (
                   <button
                     type="button"
-                    onClick={() => setShowPreferenceEditor((prev) => !prev)}
-                    className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+                    onClick={startEditPersonal}
+                    className={`inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-200 hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
                   >
-                    {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
+                    <PencilSquareIcon className="h-4 w-4" />
+                    Edit
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={cancelEditPersonal}
+                    className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+
+              {/* View mode */}
+              {!isEditingPersonal ? (
+                <div className="mt-4 space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <FieldRow label="First name" value={profile?.firstName ?? "Not provided in database"} />
+                    <FieldRow label="Last name" value={profile?.lastName ?? "Not provided in database"} />
+                  </div>
+
+                  <div className="grid gap-3">
+                    <FieldRow label="Email" value={profile?.email ?? "Not provided in database"} />
+                    <FieldRow label="Phone number" value={profile?.phone ?? "Not provided in database"} />
+                    <FieldRow label="Address" value={profile?.address ?? "Not provided in database"} />
+                    <FieldRow label="City" value={profile?.city ?? "Not provided in database"} />
+                    <FieldRow label="State" value={profile?.state ?? "Not provided in database"} />
+                    <FieldRow label="Postal code" value={profile?.postalCode ?? "Not provided in database"} />
+                    <FieldRow label="LinkedIn" value={profile?.linkedinUrl ?? "Not provided in database"} />
+                    <FieldRow label="Portfolio" value={profile?.portfolioUrl ?? "Not provided in database"} />
+                  </div>
+
+                  {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
+                  {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+                </div>
+              ) : (
+                /* Edit mode */
+                <div className="mt-4 space-y-4">
+                  {/* First/Last name = 2 columns */}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <TextField
+                      label="First name"
+                      value={personalDetailsForm.firstName}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, firstName: value }))}
+                    />
+                    <TextField
+                      label="Last name"
+                      value={personalDetailsForm.lastName}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, lastName: value }))}
+                    />
+                  </div>
+
+                  {/* Everything else = single column */}
+                  <div className="grid gap-3">
+                    <TextField
+                      label="Email"
+                      value={personalDetailsForm.email}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, email: value }))}
+                    />
+                    <TextField
+                      label="Phone number"
+                      value={personalDetailsForm.phone}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, phone: value }))}
+                    />
+                    <TextField
+                      label="Address"
+                      value={personalDetailsForm.address}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, address: value }))}
+                    />
+                    <TextField
+                      label="City"
+                      value={personalDetailsForm.city}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, city: value }))}
+                    />
+                    <TextField
+                      label="State"
+                      value={personalDetailsForm.state}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, state: value }))}
+                    />
+                    <TextField
+                      label="Postal code"
+                      value={personalDetailsForm.postalCode}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, postalCode: value }))}
+                    />
+                    <TextField
+                      label="LinkedIn"
+                      value={personalDetailsForm.linkedinUrl}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, linkedinUrl: value }))}
+                    />
+                    <TextField
+                      label="Portfolio"
+                      value={personalDetailsForm.portfolioUrl}
+                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, portfolioUrl: value }))}
+                    />
+                  </div>
+
+                  {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+
+                  <button
+                    type="button"
+                    onClick={() => void savePersonalDetails()}
+                    disabled={savingPersonalDetails}
+                    className={`w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 ${NON_DB_TEXT_CLASS}`}
+                  >
+                    {savingPersonalDetails ? "Saving changes..." : "Save changes"}
                   </button>
                 </div>
+              )}
+            </Card>
 
-                {showPreferenceEditor ? (
-                  <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <SelectField
-                        label="Role focus"
-                        value={preferencesForm.roleFocus}
-                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
-                        options={["Software Engineer", "Product Manager", "Data Analyst", "Project Coordinator"]}
-                      />
+            {/* =======================
+                PREFERENCES
+               ======================= */}
+            <Card className="p-6 mt-2">
+              <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
+              <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                Add more details (roles, locations, salary, availability) to boost match quality.
+              </p>
 
-                      <SelectField
-                        label="Availability"
-                        value={preferencesForm.availability}
-                        onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
-                        options={["asap", "2-weeks", "30-days", "not-looking"]}
-                      />
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => setShowPreferenceEditor((prev) => !prev)}
+                  className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
+                </button>
+              </div>
 
-                      <SelectField
-                        label="Salary type"
-                        value={preferencesForm.compensationType}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            compensationType: value === "hourly" ? "hourly" : "yearly",
-                          }))
-                        }
-                        options={["yearly", "hourly"]}
-                      />
+              {showPreferenceEditor ? (
+                <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <SelectField
+                      label="Role focus"
+                      value={preferencesForm.roleFocus}
+                      onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
+                      options={["Software Engineer", "Product Manager", "Data Analyst", "Project Coordinator"]}
+                    />
 
-                      <SelectField
-                        label="Minimum salary"
-                        value={String(preferencesForm.minCompensation)}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            minCompensation: Number(value) || 0,
-                          }))
-                        }
-                        options={["40000", "50000", "70000", "90000", "120000"]}
-                      />
+                    <SelectField
+                      label="Availability"
+                      value={preferencesForm.availability}
+                      onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
+                      options={["asap", "2-weeks", "30-days", "not-looking"]}
+                    />
 
-                      <SelectField
-                        label="Workplace location"
-                        value={preferencesForm.workplaceLocations[0] ?? "none"}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            workplaceLocations: value === "none" ? [] : [value],
-                          }))
-                        }
-                        options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
-                      />
+                    <SelectField
+                      label="Salary type"
+                      value={preferencesForm.compensationType}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          compensationType: value === "hourly" ? "hourly" : "yearly",
+                        }))
+                      }
+                      options={["yearly", "hourly"]}
+                    />
 
-                      <SelectField
-                        label="Remote preference"
-                        value={preferencesForm.includeRemote ? "include" : "exclude"}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            includeRemote: value === "include",
-                          }))
-                        }
-                        options={["include", "exclude"]}
-                      />
+                    <SelectField
+                      label="Minimum salary"
+                      value={String(preferencesForm.minCompensation)}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          minCompensation: Number(value) || 0,
+                        }))
+                      }
+                      options={["40000", "50000", "70000", "90000", "120000"]}
+                    />
 
-                      <SelectField
-                        label="Benefits plan"
-                        value={preferencesForm.selectedPlan}
-                        onChange={(value) =>
-                          setPreferencesForm((prev) => ({
-                            ...prev,
-                            selectedPlan: value === "annual" ? "annual" : "trial",
-                          }))
-                        }
-                        options={["trial", "annual"]}
-                      />
-                    </div>
+                    <SelectField
+                      label="Workplace location"
+                      value={preferencesForm.workplaceLocations[0] ?? "none"}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          workplaceLocations: value === "none" ? [] : [value],
+                        }))
+                      }
+                      options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
+                    />
 
-                    <div>
-                      <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
-                      <div className="flex flex-wrap gap-2">
-                        {["Health", "Dental", "Vision", "401k", "PTO"].map((benefit) => (
-                          <button
-                            key={benefit}
-                            type="button"
-                            onClick={() => toggleBenefit(benefit)}
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                              preferencesForm.benefits.includes(benefit)
-                                ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                : "border-slate-300 bg-white text-slate-700"
-                            }`}
-                          >
-                            {benefit}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    <SelectField
+                      label="Remote preference"
+                      value={preferencesForm.includeRemote ? "include" : "exclude"}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          includeRemote: value === "include",
+                        }))
+                      }
+                      options={["include", "exclude"]}
+                    />
 
-                    {preferencesError ? <p className="text-xs text-red-600">{preferencesError}</p> : null}
-
-                    <button
-                      type="button"
-                      onClick={() => void savePreferences()}
-                      disabled={savingPreferences}
-                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingPreferences ? "Saving..." : "Save Preferences"}
-                    </button>
+                    <SelectField
+                      label="Benefits plan"
+                      value={preferencesForm.selectedPlan}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          selectedPlan: value === "annual" ? "annual" : "trial",
+                        }))
+                      }
+                      options={["trial", "annual"]}
+                    />
                   </div>
-                ) : null}
-              </Card>
-            <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Subscription check</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Stripe-backed subscription status for the logged-in profile.
-                </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldRow label="Subscription email" value={subscriptionSummary.email} />
-                  <FieldRow label="Subscribed" value={subscriptionSummary.isSubscribed} />
-                  <FieldRow label="Current plan status" value={subscriptionSummary.planStatus} />
-                  <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
-                  <FieldRow label="Checked at" value={subscriptionSummary.checkedAt} />
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
+                    <div className="flex flex-wrap gap-2">
+                      {["Health", "Dental", "Vision", "401k", "PTO"].map((benefit) => (
+                        <button
+                          key={benefit}
+                          type="button"
+                          onClick={() => toggleBenefit(benefit)}
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                            preferencesForm.benefits.includes(benefit)
+                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                              : "border-slate-300 bg-white text-slate-700"
+                          }`}
+                        >
+                          {benefit}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {preferencesError ? <p className="text-xs text-red-600">{preferencesError}</p> : null}
+
+                  <button
+                    type="button"
+                    onClick={() => void savePreferences()}
+                    disabled={savingPreferences}
+                    className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {savingPreferences ? "Saving..." : "Save Preferences"}
+                  </button>
                 </div>
-              </Card>
+              ) : null}
+            </Card>
 
-              <Card className="p-6">
-                <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
-                <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                  Live data returned from <code>/api/profile</code> for the logged-in user.
-                </p>
-                <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
-                  {databaseSnapshot}
-                </pre>
-              </Card>
+            {/* =======================
+                SUBSCRIPTION
+               ======================= */}
+           <Card className="p-6 mt-2">
+              <div className="text-sm font-semibold text-slate-900">Subscription Status</div>
 
-             
+              <div className="mt-4">
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
+                  <div className="text-xs font-semibold text-slate-500">Current Status</div>
+
+                  <div
+                    className={`mt-2 text-lg font-bold ${
+                      subscriptionSummary.planStatus === "active"
+                        ? "text-green-600"
+                        : "text-red-500"
+                    }`}
+                  >
+                    {subscriptionSummary.planStatus === "active" ? "Active" : "Inactive"}
+                  </div>
+                </div>
+              </div>
+          </Card>
+
+            {/* =======================
+                SNAPSHOT
+               ======================= */}
+            {/* <Card className="p-6">
+              <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
+              <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                Live data returned from <code>/api/profile</code> for the logged-in user.
+              </p>
+              <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
+                {databaseSnapshot}
+              </pre>
+            </Card> */}
           </section>
 
+          {/* =======================
+              RIGHT COLUMN
+             ======================= */}
           <section className="lg:col-span-7">
             <div className="space-y-6">
               <Card className="p-6">
                 <div className="flex-col items-start justify-between gap-4">
-                
-
-                 
-
                   <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-md font-semibold text-slate-700">Resume:</div>
@@ -742,12 +909,8 @@ export default function ProfilePage() {
                     ) : (
                       <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
                     )}
-                    {resumeUploadSuccess ? (
-                      <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p>
-                    ) : null}
-                    {resumeUploadError ? (
-                      <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p>
-                    ) : null}
+                    {resumeUploadSuccess ? <p className="mt-2 text-xs text-green-700">{resumeUploadSuccess}</p> : null}
+                    {resumeUploadError ? <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p> : null}
                   </div>
 
                   <div className="mt-6">
@@ -763,15 +926,15 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="mt-3 space-y-3">
-                      {experience.length > 4 ? (
+                      {experience.length > 4 && !showAllExperiences ? (
                         <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
                       ) : null}
 
-                      {recentExperience.length === 0 ? (
+                      {visibleExperience.length === 0 ? (
                         <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>No experience rows found in database.</p>
                       ) : null}
 
-                      {recentExperience.map((exp) => {
+                      {visibleExperience.map((exp) => {
                         const open = !!expandedExp[exp.id];
                         const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
                         const showToggle = exp.bullets.length > 2;
@@ -825,22 +988,29 @@ export default function ProfilePage() {
                                 className={`mt-3 inline-flex items-center gap-1 text-xs font-semibold hover:text-green-900 ${NON_DB_TEXT_CLASS}`}
                               >
                                 {open ? "Show less" : "Show more"}
-                                {open ? (
-                                  <ChevronUpIcon className="h-4 w-4" />
-                                ) : (
-                                  <ChevronDownIcon className="h-4 w-4" />
-                                )}
+                                {open ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
                               </button>
                             ) : null}
                           </div>
                         );
                       })}
+
+                      {/* ✅ SHOW MORE / SHOW LESS (ALL EXPERIENCES) */}
+                      {experience.length > 4 ? (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowAllExperiences((prev) => !prev)}
+                            className={`w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold ring-1 ring-slate-200 hover:bg-slate-200 ${NON_DB_TEXT_CLASS}`}
+                          >
+                            {showAllExperiences ? `Show less` : `Show more (${experience.length - 4} more)`}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
-
               </Card>
-            
             </div>
           </section>
         </div>
@@ -866,14 +1036,12 @@ async function readJsonResponse<T>(res: Response): Promise<T | null> {
   }
 }
 
-function Card({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return <div className={["rounded-3xl border border-slate-200 bg-white shadow-sm", className].join(" ")}>{children}</div>;
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={["rounded-3xl border border-slate-200 bg-white shadow-sm", className].join(" ")}>
+      {children}
+    </div>
+  );
 }
 
 function FieldRow({ label, value }: { label: string; value: string }) {
@@ -884,22 +1052,16 @@ function FieldRow({ label, value }: { label: string; value: string }) {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-semibold text-slate-600">{label}</div>
-          <div className={`mt-1 truncate text-sm font-semibold ${isDbFallback ? NON_DB_TEXT_CLASS : "text-slate-900"}`}>{value}</div>
+          <div className={`mt-1 truncate text-sm font-semibold ${isDbFallback ? NON_DB_TEXT_CLASS : "text-slate-900"}`}>
+            {value}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function TextField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
+function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs font-semibold text-slate-700">{label}</span>

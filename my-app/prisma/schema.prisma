@@ -1,5 +1,3 @@
-// E:\Web Applications\Hirexa\my-app\prisma\schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,143 +8,108 @@ datasource db {
 }
 
 model User {
-  id   String  @id @default(cuid())
-  name String?
-
-  // ✅ Guests can exist without email until final signup
-  email    String? @unique
-  password String?
-
-  isGuest Boolean @default(true)
-
+  id              String       @id @default(cuid())
+  name            String?
+  email           String?      @unique
+  password        String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  isGuest         Boolean      @default(true)
   emailVerifiedAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  userProfile UserProfile?
+  userProfile     UserProfile?
 }
 
 model UserProfile {
-  id String @id @default(cuid())
-
-  // ✅ guest flow
-  guestId String? @unique
-
-  // ✅ user flow
-  userId String? @unique
-  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // profile fields (keep what you need)
-  skills             String[]  @default([])
-  email              String?
-  registrationStatus String?   @default("pending_verification")
-  welcomeEmailSentAt DateTime?
-  keyQuestions       Json?
-
-  workplaceLocations Json?
-  includeRemote      Boolean @default(true)
-
-  newsletterOptIn  Boolean @default(false)
-  newsletterSource String?
-
-  trialSubscriber   Boolean @default(false)
-  monthlySubscriber Boolean @default(false)
-  yearlySubscriber  Boolean @default(false)
-
-  trialPlanStatus         String?
-  monthlyPlanStatus       String?
-  yearlyPlanStatus        String?
-  lastPaymentReceivedAt   DateTime?
-  subscriptionCheckedAt   DateTime?
-  subscriptionPurchasedAt DateTime?
+  id                      String             @id @default(cuid())
+  userId                  String?            @unique
+  firstName               String?
+  lastName                String?
+  phone                   String?
+  authorizedUS            String?
+  sponsorship             String?
+  felony                  String?
+  startDate               String?
+  screening               String?
+  relocate                String?
+  gender                  String?
+  pronouns                String?
+  ethnicity               String?
+  disability              String?
+  veteran                 String?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  guestId                 String?            @unique
+  compensationType        String?
+  minCompensation         Int?
+  resumeSkills            String[]           @default([])
+  skills                  String[]           @default([])
+  email                   String?
+  welcomeEmailSentAt      DateTime?
+  includeRemote           Boolean            @default(true)
+  workplaceLocations      Json?
+  newsletterOptIn         Boolean            @default(false)
+  newsletterSource        String?
+  emailVerifiedAt         DateTime?
+  unsubscribedAt          DateTime?
+  registrationStatus      String?            @default("pending_verification")
+  address                 String?
+  city                    String?
+  dob                     DateTime?
+  linkedinUrl             String?
+  postalCode              String?
+  state                   String?
+  keyQuestions            Json?
   stripeCustomerId        String?
   stripeSubscriptionId    String?
+  lastPaymentReceivedAt   DateTime?
+  monthlyPlanStatus       String?
+  monthlySubscriber       Boolean            @default(false)
+  profileImage            Bytes?
+  profileImageFilename    String?
+  profileImageMimeType    String?
+  subscriptionCheckedAt   DateTime?
   subscriptionEmail       String?
-
-  emailVerifiedAt DateTime?
-  unsubscribedAt  DateTime?
-
-  resumeSkills String[] @default([])
-
-  minCompensation  Int?
-  compensationType String?
-
-  firstName            String?
-  lastName             String?
-  phone                String?
-  profileImage         Bytes?
-  profileImageMimeType String?
-  profileImageFilename String?
-  dob                  DateTime?
-  address              String?
-  city                 String?
-  postalCode           String?
-  state                String?
-
-  linkedinUrl String?
-  portfolioUrl String?
-
-  authorizedUS String?
-  sponsorship  String?
-  felony       String?
-  startDate    String?
-  screening    String?
-  relocate     String?
-  gender       String?
-  pronouns     String?
-  ethnicity    String?
-  disability   String?
-  veteran      String?
-
-  // ✅ Resume is connected through profileId
-  resume            Resume?
-  jobInterests      JobInterest[]
-  benefitSelections BenefitSelection[]
-  resumeFiles       ResumeFile[]
-  jobApplications   JobApplication[]
-  stripePayments    StripePayment[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  subscriptionPurchasedAt DateTime?
+  trialPlanStatus         String?
+  trialSubscriber         Boolean            @default(false)
+  yearlyPlanStatus        String?
+  yearlySubscriber        Boolean            @default(false)
+  portfolioUrl            String?
+  benefitSelections       BenefitSelection[]
+  jobApplications         JobApplication[]
+  jobInterests            JobInterest[]
+  resume                  Resume?
+  resumeFiles             ResumeFile[]
+  stripePayments          StripePayment[]
+  user                    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([email])
 }
 
 model StripePayment {
-  id String @id @default(cuid())
-
-  userProfileId String?
-  userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
-
-  stripeEventId           String  @unique
+  id                      String       @id @default(cuid())
+  userProfileId           String?
+  stripeEventId           String       @unique
   stripeCustomerId        String?
   stripeSubscriptionId    String?
   stripeCheckoutSessionId String?
   stripeInvoiceId         String?
   stripePaymentIntentId   String?
-
-  planType String?
-  status   String?
-  amount   Int?
-  currency String?
-  paidAt   DateTime?
-  metadata Json?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  planType                String?
+  status                  String?
+  amount                  Int?
+  currency                String?
+  paidAt                  DateTime?
+  metadata                Json?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  userProfile             UserProfile? @relation(fields: [userProfileId], references: [id])
 
   @@index([userProfileId])
   @@index([stripeSubscriptionId])
   @@index([stripeCheckoutSessionId])
 }
 
-enum ApplicationStatus {
-  IN_PREPARATION
-  READY_TO_SEND
-  IN_PROGRESS
-  SENT
-}
 
 model JobApplication {
   id String @id @default(cuid())
@@ -160,6 +123,8 @@ model JobApplication {
   jobUrl      String?
   sourceJobId String?
   status      ApplicationStatus @default(IN_PREPARATION)
+
+  // ✅ ADD THESE:
   auditJson   Json?
   answersJson Json?
   submittedAt DateTime?
@@ -173,51 +138,40 @@ model JobApplication {
 }
 
 model BenefitSelection {
-  id String @id @default(cuid())
-
+  id            String       @id @default(cuid())
   userProfileId String?
+  guestId       String?
+  selectedPlan  String
+  benefits      String[]     @default([])
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
   userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
-
-  guestId      String?
-  selectedPlan String
-  benefits     String[] @default([])
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
   @@index([userProfileId])
   @@index([guestId])
 }
 
 model JobInterest {
-  id            String @id @default(cuid())
+  id            String      @id @default(cuid())
   userProfileId String
   uuid          String
   title         String
-
-  userProfile UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
   @@unique([userProfileId, uuid])
   @@index([userProfileId])
 }
 
-//
-// ✅ Resume table matches your Neon table:
-// - userProfileId NOT NULL
-// - UNIQUE(userProfileId) => 1 resume per profile
-//
 model Resume {
-  id        String   @id @default(cuid())
-  filename  String
-  mimeType  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  userProfileId String      @unique
-  profile       UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
-
+  id                String            @id @default(cuid())
+  filename          String
+  mimeType          String
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  userProfileId     String            @unique
   experiences       Experience[]
-  resumeExperiences ResumeExperience[]
+  profile           UserProfile       @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  resumeExperiences ResumeExperience?
 
   @@index([userProfileId])
 }
@@ -227,25 +181,21 @@ model ResumeExperience {
   experiences Json
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
-  resume Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  resume      Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
 }
 
 model Experience {
-  id       String @id @default(cuid())
-  resumeId String
-  resume   Resume @relation(fields: [resumeId], references: [id], onDelete: Cascade)
-
+  id        String   @id @default(cuid())
+  resumeId  String
   order     Int
   title     String
   company   String
   location  String?
   dateRange String?
-
-  bullets Bullet[]
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  bullets   Bullet[]
+  resume    Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
 
   @@index([resumeId])
   @@index([resumeId, order])
@@ -254,10 +204,9 @@ model Experience {
 model Bullet {
   id           String     @id @default(cuid())
   experienceId String
+  order        Int
+  text         String
   experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
-
-  order Int
-  text  String
 
   @@index([experienceId])
   @@index([experienceId, order])
@@ -277,14 +226,12 @@ model EmailOtp {
 model ResumeFile {
   id        String      @id @default(cuid())
   profileId String
-  profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
-
   fileName  String
   mimeType  String
   sizeBytes Int
   blob      Bytes
-
-  createdAt DateTime @default(now())
+  createdAt DateTime    @default(now())
+  profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   @@index([profileId])
 }
@@ -295,4 +242,11 @@ model EmailVerificationCode {
   expiresAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum ApplicationStatus {
+  IN_PREPARATION
+  READY_TO_SEND
+  IN_PROGRESS
+  SENT
 }

@@ -39,6 +39,8 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
 
     const form = await parseGreenhouseForm(application.jobUrl);
     const { prefillValues, auditItems } = mapProfileToForm(form.fields, application.userProfile);
+    console.log("GH parse debug:", form.debug);
+    console.log("GH fields count:", form.fields.length, "method:", form.method, "action:", form.action);
 
     const status = auditItems.filter((item) => item.required).length > 0 ? "IN_PREPARATION" : "READY_TO_SEND";
 

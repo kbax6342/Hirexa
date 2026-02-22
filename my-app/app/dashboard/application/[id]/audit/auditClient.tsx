@@ -16,6 +16,7 @@ type AuditItem = {
 type AuditResponse = {
   ok: boolean;
   status: string;
+  jobTitle?: string | null; // ✅ ADD THIS
   payload: {
     action: string;
     method: string;
@@ -46,6 +47,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<AuditResponse | null>(null);
   const [showRawVsSubmitted, setShowRawVsSubmitted] = useState(false);
+  const [jobTitle, setJobTitle] = useState<string | null>(null);
 
   const loadAudit = useCallback(
     async (payloadAnswers?: Record<string, string>) => {
@@ -58,6 +60,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       });
 
       const data = (await res.json()) as AuditResponse;
+      
 
       if (!res.ok || !data.ok) {
         throw new Error(data.error ?? "Failed to load audit details");
@@ -66,6 +69,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       setPreview(data);
       setStatus(String(data.status ?? "IN_PREPARATION"));
       setAuditItems(Array.isArray(data.auditItems) ? data.auditItems : []);
+      setJobTitle(data.jobTitle ?? null);
     },
     [applicationId]
   );
@@ -157,9 +161,14 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   }
 
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+    <section className="rounded-xl mt-9 border border-gray-200 bg-white p-6 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Application audit</p>
       <h1 className="mt-2 text-2xl font-semibold text-gray-900">Review unresolved application fields</h1>
+      {jobTitle ? (
+        <p className="mt-1 text-lg font-medium text-blue-700">
+          {jobTitle}
+        </p>
+      ) : null}
       <p className="mt-2 text-sm text-gray-600">Status: {status}</p>
 
       {preview ? (

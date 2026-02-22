@@ -84,6 +84,7 @@ async function buildAuditResponse(applicationId: string, userId: string, answers
 
   return NextResponse.json({
     ok: true,
+    jobTitle: application.jobTitle, // ✅ ADD THIS
     status,
     payload,
     meta,

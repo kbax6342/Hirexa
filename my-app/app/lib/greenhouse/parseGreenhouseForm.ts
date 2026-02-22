@@ -44,22 +44,25 @@ function safeMethod(m: string | undefined | null): "POST" | "GET" {
   return up === "GET" ? "GET" : "POST";
 }
 
-function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio, $: cheerio.CheerioAPI) {
-  // Strong signals: file upload, application-ish action, greenhouse field names
+function looksLikeGreenhouseApplicationForm(
+  $form: cheerio.Cheerio,
+  $: cheerio.CheerioAPI
+) {
   const action = norm($form.attr("action") || "");
   const hasFile = $form.find("input[type='file']").length > 0;
   const hasEmail = $form.find("input[type='email'], input[name*='email' i]").length > 0;
   const hasName =
-    $form.find("input[name*='first' i], input[name*='last' i], input[name*='name' i]").length > 0;
+    $form.find("input[name*='first' i], input[name*='last' i], input[name*='name' i]").length >
+    0;
 
   const actionLooks =
-    /applications|apply|job_application|candidate/i.test(action) ||
-    /greenhouse/i.test(action);
+    /applications|apply|job_application|candidate/i.test(action) || /greenhouse/i.test(action);
 
   const hasGhFieldNames =
-    $form.find("input[name*='job_application' i], input[name*='candidate' i], input[name*='question' i]").length > 0;
+    $form.find(
+      "input[name*='job_application' i], input[name*='candidate' i], input[name*='question' i]"
+    ).length > 0;
 
-  // A "real" greenhouse apply form almost always has inputs beyond just search.
   const inputCount = $form.find("input, textarea, select").length;
 
   let score = 0;
@@ -81,7 +84,6 @@ function findBestForm($: cheerio.CheerioAPI) {
     const $form = $(el);
     const { score, action, hasFile, inputCount } = looksLikeGreenhouseApplicationForm($form, $);
 
-    // ignore obvious non-application forms
     const id = norm($form.attr("id") || "");
     const cls = norm($form.attr("class") || "");
     const isSearchy = /search|newsletter|subscribe/i.test(`${id} ${cls} ${action}`);
@@ -101,7 +103,6 @@ function findBestForm($: cheerio.CheerioAPI) {
     }
   }
 
-  // fallback: first form if nothing scored
   if (!best && forms.length > 0) {
     best = { el: forms[0], score: 0, reason: "fallback:first_form" };
   }
@@ -109,37 +110,25 @@ function findBestForm($: cheerio.CheerioAPI) {
   return best;
 }
 
-function getLabelFor(
-  $: cheerio.CheerioAPI,
-  $form: cheerio.Cheerio,
-  $el: cheerio.Cheerio
-) {
+function getLabelFor($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el: cheerio.Cheerio) {
   const id = norm($el.attr("id") || "");
   const aria = norm($el.attr("aria-label") || "");
   const ph = norm($el.attr("placeholder") || "");
   const name = norm($el.attr("name") || "");
 
-  // 1) label[for=id]
   if (id) {
     const lbl = norm($form.find(`label[for="${id}"]`).first().text());
     if (lbl) return lbl;
   }
 
-  // 2) closest label in same group/container
   const closest = norm(
-    $el
-      .closest("li, div, fieldset, section, label")
-      .find("label")
-      .first()
-      .text()
+    $el.closest("li, div, fieldset, section, label").find("label").first().text()
   );
   if (closest) return closest;
 
-  // 3) fieldset legend
   const legend = norm($el.closest("fieldset").find("legend").first().text());
   if (legend) return legend;
 
-  // 4) aria-label / placeholder / name
   if (aria) return aria;
   if (ph) return ph;
   if (name) return name;
@@ -154,17 +143,20 @@ function isRequiredEl($el: cheerio.Cheerio, label: string) {
   const ariaReq = norm($el.attr("aria-required") || "");
   if (ariaReq === "true") return true;
 
-  // some GH uses data-required
   const dataReq = norm($el.attr("data-required") || "");
   if (dataReq === "true" || dataReq === "required") return true;
 
-  // label contains * or "required"
   if (guessRequiredFromLabel(label)) return true;
 
   return false;
 }
 
-function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: string, debug: GhParsedForm["debug"]) {
+function extractForm(
+  $: cheerio.CheerioAPI,
+  formEl: cheerio.Element,
+  baseUrl: string,
+  debug: GhParsedForm["debug"]
+) {
   const $form = $(formEl);
 
   const rawAction = norm($form.attr("action") || "");
@@ -180,7 +172,6 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     hidden[name] = String($el.attr("value") ?? "");
   });
 
-  // We'll collect primitives + group radios/checkboxes by name
   const fieldsByName = new Map<string, GhField>();
   const radioGroups = new Map<
     string,
@@ -191,7 +182,6 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     { label: string; required: boolean; options: Array<{ value: string; label: string }> }
   >();
 
-  // INPUTS
   $form.find("input").each((_, el) => {
     const $el = $(el);
     const type = norm($el.attr("type") || "text").toLowerCase();
@@ -206,18 +196,10 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
 
     if (type === "radio") {
       const value = String($el.attr("value") ?? "");
-      // label for radio option: try nearest label text
       const optLabel =
-        norm($el.closest("label").text()) ||
-        norm($el.parent().find("label").first().text()) ||
-        value ||
-        "Option";
+        norm($el.closest("label").text()) || norm($el.parent().find("label").first().text()) || value || "Option";
 
-      const group = radioGroups.get(name) ?? {
-        label: label || name,
-        required,
-        options: [],
-      };
+      const group = radioGroups.get(name) ?? { label: label || name, required, options: [] };
       group.required = group.required || required;
       group.options.push({ value, label: optLabel.replace(/\*/g, "").trim() || value });
       radioGroups.set(name, group);
@@ -227,32 +209,18 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     if (type === "checkbox") {
       const value = String($el.attr("value") ?? "on");
       const optLabel =
-        norm($el.closest("label").text()) ||
-        norm($el.parent().find("label").first().text()) ||
-        value ||
-        "Option";
+        norm($el.closest("label").text()) || norm($el.parent().find("label").first().text()) || value || "Option";
 
-      const group = checkboxGroups.get(name) ?? {
-        label: label || name,
-        required,
-        options: [],
-      };
+      const group = checkboxGroups.get(name) ?? { label: label || name, required, options: [] };
       group.required = group.required || required;
       group.options.push({ value, label: optLabel.replace(/\*/g, "").trim() || value });
       checkboxGroups.set(name, group);
       return;
     }
 
-    // normal input
-    fieldsByName.set(name, {
-      name,
-      type,
-      label,
-      required,
-    });
+    fieldsByName.set(name, { name, type, label, required });
   });
 
-  // TEXTAREAS
   $form.find("textarea").each((_, el) => {
     const $el = $(el);
     const name = norm($el.attr("name") || "");
@@ -261,15 +229,9 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     const label = getLabelFor($, $form, $el).replace(/\*/g, "").trim();
     const required = isRequiredEl($el, label);
 
-    fieldsByName.set(name, {
-      name,
-      type: "textarea",
-      label,
-      required,
-    });
+    fieldsByName.set(name, { name, type: "textarea", label, required });
   });
 
-  // SELECTS
   $form.find("select").each((_, el) => {
     const $el = $(el);
     const name = norm($el.attr("name") || "");
@@ -281,24 +243,13 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     const options: Array<{ value: string; label: string }> = [];
     $el.find("option").each((__, opt) => {
       const $opt = $(opt);
-      options.push({
-        value: String($opt.attr("value") ?? ""),
-        label: norm($opt.text()),
-      });
+      options.push({ value: String($opt.attr("value") ?? ""), label: norm($opt.text()) });
     });
 
-    fieldsByName.set(name, {
-      name,
-      type: "select",
-      label,
-      required,
-      options,
-    });
+    fieldsByName.set(name, { name, type: "select", label, required, options });
   });
 
-  // Merge radio/checkbox groups into fieldsByName
   for (const [name, g] of radioGroups.entries()) {
-    // de-dupe options by value
     const seen = new Set<string>();
     const options = g.options.filter((o) => {
       const k = `${o.value}|${o.label}`;
@@ -307,13 +258,7 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
       return true;
     });
 
-    fieldsByName.set(name, {
-      name,
-      type: "radio",
-      label: g.label,
-      required: g.required,
-      options,
-    });
+    fieldsByName.set(name, { name, type: "radio", label: g.label, required: g.required, options });
   }
 
   for (const [name, g] of checkboxGroups.entries()) {
@@ -325,16 +270,9 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
       return true;
     });
 
-    fieldsByName.set(name, {
-      name,
-      type: "checkbox",
-      label: g.label,
-      required: g.required,
-      options,
-    });
+    fieldsByName.set(name, { name, type: "checkbox", label: g.label, required: g.required, options });
   }
 
-  // Final list: keep stable order by DOM appearance when possible
   const orderedNames: string[] = [];
   $form.find("input, textarea, select").each((_, el) => {
     const name = norm($(el).attr("name") || "");
@@ -350,7 +288,6 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
     fields.push(f);
   }
 
-  // If nothing found, fall back to all map values
   if (fields.length === 0) {
     fields.push(...Array.from(fieldsByName.values()));
   }
@@ -359,6 +296,28 @@ function extractForm($: cheerio.CheerioAPI, formEl: cheerio.Element, baseUrl: st
   debug.pickedFormMethod = method;
 
   return { action, method, hidden, fields, debug };
+}
+
+function parseBoardAndJobId(jobUrl: string) {
+  try {
+    const u = new URL(jobUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+
+    const board = parts[0] || "";
+    const jobsIdx = parts.findIndex((p) => p === "jobs");
+    const jobId = jobsIdx >= 0 ? parts[jobsIdx + 1] || "" : "";
+
+    return { board, jobId };
+  } catch {
+    return { board: "", jobId: "" };
+  }
+}
+
+function buildEmbedJobAppUrl(jobUrl: string) {
+  const { board, jobId } = parseBoardAndJobId(jobUrl);
+  if (!board || !jobId) return "";
+
+  return `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`;
 }
 
 /**
@@ -394,13 +353,13 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
   const shouldTryIframe =
     !best ||
     best.score < 3 ||
-    ($(best.el).find("input, textarea, select").length < 6 &&
-      $("iframe").length > 0);
+    ($(best.el).find("input, textarea, select").length < 6 && $("iframe").length > 0);
 
   if (shouldTryIframe) {
     const iframeSrc =
-      $("iframe[src*='greenhouse']").attr("src") ||
+      $("iframe[src*='embed/job_app']").attr("src") ||
       $("iframe[src*='job_app']").attr("src") ||
+      $("iframe[src*='greenhouse']").attr("src") ||
       $("iframe").first().attr("src") ||
       "";
 
@@ -416,7 +375,12 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
         const iframeBest = findBestForm($$);
         if (iframeBest) {
           debug.pickedFormReason = `iframe:${iframeBest.reason}`;
-          return extractForm($$, iframeBest.el, iframeUrl, debug);
+          const parsedIframe = extractForm($$, iframeBest.el, iframeUrl, debug);
+
+          // ✅ If iframe gives real fields and not GET, use it
+          if (parsedIframe.fields.length > 0 && parsedIframe.method !== "GET") {
+            return parsedIframe;
+          }
         }
       }
     }
@@ -426,6 +390,41 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     throw new Error("No form detected on job page (and no usable iframe).");
   }
 
+  // 3) Parse page form
   debug.pickedFormReason = `page:${best.reason}`;
-  return extractForm($, best.el, jobUrl, debug);
+  const parsedPage = extractForm($, best.el, jobUrl, debug);
+
+  // ✅ If page parse is wrong (GET or no fields), try embed/job_app
+  if (parsedPage.method === "GET" || parsedPage.fields.length === 0) {
+    const embedUrl = buildEmbedJobAppUrl(jobUrl);
+
+    if (embedUrl) {
+      try {
+        const embedRes = await fetch(embedUrl, { cache: "no-store" });
+        if (embedRes.ok) {
+          const embedHtml = await embedRes.text();
+          const $$ = cheerio.load(embedHtml);
+
+          const embedBest = findBestForm($$) ?? { el: $$("form").first().get(0) as any, score: 0, reason: "fallback:embed:first_form" };
+          if (embedBest?.el) {
+            const embedDebug: GhParsedForm["debug"] = {
+              pickedFormReason: `embed:${embedBest.reason}`,
+              formCount: $$("form").length,
+              iframeUsed: embedUrl,
+            };
+
+            const parsedEmbed = extractForm($$, embedBest.el, embedUrl, embedDebug);
+
+            if (parsedEmbed.fields.length > 0) {
+              return parsedEmbed;
+            }
+          }
+        }
+      } catch {
+        // ignore embed fetch errors and fall back to parsedPage
+      }
+    }
+  }
+
+  return parsedPage;
 }

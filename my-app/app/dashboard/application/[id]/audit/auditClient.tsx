@@ -154,6 +154,8 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           const missing = missingRequired.includes(field.name);
           const fieldId = `field-${field.name.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
           const finalValue = computedFinal[field.name];
+          const baseInputClass = `mt-2 w-full rounded border px-3 py-2 text-sm ${missing ? "border-red-400" : "border-gray-300"}`;
+
           return (
             <div key={field.name} className={`rounded-lg border p-4 ${missing ? "border-red-400 bg-red-50/30" : "border-gray-200"}`}>
               <label htmlFor={fieldId} className="block text-sm font-medium text-gray-900">
@@ -162,37 +164,77 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               <p className="font-mono text-xs text-gray-500">{field.name}</p>
 
               {field.type === "textarea" ? (
-                <textarea id={fieldId} className="mt-2 min-h-24 w-full rounded border border-gray-300 px-3 py-2 text-sm" value={String(normalize(answers[field.name], field.type))} onChange={(e) => updateValue(field.name, e.target.value)} />
+                <textarea
+                  id={fieldId}
+                  className={`${baseInputClass} min-h-24`}
+                  value={String(normalize(answers[field.name], field.type))}
+                  onChange={(e) => updateValue(field.name, e.target.value)}
+                />
               ) : field.type === "select" ? (
-                <select id={fieldId} className="mt-2 w-full rounded border border-gray-300 px-3 py-2 text-sm" value={String(normalize(answers[field.name], field.type))} onChange={(e) => updateValue(field.name, e.target.value)}>
+                <select
+                  id={fieldId}
+                  className={baseInputClass}
+                  value={String(normalize(answers[field.name], field.type))}
+                  onChange={(e) => updateValue(field.name, e.target.value)}
+                >
                   <option value="">Select an option</option>
-                  {field.options?.map((option) => <option key={`${field.name}-${option.value}`} value={option.value}>{option.label || option.value}</option>)}
+                  {field.options?.map((option) => (
+                    <option key={`${field.name}-${option.value}`} value={option.value}>
+                      {option.label || option.value}
+                    </option>
+                  ))}
                 </select>
               ) : field.type === "radio" ? (
-                <div className="mt-2 space-y-2">
+                <div className={`mt-2 space-y-2 rounded border p-3 ${missing ? "border-red-400" : "border-gray-300"}`}>
                   {field.options?.map((option) => (
                     <label key={`${field.name}-${option.value}`} className="flex items-center gap-2 text-sm text-gray-700">
-                      <input type="radio" name={field.name} value={option.value} checked={String(normalize(answers[field.name], field.type)) === option.value} onChange={(e) => updateValue(field.name, e.target.value)} />
+                      <input
+                        type="radio"
+                        name={field.name}
+                        value={option.value}
+                        checked={String(normalize(answers[field.name], field.type)) === option.value}
+                        onChange={(e) => updateValue(field.name, e.target.value)}
+                      />
                       {option.label || option.value}
                     </label>
                   ))}
                 </div>
               ) : field.type === "checkbox" ? (
-                <div className="mt-2 space-y-2">
+                <div className={`mt-2 space-y-2 rounded border p-3 ${missing ? "border-red-400" : "border-gray-300"}`}>
                   {field.options?.map((option) => {
                     const current = normalize(answers[field.name], field.type) as string[];
                     return (
                       <label key={`${field.name}-${option.value}`} className="flex items-center gap-2 text-sm text-gray-700">
-                        <input type="checkbox" value={option.value} checked={current.includes(option.value)} onChange={(e) => updateValue(field.name, e.target.checked ? [...current, option.value] : current.filter((item) => item !== option.value))} />
+                        <input
+                          type="checkbox"
+                          value={option.value}
+                          checked={current.includes(option.value)}
+                          onChange={(e) =>
+                            updateValue(
+                              field.name,
+                              e.target.checked
+                                ? [...new Set([...current, option.value])]
+                                : current.filter((item) => item !== option.value)
+                            )
+                          }
+                        />
                         {option.label || option.value}
                       </label>
                     );
                   })}
                 </div>
               ) : field.type === "file" ? (
-                <div className="mt-2 rounded border border-dashed border-gray-300 p-3 text-sm">{data.resume ? `Resume detected: ${data.resume.fileName} (PDF)` : "No resume PDF detected in profile."}</div>
+                <div className={`mt-2 rounded border border-dashed p-3 text-sm ${missing ? "border-red-400" : "border-gray-300"}`}>
+                  {data.resume ? `Resume detected: ${data.resume.fileName} (PDF)` : "No resume PDF detected in profile."}
+                </div>
               ) : (
-                <input id={fieldId} type={field.type || "text"} className="mt-2 w-full rounded border border-gray-300 px-3 py-2 text-sm" value={String(normalize(answers[field.name], field.type))} onChange={(e) => updateValue(field.name, e.target.value)} />
+                <input
+                  id={fieldId}
+                  type={field.type || "text"}
+                  className={baseInputClass}
+                  value={String(normalize(answers[field.name], field.type))}
+                  onChange={(e) => updateValue(field.name, e.target.value)}
+                />
               )}
 
               <p className="mt-2 text-xs text-gray-600">Value to submit: {displayValue(finalValue) || "(empty)"}</p>
@@ -206,14 +248,31 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         <summary className="cursor-pointer text-sm font-semibold text-gray-800">Hidden fields</summary>
         <div className="mt-3 space-y-2">
           {Object.entries(data?.form.hidden ?? {}).map(([name, value]) => (
-            <div key={name} className="rounded bg-gray-50 p-2 text-xs"><p className="font-mono text-gray-700">{name}</p><p className="text-gray-600">{value}</p></div>
+            <div key={name} className="rounded bg-gray-50 p-2 text-xs">
+              <p className="font-mono text-gray-700">{name}</p>
+              <p className="text-gray-600">{value}</p>
+            </div>
           ))}
         </div>
       </details>
 
       <div className="mt-6 flex gap-3">
-        <button type="button" onClick={saveAnswers} disabled={saving || submitting} className="rounded bg-gray-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{saving ? "Saving..." : "Save answers"}</button>
-        <button type="button" onClick={handleApplyNow} disabled={submitting || !canApply} className="rounded bg-blue-600 px-5 py-2 text-sm font-semibold text-white disabled:opacity-60">{submitting ? "Submitting..." : success ? "Submitted" : "Apply Now"}</button>
+        <button
+          type="button"
+          onClick={saveAnswers}
+          disabled={saving || submitting}
+          className="rounded bg-gray-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+        >
+          {saving ? "Saving..." : "Save answers"}
+        </button>
+        <button
+          type="button"
+          onClick={handleApplyNow}
+          disabled={submitting || !canApply}
+          className="rounded bg-blue-600 px-5 py-2 text-sm font-semibold text-white disabled:opacity-60"
+        >
+          {submitting ? "Submitting..." : success ? "Submitted" : "Apply Now"}
+        </button>
       </div>
     </section>
   );

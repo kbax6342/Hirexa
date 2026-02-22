@@ -24,13 +24,10 @@ function normalizeAnswer(value: unknown, field: GhField): AnswerValue {
     }
     const txt = toText(value);
     if (!txt) return [];
-    if (txt.includes(",")) {
-      return txt
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
-    return [txt];
+    return txt
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
   }
 
   if (Array.isArray(value)) {
@@ -38,6 +35,19 @@ function normalizeAnswer(value: unknown, field: GhField): AnswerValue {
   }
 
   return toText(value);
+}
+
+function mergeValue(field: GhField, answer: AnswerValue, prefill: AnswerValue): AnswerValue {
+  if (field.type === "checkbox") {
+    const answerArr = Array.isArray(answer) ? answer : [];
+    if (answerArr.length > 0) return answerArr;
+    return Array.isArray(prefill) ? prefill : [];
+  }
+
+  const answerStr = Array.isArray(answer) ? answer[0] ?? "" : answer;
+  if (answerStr) return answerStr;
+
+  return Array.isArray(prefill) ? prefill[0] ?? "" : prefill;
 }
 
 function pickResumeFieldName(fields: GhField[]) {
@@ -93,7 +103,6 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       where: { id: application.id },
       data: {
         status: "IN_PROGRESS",
-        answersJson: answers,
       },
     });
 
@@ -114,13 +123,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     for (const field of form.fields) {
       const answerValue = normalizeAnswer(answers[field.name], field);
       const prefillValue = normalizeAnswer(prefillValues[field.name], field);
-      const finalValue: AnswerValue = Array.isArray(answerValue)
-        ? answerValue.length > 0
-          ? answerValue
-          : Array.isArray(prefillValue)
-            ? prefillValue
-            : []
-        : answerValue || (Array.isArray(prefillValue) ? "" : prefillValue) || "";
+      const finalValue = mergeValue(field, answerValue, prefillValue);
 
       finalValuesToSubmit[field.name] = finalValue;
 
@@ -142,7 +145,12 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           status: "IN_PREPARATION",
           answersJson: answers,
           auditJson: {
-            form,
+            form: {
+              action: form.action,
+              method: form.method,
+              hidden: form.hidden,
+              fields: form.fields,
+            },
             computedPrefill: prefillValues,
             computedFinalValues: finalValuesToSubmit,
             missing: missingRequired,
@@ -174,15 +182,13 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       }
     }
 
-    if (resume) {
-      const resumeFieldName = pickResumeFieldName(form.fields);
-      if (resumeFieldName) {
-        fd.set(
-          resumeFieldName,
-          new Blob([resume.blob], { type: "application/pdf" }),
-          resume.fileName || "resume.pdf"
-        );
-      }
+    const resumeFieldName = pickResumeFieldName(form.fields);
+    if (resume && resumeFieldName) {
+      fd.set(
+        resumeFieldName,
+        new Blob([resume.blob], { type: "application/pdf" }),
+        resume.fileName || "resume.pdf"
+      );
     }
 
     const submitRes = await fetch(form.action, {
@@ -195,17 +201,21 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     const success = submitRes.ok && isSuccessHtml(responseHtml);
 
     if (!success) {
-      const status = missingRequired.length > 0 ? "IN_PREPARATION" : "READY_TO_SEND";
       await prisma.jobApplication.update({
         where: { id: application.id },
         data: {
-          status,
+          status: "READY_TO_SEND",
           answersJson: answers,
           auditJson: {
-            form,
+            form: {
+              action: form.action,
+              method: form.method,
+              hidden: form.hidden,
+              fields: form.fields,
+            },
             computedPrefill: prefillValues,
             computedFinalValues: finalValuesToSubmit,
-            missing: missingRequired,
+            missing: [],
           },
         },
       });
@@ -226,7 +236,12 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         submittedAt: new Date(),
         answersJson: answers,
         auditJson: {
-          form,
+          form: {
+            action: form.action,
+            method: form.method,
+            hidden: form.hidden,
+            fields: form.fields,
+          },
           computedPrefill: prefillValues,
           computedFinalValues: finalValuesToSubmit,
           missing: [],

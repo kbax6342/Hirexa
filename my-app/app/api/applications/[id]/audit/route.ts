@@ -37,16 +37,9 @@ function normalizeAnswer(value: unknown, field: GhField): AnswerValue {
   return toText(value);
 }
 
-function mergeValue(field: GhField, answer: AnswerValue, prefill: AnswerValue): AnswerValue {
-  if (field.type === "checkbox") {
-    const answerArr = Array.isArray(answer) ? answer : [];
-    if (answerArr.length > 0) return answerArr;
-    return Array.isArray(prefill) ? prefill : [];
-  }
-
-  const answerStr = Array.isArray(answer) ? answer[0] ?? "" : answer;
-  if (answerStr) return answerStr;
-
+function mergeValue(field: GhField, answer: AnswerValue, hasAnswer: boolean, prefill: AnswerValue): AnswerValue {
+  if (hasAnswer) return answer;
+  if (field.type === "checkbox") return Array.isArray(prefill) ? prefill : [];
   return Array.isArray(prefill) ? prefill[0] ?? "" : prefill;
 }
 
@@ -94,9 +87,10 @@ async function buildAuditResponse(applicationId: string, userId: string, answers
   const missingRequired: string[] = [];
 
   for (const field of form.fields) {
+    const hasAnswer = Object.prototype.hasOwnProperty.call(savedAnswers, field.name);
     const answerValue = normalizeAnswer(savedAnswers[field.name], field);
     const prefillValue = normalizeAnswer(prefillValues[field.name], field);
-    const finalValue = mergeValue(field, answerValue, prefillValue);
+    const finalValue = mergeValue(field, answerValue, hasAnswer, prefillValue);
 
     finalValuesToSubmit[field.name] = finalValue;
 

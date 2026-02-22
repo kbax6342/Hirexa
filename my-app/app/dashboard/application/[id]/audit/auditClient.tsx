@@ -69,13 +69,17 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const computedFinal = useMemo(() => {
     const merged: AnswersMap = {};
     for (const field of data?.form.fields ?? []) {
+      const hasAnswer = Object.prototype.hasOwnProperty.call(answers, field.name);
       const answer = normalize(answers[field.name], field.type);
       const prefill = normalize(data?.prefill[field.name], field.type);
-      merged[field.name] = Array.isArray(answer)
-        ? answer.length > 0
-          ? answer
-          : (prefill as string[])
-        : answer || (prefill as string) || "";
+
+      if (hasAnswer) {
+        merged[field.name] = answer;
+      } else if (field.type === "checkbox") {
+        merged[field.name] = Array.isArray(prefill) ? prefill : [];
+      } else {
+        merged[field.name] = Array.isArray(prefill) ? (prefill[0] ?? "") : prefill;
+      }
     }
     return merged;
   }, [answers, data?.form.fields, data?.prefill]);
@@ -167,14 +171,14 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                 <textarea
                   id={fieldId}
                   className={`${baseInputClass} min-h-24`}
-                  value={String(normalize(answers[field.name], field.type))}
+                  value={String(normalize(finalValue, field.type))}
                   onChange={(e) => updateValue(field.name, e.target.value)}
                 />
               ) : field.type === "select" ? (
                 <select
                   id={fieldId}
                   className={baseInputClass}
-                  value={String(normalize(answers[field.name], field.type))}
+                  value={String(normalize(finalValue, field.type))}
                   onChange={(e) => updateValue(field.name, e.target.value)}
                 >
                   <option value="">Select an option</option>
@@ -192,7 +196,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                         type="radio"
                         name={field.name}
                         value={option.value}
-                        checked={String(normalize(answers[field.name], field.type)) === option.value}
+                        checked={String(normalize(finalValue, field.type)) === option.value}
                         onChange={(e) => updateValue(field.name, e.target.value)}
                       />
                       {option.label || option.value}
@@ -202,7 +206,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               ) : field.type === "checkbox" ? (
                 <div className={`mt-2 space-y-2 rounded border p-3 ${missing ? "border-red-400" : "border-gray-300"}`}>
                   {field.options?.map((option) => {
-                    const current = normalize(answers[field.name], field.type) as string[];
+                    const current = normalize(finalValue, field.type) as string[];
                     return (
                       <label key={`${field.name}-${option.value}`} className="flex items-center gap-2 text-sm text-gray-700">
                         <input
@@ -232,7 +236,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                   id={fieldId}
                   type={field.type || "text"}
                   className={baseInputClass}
-                  value={String(normalize(answers[field.name], field.type))}
+                  value={String(normalize(finalValue, field.type))}
                   onChange={(e) => updateValue(field.name, e.target.value)}
                 />
               )}

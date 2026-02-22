@@ -255,15 +255,12 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       );
     }
 
-    if (/\/jobs\/\d+/i.test(form.action)) {
+    if (/\/jobs\//i.test(form.action)) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Parsed form action looked like a job page, not a submit endpoint",
-          statusCode: 400,
-          finalUrl: form.action,
-          reason: "Parsed action appears suspicious and may not be the Greenhouse submission endpoint.",
-          hints: ["Expected a Greenhouse form post URL, but got a jobs page URL."],
+          error: "Parsed submit action is not a Greenhouse submission endpoint",
+          action: form.action,
         },
         { status: 400 }
       );

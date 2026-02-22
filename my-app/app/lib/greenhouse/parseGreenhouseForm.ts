@@ -8,7 +8,7 @@ export type GhField = {
   required: boolean;
   placeholder?: string;
   questionKey?: string;
-  options?: Array<{ value: string; label: string }>; // for select/radio/checkbox
+  options?: Array<{ value: string; label: string }>;
 };
 
 export type GhParsedForm = {
@@ -48,13 +48,28 @@ function safeMethod(m: string | undefined | null): "POST" | "GET" {
   return up === "GET" ? "GET" : "POST";
 }
 
+function isJobsPageUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    return /\/jobs\/\d+/.test(path) || /\/embed\/[^/]+\/jobs\/\d+/.test(path) || path.includes("/jobs/");
+  } catch {
+    return /\/jobs\//i.test(url);
+  }
+}
+
+function normalizeAction($form: cheerio.Cheerio, baseUrl: string) {
+  const rawAction = $form.attr("action") || "";
+  return new URL(rawAction, baseUrl).toString();
+}
+
 function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
   const action = norm($form.attr("action") || "");
   const hasFile = $form.find("input[type='file']").length > 0;
   const hasEmail = $form.find("input[type='email'], input[name*='email' i]").length > 0;
   const hasName =
-    $form.find("input[name*='first' i], input[name*='last' i], input[name*='name' i]").length >
-    0;
+    $form.find("input[name*='first' i], input[name*='last' i], input[name*='name' i]").length > 0;
 
   const actionLooks =
     /applications|apply|job_application|candidate/i.test(action) || /greenhouse/i.test(action);
@@ -208,26 +223,59 @@ function dedupeOptions(options: GhOption[]) {
   });
 }
 
+function pickStrictSubmitForm(
+  $: cheerio.CheerioAPI,
+  selectedFormEl: cheerio.Element,
+  baseUrl: string
+): { formEl: cheerio.Element; reason: string } {
+  const $selected = $(selectedFormEl);
+  const selectedAction = normalizeAction($selected, baseUrl);
+  const selectedRawAction = norm($selected.attr("action") || "");
+  const selectedLooksWrong = !selectedRawAction || isJobsPageUrl(selectedAction);
+
+  if (!selectedLooksWrong) {
+    return { formEl: selectedFormEl, reason: "selected:action-ok" };
+  }
+
+  const alt = $("form")
+    .toArray()
+    .find((el) => {
+      const action = norm($(el).attr("action") || "").toLowerCase();
+      if (!action) return false;
+      return /applications|job_application|candidate|apply/.test(action);
+    });
+
+  if (alt) {
+    return { formEl: alt, reason: `selected:replaced_due_to_action(${selectedAction})` };
+  }
+
+  return { formEl: selectedFormEl, reason: `selected:kept_suspicious_action(${selectedAction})` };
+}
+
 function extractForm(
   $: cheerio.CheerioAPI,
   formEl: cheerio.Element,
   baseUrl: string,
   debug: GhParsedForm["debug"]
 ) {
-  const $form = $(formEl);
+  const strictPick = pickStrictSubmitForm($, formEl, baseUrl);
+  const $form = $(strictPick.formEl);
 
-  const rawAction = norm($form.attr("action") || "");
-  const action = rawAction ? toAbsUrl(baseUrl, rawAction) : baseUrl;
-
-  const method = safeMethod($form.attr("method"));
+  const action = normalizeAction($form, baseUrl);
+  let method = safeMethod($form.attr("method"));
+  if (method === "GET") method = "POST";
 
   const hidden: Record<string, string> = {};
-  $form.find("input[type='hidden']").each((_, el) => {
-    const $el = $(el);
-    const name = norm($el.attr("name") || "");
-    if (!name) return;
-    hidden[name] = String($el.attr("value") ?? "");
-  });
+  $form
+    .find(
+      "input[type='hidden'], input[name*='csrf' i], input[name*='token' i], input[name*='security' i], input[id*='security' i]"
+    )
+    .each((_, el) => {
+      const $el = $(el);
+      const name = norm($el.attr("name") || "");
+      if (!name) return;
+      hidden[name] = String($el.attr("value") ?? "");
+    });
 
   const fieldsByName = new Map<string, GhField>();
   const orderedNames: string[] = [];
@@ -332,6 +380,7 @@ function extractForm(
       options: f.options ?? [],
     }));
 
+  debug.pickedFormReason = `${debug.pickedFormReason || ""}${debug.pickedFormReason ? " | " : ""}${strictPick.reason}`;
   debug.pickedFormAction = action;
   debug.pickedFormMethod = method;
 
@@ -360,17 +409,54 @@ function buildEmbedJobAppUrl(jobUrl: string) {
   return `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`;
 }
 
+async function parseFromHtml(html: string, baseUrl: string, debugPrefix: string): Promise<GhParsedForm | null> {
+  const $ = cheerio.load(html);
+  const best = findBestForm($);
+  const fallbackForm = $("form").first().get(0);
+  const picked =
+    best ??
+    (fallbackForm
+      ? { el: fallbackForm, score: 0, reason: "fallback:first_form" }
+      : null);
+
+  if (!picked) return null;
+
+  const debug: GhParsedForm["debug"] = {
+    pickedFormReason: `${debugPrefix}:${picked.reason}`,
+    formCount: $("form").length,
+    iframeUsed: baseUrl,
+  };
+
+  const parsed = extractForm($, picked.el, baseUrl, debug);
+  if (isJobsPageUrl(parsed.action)) {
+    throw new Error("Parsed submit action still looks like a job page.");
+  }
+  return parsed;
+}
+
 /**
  * Main entry
  */
 export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm> {
+  const defaultHeaders = {
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+    accept: "text/html",
+  };
+
+  const embedUrl = buildEmbedJobAppUrl(jobUrl);
+  if (embedUrl) {
+    const embedRes = await fetch(embedUrl, { cache: "no-store", headers: defaultHeaders });
+    if (embedRes.ok) {
+      const embedHtml = await embedRes.text();
+      const parsedEmbed = await parseFromHtml(embedHtml, embedUrl, "embed");
+      if (parsedEmbed) return parsedEmbed;
+    }
+  }
+
   const res = await fetch(jobUrl, {
     cache: "no-store",
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-      accept: "text/html",
-    },
+    headers: defaultHeaders,
   });
 
   if (!res.ok) {
@@ -380,92 +466,25 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  const debug: GhParsedForm["debug"] = {
-    pickedFormReason: "",
-    formCount: $("form").length,
-    iframeUsed: null,
-  };
+  const iframeSrc =
+    $("iframe[src*='embed/job_app']").attr("src") ||
+    $("iframe[src*='job_app']").attr("src") ||
+    $("iframe[src*='greenhouse']").attr("src") ||
+    "";
 
-  const best = findBestForm($);
-
-  const shouldTryIframe = Boolean($("iframe").length) || !best || best.score < 5;
-
-  if (shouldTryIframe) {
-    const iframeSrc =
-      $("iframe[src*='embed/job_app']").attr("src") ||
-      $("iframe[src*='job_app']").attr("src") ||
-      $("iframe[src*='greenhouse']").attr("src") ||
-      $("iframe").first().attr("src") ||
-      "";
-
-    if (iframeSrc) {
-      const iframeUrl = toAbsUrl(jobUrl, iframeSrc);
-      debug.iframeUsed = iframeUrl;
-
-      const iframeRes = await fetch(iframeUrl, { cache: "no-store" });
-      if (iframeRes.ok) {
-        const iframeHtml = await iframeRes.text();
-        const $$ = cheerio.load(iframeHtml);
-
-        const iframeBest = findBestForm($$);
-        if (iframeBest) {
-          debug.pickedFormReason = `iframe:${iframeBest.reason}`;
-          const parsedIframe = extractForm($$, iframeBest.el, iframeUrl, debug);
-
-          if (parsedIframe.fields.length > 0) {
-            parsedIframe.method = "POST";
-            return parsedIframe;
-          }
-        }
-      }
+  if (iframeSrc) {
+    const iframeUrl = toAbsUrl(jobUrl, iframeSrc);
+    const iframeRes = await fetch(iframeUrl, { cache: "no-store", headers: defaultHeaders });
+    if (iframeRes.ok) {
+      const iframeHtml = await iframeRes.text();
+      const parsedIframe = await parseFromHtml(iframeHtml, iframeUrl, "iframe");
+      if (parsedIframe) return parsedIframe;
     }
   }
 
-  if (!best) {
+  const parsedPage = await parseFromHtml(html, jobUrl, "page");
+  if (!parsedPage) {
     throw new Error("No form detected on job page (and no usable iframe).");
-  }
-
-  debug.pickedFormReason = `page:${best.reason}`;
-  const parsedPage = extractForm($, best.el, jobUrl, debug);
-
-  if (parsedPage.method === "GET" || parsedPage.fields.length === 0) {
-    const embedUrl = buildEmbedJobAppUrl(jobUrl);
-
-    if (embedUrl) {
-      try {
-        const embedRes = await fetch(embedUrl, { cache: "no-store" });
-        if (embedRes.ok) {
-          const embedHtml = await embedRes.text();
-          const $$ = cheerio.load(embedHtml);
-
-          const fallbackForm = $$("form").first().get(0);
-          const embedBest = findBestForm($$) ??
-            (fallbackForm
-              ? { el: fallbackForm, score: 0, reason: "fallback:embed:first_form" }
-              : null);
-          if (embedBest?.el) {
-            const embedDebug: GhParsedForm["debug"] = {
-              pickedFormReason: `embed:${embedBest.reason}`,
-              formCount: $$("form").length,
-              iframeUsed: embedUrl,
-            };
-
-            const parsedEmbed = extractForm($$, embedBest.el, embedUrl, embedDebug);
-
-            if (parsedEmbed.fields.length > 0) {
-              parsedEmbed.method = "POST";
-              return parsedEmbed;
-            }
-          }
-        }
-      } catch {
-        // ignore embed fetch errors and fall back to parsedPage
-      }
-    }
-  }
-
-  if (/applications|apply|job_application|candidate/i.test(parsedPage.action)) {
-    parsedPage.method = "POST";
   }
 
   return parsedPage;

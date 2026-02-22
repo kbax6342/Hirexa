@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ClipboardDocumentIcon, ExclamationTriangleIcon, EyeIcon, EyeSlashIcon, ListBulletIcon } from "@heroicons/react/24/outline";
+import SubmitPreviewPanel from "@/app/components/applications/SubmitPreviewPanel";
 
 type AuditItem = {
   name: string;
@@ -14,8 +16,24 @@ type AuditItem = {
 type AuditResponse = {
   ok: boolean;
   status: string;
-  prefill: Record<string, string>;
-  auditItems: AuditItem[];
+  payload: {
+    action: string;
+    method: string;
+    fields: Record<string, unknown>;
+    fileFields: Array<{ name: string; fileName: string; mimeType: string; sizeBytes: number }>;
+  };
+  meta: {
+    missing: string[];
+    fieldStates: Array<{
+      path: string;
+      value: unknown;
+      isMissing: boolean;
+      rawValue?: unknown;
+      submittedValue?: unknown;
+    }>;
+  };
+  auditItems?: AuditItem[];
+  error?: string;
 };
 
 export default function AuditClient({ applicationId }: { applicationId: string }) {
@@ -26,25 +44,41 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [status, setStatus] = useState<string>("IN_PREPARATION");
   const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<AuditResponse | null>(null);
+  const [showRawVsSubmitted, setShowRawVsSubmitted] = useState(false);
+
+  const loadAudit = useCallback(
+    async (payloadAnswers?: Record<string, string>) => {
+      const method = payloadAnswers ? "POST" : "GET";
+      const res = await fetch(`/api/applications/${applicationId}/audit`, {
+        method,
+        cache: "no-store",
+        headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+        body: method === "POST" ? JSON.stringify({ answers: payloadAnswers }) : undefined,
+      });
+
+      const data = (await res.json()) as AuditResponse;
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? "Failed to load audit details");
+      }
+
+      setPreview(data);
+      setStatus(String(data.status ?? "IN_PREPARATION"));
+      setAuditItems(Array.isArray(data.auditItems) ? data.auditItems : []);
+    },
+    [applicationId]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadAudit() {
+    async function bootstrap() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/applications/${applicationId}/audit`, { cache: "no-store" });
-        const data = (await res.json()) as Partial<AuditResponse> & { error?: string };
-
-        if (!res.ok) {
-          throw new Error(data.error ?? "Failed to load audit details");
-        }
-
+        await loadAudit();
         if (cancelled) return;
-
-        setAuditItems(Array.isArray(data.auditItems) ? data.auditItems : []);
-        setStatus(String(data.status ?? "IN_PREPARATION"));
       } catch (e: unknown) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load audit");
@@ -54,13 +88,41 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       }
     }
 
-    loadAudit();
+    bootstrap();
     return () => {
       cancelled = true;
     };
-  }, [applicationId]);
+  }, [loadAudit]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadAudit(answers).catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Preview unavailable");
+      });
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [answers, loadAudit]);
 
   const requiredItems = useMemo(() => auditItems.filter((item) => item.required), [auditItems]);
+
+  const groupedStates = useMemo(() => {
+    const groups: Record<string, Array<AuditResponse["meta"]["fieldStates"][number]>> = {};
+    for (const state of preview?.meta.fieldStates ?? []) {
+      const prefix = state.path.split(".")[0] || "other";
+      groups[prefix] = groups[prefix] ?? [];
+      groups[prefix].push(state);
+    }
+    return groups;
+  }, [preview?.meta.fieldStates]);
+
+  const hasRawVsSubmitted = useMemo(
+    () =>
+      (preview?.meta.fieldStates ?? []).some(
+        (state) => JSON.stringify(state.rawValue) !== JSON.stringify(state.submittedValue)
+      ),
+    [preview?.meta.fieldStates]
+  );
 
   const canApply = requiredItems.every((item) => String(answers[item.name] ?? "").trim().length > 0);
 
@@ -100,7 +162,80 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       <h1 className="mt-2 text-2xl font-semibold text-gray-900">Review unresolved application fields</h1>
       <p className="mt-2 text-sm text-gray-600">Status: {status}</p>
 
-      {error ? <p className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
+      {preview ? (
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <ListBulletIcon className="h-4 w-4" />
+            Submitting {preview.meta.fieldStates.length} fields • {preview.meta.missing.length} missing
+          </p>
+
+          {preview.meta.missing.length > 0 ? (
+            <ul className="mt-2 list-disc pl-5 text-xs text-amber-800">
+              {preview.meta.missing.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+
+          {hasRawVsSubmitted ? (
+            <button
+              type="button"
+              onClick={() => setShowRawVsSubmitted((prev) => !prev)}
+              className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+            >
+              {showRawVsSubmitted ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+              {showRawVsSubmitted ? "Hide raw vs submitted" : "Show raw vs submitted"}
+            </button>
+          ) : null}
+
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {Object.entries(groupedStates).map(([group, items]) => (
+              <div key={group} className="rounded-md border border-slate-200 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">{group}</p>
+                <div className="mt-2 space-y-2">
+                  {items.map((item) => (
+                    <div key={item.path} className="rounded bg-slate-50 p-2 text-xs">
+                      <p className="font-medium text-slate-700">{item.path}</p>
+                      <p className="text-slate-600">value: {JSON.stringify(item.value)}</p>
+                      {showRawVsSubmitted ? (
+                        <>
+                          <p className="text-slate-500">raw: {JSON.stringify(item.rawValue)}</p>
+                          <p className="text-slate-500">submitted: {JSON.stringify(item.submittedValue)}</p>
+                        </>
+                      ) : null}
+                      {item.isMissing ? <p className="text-amber-700">missing</p> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Raw JSON</p>
+            <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">
+              {JSON.stringify(preview.payload, null, 2)}
+            </pre>
+            <button
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(JSON.stringify(preview.payload, null, 2));
+              }}
+              className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+            >
+              <ClipboardDocumentIcon className="h-4 w-4" />
+              Copy JSON
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <p className="mt-4 flex items-center gap-2 rounded-md bg-red-50 p-3 text-sm text-red-700">
+          <ExclamationTriangleIcon className="h-4 w-4" />
+          {error}
+        </p>
+      ) : null}
 
       {success ? (
         <p className="mt-4 rounded-md bg-green-50 p-3 text-sm text-green-700">
@@ -154,6 +289,8 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           ))}
         </div>
       )}
+
+      <SubmitPreviewPanel applicationId={applicationId} answers={answers} />
 
       <button
         type="button"

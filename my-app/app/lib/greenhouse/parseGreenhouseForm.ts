@@ -6,6 +6,8 @@ export type GhField = {
   type: string; // text | email | tel | textarea | select | file | radio | checkbox | hidden | etc.
   label: string;
   required: boolean;
+  placeholder?: string;
+  questionKey?: string;
   options?: Array<{ value: string; label: string }>; // for select/radio/checkbox
 };
 
@@ -22,6 +24,8 @@ export type GhParsedForm = {
     iframeUsed?: string | null;
   };
 };
+
+type GhOption = { value: string; label: string };
 
 function toAbsUrl(base: string, url: string) {
   try {
@@ -44,10 +48,7 @@ function safeMethod(m: string | undefined | null): "POST" | "GET" {
   return up === "GET" ? "GET" : "POST";
 }
 
-function looksLikeGreenhouseApplicationForm(
-  $form: cheerio.Cheerio,
-  $: cheerio.CheerioAPI
-) {
+function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
   const action = norm($form.attr("action") || "");
   const hasFile = $form.find("input[type='file']").length > 0;
   const hasEmail = $form.find("input[type='email'], input[name*='email' i]").length > 0;
@@ -82,7 +83,7 @@ function findBestForm($: cheerio.CheerioAPI) {
 
   for (const el of forms) {
     const $form = $(el);
-    const { score, action, hasFile, inputCount } = looksLikeGreenhouseApplicationForm($form, $);
+    const { score, action, hasFile, inputCount } = looksLikeGreenhouseApplicationForm($form);
 
     const id = norm($form.attr("id") || "");
     const cls = norm($form.attr("class") || "");
@@ -110,24 +111,38 @@ function findBestForm($: cheerio.CheerioAPI) {
   return best;
 }
 
-function getLabelFor($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el: cheerio.Cheerio) {
+function findQuestionScope($el: cheerio.Cheerio) {
+  const scope = $el.closest("li, .field, .question, .application-question, [data-qa], fieldset, div");
+  return scope.length ? scope.first() : $el.parent();
+}
+
+function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el: cheerio.Cheerio) {
   const id = norm($el.attr("id") || "");
   const aria = norm($el.attr("aria-label") || "");
   const ph = norm($el.attr("placeholder") || "");
   const name = norm($el.attr("name") || "");
 
   if (id) {
-    const lbl = norm($form.find(`label[for="${id}"]`).first().text());
-    if (lbl) return lbl;
+    const byFor = norm($form.find(`label[for="${id}"]`).first().text());
+    if (byFor) return byFor;
   }
 
-  const closest = norm(
-    $el.closest("li, div, fieldset, section, label").find("label").first().text()
-  );
-  if (closest) return closest;
+  const scope = findQuestionScope($el);
 
-  const legend = norm($el.closest("fieldset").find("legend").first().text());
-  if (legend) return legend;
+  const scopeLegend = norm(scope.find("legend").first().text());
+  if (scopeLegend) return scopeLegend;
+
+  const directLabel = norm(scope.children("label").first().text()) || norm(scope.find("> label").first().text());
+  if (directLabel) return directLabel;
+
+  const closestLabel = norm($el.closest("label").text());
+  if (closestLabel) return closestLabel;
+
+  const anyScopeLabel = norm(scope.find("label").first().text());
+  if (anyScopeLabel) return anyScopeLabel;
+
+  const questionLike = norm(scope.find(".question, .field-label, .application-question, p").first().text());
+  if (questionLike) return questionLike;
 
   if (aria) return aria;
   if (ph) return ph;
@@ -148,7 +163,49 @@ function isRequiredEl($el: cheerio.Cheerio, label: string) {
 
   if (guessRequiredFromLabel(label)) return true;
 
+  const scope = findQuestionScope($el);
+  const scopeRequired =
+    scope.attr("aria-required") === "true" ||
+    scope.attr("data-required") === "true" ||
+    /\brequired\b/i.test(norm(scope.attr("class") || ""));
+  if (scopeRequired) return true;
+
   return false;
+}
+
+function toQuestionKey(name: string) {
+  const match = name.match(/job_application\[answers_attributes\]\[(\d+)\]\[(.+?)\]/);
+  if (!match) return undefined;
+  return `answers_attributes_${match[1]}`;
+}
+
+function optionLabelFromInput($: cheerio.CheerioAPI, $optEl: cheerio.Cheerio) {
+  const id = norm($optEl.attr("id") || "");
+  const byFor = id ? norm($(`label[for="${id}"]`).first().text()) : "";
+  if (byFor) return byFor;
+
+  const wrapped = norm($optEl.closest("label").text());
+  if (wrapped) return wrapped;
+
+  const sibling = norm(
+    $optEl
+      .nextAll("label, span")
+      .first()
+      .text()
+  );
+  if (sibling) return sibling;
+
+  return String($optEl.attr("value") ?? "Option");
+}
+
+function dedupeOptions(options: GhOption[]) {
+  const seen = new Set<string>();
+  return options.filter((o) => {
+    const key = `${o.value}|${o.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractForm(
@@ -173,124 +230,107 @@ function extractForm(
   });
 
   const fieldsByName = new Map<string, GhField>();
-  const radioGroups = new Map<
-    string,
-    { label: string; required: boolean; options: Array<{ value: string; label: string }> }
-  >();
-  const checkboxGroups = new Map<
-    string,
-    { label: string; required: boolean; options: Array<{ value: string; label: string }> }
-  >();
+  const orderedNames: string[] = [];
 
-  $form.find("input").each((_, el) => {
+  const upsertField = (field: GhField) => {
+    const existing = fieldsByName.get(field.name);
+
+    const next: GhField = existing
+      ? {
+          ...existing,
+          ...field,
+          label: field.label || existing.label,
+          placeholder: field.placeholder || existing.placeholder,
+          questionKey: field.questionKey || existing.questionKey,
+          required: existing.required || field.required,
+          options: field.options ?? existing.options ?? [],
+        }
+      : {
+          ...field,
+          options: field.options ?? [],
+        };
+
+    fieldsByName.set(field.name, next);
+    if (!orderedNames.includes(field.name)) orderedNames.push(field.name);
+  };
+
+  $form.find("input, textarea, select").each((_, el) => {
     const $el = $(el);
-    const type = norm($el.attr("type") || "text").toLowerCase();
+    const tag = ($el.get(0) as cheerio.Element).tagName.toLowerCase();
+    const inputType = norm($el.attr("type") || "text").toLowerCase();
+    const type = tag === "input" ? inputType : tag;
 
     if (type === "hidden" || type === "submit" || type === "button" || type === "image") return;
 
     const name = norm($el.attr("name") || "");
     if (!name) return;
 
-    const label = getLabelFor($, $form, $el).replace(/\*/g, "").trim();
-    const required = isRequiredEl($el, label);
+    const placeholder = norm($el.attr("placeholder") || "");
+    const rawLabel = extractQuestionLabel($, $form, $el).replace(/\*/g, "").trim();
+    const label = rawLabel || placeholder || name;
+    const required = isRequiredEl($el, rawLabel || placeholder || name);
+    const questionKey = toQuestionKey(name);
 
-    if (type === "radio") {
-      const value = String($el.attr("value") ?? "");
-      const optLabel =
-        norm($el.closest("label").text()) || norm($el.parent().find("label").first().text()) || value || "Option";
+    if (type === "radio" || type === "checkbox") {
+      const value = String($el.attr("value") ?? (type === "checkbox" ? "on" : ""));
+      const optionLabel = optionLabelFromInput($, $el).replace(/\*/g, "").trim() || value || "Option";
 
-      const group = radioGroups.get(name) ?? { label: label || name, required, options: [] };
-      group.required = group.required || required;
-      group.options.push({ value, label: optLabel.replace(/\*/g, "").trim() || value });
-      radioGroups.set(name, group);
+      const current = fieldsByName.get(name);
+      const options = dedupeOptions([...(current?.options ?? []), { value, label: optionLabel }]);
+
+      upsertField({
+        name,
+        type,
+        label,
+        placeholder,
+        required,
+        questionKey,
+        options,
+      });
       return;
     }
 
-    if (type === "checkbox") {
-      const value = String($el.attr("value") ?? "on");
-      const optLabel =
-        norm($el.closest("label").text()) || norm($el.parent().find("label").first().text()) || value || "Option";
+    if (type === "select") {
+      const options: GhOption[] = [];
+      $el.find("option").each((__, opt) => {
+        const $opt = $(opt);
+        const value = String($opt.attr("value") ?? "");
+        const optLabel = norm($opt.text());
+        if (!value && !optLabel) return;
+        if (!value && /select|choose|please/i.test(optLabel)) return;
+        options.push({ value, label: optLabel || value });
+      });
 
-      const group = checkboxGroups.get(name) ?? { label: label || name, required, options: [] };
-      group.required = group.required || required;
-      group.options.push({ value, label: optLabel.replace(/\*/g, "").trim() || value });
-      checkboxGroups.set(name, group);
+      upsertField({
+        name,
+        type: "select",
+        label,
+        placeholder,
+        required,
+        questionKey,
+        options: dedupeOptions(options),
+      });
       return;
     }
 
-    fieldsByName.set(name, { name, type, label, required });
-  });
-
-  $form.find("textarea").each((_, el) => {
-    const $el = $(el);
-    const name = norm($el.attr("name") || "");
-    if (!name) return;
-
-    const label = getLabelFor($, $form, $el).replace(/\*/g, "").trim();
-    const required = isRequiredEl($el, label);
-
-    fieldsByName.set(name, { name, type: "textarea", label, required });
-  });
-
-  $form.find("select").each((_, el) => {
-    const $el = $(el);
-    const name = norm($el.attr("name") || "");
-    if (!name) return;
-
-    const label = getLabelFor($, $form, $el).replace(/\*/g, "").trim();
-    const required = isRequiredEl($el, label);
-
-    const options: Array<{ value: string; label: string }> = [];
-    $el.find("option").each((__, opt) => {
-      const $opt = $(opt);
-      options.push({ value: String($opt.attr("value") ?? ""), label: norm($opt.text()) });
+    upsertField({
+      name,
+      type: tag === "textarea" ? "textarea" : type,
+      label,
+      placeholder,
+      required,
+      questionKey,
     });
-
-    fieldsByName.set(name, { name, type: "select", label, required, options });
   });
 
-  for (const [name, g] of radioGroups.entries()) {
-    const seen = new Set<string>();
-    const options = g.options.filter((o) => {
-      const k = `${o.value}|${o.label}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    fieldsByName.set(name, { name, type: "radio", label: g.label, required: g.required, options });
-  }
-
-  for (const [name, g] of checkboxGroups.entries()) {
-    const seen = new Set<string>();
-    const options = g.options.filter((o) => {
-      const k = `${o.value}|${o.label}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    fieldsByName.set(name, { name, type: "checkbox", label: g.label, required: g.required, options });
-  }
-
-  const orderedNames: string[] = [];
-  $form.find("input, textarea, select").each((_, el) => {
-    const name = norm($(el).attr("name") || "");
-    if (!name) return;
-    if (!orderedNames.includes(name)) orderedNames.push(name);
-  });
-
-  const fields: GhField[] = [];
-  for (const name of orderedNames) {
-    const f = fieldsByName.get(name);
-    if (!f) continue;
-    if (f.type === "hidden") continue;
-    fields.push(f);
-  }
-
-  if (fields.length === 0) {
-    fields.push(...Array.from(fieldsByName.values()));
-  }
+  const fields: GhField[] = orderedNames
+    .map((name) => fieldsByName.get(name))
+    .filter((f): f is GhField => Boolean(f && f.type !== "hidden"))
+    .map((f) => ({
+      ...f,
+      label: f.label || f.placeholder || f.name,
+      options: f.options ?? [],
+    }));
 
   debug.pickedFormAction = action;
   debug.pickedFormMethod = method;
@@ -346,10 +386,8 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     iframeUsed: null,
   };
 
-  // 1) Try best form on the page
   const best = findBestForm($);
 
-  // 2) If no good form, or it looks empty-ish, try iframe
   const shouldTryIframe =
     !best ||
     best.score < 3 ||
@@ -377,7 +415,6 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
           debug.pickedFormReason = `iframe:${iframeBest.reason}`;
           const parsedIframe = extractForm($$, iframeBest.el, iframeUrl, debug);
 
-          // ✅ If iframe gives real fields and not GET, use it
           if (parsedIframe.fields.length > 0 && parsedIframe.method !== "GET") {
             return parsedIframe;
           }
@@ -390,11 +427,9 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     throw new Error("No form detected on job page (and no usable iframe).");
   }
 
-  // 3) Parse page form
   debug.pickedFormReason = `page:${best.reason}`;
   const parsedPage = extractForm($, best.el, jobUrl, debug);
 
-  // ✅ If page parse is wrong (GET or no fields), try embed/job_app
   if (parsedPage.method === "GET" || parsedPage.fields.length === 0) {
     const embedUrl = buildEmbedJobAppUrl(jobUrl);
 
@@ -405,7 +440,11 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
           const embedHtml = await embedRes.text();
           const $$ = cheerio.load(embedHtml);
 
-          const embedBest = findBestForm($$) ?? { el: $$("form").first().get(0) as any, score: 0, reason: "fallback:embed:first_form" };
+          const fallbackForm = $$("form").first().get(0);
+          const embedBest = findBestForm($$) ??
+            (fallbackForm
+              ? { el: fallbackForm, score: 0, reason: "fallback:embed:first_form" }
+              : null);
           if (embedBest?.el) {
             const embedDebug: GhParsedForm["debug"] = {
               pickedFormReason: `embed:${embedBest.reason}`,

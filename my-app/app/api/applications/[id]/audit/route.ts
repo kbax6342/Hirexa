@@ -82,18 +82,14 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       return NextResponse.json({ ok: false, error: "Application missing jobUrl" }, { status: 400 });
     }
 
-    // 1) Parse the real GH application form (your parser is now fixed)
     const form = await parseGreenhouseForm(application.jobUrl);
 
-    // 2) Map profile -> prefill + audit items (may be undefined)
     const mapped = mapProfileToForm(form.fields, application.userProfile);
     const prefillValues = (mapped as any)?.prefillValues ?? {};
     const auditItems = Array.isArray((mapped as any)?.auditItems) ? (mapped as any).auditItems : [];
 
-    // 3) Load saved answers (if any)
     const savedAnswers = ((application.answersJson as AnswersMap | null) ?? {}) as AnswersMap;
 
-    // 4) Find latest resume PDF (required for file field)
     const resume = await prisma.resumeFile.findFirst({
       where: {
         profileId: application.userProfileId,
@@ -102,7 +98,6 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       orderBy: { createdAt: "desc" },
     });
 
-    // 5) Compute final values + missing required
     const finalValuesToSubmit: AnswersMap = {};
     const missingRequired: string[] = [];
 
@@ -121,11 +116,9 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
 
     const status = missingRequired.length > 0 ? "IN_PREPARATION" : "READY_TO_SEND";
 
-    // Helpful logs while you stabilize this
     console.log("GH parse debug:", form.debug);
     console.log("GH fields count:", form.fields.length, "method:", form.method, "action:", form.action);
 
-    // 6) Build fieldStates for your UI (single column list)
     const fieldStates = form.fields.map((f) => {
       const v = finalValuesToSubmit[f.name];
       const has = Object.prototype.hasOwnProperty.call(savedAnswers, f.name);
@@ -133,17 +126,17 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       return {
         path: f.name,
         label: f.label,
+        placeholder: f.placeholder ?? "",
         type: f.type,
         required: f.required,
+        options: Array.isArray(f.options) ? f.options : [],
         value: v,
         isMissing: missingRequired.includes(f.name),
         rawValue: (prefillValues as any)[f.name],
         submittedValue: has ? savedAnswers[f.name] : undefined,
-        options: f.options ?? undefined,
       };
     });
 
-    // 7) Persist audit snapshot
     await prisma.jobApplication.update({
       where: { id: application.id },
       data: {
@@ -165,7 +158,6 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       },
     });
 
-    // 8) Return everything UI needs
     return NextResponse.json({
       ok: true,
       status,

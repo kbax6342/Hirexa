@@ -1,22 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+type Option = { value: string; label: string };
 
 type AuditFieldState = {
-  path: string;          // field name in form (e.g. "first_name")
-  value: unknown;        // computed value to submit
-  isMissing: boolean;    // required but missing
+  path: string;
+  label?: string;
+  placeholder?: string;
+  type: string;
+  required: boolean;
+  options: Option[];
+  value: unknown;
+  isMissing: boolean;
   rawValue?: unknown;
   submittedValue?: unknown;
-};
-
-type AuditItem = {
-  name: string;
-  label: string;
-  type: string; // text/email/tel/select/textarea/file/radio/checkbox
-  required: boolean;
-  options?: Array<{ value: string; label: string }>;
-  reason?: string;
 };
 
 type AuditResponse = {
@@ -26,36 +24,58 @@ type AuditResponse = {
   company?: string;
   location?: string | null;
 
-  payload?: {
-    action?: string;
-    method?: string;
-    fields?: Record<string, unknown>;
-    fileFields?: Array<{ name: string; fileName: string; mimeType: string; sizeBytes: number }>;
-  };
-
   meta?: {
     missing?: string[];
     fieldStates?: AuditFieldState[];
   };
 
-  auditItems?: AuditItem[];
   error?: string;
 };
 
-function toStr(v: unknown) {
+function isTextValueLabel(label: string) {
+  return /(^|\W)text_value(\W|$)/i.test(label.trim());
+}
+
+function toDisplayText(v: unknown) {
   if (v === null || v === undefined) return "";
-  if (Array.isArray(v)) return v.map(toStr).filter(Boolean).join(", ");
+  if (Array.isArray(v)) return v.map((item) => String(item)).filter(Boolean).join(", ");
   return String(v);
+}
+
+function toInitialValue(field: AuditFieldState): string | string[] {
+  if (field.type === "checkbox") {
+    if (Array.isArray(field.value)) return field.value.map((v) => String(v)).filter(Boolean);
+    if (typeof field.value === "string" && field.value.trim()) {
+      return field.value
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  return toDisplayText(field.value);
+}
+
+function fieldLabel(field: AuditFieldState) {
+  const label = (field.label ?? "").trim();
+  const placeholder = (field.placeholder ?? "").trim();
+
+  if (label && !isTextValueLabel(label)) return label;
+  if (placeholder) return placeholder;
+  return field.path;
+}
+
+function inputTypeFor(type: string) {
+  if (["text", "email", "tel", "url", "number", "date"].includes(type)) return type;
+  return "text";
 }
 
 export default function AuditClient({ applicationId }: { applicationId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [data, setData] = useState<AuditResponse | null>(null);
-
-  // local edits (overrides). You can wire these to a save/apply endpoint later.
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [overrides, setOverrides] = useState<Record<string, string | string[]>>({});
 
   const loadAudit = useCallback(async () => {
     const res = await fetch(`/api/applications/${applicationId}/audit`, { cache: "no-store" });
@@ -82,17 +102,16 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     })();
   }, [loadAudit]);
 
-  const fieldStates = Array.isArray(data?.meta?.fieldStates) ? data!.meta!.fieldStates! : [];
-  const auditItems = Array.isArray(data?.auditItems) ? data!.auditItems! : [];
-  const fileFields = Array.isArray(data?.payload?.fileFields) ? data!.payload!.fileFields! : [];
+  const fieldStates = Array.isArray(data?.meta?.fieldStates) ? data.meta!.fieldStates! : [];
 
-  const byName = useMemo(() => {
-    const map = new Map<string, AuditItem>();
-    for (const item of auditItems) map.set(item.name, item);
-    return map;
-  }, [auditItems]);
+  const missingCount = fieldStates.filter((f) => f.isMissing).length;
 
-  const missingCount = fieldStates.filter((f) => f?.isMissing).length;
+  const getCurrentValue = (field: AuditFieldState) => {
+    if (Object.prototype.hasOwnProperty.call(overrides, field.path)) {
+      return overrides[field.path];
+    }
+    return toInitialValue(field);
+  };
 
   if (loading) {
     return (
@@ -158,24 +177,6 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         </div>
       </div>
 
-      {/* Resume / files preview */}
-      {fileFields.length > 0 ? (
-        <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
-          <p className="text-sm font-semibold text-gray-900">Files</p>
-          <div className="mt-2 space-y-2">
-            {fileFields.map((f) => (
-              <div key={f.name} className="flex flex-col text-sm">
-                <span className="font-medium text-gray-800">{f.name}</span>
-                <span className="text-gray-600">
-                  {f.fileName} • {f.mimeType} • {Math.round((f.sizeBytes ?? 0) / 1024)} KB
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {/* Full form fields (single column) */}
       <div className="mt-6 space-y-4">
         {fieldStates.length === 0 ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -184,14 +185,18 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         ) : null}
 
         {fieldStates.map((fs) => {
-          const item = byName.get(fs.path);
-          const label = item?.label ?? fs.path;
-          const type = item?.type ?? "text";
-          const required = Boolean(item?.required);
+          const label = fieldLabel(fs);
+          const type = fs.type || "text";
+          const required = Boolean(fs.required);
+          const current = getCurrentValue(fs);
 
-          const computed = toStr(fs.value);
-          const shownValue = overrides[fs.path] ?? computed;
-          const isMissing = required && shownValue.trim().length === 0;
+          const asText = Array.isArray(current)
+            ? current.join(", ")
+            : typeof current === "string"
+              ? current
+              : toDisplayText(current);
+
+          const isMissing = required && asText.trim().length === 0;
 
           return (
             <div
@@ -224,40 +229,87 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                 {type === "textarea" ? (
                   <textarea
                     className="min-h-[96px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={shownValue}
+                    value={typeof current === "string" ? current : asText}
                     onChange={(e) =>
                       setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
                     }
-                    placeholder="Enter value"
+                    placeholder={fs.placeholder || "Enter value"}
                   />
-                ) : type === "select" && item?.options ? (
+                ) : type === "select" ? (
                   <select
                     className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={shownValue}
+                    value={typeof current === "string" ? current : ""}
                     onChange={(e) =>
                       setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
                     }
                   >
                     <option value="">Select…</option>
-                    {item.options.map((o) => (
+                    {(fs.options ?? []).map((o) => (
                       <option key={`${o.value}-${o.label}`} value={o.value}>
                         {o.label}
                       </option>
                     ))}
                   </select>
-                ) : type === "file" ? (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                    File fields are pulled from your database (ResumeFile) and will be attached on
-                    submit.
+                ) : type === "radio" ? (
+                  <div className="space-y-2">
+                    {(fs.options ?? []).map((o) => {
+                      const checked = (typeof current === "string" ? current : "") === o.value;
+                      return (
+                        <label key={`${fs.path}-${o.value}`} className="flex items-center gap-2 text-sm text-gray-900">
+                          <input
+                            type="radio"
+                            name={fs.path}
+                            checked={checked}
+                            onChange={() =>
+                              setOverrides((prev) => ({ ...prev, [fs.path]: o.value }))
+                            }
+                          />
+                          <span>{o.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : type === "checkbox" ? (
+                  <div className="space-y-2">
+                    {(fs.options ?? []).map((o) => {
+                      const currentList = Array.isArray(current) ? current : [];
+                      const checked = currentList.includes(o.value);
+                      return (
+                        <label key={`${fs.path}-${o.value}`} className="flex items-center gap-2 text-sm text-gray-900">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setOverrides((prev) => {
+                                const list = Array.isArray(getCurrentValue(fs))
+                                  ? [...(getCurrentValue(fs) as string[])]
+                                  : [];
+
+                                if (e.target.checked) {
+                                  if (!list.includes(o.value)) list.push(o.value);
+                                } else {
+                                  const idx = list.indexOf(o.value);
+                                  if (idx >= 0) list.splice(idx, 1);
+                                }
+
+                                return { ...prev, [fs.path]: list };
+                              });
+                            }}
+                          />
+                          <span>{o.label}</span>
+                        </label>
+                      );
+                    })}
                   </div>
                 ) : (
                   <input
+                    type={inputTypeFor(type)}
                     className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={shownValue}
+                    value={typeof current === "string" ? current : asText}
                     onChange={(e) =>
                       setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
                     }
-                    placeholder="Enter value"
+                    placeholder={fs.placeholder || "Enter value"}
                   />
                 )}
               </div>
@@ -265,7 +317,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
                 <p className="text-[11px] font-semibold text-gray-700">Will submit</p>
                 <p className="mt-1 break-words text-sm text-gray-900">
-                  {shownValue.trim().length ? shownValue : <span className="text-gray-500">—</span>}
+                  {asText.trim().length ? asText : <span className="text-gray-500">—</span>}
                 </p>
               </div>
             </div>

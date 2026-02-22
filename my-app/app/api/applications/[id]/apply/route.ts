@@ -56,8 +56,38 @@ function pickResumeFieldName(fields: GhField[]) {
   return namedResume?.name ?? fileFields[0].name;
 }
 
-function isSuccessHtml(html: string) {
-  return /thank you|application submitted|we have received/i.test(html);
+function detectGreenhouseSuccess(html: string, finalUrl?: string | null) {
+  const normalized = html.replace(/\s+/g, " ").toLowerCase();
+
+  const successSignals = [/thank you/i, /application submitted/i, /we have received/i];
+  const errorSignals = [
+    /there was a problem/i,
+    /please fill out/i,
+    /required/i,
+    /validation/i,
+    /error/i,
+    /captcha/i,
+    /sign in/i,
+    /log in/i,
+  ];
+
+  const hasSuccessText = successSignals.some((re) => re.test(normalized));
+  const hasErrorText = errorSignals.some((re) => re.test(normalized));
+
+  const urlLooksLikeThankYou = finalUrl
+    ? /thank[_-]?you|submitted|application_confirmation|confirmation/i.test(finalUrl)
+    : false;
+
+  return {
+    ok: (hasSuccessText || urlLooksLikeThankYou) && !hasErrorText,
+    hasSuccessText,
+    hasErrorText,
+    urlLooksLikeThankYou,
+  };
+}
+
+function shortExcerpt(html: string) {
+  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 280);
 }
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -66,7 +96,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     const userId = session?.user?.id;
 
     if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
     const { id } = await context.params;
@@ -86,23 +116,18 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     });
 
     if (!application) {
-      return NextResponse.json({ error: "Application not found" }, { status: 404 });
+      return NextResponse.json({ ok: false, error: "Application not found" }, { status: 404 });
     }
 
     if (!application.jobUrl) {
-      return NextResponse.json({ error: "Application missing jobUrl" }, { status: 400 });
+      return NextResponse.json({ ok: false, error: "Application missing jobUrl" }, { status: 400 });
     }
-
-    const savedAnswers = (application.answersJson as AnswersMap | null) ?? {};
-    const answers: AnswersMap = { ...savedAnswers, ...requestAnswers };
-
-    await prisma.jobApplication.update({
-      where: { id: application.id },
-      data: { status: "IN_PROGRESS" },
-    });
 
     const form = await parseGreenhouseForm(application.jobUrl);
     const { prefillValues } = mapProfileToForm(form.fields, application.userProfile);
+
+    const savedAnswers = (application.answersJson as AnswersMap | null) ?? {};
+    const answers: AnswersMap = { ...savedAnswers, ...requestAnswers };
 
     const resume = await prisma.resumeFile.findFirst({
       where: {
@@ -134,28 +159,31 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       }
     }
 
+    const auditSnapshot = {
+      form: {
+        action: form.action,
+        method: form.method,
+        hidden: form.hidden,
+        fields: form.fields,
+      },
+      computedPrefill: prefillValues,
+      computedFinalValues: finalValuesToSubmit,
+      missing: missingRequired,
+    };
+
     if (missingRequired.length > 0) {
       await prisma.jobApplication.update({
         where: { id: application.id },
         data: {
           status: "IN_PREPARATION",
           answersJson: answers,
-          auditJson: {
-            form: {
-              action: form.action,
-              method: form.method,
-              hidden: form.hidden,
-              fields: form.fields,
-            },
-            computedPrefill: prefillValues,
-            computedFinalValues: finalValuesToSubmit,
-            missing: missingRequired,
-          },
+          auditJson: auditSnapshot,
         },
       });
 
       return NextResponse.json(
         {
+          ok: false,
           error: "Please complete all required fields before applying.",
           missingRequired,
         },
@@ -165,7 +193,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     const fd = new FormData();
     Object.entries(form.hidden).forEach(([key, value]) => {
-      fd.set(key, String(value));
+      fd.append(key, String(value));
     });
 
     for (const field of form.fields) {
@@ -194,54 +222,35 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     });
 
     const responseHtml = await submitRes.text();
-    const success = submitRes.ok && isSuccessHtml(responseHtml);
+    const successCheck = detectGreenhouseSuccess(responseHtml, submitRes.url);
 
-    if (!success) {
+    if (!submitRes.ok || !successCheck.ok) {
       await prisma.jobApplication.update({
         where: { id: application.id },
         data: {
           status: "READY_TO_SEND",
           answersJson: answers,
           auditJson: {
-            form: {
-              action: form.action,
-              method: form.method,
-              hidden: form.hidden,
-              fields: form.fields,
+            ...auditSnapshot,
+            greenhouseResponse: {
+              statusCode: submitRes.status,
+              finalUrl: submitRes.url,
+              excerpt: shortExcerpt(responseHtml),
+              successSignals: successCheck,
             },
-            computedPrefill: prefillValues,
-            computedFinalValues: finalValuesToSubmit,
-            missing: [],
           },
         },
       });
 
       return NextResponse.json(
         {
-          error: "Greenhouse did not confirm submission.",
+          ok: false,
+          error: "Greenhouse did not confirm submission",
           statusCode: submitRes.status,
+          reason: shortExcerpt(responseHtml),
         },
         { status: 502 }
       );
-    }
-
-    // ✅ NEW: Save country + countryCode back to profile (simple heuristic)
-    let country: string | null = null;
-    let countryCode: string | null = null;
-
-    for (const field of form.fields) {
-      const name = String(field.name ?? "").toLowerCase();
-      const value = finalValuesToSubmit[field.name];
-
-      if (!value) continue;
-
-      if (name.includes("country") && !name.includes("phone")) {
-        country = Array.isArray(value) ? (value[0] ?? null) : value;
-      }
-
-      if (name.includes("country_code") || name.includes("phone_country")) {
-        countryCode = Array.isArray(value) ? (value[0] ?? null) : value;
-      }
     }
 
     await prisma.jobApplication.update({
@@ -251,33 +260,24 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         submittedAt: new Date(),
         answersJson: answers,
         auditJson: {
-          form: {
-            action: form.action,
-            method: form.method,
-            hidden: form.hidden,
-            fields: form.fields,
+          ...auditSnapshot,
+          greenhouseResponse: {
+            statusCode: submitRes.status,
+            finalUrl: submitRes.url,
+            excerpt: shortExcerpt(responseHtml),
+            successSignals: successCheck,
           },
-          computedPrefill: prefillValues,
-          computedFinalValues: finalValuesToSubmit,
-          missing: [],
         },
       },
     });
 
-    // Save back to profile (only if we found values)
-    if (country || countryCode) {
-      await prisma.userProfile.update({
-        where: { id: application.userProfileId },
-        data: {
-          ...(country ? { country } : {}),
-          ...(countryCode ? { countryCode } : {}),
-        },
-      });
-    }
-
-    return NextResponse.json({ ok: true, status: "SENT" });
+    return NextResponse.json({
+      ok: true,
+      status: "SENT",
+      confirmation: "Confirmed: Greenhouse submission successful",
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

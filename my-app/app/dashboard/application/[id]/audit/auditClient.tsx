@@ -10,33 +10,12 @@ type AnswersMap = Record<string, AnswerValue>;
 type AuditResponse = {
   ok: boolean;
   status: string;
-<<<<<<< HEAD
-  jobTitle?: string | null; // ✅ ADD THIS
-  payload: {
-    action: string;
-    method: string;
-    fields: Record<string, unknown>;
-    fileFields: Array<{ name: string; fileName: string; mimeType: string; sizeBytes: number }>;
-  };
-  meta: {
-    missing: string[];
-    fieldStates: Array<{
-      path: string;
-      value: unknown;
-      isMissing: boolean;
-      rawValue?: unknown;
-      submittedValue?: unknown;
-    }>;
-  };
-  auditItems?: AuditItem[];
-=======
   form: { action: string; method: string; hidden: Record<string, string>; fields: Field[] };
   prefill: Record<string, string>;
   answers: AnswersMap;
   finalValuesToSubmit: AnswersMap;
   missingRequired: string[];
   resume: { fileName: string; mimeType: string } | null;
->>>>>>> 669fb881e7b06edf8478c27468f3de187a661a30
   error?: string;
 };
 

@@ -255,12 +255,13 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       );
     }
 
-    if (/\/jobs\//i.test(form.action)) {
+    if (/\/jobs\//i.test(form.action) || form.debug?.actionSuspicious) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Parsed submit action is not a Greenhouse submission endpoint",
+          error: "Apply blocked: parsed submit action still looks like a job page, not the Greenhouse submission endpoint.",
           action: form.action,
+          finalUrl: form.action,
         },
         { status: 400 }
       );

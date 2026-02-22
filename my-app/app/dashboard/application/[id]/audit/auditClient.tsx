@@ -155,14 +155,25 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         body: JSON.stringify({ answers: buildAnswersPayload() }),
       });
 
-      const payload = (await res.json()) as { ok?: boolean; error?: string; missingRequired?: string[] };
+      const payload = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        missingRequired?: string[];
+        confirmation?: string;
+      };
 
       if (!res.ok || !payload.ok) {
-        const missing = Array.isArray(payload.missingRequired) ? ` Missing: ${payload.missingRequired.join(", ")}` : "";
+        const missing = Array.isArray(payload.missingRequired)
+          ? ` Missing required: ${payload.missingRequired.join(", ")}`
+          : "";
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
-      setApplyMessage("Application submitted successfully.");
+      setApplyMessage(
+        payload.confirmation
+          ? `${payload.confirmation}. Confirmed: You applied. Check your email for Greenhouse confirmation.`
+          : "Confirmed: You applied. Check your email for Greenhouse confirmation."
+      );
       await loadAudit();
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");

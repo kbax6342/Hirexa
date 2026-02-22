@@ -388,10 +388,7 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
 
   const best = findBestForm($);
 
-  const shouldTryIframe =
-    !best ||
-    best.score < 3 ||
-    ($(best.el).find("input, textarea, select").length < 6 && $("iframe").length > 0);
+  const shouldTryIframe = Boolean($("iframe").length) || !best || best.score < 5;
 
   if (shouldTryIframe) {
     const iframeSrc =
@@ -415,7 +412,8 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
           debug.pickedFormReason = `iframe:${iframeBest.reason}`;
           const parsedIframe = extractForm($$, iframeBest.el, iframeUrl, debug);
 
-          if (parsedIframe.fields.length > 0 && parsedIframe.method !== "GET") {
+          if (parsedIframe.fields.length > 0) {
+            parsedIframe.method = "POST";
             return parsedIframe;
           }
         }
@@ -455,6 +453,7 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
             const parsedEmbed = extractForm($$, embedBest.el, embedUrl, embedDebug);
 
             if (parsedEmbed.fields.length > 0) {
+              parsedEmbed.method = "POST";
               return parsedEmbed;
             }
           }
@@ -463,6 +462,10 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
         // ignore embed fetch errors and fall back to parsedPage
       }
     }
+  }
+
+  if (/applications|apply|job_application|candidate/i.test(parsedPage.action)) {
+    parsedPage.method = "POST";
   }
 
   return parsedPage;

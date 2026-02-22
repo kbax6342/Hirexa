@@ -1,6 +1,7 @@
+// my-app/app/dashboard/application/[id]/audit/auditClient.tsx
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Option = { value: string; label: string };
 
@@ -106,19 +107,29 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     })();
   }, [loadAudit]);
 
-  const fieldStates = Array.isArray(data?.meta?.fieldStates) ? data.meta!.fieldStates! : [];
+  const fieldStates = useMemo(
+    () => (Array.isArray(data?.meta?.fieldStates) ? data!.meta!.fieldStates! : []),
+    [data]
+  );
 
-  const missingCount = fieldStates.filter((f) => f.isMissing).length;
+  const missingCount = useMemo(() => fieldStates.filter((f) => Boolean(f.isMissing)).length, [fieldStates]);
 
-  const getCurrentValue = (field: AuditFieldState) => {
-    if (Object.prototype.hasOwnProperty.call(overrides, field.path)) {
-      return overrides[field.path];
-    }
-    return toInitialValue(field);
-  };
+  const getCurrentValue = useCallback(
+    (field: AuditFieldState) => {
+      if (Object.prototype.hasOwnProperty.call(overrides, field.path)) {
+        return overrides[field.path];
+      }
+      return toInitialValue(field);
+    },
+    [overrides]
+  );
 
+  // ✅ New helper (used by the snippet you requested)
+  const handleChange = useCallback((path: string, value: string) => {
+    setOverrides((prev) => ({ ...prev, [path]: value }));
+  }, []);
 
-  const buildAnswersPayload = () => {
+  const buildAnswersPayload = useCallback(() => {
     const next: Record<string, string | string[]> = {};
 
     for (const field of fieldStates) {
@@ -131,7 +142,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     }
 
     return next;
-  };
+  }, [fieldStates, getCurrentValue]);
 
   const handleApplyNow = async () => {
     try {
@@ -189,7 +200,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const title = data?.jobTitle ?? "Untitled role";
 
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+    <section className="rounded-xl border border-gray-200 bg-white p-6 text-black shadow-sm">
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold text-gray-900">Application Audit</h1>
         <p className="text-lg font-medium text-gray-800">{title}</p>
@@ -231,23 +242,26 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           </div>
         ) : null}
 
-        {fieldStates.map((fs) => {
-          const label = fieldLabel(fs);
-          const type = fs.type || "text";
-          const required = Boolean(fs.required);
-          const current = getCurrentValue(fs);
+        {fieldStates.map((field) => {
+          const label = fieldLabel(field);
+          const type = field.type || "text";
+          const required = Boolean(field.required);
 
-          const asText = Array.isArray(current)
-            ? current.join(", ")
-            : typeof current === "string"
-              ? current
-              : toDisplayText(current);
+          // ✅ The snippet you requested needs a simple "value" string
+          const valueRaw = getCurrentValue(field);
+          const value = Array.isArray(valueRaw) ? valueRaw.join(", ") : String(valueRaw ?? "");
+
+          const asText = Array.isArray(valueRaw)
+            ? valueRaw.join(", ")
+            : typeof valueRaw === "string"
+              ? valueRaw
+              : toDisplayText(valueRaw);
 
           const isMissing = required && asText.trim().length === 0;
 
           return (
             <div
-              key={fs.path}
+              key={field.path}
               className={[
                 "rounded-lg border p-4",
                 isMissing ? "border-red-300 bg-red-50/40" : "border-gray-200 bg-white",
@@ -259,13 +273,13 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                     {label} {required ? <span className="text-red-600">*</span> : null}
                   </p>
                   <p className="mt-0.5 text-xs text-gray-500">
-                    <span className="font-mono">{fs.path}</span>
+                    <span className="font-mono">{field.path}</span>
                     <span className="mx-2">•</span>
                     <span className="font-medium">{type}</span>
-                    {fs.countryFieldKind ? (
+                    {field.countryFieldKind ? (
                       <>
                         <span className="mx-2">•</span>
-                        <span className="font-medium text-indigo-600">{fs.countryFieldKind}</span>
+                        <span className="font-medium text-indigo-600">{field.countryFieldKind}</span>
                       </>
                     ) : null}
                   </p>
@@ -282,40 +296,24 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                 {type === "textarea" ? (
                   <textarea
                     className="min-h-[96px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={typeof current === "string" ? current : asText}
-                    onChange={(e) =>
-                      setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
-                    }
-                    placeholder={fs.placeholder || "Enter value"}
+                    value={value}
+                    onChange={(e) => handleChange(field.path, e.target.value)}
+                    placeholder={field.placeholder || "Enter value"}
                   />
-                ) : type === "select" ? (
-                  <select
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={typeof current === "string" ? current : ""}
-                    onChange={(e) =>
-                      setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
-                    }
-                  >
-                    <option value="">Select…</option>
-                    {(fs.options ?? []).map((o) => (
-                      <option key={`${o.value}-${o.label}`} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
                 ) : type === "radio" ? (
                   <div className="space-y-2">
-                    {(fs.options ?? []).map((o) => {
-                      const checked = (typeof current === "string" ? current : "") === o.value;
+                    {(field.options ?? []).map((o) => {
+                      const checked = value === o.value;
                       return (
-                        <label key={`${fs.path}-${o.value}`} className="flex items-center gap-2 text-sm text-gray-900">
+                        <label
+                          key={`${field.path}-${o.value}`}
+                          className="flex items-center gap-2 text-sm text-gray-900"
+                        >
                           <input
                             type="radio"
-                            name={fs.path}
+                            name={field.path}
                             checked={checked}
-                            onChange={() =>
-                              setOverrides((prev) => ({ ...prev, [fs.path]: o.value }))
-                            }
+                            onChange={() => handleChange(field.path, o.value)}
                           />
                           <span>{o.label}</span>
                         </label>
@@ -324,18 +322,21 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                   </div>
                 ) : type === "checkbox" ? (
                   <div className="space-y-2">
-                    {(fs.options ?? []).map((o) => {
-                      const currentList = Array.isArray(current) ? current : [];
+                    {(field.options ?? []).map((o) => {
+                      const currentList = Array.isArray(valueRaw) ? valueRaw : [];
                       const checked = currentList.includes(o.value);
                       return (
-                        <label key={`${fs.path}-${o.value}`} className="flex items-center gap-2 text-sm text-gray-900">
+                        <label
+                          key={`${field.path}-${o.value}`}
+                          className="flex items-center gap-2 text-sm text-gray-900"
+                        >
                           <input
                             type="checkbox"
                             checked={checked}
                             onChange={(e) => {
                               setOverrides((prev) => {
-                                const list = Array.isArray(getCurrentValue(fs))
-                                  ? [...(getCurrentValue(fs) as string[])]
+                                const list = Array.isArray(getCurrentValue(field))
+                                  ? [...(getCurrentValue(field) as string[])]
                                   : [];
 
                                 if (e.target.checked) {
@@ -345,7 +346,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                                   if (idx >= 0) list.splice(idx, 1);
                                 }
 
-                                return { ...prev, [fs.path]: list };
+                                return { ...prev, [field.path]: list };
                               });
                             }}
                           />
@@ -355,15 +356,31 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                     })}
                   </div>
                 ) : (
-                  <input
-                    type={inputTypeFor(type)}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    value={typeof current === "string" ? current : asText}
-                    onChange={(e) =>
-                      setOverrides((prev) => ({ ...prev, [fs.path]: e.target.value }))
-                    }
-                    placeholder={fs.placeholder || "Enter value"}
-                  />
+                  // ✅ Requested snippet (select if options exist, else input)
+                  <>
+                    {field.options?.length ? (
+                      <select
+                        value={value}
+                        onChange={(e) => handleChange(field.path, e.target.value)}
+                        className="mt-1 w-full rounded-md border border-gray-300 p-2"
+                      >
+                        <option value="">Select...</option>
+                        {field.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={inputTypeFor(type)}
+                        value={value}
+                        onChange={(e) => handleChange(field.path, e.target.value)}
+                        placeholder={field.placeholder || field.label || "Enter value"}
+                        className="mt-1 w-full rounded-md border border-gray-300 p-2"
+                      />
+                    )}
+                  </>
                 )}
               </div>
 

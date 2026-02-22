@@ -1,9 +1,9 @@
+// my-app/app/api/applications/[id]/apply/route.ts
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
-import { detectCountryFieldKind, looksLikeCountryCode } from "@/app/lib/greenhouse/countryFields";
 
 export const runtime = "nodejs";
 
@@ -60,39 +60,6 @@ function isSuccessHtml(html: string) {
   return /thank you|application submitted|we have received/i.test(html);
 }
 
-function extractCountryProfileUpdate(fields: GhField[], finalValues: AnswersMap) {
-  let countryCode: string | undefined;
-  let country: string | undefined;
-
-  for (const field of fields) {
-    const value = finalValues[field.name];
-    if (Array.isArray(value)) continue;
-
-    const text = toText(value);
-    if (!text) continue;
-
-    const kind = detectCountryFieldKind(field);
-    if (kind === "countryCode") {
-      countryCode = text;
-      continue;
-    }
-
-    if (kind === "country") {
-      country = text;
-      continue;
-    }
-
-    if (!countryCode && looksLikeCountryCode(text)) {
-      countryCode = text;
-    }
-  }
-
-  const data: { countryCode?: string; country?: string } = {};
-  if (countryCode) data.countryCode = countryCode;
-  if (country) data.country = country;
-  return data;
-}
-
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();
@@ -131,9 +98,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     await prisma.jobApplication.update({
       where: { id: application.id },
-      data: {
-        status: "IN_PROGRESS",
-      },
+      data: { status: "IN_PROGRESS" },
     });
 
     const form = await parseGreenhouseForm(application.jobUrl);
@@ -260,7 +225,24 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       );
     }
 
-    const countryProfileUpdate = extractCountryProfileUpdate(form.fields, finalValuesToSubmit);
+    // ✅ NEW: Save country + countryCode back to profile (simple heuristic)
+    let country: string | null = null;
+    let countryCode: string | null = null;
+
+    for (const field of form.fields) {
+      const name = String(field.name ?? "").toLowerCase();
+      const value = finalValuesToSubmit[field.name];
+
+      if (!value) continue;
+
+      if (name.includes("country") && !name.includes("phone")) {
+        country = Array.isArray(value) ? (value[0] ?? null) : value;
+      }
+
+      if (name.includes("country_code") || name.includes("phone_country")) {
+        countryCode = Array.isArray(value) ? (value[0] ?? null) : value;
+      }
+    }
 
     await prisma.jobApplication.update({
       where: { id: application.id },
@@ -282,10 +264,14 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       },
     });
 
-    if (countryProfileUpdate.country || countryProfileUpdate.countryCode) {
+    // Save back to profile (only if we found values)
+    if (country || countryCode) {
       await prisma.userProfile.update({
         where: { id: application.userProfileId },
-        data: countryProfileUpdate,
+        data: {
+          ...(country ? { country } : {}),
+          ...(countryCode ? { countryCode } : {}),
+        },
       });
     }
 

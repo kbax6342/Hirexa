@@ -56,38 +56,87 @@ function pickResumeFieldName(fields: GhField[]) {
   return namedResume?.name ?? fileFields[0].name;
 }
 
-function detectGreenhouseSuccess(html: string, finalUrl?: string | null) {
-  const normalized = html.replace(/\s+/g, " ").toLowerCase();
+function sanitizeSnippet(text: string, maxLen = 300) {
+  return text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/[\r\n\t]+/g, " ").trim().slice(0, maxLen);
+}
 
-  const successSignals = [/thank you/i, /application submitted/i, /we have received/i];
-  const errorSignals = [
-    /there was a problem/i,
-    /please fill out/i,
-    /required/i,
-    /validation/i,
-    /error/i,
-    /captcha/i,
-    /sign in/i,
-    /log in/i,
-  ];
-
-  const hasSuccessText = successSignals.some((re) => re.test(normalized));
-  const hasErrorText = errorSignals.some((re) => re.test(normalized));
-
-  const urlLooksLikeThankYou = finalUrl
-    ? /thank[_-]?you|submitted|application_confirmation|confirmation/i.test(finalUrl)
+function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
+  const normalizedText = sanitizeSnippet(html, 5000);
+  const successByUrl = finalUrl
+    ? /\/thank_you|thank_you|thanks|submitted|confirmation/i.test(finalUrl)
     : false;
 
+  const successPatterns = [
+    /thank you/i,
+    /application submitted/i,
+    /we (?:have|['’]ve) received/i,
+    /your application has been received/i,
+    /thanks for applying/i,
+  ];
+  const successByHtml = successPatterns.some((re) => re.test(normalizedText));
+
+  const hasGenericErrorText =
+    /error/i.test(normalizedText) && /(required|missing|please|fix the errors)/i.test(normalizedText);
+  const errorPatterns = [
+    /this field is required/i,
+    /please fill out/i,
+    /there was a problem/i,
+    /something went wrong/i,
+    /class=["'][^"']*(?:error|field_with_errors|errors|error_messages)[^"']*["']/i,
+  ];
+  const hasErrorIndicators = hasGenericErrorText || errorPatterns.some((re) => re.test(html));
+  const hasCaptchaIndicators = /captcha|turnstile|cloudflare/i.test(normalizedText);
+
+  const reasonCandidates = [
+    /<(?:div|p|span|li)[^>]*class=["'][^"']*(?:error_messages|field_with_errors|errors|error)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|p|span|li)>/i,
+    /<(?:div|p|span)[^>]*aria-live=["'][^"']+["'][^>]*>([\s\S]*?)<\/(?:div|p|span)>/i,
+    /(this field is required[^<\n\r]{0,160})/i,
+    /(please fill out[^<\n\r]{0,160})/i,
+    /(there was a problem[^<\n\r]{0,160})/i,
+    /(something went wrong[^<\n\r]{0,160})/i,
+    /(captcha[^<\n\r]{0,160})/i,
+    /(turnstile[^<\n\r]{0,160})/i,
+    /(cloudflare[^<\n\r]{0,160})/i,
+  ];
+
+  let reason = "";
+  for (const re of reasonCandidates) {
+    const match = re.exec(html);
+    if (match?.[1]) {
+      reason = sanitizeSnippet(match[1], 200);
+      if (reason) break;
+    }
+  }
+  if (!reason) reason = sanitizeSnippet(html, 200);
+
+  const hints: string[] = [];
+  if (hasCaptchaIndicators) {
+    hints.push("Greenhouse likely requires captcha/Turnstile/Cloudflare verification that cannot be solved server-side.");
+  }
+  if (/this field is required|please fill out|required|missing|fix the errors/i.test(normalizedText)) {
+    hints.push("A required field appears to be missing or invalid; verify all required answers and consent checkboxes.");
+  }
+  if (/field_with_errors|error_messages|class=["'][^"']*errors?/i.test(html)) {
+    hints.push("Greenhouse returned inline field validation errors; inspect the highlighted fields in the form.");
+  }
+  if (!successByUrl && !successByHtml) {
+    hints.push("No thank-you confirmation detected in response URL/body; Greenhouse may require JS-only interactions.");
+  }
+
   return {
-    ok: (hasSuccessText || urlLooksLikeThankYou) && !hasErrorText,
-    hasSuccessText,
-    hasErrorText,
-    urlLooksLikeThankYou,
+    ok: successByUrl || successByHtml,
+    successByUrl,
+    successByHtml,
+    hasErrorIndicators,
+    hasCaptchaIndicators,
+    reason,
+    hints,
+    errorSnippet: sanitizeSnippet(html, 220),
   };
 }
 
 function shortExcerpt(html: string) {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 280);
+  return sanitizeSnippet(html, 280);
 }
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -191,6 +240,35 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       );
     }
 
+    const method = String(form.method || "").trim().toUpperCase();
+    if (method === "GET") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Parsed form method was GET; not a submit form",
+          statusCode: 400,
+          finalUrl: form.action,
+          reason: "Greenhouse parser resolved a GET form instead of the submission POST form.",
+          hints: ["Refresh form parsing and ensure the apply/submit form is selected."],
+        },
+        { status: 400 }
+      );
+    }
+
+    if (/\/jobs\/\d+/i.test(form.action)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Parsed form action looked like a job page, not a submit endpoint",
+          statusCode: 400,
+          finalUrl: form.action,
+          reason: "Parsed action appears suspicious and may not be the Greenhouse submission endpoint.",
+          hints: ["Expected a Greenhouse form post URL, but got a jobs page URL."],
+        },
+        { status: 400 }
+      );
+    }
+
     const fd = new FormData();
     Object.entries(form.hidden).forEach(([key, value]) => {
       fd.append(key, String(value));
@@ -222,7 +300,19 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     });
 
     const responseHtml = await submitRes.text();
-    const successCheck = detectGreenhouseSuccess(responseHtml, submitRes.url);
+    const successCheck = detectGreenhouseOutcome(responseHtml, submitRes.url);
+
+    console.info("[apply] greenhouse submission response", {
+      statusCode: submitRes.status,
+      finalUrl: submitRes.url,
+      responseSnippet: sanitizeSnippet(responseHtml, 300),
+      flags: {
+        successByUrl: successCheck.successByUrl,
+        successByHtml: successCheck.successByHtml,
+        hasErrorIndicators: successCheck.hasErrorIndicators,
+        hasCaptchaIndicators: successCheck.hasCaptchaIndicators,
+      },
+    });
 
     if (!submitRes.ok || !successCheck.ok) {
       await prisma.jobApplication.update({
@@ -247,7 +337,10 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           ok: false,
           error: "Greenhouse did not confirm submission",
           statusCode: submitRes.status,
-          reason: shortExcerpt(responseHtml),
+          finalUrl: submitRes.url,
+          reason: successCheck.reason,
+          hints: successCheck.hints,
+          errorSnippet: successCheck.errorSnippet,
         },
         { status: 502 }
       );

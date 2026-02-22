@@ -81,6 +81,12 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [overrides, setOverrides] = useState<Record<string, string | string[]>>({});
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [applyDebug, setApplyDebug] = useState<{
+    reason?: string;
+    hints?: string[];
+    finalUrl?: string;
+    errorSnippet?: string;
+  } | null>(null);
 
   const loadAudit = useCallback(async () => {
     const res = await fetch(`/api/applications/${applicationId}/audit`, { cache: "no-store" });
@@ -148,6 +154,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     try {
       setApplyLoading(true);
       setApplyMessage(null);
+      setApplyDebug(null);
 
       const res = await fetch(`/api/applications/${applicationId}/apply`, {
         method: "POST",
@@ -160,12 +167,22 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         error?: string;
         missingRequired?: string[];
         confirmation?: string;
+        reason?: string;
+        hints?: string[];
+        finalUrl?: string;
+        errorSnippet?: string;
       };
 
       if (!res.ok || !payload.ok) {
         const missing = Array.isArray(payload.missingRequired)
           ? ` Missing required: ${payload.missingRequired.join(", ")}`
           : "";
+        setApplyDebug({
+          reason: payload.reason,
+          hints: Array.isArray(payload.hints) ? payload.hints : [],
+          finalUrl: payload.finalUrl,
+          errorSnippet: payload.errorSnippet,
+        });
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
@@ -417,6 +434,42 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         </button>
         {applyMessage ? <p className="text-sm text-gray-700">{applyMessage}</p> : null}
       </div>
+
+      {applyDebug ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {applyDebug.reason ? (
+            <p>
+              <span className="font-semibold">Reason:</span> {applyDebug.reason}
+            </p>
+          ) : null}
+
+          {applyDebug.hints?.length ? (
+            <div className="mt-2">
+              <p className="font-semibold">Hints</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                {applyDebug.hints.map((hint, idx) => (
+                  <li key={`${hint}-${idx}`}>{hint}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {applyDebug.finalUrl ? (
+            <p className="mt-2 break-all">
+              <span className="font-semibold">Final URL:</span> {applyDebug.finalUrl}
+            </p>
+          ) : null}
+
+          {applyDebug.errorSnippet ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer font-semibold">Response snippet</summary>
+              <pre className="mt-2 whitespace-pre-wrap rounded border border-amber-200 bg-white p-2 text-xs text-amber-900">
+                {applyDebug.errorSnippet}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -15,6 +15,8 @@ type AuditFieldState = {
   isMissing: boolean;
   rawValue?: unknown;
   submittedValue?: unknown;
+  countryFieldKind?: "country" | "countryCode" | null;
+  isCountryField?: boolean;
 };
 
 type AuditResponse = {
@@ -76,6 +78,8 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AuditResponse | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string | string[]>>({});
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyMessage, setApplyMessage] = useState<string | null>(null);
 
   const loadAudit = useCallback(async () => {
     const res = await fetch(`/api/applications/${applicationId}/audit`, { cache: "no-store" });
@@ -111,6 +115,49 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       return overrides[field.path];
     }
     return toInitialValue(field);
+  };
+
+
+  const buildAnswersPayload = () => {
+    const next: Record<string, string | string[]> = {};
+
+    for (const field of fieldStates) {
+      const current = getCurrentValue(field);
+      if (Array.isArray(current)) {
+        next[field.path] = current.map((item) => String(item)).filter(Boolean);
+      } else {
+        next[field.path] = String(current ?? "").trim();
+      }
+    }
+
+    return next;
+  };
+
+  const handleApplyNow = async () => {
+    try {
+      setApplyLoading(true);
+      setApplyMessage(null);
+
+      const res = await fetch(`/api/applications/${applicationId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: buildAnswersPayload() }),
+      });
+
+      const payload = (await res.json()) as { ok?: boolean; error?: string; missingRequired?: string[] };
+
+      if (!res.ok || !payload.ok) {
+        const missing = Array.isArray(payload.missingRequired) ? ` Missing: ${payload.missingRequired.join(", ")}` : "";
+        throw new Error((payload.error ?? "Unable to submit application") + missing);
+      }
+
+      setApplyMessage("Application submitted successfully.");
+      await loadAudit();
+    } catch (e: unknown) {
+      setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
+    } finally {
+      setApplyLoading(false);
+    }
   };
 
   if (loading) {
@@ -215,6 +262,12 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                     <span className="font-mono">{fs.path}</span>
                     <span className="mx-2">•</span>
                     <span className="font-medium">{type}</span>
+                    {fs.countryFieldKind ? (
+                      <>
+                        <span className="mx-2">•</span>
+                        <span className="font-medium text-indigo-600">{fs.countryFieldKind}</span>
+                      </>
+                    ) : null}
                   </p>
                 </div>
 
@@ -323,6 +376,18 @@ export default function AuditClient({ applicationId }: { applicationId: string }
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-6 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleApplyNow}
+          disabled={applyLoading}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {applyLoading ? "Applying..." : "Apply Now"}
+        </button>
+        {applyMessage ? <p className="text-sm text-gray-700">{applyMessage}</p> : null}
       </div>
     </section>
   );

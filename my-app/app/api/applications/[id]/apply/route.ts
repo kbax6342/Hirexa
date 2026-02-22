@@ -3,6 +3,7 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import { detectCountryFieldKind, looksLikeCountryCode } from "@/app/lib/greenhouse/countryFields";
 
 export const runtime = "nodejs";
 
@@ -59,16 +60,37 @@ function isSuccessHtml(html: string) {
   return /thank you|application submitted|we have received/i.test(html);
 }
 
-function pickResumeFieldName(fields: Array<{ name: string; label: string; type: string }>) {
-  const fileFields = fields.filter((field) => field.type === "file");
-  if (!fileFields.length) return "resume";
+function extractCountryProfileUpdate(fields: GhField[], finalValues: AnswersMap) {
+  let countryCode: string | undefined;
+  let country: string | undefined;
 
-  const resumeField = fileFields.find((field) => {
-    const text = `${field.name} ${field.label}`.toLowerCase();
-    return text.includes("resume") || text.includes("cv");
-  });
+  for (const field of fields) {
+    const value = finalValues[field.name];
+    if (Array.isArray(value)) continue;
 
-  return resumeField?.name ?? fileFields[0].name;
+    const text = toText(value);
+    if (!text) continue;
+
+    const kind = detectCountryFieldKind(field);
+    if (kind === "countryCode") {
+      countryCode = text;
+      continue;
+    }
+
+    if (kind === "country") {
+      country = text;
+      continue;
+    }
+
+    if (!countryCode && looksLikeCountryCode(text)) {
+      countryCode = text;
+    }
+  }
+
+  const data: { countryCode?: string; country?: string } = {};
+  if (countryCode) data.countryCode = countryCode;
+  if (country) data.country = country;
+  return data;
 }
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -238,6 +260,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       );
     }
 
+    const countryProfileUpdate = extractCountryProfileUpdate(form.fields, finalValuesToSubmit);
+
     await prisma.jobApplication.update({
       where: { id: application.id },
       data: {
@@ -257,6 +281,13 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         },
       },
     });
+
+    if (countryProfileUpdate.country || countryProfileUpdate.countryCode) {
+      await prisma.userProfile.update({
+        where: { id: application.userProfileId },
+        data: countryProfileUpdate,
+      });
+    }
 
     return NextResponse.json({ ok: true, status: "SENT" });
   } catch (error: unknown) {

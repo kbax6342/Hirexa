@@ -58,6 +58,8 @@ model UserProfile {
   linkedinUrl             String?
   postalCode              String?
   state                   String?
+  countryCode             String?
+  country                 String?
   keyQuestions            Json?
   stripeCustomerId        String?
   stripeSubscriptionId    String?

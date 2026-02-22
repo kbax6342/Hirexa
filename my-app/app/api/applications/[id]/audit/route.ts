@@ -3,6 +3,7 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import { detectCountryFieldKind } from "@/app/lib/greenhouse/countryFields";
 
 export const runtime = "nodejs";
 
@@ -85,8 +86,8 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
     const form = await parseGreenhouseForm(application.jobUrl);
 
     const mapped = mapProfileToForm(form.fields, application.userProfile);
-    const prefillValues = (mapped as any)?.prefillValues ?? {};
-    const auditItems = Array.isArray((mapped as any)?.auditItems) ? (mapped as any).auditItems : [];
+    const prefillValues = mapped.prefillValues ?? {};
+    const auditItems: Array<unknown> = [];
 
     const savedAnswers = ((application.answersJson as AnswersMap | null) ?? {}) as AnswersMap;
 
@@ -104,7 +105,7 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
     for (const field of form.fields) {
       const hasAnswer = Object.prototype.hasOwnProperty.call(savedAnswers, field.name);
       const answerValue = normalizeAnswer(savedAnswers[field.name], field);
-      const prefillValue = normalizeAnswer((prefillValues as any)[field.name], field);
+      const prefillValue = normalizeAnswer(prefillValues[field.name], field);
       const finalValue = mergeValue(field, answerValue, hasAnswer, prefillValue);
 
       finalValuesToSubmit[field.name] = finalValue;
@@ -123,6 +124,8 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       const v = finalValuesToSubmit[f.name];
       const has = Object.prototype.hasOwnProperty.call(savedAnswers, f.name);
 
+      const countryFieldKind = detectCountryFieldKind(f);
+
       return {
         path: f.name,
         label: f.label,
@@ -132,8 +135,10 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
         options: Array.isArray(f.options) ? f.options : [],
         value: v,
         isMissing: missingRequired.includes(f.name),
-        rawValue: (prefillValues as any)[f.name],
+        rawValue: prefillValues[f.name],
         submittedValue: has ? savedAnswers[f.name] : undefined,
+        countryFieldKind,
+        isCountryField: countryFieldKind !== null,
       };
     });
 

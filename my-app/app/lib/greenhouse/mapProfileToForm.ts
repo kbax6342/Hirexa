@@ -1,5 +1,6 @@
 import type { UserProfile } from "@prisma/client";
 import type { GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import { detectCountryFieldKind } from "@/app/lib/greenhouse/countryFields";
 
 export type AuditItem = {
   name: string;
@@ -13,6 +14,8 @@ export type AuditItem = {
 export type MappedFormValues = {
   prefillValues: Record<string, string>;
 };
+
+type ProfileWithCountry = UserProfile & { countryCode?: string | null; country?: string | null };
 
 function normalize(value: unknown) {
   return String(value ?? "").trim();
@@ -31,14 +34,18 @@ function matchesKeyword(input: string, keywords: string[]) {
   return keywords.some((keyword) => normalized.includes(keyword));
 }
 
-function inferProfileValue(field: GhField, profile: UserProfile): string {
+function inferProfileValue(field: GhField, profile: ProfileWithCountry): string {
   const target = `${field.name} ${field.label}`.toLowerCase();
 
   if (matchesKeyword(target, ["first name", "firstname", "given name"])) return normalize(profile.firstName);
   if (matchesKeyword(target, ["last name", "lastname", "family name", "surname"])) return normalize(profile.lastName);
   if (matchesKeyword(target, ["email", "e-mail"])) return normalize(profile.email);
   if (matchesKeyword(target, ["phone", "mobile", "telephone"])) return normalize(profile.phone);
-  if (matchesKeyword(target, ["country"])) return "";
+
+  const countryFieldKind = detectCountryFieldKind(field);
+  if (countryFieldKind === "countryCode") return normalize(profile.countryCode);
+  if (countryFieldKind === "country") return normalize(profile.country);
+
   if (matchesKeyword(target, ["address", "street"])) return normalize(profile.address);
   if (matchesKeyword(target, ["city", "town", "location"])) return normalize(profile.city);
   if (matchesKeyword(target, ["zip", "postal"])) return normalize(profile.postalCode);
@@ -67,12 +74,13 @@ function resolveSelectValue(value: string, options: Array<{ value: string; label
 }
 
 export function mapProfileToForm(fields: GhField[], profile: UserProfile): MappedFormValues {
+  const enhancedProfile = profile as ProfileWithCountry;
   const prefillValues: Record<string, string> = {};
 
   for (const field of fields) {
     if (field.type === "file") continue;
 
-    const inferred = inferProfileValue(field, profile);
+    const inferred = inferProfileValue(field, enhancedProfile);
     const mappedValue = field.type === "select" ? resolveSelectValue(inferred, field.options) : inferred;
 
     if (mappedValue) {

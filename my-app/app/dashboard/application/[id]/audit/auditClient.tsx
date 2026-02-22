@@ -30,8 +30,12 @@ type AuditResponse = {
   meta?: {
     missing?: string[];
     fieldStates?: AuditFieldState[];
+    actionSuspicious?: boolean;
+    action?: string;
+    method?: string;
   };
 
+  warning?: string;
   error?: string;
 };
 
@@ -92,7 +96,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     const res = await fetch(`/api/applications/${applicationId}/audit`, { cache: "no-store" });
     const payload = (await res.json()) as AuditResponse;
 
-    if (!res.ok || !payload.ok) {
+    if (!res.ok) {
       throw new Error(payload.error ?? "Unable to load audit");
     }
 
@@ -119,6 +123,8 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   );
 
   const missingCount = useMemo(() => fieldStates.filter((f) => Boolean(f.isMissing)).length, [fieldStates]);
+  const actionSuspicious = Boolean(data?.meta?.actionSuspicious);
+  const warning = data?.warning;
 
   const getCurrentValue = useCallback(
     (field: AuditFieldState) => {
@@ -232,6 +238,18 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold text-gray-900">Application Audit</h1>
         <p className="text-lg font-medium text-gray-800">{title}</p>
+
+        {warning ? (
+          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            {warning}
+          </div>
+        ) : null}
+
+        {data?.ok === false && data?.error ? (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            {data.error}
+          </div>
+        ) : null}
 
         {data?.company || data?.location ? (
           <p className="text-sm text-gray-600">
@@ -427,13 +445,19 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         <button
           type="button"
           onClick={handleApplyNow}
-          disabled={applyLoading}
+          disabled={applyLoading || actionSuspicious || missingCount > 0}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {applyLoading ? "Applying..." : "Apply Now"}
         </button>
         {applyMessage ? <p className="text-sm text-gray-700">{applyMessage}</p> : null}
       </div>
+
+      {actionSuspicious ? (
+        <p className="mt-2 text-sm text-amber-800">
+          Apply is disabled because we couldn&apos;t find the Greenhouse submit endpoint yet.
+        </p>
+      ) : null}
 
       {applyDebug ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">

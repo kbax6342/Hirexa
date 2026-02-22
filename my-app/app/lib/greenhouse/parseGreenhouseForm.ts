@@ -22,6 +22,8 @@ export type GhParsedForm = {
     pickedFormAction?: string;
     pickedFormMethod?: string;
     iframeUsed?: string | null;
+    actionSuspicious?: boolean;
+    actionSuspiciousReason?: string;
   };
 };
 
@@ -429,7 +431,8 @@ async function parseFromHtml(html: string, baseUrl: string, debugPrefix: string)
 
   const parsed = extractForm($, picked.el, baseUrl, debug);
   if (isJobsPageUrl(parsed.action)) {
-    throw new Error("Parsed submit action still looks like a job page.");
+    parsed.debug.actionSuspicious = true;
+    parsed.debug.actionSuspiciousReason = "looks_like_jobs_page";
   }
   return parsed;
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
-import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import { parseGreenhouseForm, type GhField, type GhParsedForm } from "@/app/lib/greenhouse/parseGreenhouseForm";
 import { detectCountryFieldKind } from "@/app/lib/greenhouse/countryFields";
 
 export const runtime = "nodejs";
@@ -83,7 +83,13 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       return NextResponse.json({ ok: false, error: "Application missing jobUrl" }, { status: 400 });
     }
 
-    const form = await parseGreenhouseForm(application.jobUrl);
+    let form: GhParsedForm;
+    try {
+      form = await parseGreenhouseForm(application.jobUrl);
+    } catch (parseError: unknown) {
+      const message = parseError instanceof Error ? parseError.message : "Unable to parse Greenhouse form";
+      return NextResponse.json({ ok: false, error: message }, { status: 200 });
+    }
 
     const mapped = mapProfileToForm(form.fields, application.userProfile);
     const prefillValues = mapped.prefillValues ?? {};
@@ -163,9 +169,17 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       },
     });
 
+    const actionSuspicious = Boolean(form.debug?.actionSuspicious);
+
     return NextResponse.json({
       ok: true,
       status,
+      ...(actionSuspicious
+        ? {
+            warning:
+              "Parsed submit action looks like a job page. Apply is disabled until submit endpoint is resolved.",
+          }
+        : {}),
 
       jobTitle: application.jobTitle,
       company: application.company,
@@ -188,6 +202,9 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       meta: {
         missing: missingRequired,
         fieldStates,
+        actionSuspicious,
+        action: form.action,
+        method: form.method,
       },
 
       auditItems,

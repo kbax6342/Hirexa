@@ -3,6 +3,7 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import { buildApplyPayload } from "@/app/lib/applications/buildApplyPayload";
 
 export const runtime = "nodejs";
 
@@ -10,25 +11,9 @@ type ApplyBody = {
   answers?: Record<string, string>;
 };
 
-function normalizeText(value: unknown) {
-  return String(value ?? "").trim();
-}
-
 function isSuccessHtml(html: string) {
   const text = html.toLowerCase();
   return ["thank you", "application submitted", "we have received"].some((phrase) => text.includes(phrase));
-}
-
-function pickResumeFieldName(fields: Array<{ name: string; label: string; type: string }>) {
-  const fileFields = fields.filter((field) => field.type === "file");
-  if (!fileFields.length) return "resume";
-
-  const resumeField = fileFields.find((field) => {
-    const text = `${field.name} ${field.label}`.toLowerCase();
-    return text.includes("resume") || text.includes("cv");
-  });
-
-  return resumeField?.name ?? fileFields[0].name;
 }
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -74,45 +59,6 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     const form = await parseGreenhouseForm(application.jobUrl);
     const { prefillValues, auditItems } = mapProfileToForm(form.fields, application.userProfile);
-    const requiredAudit = auditItems.filter((item) => item.required);
-
-    const missingAnswers = requiredAudit.filter((item) => !normalizeText(answers[item.name]));
-    if (missingAnswers.length > 0) {
-      await prisma.jobApplication.update({
-        where: { id: application.id },
-        data: {
-          status: "IN_PREPARATION",
-          auditJson: {
-            form,
-            prefill: prefillValues,
-            auditItems,
-          },
-          answersJson: answers,
-        },
-      });
-
-      return NextResponse.json(
-        {
-          error: "Please answer all required audit fields before applying.",
-          missing: missingAnswers,
-        },
-        { status: 400 }
-      );
-    }
-
-    const fd = new FormData();
-
-    Object.entries(form.hidden).forEach(([key, value]) => {
-      fd.set(key, value);
-    });
-
-    Object.entries(prefillValues).forEach(([key, value]) => {
-      fd.set(key, value);
-    });
-
-    Object.entries(answers).forEach(([key, value]) => {
-      fd.set(key, normalizeText(value));
-    });
 
     const resume = await prisma.resumeFile.findFirst({
       where: {
@@ -122,14 +68,69 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       orderBy: { createdAt: "desc" },
     });
 
-    if (resume?.blob) {
-      const resumeFieldName = pickResumeFieldName(form.fields);
-      const bytes = resume.blob instanceof Uint8Array ? resume.blob : new Uint8Array(resume.blob as ArrayBuffer);
-      fd.set(resumeFieldName, new Blob([bytes], { type: "application/pdf" }), resume.fileName || "resume.pdf");
+    const resumeBytes = resume?.blob
+      ? resume.blob instanceof Uint8Array
+        ? resume.blob
+        : new Uint8Array(resume.blob as ArrayBuffer)
+      : undefined;
+
+    const { payload, meta } = buildApplyPayload({
+      answers,
+      form,
+      prefillValues,
+      auditItems,
+      resume: resumeBytes
+        ? {
+            fileName: resume?.fileName ?? null,
+            mimeType: "application/pdf",
+            bytes: resumeBytes,
+          }
+        : null,
+    });
+
+    if (meta.missing.length > 0) {
+      await prisma.jobApplication.update({
+        where: { id: application.id },
+        data: {
+          status: "IN_PREPARATION",
+          auditJson: {
+            form,
+            prefill: prefillValues,
+            auditItems,
+            payload,
+            meta,
+          },
+          answersJson: answers,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          error: "Please answer all required audit fields before applying.",
+          missing: meta.missing,
+        },
+        { status: 400 }
+      );
     }
 
-    const submitRes = await fetch(form.action, {
-      method: form.method || "POST",
+    const fd = new FormData();
+    Object.entries(payload.fields).forEach(([key, value]) => {
+      if (value == null) return;
+      if (typeof value === "object") return;
+      fd.set(key, String(value));
+    });
+
+    if (resumeBytes && payload.fileFields.length > 0) {
+      const resumeField = payload.fileFields[0];
+      fd.set(
+        resumeField.name,
+        new Blob([resumeBytes], { type: resumeField.mimeType }),
+        resumeField.fileName
+      );
+    }
+
+    const submitRes = await fetch(payload.action, {
+      method: payload.method,
       body: fd,
       redirect: "follow",
     });
@@ -146,6 +147,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
             form,
             prefill: prefillValues,
             auditItems,
+            payload,
+            meta,
           },
           answersJson: answers,
         },
@@ -170,6 +173,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           form,
           prefill: prefillValues,
           auditItems,
+          payload,
+          meta,
         },
       },
     });

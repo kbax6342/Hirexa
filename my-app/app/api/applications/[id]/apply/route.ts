@@ -59,6 +59,18 @@ function isSuccessHtml(html: string) {
   return /thank you|application submitted|we have received/i.test(html);
 }
 
+function pickResumeFieldName(fields: Array<{ name: string; label: string; type: string }>) {
+  const fileFields = fields.filter((field) => field.type === "file");
+  if (!fileFields.length) return "resume";
+
+  const resumeField = fileFields.find((field) => {
+    const text = `${field.name} ${field.label}`.toLowerCase();
+    return text.includes("resume") || text.includes("cv");
+  });
+
+  return resumeField?.name ?? fileFields[0].name;
+}
+
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();

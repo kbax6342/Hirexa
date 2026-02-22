@@ -1,5 +1,5 @@
 import type { UserProfile } from "@prisma/client";
-import type { ParsedFormField } from "@/app/lib/greenhouse/parseGreenhouseForm";
+import type { GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
 
 export type AuditItem = {
   name: string;
@@ -12,7 +12,6 @@ export type AuditItem = {
 
 export type MappedFormValues = {
   prefillValues: Record<string, string>;
-  auditItems: AuditItem[];
 };
 
 function normalize(value: unknown) {
@@ -32,15 +31,16 @@ function matchesKeyword(input: string, keywords: string[]) {
   return keywords.some((keyword) => normalized.includes(keyword));
 }
 
-function inferProfileValue(field: ParsedFormField, profile: UserProfile): string {
-  const target = `${field.name} ${field.label} ${field.placeholder}`.toLowerCase();
+function inferProfileValue(field: GhField, profile: UserProfile): string {
+  const target = `${field.name} ${field.label}`.toLowerCase();
 
   if (matchesKeyword(target, ["first name", "firstname", "given name"])) return normalize(profile.firstName);
   if (matchesKeyword(target, ["last name", "lastname", "family name", "surname"])) return normalize(profile.lastName);
   if (matchesKeyword(target, ["email", "e-mail"])) return normalize(profile.email);
   if (matchesKeyword(target, ["phone", "mobile", "telephone"])) return normalize(profile.phone);
+  if (matchesKeyword(target, ["country"])) return "";
   if (matchesKeyword(target, ["address", "street"])) return normalize(profile.address);
-  if (matchesKeyword(target, ["city", "town"])) return normalize(profile.city);
+  if (matchesKeyword(target, ["city", "town", "location"])) return normalize(profile.city);
   if (matchesKeyword(target, ["zip", "postal"])) return normalize(profile.postalCode);
   if (matchesKeyword(target, ["state", "province", "region"])) return normalize(profile.state);
   if (matchesKeyword(target, ["linkedin"])) return normalize(profile.linkedinUrl);
@@ -66,41 +66,19 @@ function resolveSelectValue(value: string, options: Array<{ value: string; label
   return exact?.value ?? "";
 }
 
-function isSensitiveQuestion(field: ParsedFormField) {
-  const target = `${field.name} ${field.label}`.toLowerCase();
-  return ["gender", "pronoun", "ethnicity", "race", "veteran", "disability"].some((word) => target.includes(word));
-}
-
-export function mapProfileToForm(fields: ParsedFormField[], profile: UserProfile): MappedFormValues {
+export function mapProfileToForm(fields: GhField[], profile: UserProfile): MappedFormValues {
   const prefillValues: Record<string, string> = {};
-  const auditItems: AuditItem[] = [];
 
   for (const field of fields) {
     if (field.type === "file") continue;
 
     const inferred = inferProfileValue(field, profile);
-    let mappedValue = inferred;
-
-    if (field.type === "select") {
-      mappedValue = resolveSelectValue(inferred, field.options);
-    }
-
-    const needsAudit = field.required && !mappedValue;
-    const shouldAuditOptional = !field.required && !mappedValue && isSensitiveQuestion(field);
+    const mappedValue = field.type === "select" ? resolveSelectValue(inferred, field.options) : inferred;
 
     if (mappedValue) {
       prefillValues[field.name] = mappedValue;
-    } else if (needsAudit || shouldAuditOptional) {
-      auditItems.push({
-        name: field.name,
-        label: field.label || field.name,
-        type: field.type,
-        required: field.required,
-        reason: needsAudit ? "Required field could not be auto-filled confidently." : "Compliance question needs your confirmation.",
-        options: field.options,
-      });
     }
   }
 
-  return { prefillValues, auditItems };
+  return { prefillValues };
 }

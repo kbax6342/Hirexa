@@ -1,6 +1,9 @@
 import { chromium } from "playwright-core";
 import { cssEscape } from "@/app/lib/apply/cssEscape";
-import { closeRemoteSession, createRemoteSession } from "@/app/lib/apply/remoteBrowser";
+import {
+  closeRemoteSession,
+  createRemoteSession,
+} from "@/app/lib/apply/remoteBrowser";
 
 export type PlaywrightApplyResult = {
   ok: boolean;
@@ -28,7 +31,9 @@ export type PlaywrightApplyResult = {
 type AnswerValue = string | string[];
 
 function asArray(value: AnswerValue) {
-  return Array.isArray(value) ? value.map((item) => String(item)) : [String(value ?? "")];
+  return Array.isArray(value)
+    ? value.map((item) => String(item))
+    : [String(value ?? "")];
 }
 
 function containsSignal(text: string, checks: string[]) {
@@ -68,7 +73,10 @@ async function detectHumanVerification(page: import("playwright-core").Page) {
   const html = await page.content().catch(() => "");
   const pageText = await page.innerText("body").catch(() => "");
   const verificationSignals = [
-    ...new Set([...containsSignal(html, checks), ...containsSignal(pageText, checks)]),
+    ...new Set([
+      ...containsSignal(html, checks),
+      ...containsSignal(pageText, checks),
+    ]),
   ];
 
   return {
@@ -86,21 +94,36 @@ export async function applyWithPlaywright(args: {
   };
   values: Record<string, string | string[]>;
   resumePath?: string | null;
+  mode?: "AUTO" | "HUMAN_ASSIST";
+  onPageReady?: (
+    page: import("playwright-core").Page,
+    context: import("playwright-core").BrowserContext,
+  ) => Promise<void> | void;
+  onStatus?: (update: {
+    status: "RUNNING" | "WAITING_HUMAN" | "DONE" | "FAILED";
+    lastUrl?: string;
+    error?: string;
+  }) => Promise<void> | void;
 }): Promise<PlaywrightApplyResult> {
   let browser;
   let context;
-  let remoteSession: Awaited<ReturnType<typeof createRemoteSession>> | null = null;
+  let remoteSession: Awaited<ReturnType<typeof createRemoteSession>> | null =
+    null;
   let keepRemoteAlive = false;
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
-  const greenhouseEmbedUrl = isGreenhouseUrl(args.jobUrl) ? buildEmbedJobAppUrl(args.jobUrl) : null;
+  const greenhouseEmbedUrl = isGreenhouseUrl(args.jobUrl)
+    ? buildEmbedJobAppUrl(args.jobUrl)
+    : null;
   const targetUrl = args.form?.embedUrl ?? greenhouseEmbedUrl ?? args.jobUrl;
 
   try {
     if (shouldUseRemoteBrowser()) {
       remoteSession = await createRemoteSession();
-      const useCdp = remoteSession.connectUrl.startsWith("http://") || remoteSession.connectUrl.startsWith("https://");
+      const useCdp =
+        remoteSession.connectUrl.startsWith("http://") ||
+        remoteSession.connectUrl.startsWith("https://");
       browser = useCdp
         ? await chromium.connectOverCDP(remoteSession.connectUrl)
         : await chromium.connect(remoteSession.connectUrl);
@@ -109,12 +132,15 @@ export async function applyWithPlaywright(args: {
         transport: useCdp ? "cdp" : "ws",
       });
     } else {
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({
+        headless: args.mode === "HUMAN_ASSIST" ? false : true,
+      });
       console.log("[REMOTE_APPLY] using local browser");
     }
 
     context = await browser.newContext();
     const page = await context.newPage();
+    await args.onPageReady?.(page, context);
 
     console.log("[REMOTE_APPLY] goto", targetUrl);
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
@@ -122,7 +148,32 @@ export async function applyWithPlaywright(args: {
 
     const preSubmitVerification = await detectHumanVerification(page);
     if (preSubmitVerification.needsHuman) {
-      keepRemoteAlive = true;
+      await args.onStatus?.({ status: "WAITING_HUMAN", lastUrl: page.url() });
+
+      if (args.mode === "HUMAN_ASSIST") {
+        const startedAt = Date.now();
+        const timeoutAt = startedAt + 10 * 60_000;
+        while (Date.now() < timeoutAt) {
+          const currentUrl = page.url();
+          await args.onStatus?.({
+            status: "WAITING_HUMAN",
+            lastUrl: currentUrl,
+          });
+          if (currentUrl.toLowerCase().includes("/confirmation")) {
+            await args.onStatus?.({ status: "DONE", lastUrl: currentUrl });
+            return { ok: true, finalUrl: currentUrl, needsHuman: false };
+          }
+          await page.waitForTimeout(1000);
+        }
+        await args.onStatus?.({
+          status: "FAILED",
+          lastUrl: page.url(),
+          error: "Timed out waiting for human verification.",
+        });
+      } else {
+        keepRemoteAlive = true;
+      }
+
       return {
         ok: false,
         needsHuman: true,
@@ -146,7 +197,9 @@ export async function applyWithPlaywright(args: {
       };
     }
 
-    await page.waitForSelector("form input, form textarea, form select", { timeout: 15_000 });
+    await page.waitForSelector("form input, form textarea, form select", {
+      timeout: 15_000,
+    });
 
     for (const [name, rawValue] of Object.entries(args.values)) {
       const selector = `[name="${cssEscape(name)}"]`;
@@ -160,14 +213,20 @@ export async function applyWithPlaywright(args: {
       }
 
       const first = locator.first();
-      const tagName = await first.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+      const tagName = await first
+        .evaluate((el) => el.tagName.toLowerCase())
+        .catch(() => "");
       const inputType =
         tagName === "input"
-          ? await first.evaluate((el) => (el as HTMLInputElement).type?.toLowerCase() || "text").catch(() => "text")
+          ? await first
+              .evaluate(
+                (el) => (el as HTMLInputElement).type?.toLowerCase() || "text",
+              )
+              .catch(() => "text")
           : "";
 
       if (tagName === "select") {
-        const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
+        const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
         await first.selectOption({ value: String(value) }).catch(async () => {
           await first.selectOption({ label: String(value) });
         });
@@ -179,21 +238,24 @@ export async function applyWithPlaywright(args: {
         for (let i = 0; i < count; i += 1) {
           const checkbox = locator.nth(i);
           const elementValue = await checkbox.getAttribute("value");
-          const labelText = (await checkbox.evaluate((el) => {
-            const input = el as HTMLInputElement;
-            const id = input.id;
-            if (id) {
-              const explicit = document.querySelector(`label[for="${id}"]`);
-              if (explicit?.textContent) return explicit.textContent;
-            }
-            return input.closest("label")?.textContent ?? "";
-          }))
+          const labelText = (
+            await checkbox.evaluate((el) => {
+              const input = el as HTMLInputElement;
+              const id = input.id;
+              if (id) {
+                const explicit = document.querySelector(`label[for="${id}"]`);
+                if (explicit?.textContent) return explicit.textContent;
+              }
+              return input.closest("label")?.textContent ?? "";
+            })
+          )
             .toLowerCase()
             .trim();
 
           const shouldCheck = values.some((target) => {
             const normalized = target.toLowerCase().trim();
-            if (elementValue && elementValue.toLowerCase() === normalized) return true;
+            if (elementValue && elementValue.toLowerCase() === normalized)
+              return true;
             return Boolean(labelText) && labelText.includes(normalized);
           });
 
@@ -205,8 +267,10 @@ export async function applyWithPlaywright(args: {
       }
 
       if (inputType === "radio") {
-        const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
-        const option = page.locator(`${selector}[value="${cssEscape(String(value))}"]`).first();
+        const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
+        const option = page
+          .locator(`${selector}[value="${cssEscape(String(value))}"]`)
+          .first();
         if ((await option.count()) > 0) {
           await option.check().catch(() => option.click());
         }
@@ -220,7 +284,7 @@ export async function applyWithPlaywright(args: {
         continue;
       }
 
-      const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
+      const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
       await first.fill(String(value ?? ""));
     }
 
@@ -251,7 +315,9 @@ export async function applyWithPlaywright(args: {
       submitUsed = submitSelector;
       console.log("[REMOTE_APPLY] clicking submit", submitSelector);
       await Promise.all([
-        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null),
+        page
+          .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
+          .catch(() => null),
         button.click(),
       ]);
       break;
@@ -282,7 +348,8 @@ export async function applyWithPlaywright(args: {
     await page.waitForTimeout(1500);
 
     const finalUrl = page.url();
-    const { html, pageText, verificationSignals, needsHuman } = await detectHumanVerification(page);
+    const { html, pageText, verificationSignals, needsHuman } =
+      await detectHumanVerification(page);
     const success =
       finalUrl.toLowerCase().includes("/confirmation") ||
       /thank you|application submitted/i.test(html) ||
@@ -291,8 +358,42 @@ export async function applyWithPlaywright(args: {
     console.log("[REMOTE_APPLY] final url", finalUrl);
 
     if (needsHuman) {
-      keepRemoteAlive = true;
+      await args.onStatus?.({ status: "WAITING_HUMAN", lastUrl: finalUrl });
+      if (args.mode === "HUMAN_ASSIST") {
+        const timeoutAt = Date.now() + 10 * 60_000;
+        while (Date.now() < timeoutAt) {
+          const currentUrl = page.url();
+          const content = await page.content().catch(() => "");
+          const text = await page.innerText("body").catch(() => "");
+          const confirmed =
+            currentUrl.toLowerCase().includes("/confirmation") ||
+            /thank you|application submitted/i.test(content) ||
+            /thank you|application submitted/i.test(text);
+
+          await args.onStatus?.({
+            status: confirmed ? "DONE" : "WAITING_HUMAN",
+            lastUrl: currentUrl,
+          });
+          if (confirmed) {
+            return { ok: true, finalUrl: currentUrl, needsHuman: false };
+          }
+          await page.waitForTimeout(1000);
+        }
+
+        await args.onStatus?.({
+          status: "FAILED",
+          lastUrl: page.url(),
+          error: "Timed out waiting for human verification.",
+        });
+      } else {
+        keepRemoteAlive = true;
+      }
     }
+
+    await args.onStatus?.({
+      status: success ? "DONE" : needsHuman ? "WAITING_HUMAN" : "FAILED",
+      lastUrl: finalUrl,
+    });
 
     return {
       ok: success,
@@ -300,7 +401,11 @@ export async function applyWithPlaywright(args: {
       needsHuman,
       openUrl: targetUrl,
       viewerUrl: remoteSession?.viewerUrl,
-      message: success ? undefined : needsHuman ? "Human verification required" : "Submission could not be confirmed.",
+      message: success
+        ? undefined
+        : needsHuman
+          ? "Human verification required"
+          : "Submission could not be confirmed.",
       debug: {
         attemptedSelectors,
         missingNames,
@@ -317,8 +422,11 @@ export async function applyWithPlaywright(args: {
       },
     };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Playwright submit failed.";
+    const message =
+      error instanceof Error ? error.message : "Playwright submit failed.";
     console.log("[REMOTE_APPLY] error", message);
+
+    await args.onStatus?.({ status: "FAILED", error: message });
 
     return {
       ok: false,

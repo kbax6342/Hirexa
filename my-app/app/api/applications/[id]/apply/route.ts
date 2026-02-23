@@ -2,60 +2,26 @@ import { unlink } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
-import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
-import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
-import { applyWithPlaywright, type PlaywrightApplyResult } from "@/app/lib/apply/playwrightApply";
+import {
+  applyWithPlaywright,
+  type PlaywrightApplyResult,
+} from "@/app/lib/apply/playwrightApply";
 import { writeResumeToTemp } from "@/app/lib/apply/tempResume";
+import {
+  prepareApplyPayload,
+  type AnswersMap,
+} from "@/app/lib/apply/prepareApplyPayload";
 
 export const runtime = "nodejs";
-
-type AnswerValue = string | string[];
-type AnswersMap = Record<string, AnswerValue>;
 
 type ApplyBody = {
   answers?: AnswersMap;
 };
 
-function isGreenhouseBoardUrl(jobUrl: string) {
-  try {
-    const host = new URL(jobUrl).hostname.toLowerCase();
-    return host === "job-boards.greenhouse.io" || host === "boards.greenhouse.io";
-  } catch {
-    return false;
-  }
-}
-
-function toText(value: unknown) {
-  return String(value ?? "").trim();
-}
-
-function normalizeAnswer(value: unknown, field: GhField): AnswerValue {
-  if (field.type === "checkbox") {
-    if (Array.isArray(value)) {
-      return value.map((item) => toText(item)).filter(Boolean);
-    }
-    const txt = toText(value);
-    if (!txt) return [];
-    return txt
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  if (Array.isArray(value)) {
-    return toText(value[0]);
-  }
-
-  return toText(value);
-}
-
-function mergeValue(field: GhField, answer: AnswerValue, hasAnswer: boolean, prefill: AnswerValue): AnswerValue {
-  if (hasAnswer) return answer;
-  if (field.type === "checkbox") return Array.isArray(prefill) ? prefill : [];
-  return Array.isArray(prefill) ? prefill[0] ?? "" : prefill;
-}
-
-export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(
+  req: Request,
+  context: { params: Promise<{ id: string }> },
+) {
   try {
     if (process.env.PLAYWRIGHT_ENABLED !== "true") {
       return NextResponse.json(
@@ -63,7 +29,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           ok: false,
           error: 'Playwright apply is disabled. Set PLAYWRIGHT_ENABLED="true".',
         },
-        { status: 501 }
+        { status: 501 },
       );
     }
 
@@ -71,7 +37,10 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     const userId = session?.user?.id;
 
     if (!userId) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized" },
+        { status: 401 },
+      );
     }
 
     const { id } = await context.params;
@@ -83,39 +52,26 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     });
 
     if (!application) {
-      return NextResponse.json({ ok: false, error: "Application not found" }, { status: 404 });
+      return NextResponse.json(
+        { ok: false, error: "Application not found" },
+        { status: 404 },
+      );
     }
 
     if (!application.jobUrl) {
-      return NextResponse.json({ ok: false, error: "Application missing jobUrl" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Application missing jobUrl" },
+        { status: 400 },
+      );
     }
 
-    const savedAnswers = (application.answersJson as AnswersMap | null) ?? {};
-    const requestAnswers = body.answers ?? {};
-    const answers: AnswersMap = { ...savedAnswers, ...requestAnswers };
-
-    let finalValuesToSubmit: AnswersMap = { ...answers };
-    let greenhouseEmbedUrl: string | undefined;
-
-    if (isGreenhouseBoardUrl(application.jobUrl)) {
-      try {
-        const form = await parseGreenhouseForm(application.jobUrl);
-        greenhouseEmbedUrl = form.embedUrl;
-        const { prefillValues } = mapProfileToForm(form.fields, application.userProfile);
-        finalValuesToSubmit = {};
-
-        for (const field of form.fields) {
-          const hasAnswer = Object.prototype.hasOwnProperty.call(answers, field.name);
-          const answerValue = normalizeAnswer(answers[field.name], field);
-          const prefillValue = normalizeAnswer(prefillValues[field.name], field);
-          finalValuesToSubmit[field.name] = mergeValue(field, answerValue, hasAnswer, prefillValue);
-        }
-      } catch (error) {
-        console.log("[REMOTE_APPLY] greenhouse parse failed, using merged answers", {
-          reason: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    const { answers, finalValuesToSubmit, greenhouseEmbedUrl } =
+      await prepareApplyPayload({
+        jobUrl: application.jobUrl,
+        profile: application.userProfile,
+        savedAnswers: (application.answersJson as AnswersMap | null) ?? {},
+        requestAnswers: body.answers ?? {},
+      });
 
     const tempResume = await writeResumeToTemp(application.userProfileId);
 
@@ -132,6 +88,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         form: { embedUrl: greenhouseEmbedUrl },
         values: finalValuesToSubmit,
         resumePath: tempResume?.path ?? null,
+        mode: "AUTO",
       });
     } finally {
       if (tempResume?.path) {
@@ -155,7 +112,11 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         },
       });
 
-      return NextResponse.json({ ok: true, status: "SENT", finalUrl: result.finalUrl });
+      return NextResponse.json({
+        ok: true,
+        status: "SENT",
+        finalUrl: result.finalUrl,
+      });
     }
 
     if (result.needsHuman) {
@@ -173,11 +134,16 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           ok: false,
           needsHuman: true,
           viewerUrl: result.viewerUrl ?? result.debug?.viewerUrl,
-          openUrl: result.openUrl ?? result.debug?.targetUrl ?? greenhouseEmbedUrl ?? application.jobUrl,
-          message: "Almost done — please complete verification and click Submit in the live window.",
+          openUrl:
+            result.openUrl ??
+            result.debug?.targetUrl ??
+            greenhouseEmbedUrl ??
+            application.jobUrl,
+          message:
+            "Almost done — please complete verification and click Submit in the live window.",
           sessionId: result.debug?.sessionId,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
@@ -196,7 +162,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         error: result.message ?? "Submission could not be confirmed.",
         debug: result.debug,
       },
-      { status: 502 }
+      { status: 502 },
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Server error";

@@ -49,7 +49,7 @@ function isMissingRequired(field: GhField, value: AnswerValue, hasResume: boolea
   if (!field.required) return false;
   if (field.type === "file") return !hasResume;
   if (Array.isArray(value)) return value.length === 0;
-  return value.length === 0;
+  return String(value ?? "").trim().length === 0;
 }
 
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {

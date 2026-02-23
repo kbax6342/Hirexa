@@ -328,7 +328,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               ? valueRaw
               : toDisplayText(valueRaw);
 
-          const isMissing = required && asText.trim().length === 0;
+          const isMissing = Boolean(field.isMissing);
 
           return (
             <div
@@ -470,7 +470,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         <button
           type="button"
           onClick={handleApplyNow}
-          disabled={applyLoading || missingCount > 0 || fieldStates.length === 0}
+          disabled={applyLoading || missingCount > 0 || Boolean(data?.meta?.actionSuspicious)}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {applyLoading ? "Applying..." : "Apply Now"}
@@ -490,8 +490,10 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         ) : null}
       </div>
 
-      {actionSuspicious ? (
-        <p className="mt-2 text-sm text-amber-800">Submit action looks suspicious; submission may fail.</p>
+      {missingCount > 0 ? (
+        <p className="mt-2 text-sm text-amber-800">Fill required fields to enable Apply Now.</p>
+      ) : actionSuspicious ? (
+        <p className="mt-2 text-sm text-amber-800">Apply disabled: submit endpoint not resolved.</p>
       ) : null}
 
       {applyDebug ? (

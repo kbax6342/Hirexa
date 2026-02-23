@@ -89,10 +89,24 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       console.log("GH parse debug:", form.debug);
     } catch (parseError: unknown) {
       const message = parseError instanceof Error ? parseError.message : "Unable to parse Greenhouse form";
+      console.error(message);
+
+      let parsedDebug: unknown;
+      if (message.includes("DEBUG=")) {
+        const debugRaw = message.slice(message.indexOf("DEBUG=") + "DEBUG=".length);
+        try {
+          parsedDebug = JSON.parse(debugRaw);
+          console.log("GH PARSE DEBUG OBJECT:", parsedDebug);
+        } catch {
+          parsedDebug = { parseError: "Failed to parse DEBUG payload", raw: debugRaw };
+        }
+      }
+
       return NextResponse.json(
         {
           ok: false,
-          error: message,
+          error: "No application form found...",
+          ...(parsedDebug ? { debug: parsedDebug } : {}),
           jobTitle: application.jobTitle,
           company: application.company,
           location: application.location ?? null,

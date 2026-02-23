@@ -240,9 +240,17 @@ function extractForm(
     if (!name) return;
 
     const placeholder = norm($el.attr("placeholder") || "");
-    const rawLabel = extractQuestionLabel($, $form, $el).replace(/\*/g, "").trim();
+    const rawLabelWithMarks = extractQuestionLabel($, $form, $el).trim();
+    const rawLabel = rawLabelWithMarks.replace(/\*/g, "").trim();
     const label = rawLabel || placeholder || name;
-    const required = isRequiredEl($el, rawLabel || placeholder || name);
+    const isSecurityCodeField =
+      name.toLowerCase().includes("security_code") ||
+      norm($el.attr("id") || "").toLowerCase().includes("security_code");
+    const securityCodeRequiredByHint =
+      /\*/.test(rawLabelWithMarks) || /required/i.test(placeholder) || /required/i.test(rawLabelWithMarks);
+    const required = isSecurityCodeField
+      ? isRequiredEl($el, rawLabelWithMarks || placeholder || name) || securityCodeRequiredByHint
+      : isRequiredEl($el, rawLabelWithMarks || placeholder || name);
     const questionKey = toQuestionKey(name);
 
     if (type === "radio" || type === "checkbox") {

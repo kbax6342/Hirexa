@@ -54,6 +54,13 @@ function mergeValue(field: GhField, answer: AnswerValue, hasAnswer: boolean, pre
   return Array.isArray(prefill) ? prefill[0] ?? "" : prefill;
 }
 
+function isMissingRequired(field: GhField, value: AnswerValue, hasResume: boolean) {
+  if (!field.required) return false;
+  if (field.type === "file") return !hasResume;
+  if (Array.isArray(value)) return value.length === 0;
+  return String(value ?? "").trim().length === 0;
+}
+
 function pickResumeFieldName(fields: GhField[]) {
   const fileFields = fields.filter((field) => field.type === "file");
   if (!fileFields.length) return null;
@@ -118,14 +125,8 @@ async function tryGreenhouseFastPath(args: {
 
     finalValuesToSubmit[field.name] = finalValue;
 
-    if (field.required) {
-      if (field.type === "file") {
-        if (!args.resume) missingRequired.push(field.name);
-      } else if (Array.isArray(finalValue)) {
-        if (finalValue.length === 0) missingRequired.push(field.name);
-      } else if (!finalValue) {
-        missingRequired.push(field.name);
-      }
+    if (isMissingRequired(field, finalValue, Boolean(args.resume))) {
+      missingRequired.push(field.name);
     }
   }
 

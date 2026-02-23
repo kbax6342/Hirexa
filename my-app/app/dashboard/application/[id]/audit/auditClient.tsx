@@ -219,12 +219,13 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         openUrl?: string;
       };
 
+      if (res.status === 409 && payload.needsHuman) {
+        setApplyMessage("Human verification required. Open the application and submit there.");
+        setManualOpenUrl(payload.openUrl ?? null);
+        return;
+      }
+
       if (!res.ok || !payload.ok) {
-        if (payload.needsHuman && payload.openUrl) {
-          setApplyMessage("Human verification required. Open the application and submit there.");
-          setManualOpenUrl(payload.openUrl);
-          return;
-        }
 
         const missing = Array.isArray(payload.missingRequired)
           ? ` Missing required: ${payload.missingRequired.join(", ")}`

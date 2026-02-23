@@ -1,274 +1,220 @@
-// Install: npm i playwright
-// Install browser: npx playwright install chromium
-
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { chromium } from "playwright";
+import { cssEscape } from "@/app/lib/apply/cssEscape";
 
-export type ApplyResult = {
+export type PlaywrightApplyResult = {
   ok: boolean;
   finalUrl?: string;
-  reason?: string;
-  screenshotPath?: string;
-  htmlSnippet?: string;
+  needsHuman?: boolean;
+  message?: string;
+  debug?: {
+    attemptedSelectors: string[];
+    missingNames: string[];
+    finalUrl?: string;
+    success: boolean;
+    needsHuman: boolean;
+  };
 };
 
 type AnswerValue = string | string[];
-type AnswersMap = Record<string, AnswerValue>;
 
-type FillCandidate = {
-  tag: "input" | "textarea" | "select";
-  type: string;
-  name: string;
-  id: string;
-  placeholder: string;
-  ariaLabel: string;
-  labelText: string;
-  key: string;
-};
-
-const SUCCESS_URL_RE = /\/(confirmation|thank|submitted)/i;
-const SUCCESS_TEXT_RE = /thank you|application submitted|we have received/i;
-const CAPTCHA_RE = /captcha|turnstile|cloudflare/i;
-
-function normalizeText(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function asArray(value: AnswerValue) {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [String(value ?? "")];
 }
 
-function flattenText(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function pickBestAnswer(answers: AnswersMap, candidate: FillCandidate): { key: string; value: AnswerValue } | null {
-  const fields = [candidate.name, candidate.id, candidate.labelText, candidate.placeholder, candidate.ariaLabel, candidate.key]
-    .map((v) => normalizeText(v))
-    .filter(Boolean);
-
-  for (const [answerKey, answerValue] of Object.entries(answers)) {
-    const normalizedKey = normalizeText(answerKey);
-    if (!normalizedKey) continue;
-    if (fields.some((field) => field === normalizedKey || field.includes(normalizedKey) || normalizedKey.includes(field))) {
-      return { key: answerKey, value: answerValue };
-    }
-  }
-
-  return null;
-}
-
-function resolveTmpDir() {
-  const cwd = process.cwd();
-  if (cwd.endsWith(`${path.sep}my-app`) || cwd === "my-app") return path.join(cwd, ".tmp");
-  return path.join(cwd, "my-app", ".tmp");
-}
-
-function toBooleanAnswer(value: AnswerValue) {
-  if (Array.isArray(value)) {
-    return value.some((item) => /^(true|yes|y|1|on|checked)$/i.test(String(item).trim()));
-  }
-  return /^(true|yes|y|1|on|checked)$/i.test(String(value).trim());
+function lowerIncludesAny(text: string, checks: string[]) {
+  const lower = text.toLowerCase();
+  return checks.some((check) => lower.includes(check));
 }
 
 export async function applyWithPlaywright(args: {
   jobUrl: string;
-  answers: AnswersMap;
-  resume?: { fileName: string; mimeType: string; buffer: Buffer };
-  timeoutMs?: number;
-}): Promise<ApplyResult> {
-  const timeoutMs = args.timeoutMs ?? 90_000;
+  values: Record<string, string | string[]>;
+  resumePath?: string | null;
+}): Promise<PlaywrightApplyResult> {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  page.setDefaultTimeout(Math.min(timeoutMs, 20_000));
 
-  let screenshotPath: string | undefined;
-  let resumeTempPath: string | undefined;
+  const attemptedSelectors: string[] = [];
+  const missingNames: string[] = [];
 
   try {
-    console.info("[apply:pw] opening job URL", { jobUrl: args.jobUrl, timeoutMs, answerKeys: Object.keys(args.answers).length });
+    console.log("[PW_APPLY] goto", args.jobUrl);
+    await page.goto(args.jobUrl, { waitUntil: "domcontentloaded" });
+    console.log("[PW_APPLY] landed", page.url());
 
-    await page.goto(args.jobUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
+    await page.waitForSelector("form input, form textarea, form select", { timeout: 15_000 });
 
-    const bodyText = flattenText(await page.locator("body").innerText().catch(() => ""));
-    if (CAPTCHA_RE.test(bodyText)) {
-      console.info("[apply:pw] captcha detected before fill");
+    for (const [name, rawValue] of Object.entries(args.values)) {
+      const selector = `[name="${cssEscape(name)}"]`;
+      attemptedSelectors.push(selector);
+      const locator = page.locator(selector);
+      const count = await locator.count();
+
+      if (count === 0) {
+        missingNames.push(name);
+        continue;
+      }
+
+      const first = locator.first();
+      const tagName = await first.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+      const inputType =
+        tagName === "input"
+          ? await first.evaluate((el) => (el as HTMLInputElement).type?.toLowerCase() || "text").catch(() => "text")
+          : "";
+
+      if (tagName === "select") {
+        const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
+        await first.selectOption({ value: String(value) }).catch(async () => {
+          await first.selectOption({ label: String(value) });
+        });
+        continue;
+      }
+
+      if (inputType === "checkbox") {
+        const values = asArray(rawValue);
+        for (let i = 0; i < count; i += 1) {
+          const checkbox = locator.nth(i);
+          const elementValue = await checkbox.getAttribute("value");
+          const labelText = (await checkbox.evaluate((el) => {
+            const input = el as HTMLInputElement;
+            const id = input.id;
+            if (id) {
+              const explicit = document.querySelector(`label[for="${id}"]`);
+              if (explicit?.textContent) return explicit.textContent;
+            }
+            return input.closest("label")?.textContent ?? "";
+          }))
+            .toLowerCase()
+            .trim();
+
+          const shouldCheck = values.some((target) => {
+            const normalized = target.toLowerCase().trim();
+            if (elementValue && elementValue.toLowerCase() === normalized) return true;
+            return Boolean(labelText) && labelText.includes(normalized);
+          });
+
+          if (shouldCheck) {
+            await checkbox.check().catch(() => undefined);
+          }
+        }
+        continue;
+      }
+
+      if (inputType === "radio") {
+        const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
+        const option = page.locator(`${selector}[value="${cssEscape(String(value))}"]`).first();
+        if ((await option.count()) > 0) {
+          await option.check().catch(() => option.click());
+        }
+        continue;
+      }
+
+      if (inputType === "file") {
+        if (args.resumePath) {
+          await first.setInputFiles(args.resumePath);
+        }
+        continue;
+      }
+
+      const value = Array.isArray(rawValue) ? rawValue[0] ?? "" : rawValue;
+      await first.fill(String(value ?? ""));
+    }
+
+    if (args.resumePath) {
+      const fileInput = page.locator('input[type="file"]:visible').first();
+      if ((await fileInput.count()) > 0) {
+        await fileInput.setInputFiles(args.resumePath);
+        console.log("[PW_APPLY] resume uploaded", args.resumePath);
+      }
+    }
+
+    const submitSelectors = [
+      'button[type="submit"]',
+      'input[type="submit"]',
+      'button:has-text("Submit application")',
+      'button:has-text("Submit Application")',
+      'button:has-text("Submit")',
+      'button:has-text("Apply")',
+    ];
+
+    let submitUsed: string | null = null;
+    for (const submitSelector of submitSelectors) {
+      const button = page.locator(submitSelector).first();
+      if ((await button.count()) === 0) continue;
+      if (!(await button.isVisible().catch(() => false))) continue;
+      if (!(await button.isEnabled().catch(() => false))) continue;
+
+      submitUsed = submitSelector;
+      console.log("[PW_APPLY] clicking submit", submitSelector);
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => null),
+        button.click(),
+      ]);
+      break;
+    }
+
+    if (!submitUsed) {
       return {
         ok: false,
-        finalUrl: page.url(),
-        reason: "Captcha detected",
-        htmlSnippet: bodyText.slice(0, 300),
+        message: "Submit button not found.",
+        debug: {
+          attemptedSelectors,
+          missingNames,
+          finalUrl: page.url(),
+          success: false,
+          needsHuman: false,
+        },
       };
     }
 
-    const candidates = await page.evaluate(() => {
-      function text(v: string | null | undefined) {
-        return (v ?? "").replace(/\s+/g, " ").trim();
-      }
-
-      const all = Array.from(
-        document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
-          "input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])"
-        )
-      );
-
-      return all.map((el) => {
-        const tag = el.tagName.toLowerCase() as "input" | "textarea" | "select";
-        const type = tag === "input" ? (el.getAttribute("type") ?? "text").toLowerCase() : tag;
-        const id = text(el.id);
-        const name = text(el.getAttribute("name"));
-        const placeholder = text(el.getAttribute("placeholder"));
-        const ariaLabel = text(el.getAttribute("aria-label"));
-
-        let labelText = "";
-        if (id) {
-          const label = document.querySelector(`label[for="${id}"]`);
-          labelText = text(label?.textContent ?? "");
-        }
-        if (!labelText) {
-          const closestLabel = el.closest("label");
-          labelText = text(closestLabel?.textContent ?? "");
-        }
-
-        const key = text([name, id, labelText, placeholder, ariaLabel].filter(Boolean).join(" "));
-
-        return { tag, type, name, id, placeholder, ariaLabel, labelText, key };
-      });
-    });
-
-    console.info("[apply:pw] field candidates", { count: candidates.length });
-
-    for (const candidate of candidates as FillCandidate[]) {
-      const match = pickBestAnswer(args.answers, candidate);
-      if (!match) continue;
-
-      let locator = page.locator("__never__");
-      if (candidate.id) {
-        locator = page.locator(`#${candidate.id}`).first();
-      } else if (candidate.name) {
-        locator = page.locator(`[name="${candidate.name}"]`).first();
-      }
-
-      if ((await locator.count()) === 0) continue;
-      if (!(await locator.isVisible().catch(() => false))) continue;
-
-      const raw = match.value;
-      const textValue = Array.isArray(raw) ? raw[0] ?? "" : String(raw ?? "");
-
-      try {
-        if (candidate.tag === "textarea") {
-          await locator.fill(textValue);
-        } else if (candidate.tag === "select") {
-          const selected = Array.isArray(raw) ? raw.map((v) => String(v)) : [String(raw)];
-          await locator.selectOption(selected.map((v) => ({ value: v })));
-        } else if (candidate.type === "checkbox") {
-          if (toBooleanAnswer(raw) || (Array.isArray(raw) && raw.length > 0)) {
-            await locator.check().catch(() => undefined);
-          }
-        } else if (candidate.type === "radio") {
-          await locator.check().catch(() => undefined);
-        } else if (["email", "tel", "url", "text", "number", "date", "search"].includes(candidate.type)) {
-          await locator.fill(textValue);
-        }
-
-        console.info("[apply:pw] filled field", { field: candidate.key, answerKey: match.key });
-      } catch (error) {
-        try {
-          if (candidate.tag === "select") {
-            const selected = Array.isArray(raw) ? raw.map((v) => ({ label: String(v) })) : [{ label: String(raw) }];
-            await locator.selectOption(selected);
-            console.info("[apply:pw] selected by label fallback", { field: candidate.key, answerKey: match.key });
-            continue;
-          }
-        } catch {
-          // no-op, handled by log below
-        }
-
-        console.info("[apply:pw] field fill skipped", {
-          candidate: candidate.key,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    if (args.resume) {
-      const fileInput = page.locator('input[type="file"]').first();
-      if ((await fileInput.count()) > 0) {
-        const tmpDir = resolveTmpDir();
-        await mkdir(tmpDir, { recursive: true });
-        resumeTempPath = path.join(tmpDir, `resume-upload-${Date.now()}.pdf`);
-        await writeFile(resumeTempPath, args.resume.buffer);
-
-        await fileInput.setInputFiles(resumeTempPath);
-        console.info("[apply:pw] resume uploaded", { path: resumeTempPath });
-      }
-    }
-
-    const beforeSubmitUrl = page.url();
-    const submitButton = page.getByRole("button", { name: /submit application|submit|apply|send application|finish/i }).first();
-    if ((await submitButton.count()) > 0) {
-      await submitButton.click({ timeout: 10_000 });
-      console.info("[apply:pw] clicked button submit");
-    } else {
-      const submitInput = page.locator('input[type="submit"]').first();
-      if ((await submitInput.count()) > 0) {
-        await submitInput.click({ timeout: 10_000 });
-        console.info("[apply:pw] clicked input submit");
-      } else {
-        return {
-          ok: false,
-          finalUrl: page.url(),
-          reason: "Submit button not found",
-        };
-      }
-    }
-
-    await Promise.race([
-      page.waitForURL((url) => url.toString() !== beforeSubmitUrl, { timeout: 12_000 }),
-      page.waitForLoadState("domcontentloaded", { timeout: 12_000 }),
-      page.waitForSelector("text=/thank you|application submitted|we have received/i", { timeout: 12_000 }),
-    ]).catch(() => undefined);
-
-    await page.waitForTimeout(1_000);
+    await page.waitForTimeout(1500);
 
     const finalUrl = page.url();
-    const finalText = flattenText(await page.locator("body").innerText().catch(() => ""));
+    const html = (await page.content()).toLowerCase();
+    const success = finalUrl.toLowerCase().includes("/confirmation") || lowerIncludesAny(html, ["thank you", "application submitted"]);
+    const needsHuman = lowerIncludesAny(html, [
+      "verify you are human",
+      "captcha",
+      "turnstile",
+      "cloudflare",
+      "security check",
+    ]);
 
-    if (SUCCESS_URL_RE.test(finalUrl) || SUCCESS_TEXT_RE.test(finalText)) {
-      console.info("[apply:pw] submission confirmed", { finalUrl });
-      return { ok: true, finalUrl };
+    console.log("[PW_APPLY] final url", finalUrl);
+    if (needsHuman) {
+      console.log("[PW_APPLY] bot-check detected");
     }
 
-    const tmpDir = resolveTmpDir();
-    await mkdir(tmpDir, { recursive: true });
-    const fileName = `apply-fail-${Date.now()}.png`;
-    screenshotPath = path.join("my-app", ".tmp", fileName);
-    await page.screenshot({ path: path.join(tmpDir, fileName), fullPage: true });
-
     return {
-      ok: false,
+      ok: success,
       finalUrl,
-      reason: CAPTCHA_RE.test(finalText) ? "Captcha detected" : "Submission was not confirmed",
-      screenshotPath,
-      htmlSnippet: finalText.slice(0, 500),
+      needsHuman,
+      message: success ? undefined : needsHuman ? "Human verification required." : "Submission could not be confirmed.",
+      debug: {
+        attemptedSelectors,
+        missingNames,
+        finalUrl,
+        success,
+        needsHuman,
+      },
     };
-  } catch (error) {
-    const finalUrl = page.url();
-    const tmpDir = resolveTmpDir();
-    await mkdir(tmpDir, { recursive: true });
-    const fileName = `apply-fail-${Date.now()}.png`;
-    screenshotPath = path.join("my-app", ".tmp", fileName);
-    await page.screenshot({ path: path.join(tmpDir, fileName), fullPage: true }).catch(() => undefined);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Playwright submit failed.";
+    console.log("[PW_APPLY] error", message);
 
     return {
       ok: false,
-      finalUrl,
-      reason: error instanceof Error ? error.message : "Playwright apply failed",
-      screenshotPath,
+      message,
+      debug: {
+        attemptedSelectors,
+        missingNames,
+        finalUrl: page.url(),
+        success: false,
+        needsHuman: false,
+      },
     };
   } finally {
-    if (resumeTempPath) {
-      await unlink(resumeTempPath).catch(() => undefined);
-    }
     await context.close().catch(() => undefined);
     await browser.close().catch(() => undefined);
   }

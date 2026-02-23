@@ -62,11 +62,10 @@ function sanitizeSnippet(text: string, maxLen = 300) {
 
 function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
   const normalizedText = sanitizeSnippet(html, 5000);
-  const successByUrl = finalUrl
-    ? /\/thank_you|thank_you|thanks|submitted|confirmation/i.test(finalUrl)
-    : false;
+  const successByUrl = finalUrl ? /\/confirmation|\/thank_you|thank_you|thanks|submitted/i.test(finalUrl) : false;
 
   const successPatterns = [
+    /\/confirmation/i,
     /thank you/i,
     /application submitted/i,
     /we (?:have|['’]ve) received/i,
@@ -241,27 +240,13 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     }
 
     const method = String(form.method || "").trim().toUpperCase();
-    if (method === "GET") {
+    if (method !== "POST" || /\/jobs\//i.test(form.action)) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Parsed form method was GET; not a submit form",
-          statusCode: 400,
-          finalUrl: form.action,
-          reason: "Greenhouse parser resolved a GET form instead of the submission POST form.",
-          hints: ["Refresh form parsing and ensure the apply/submit form is selected."],
-        },
-        { status: 400 }
-      );
-    }
-
-    if (/\/jobs\//i.test(form.action) || form.debug?.actionSuspicious) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Apply blocked: parsed submit action still looks like a job page, not the Greenhouse submission endpoint.",
-          action: form.action,
-          finalUrl: form.action,
+          error: "Submit endpoint not resolved",
+          actionUsed: form.action,
+          methodUsed: method || form.method,
         },
         { status: 400 }
       );
@@ -336,6 +321,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           error: "Greenhouse did not confirm submission",
           statusCode: submitRes.status,
           finalUrl: submitRes.url,
+          actionUsed: form.action,
+          methodUsed: "POST",
           reason: successCheck.reason,
           hints: successCheck.hints,
           errorSnippet: successCheck.errorSnippet,

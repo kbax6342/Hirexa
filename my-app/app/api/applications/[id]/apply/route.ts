@@ -1,10 +1,11 @@
-// my-app/app/api/applications/[id]/apply/route.ts
+import { unlink } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm, type GhField } from "@/app/lib/greenhouse/parseGreenhouseForm";
-import { applyWithPlaywright } from "@/app/lib/apply/playwrightApply";
+import { applyWithPlaywright, type PlaywrightApplyResult } from "@/app/lib/apply/playwrightApply";
+import { writeResumeToTemp } from "@/app/lib/apply/tempResume";
 
 export const runtime = "nodejs";
 
@@ -54,146 +55,19 @@ function mergeValue(field: GhField, answer: AnswerValue, hasAnswer: boolean, pre
   return Array.isArray(prefill) ? prefill[0] ?? "" : prefill;
 }
 
-function isMissingRequired(field: GhField, value: AnswerValue, hasResume: boolean) {
-  if (!field.required) return false;
-  if (field.name === "security_code") return false;
-  if (field.type === "file") return !hasResume;
-  if (Array.isArray(value)) return value.length === 0;
-  return String(value ?? "").trim().length === 0;
-}
-
-function looksLikeBotCheck(html: string) {
-  return /captcha|turnstile|cloudflare|verify you are human|security check/i.test(html);
-}
-
-function pickResumeFieldName(fields: GhField[]) {
-  const fileFields = fields.filter((field) => field.type === "file");
-  if (!fileFields.length) return null;
-
-  const namedResume = fileFields.find((field) => {
-    const text = `${field.name} ${field.label}`.toLowerCase();
-    return text.includes("resume") || text.includes("cv");
-  });
-
-  return namedResume?.name ?? fileFields[0].name;
-}
-
-function sanitizeSnippet(text: string, maxLen = 300) {
-  return text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/[\r\n\t]+/g, " ").trim().slice(0, maxLen);
-}
-
-function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
-  const normalizedText = sanitizeSnippet(html, 5000);
-  const successByConfirmationUrl = finalUrl ? /\/(confirmation|thank|submitted)/i.test(finalUrl) : false;
-
-  const successPatterns = [
-    /\/confirmation/i,
-    /thank you/i,
-    /application submitted/i,
-    /we (?:have|['’]ve) received/i,
-    /your application has been received/i,
-    /thanks for applying/i,
-  ];
-  const successByHtml = /\/confirmation/i.test(html) || successPatterns.some((re) => re.test(normalizedText));
-
-  const hasCaptchaIndicators = /captcha|turnstile|cloudflare/i.test(normalizedText);
-
-  return {
-    ok: successByConfirmationUrl || successByHtml,
-    hasCaptchaIndicators,
-    reason: hasCaptchaIndicators ? "Captcha detected" : sanitizeSnippet(html, 200),
-    errorSnippet: sanitizeSnippet(html, 220),
-  };
-}
-
-async function tryGreenhouseFastPath(args: {
-  jobUrl: string;
-  answers: AnswersMap;
-  userProfile: unknown;
-  resume?: { fileName: string; blob: Uint8Array<ArrayBufferLike> | Buffer } | null;
-}) {
-  const form = await parseGreenhouseForm(args.jobUrl);
-  if (!Array.isArray(form.fields) || form.fields.length === 0) {
-    return { ok: false as const, reason: "No fields parsed; cannot submit." };
-  }
-
-  const { prefillValues } = mapProfileToForm(form.fields, args.userProfile as never);
-
-  const finalValuesToSubmit: AnswersMap = {};
-  const missingRequired: string[] = [];
-
-  for (const field of form.fields) {
-    const hasAnswer = Object.prototype.hasOwnProperty.call(args.answers, field.name);
-    const answerValue = normalizeAnswer(args.answers[field.name], field);
-    const prefillValue = normalizeAnswer(prefillValues[field.name], field);
-    const finalValue = mergeValue(field, answerValue, hasAnswer, prefillValue);
-
-    finalValuesToSubmit[field.name] = finalValue;
-
-    if (isMissingRequired(field, finalValue, Boolean(args.resume))) {
-      missingRequired.push(field.name);
-    }
-  }
-
-  if (missingRequired.length > 0) {
-    return {
-      ok: false as const,
-      reason: "Please complete all required fields before applying.",
-      missingRequired,
-    };
-  }
-
-  const method = String(form.method || "").trim().toUpperCase();
-  if (method !== "POST") {
-    return { ok: false as const, reason: "Submit endpoint not resolved" };
-  }
-
-  const fd = new FormData();
-  Object.entries(form.hidden).forEach(([key, value]) => fd.append(key, String(value)));
-
-  for (const field of form.fields) {
-    if (field.type === "file") continue;
-    const value = finalValuesToSubmit[field.name];
-    if (field.name === "security_code" && String(value ?? "").trim().length === 0) continue;
-    if (Array.isArray(value)) {
-      value.forEach((item) => fd.append(field.name, item));
-    } else {
-      fd.set(field.name, value ?? "");
-    }
-  }
-
-  const resumeFieldName = pickResumeFieldName(form.fields);
-  if (args.resume && resumeFieldName) {
-    fd.set(resumeFieldName, new Blob([args.resume.blob], { type: "application/pdf" }), args.resume.fileName || "resume.pdf");
-  }
-
-  const submitRes = await fetch(form.action, { method: "POST", body: fd, redirect: "follow" });
-  const responseHtml = await submitRes.text();
-  const outcome = detectGreenhouseOutcome(responseHtml, submitRes.url);
-
-  console.info("[apply] greenhouse fast path", {
-    statusCode: submitRes.status,
-    finalUrl: submitRes.url,
-    ok: outcome.ok,
-    hasCaptchaIndicators: outcome.hasCaptchaIndicators,
-  });
-
-  if (!submitRes.ok || !outcome.ok) {
-    const needsHuman = !outcome.ok && looksLikeBotCheck(responseHtml);
-    return {
-      ok: false as const,
-      reason: outcome.reason,
-      finalUrl: submitRes.url,
-      errorSnippet: outcome.errorSnippet,
-      needsHuman,
-    };
-  }
-
-  return { ok: true as const, finalUrl: submitRes.url };
-}
-
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    if (process.env.PLAYWRIGHT_ENABLED !== "true") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'Playwright apply is disabled. Set PLAYWRIGHT_ENABLED="true", run "npm i playwright" and "npx playwright install chromium".',
+        },
+        { status: 501 }
+      );
+    }
+
     const session = await auth();
     const userId = session?.user?.id;
 
@@ -203,7 +77,6 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     const { id } = await context.params;
     const body = (await req.json()) as ApplyBody;
-    const requestAnswers = body.answers ?? {};
 
     const application = await prisma.jobApplication.findFirst({
       where: { id, userProfile: { userId } },
@@ -219,66 +92,49 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     }
 
     const savedAnswers = (application.answersJson as AnswersMap | null) ?? {};
+    const requestAnswers = body.answers ?? {};
     const answers: AnswersMap = { ...savedAnswers, ...requestAnswers };
-    const resume = await prisma.resumeFile.findFirst({
-      where: {
-        profileId: application.userProfileId,
-        mimeType: "application/pdf",
-      },
-      orderBy: { createdAt: "desc" },
-    });
 
-    const resumePayload = resume
-      ? {
-          fileName: resume.fileName || "resume.pdf",
-          mimeType: resume.mimeType,
-          buffer: Buffer.from(resume.blob as Uint8Array<ArrayBufferLike>),
-        }
-      : undefined;
-
-    let result:
-      | { ok: true; finalUrl?: string }
-      | {
-          ok: false;
-          reason?: string;
-          finalUrl?: string;
-          screenshotPath?: string;
-          htmlSnippet?: string;
-          needsHuman?: boolean;
-        };
+    let finalValuesToSubmit: AnswersMap = { ...answers };
 
     if (isGreenhouseBoardUrl(application.jobUrl)) {
-      const greenhouse = await tryGreenhouseFastPath({
-        jobUrl: application.jobUrl,
-        answers,
-        userProfile: application.userProfile,
-        resume: resume ? { fileName: resume.fileName || "resume.pdf", blob: resume.blob } : null,
-      });
+      try {
+        const form = await parseGreenhouseForm(application.jobUrl);
+        const { prefillValues } = mapProfileToForm(form.fields, application.userProfile);
+        finalValuesToSubmit = {};
 
-      if (greenhouse.ok) {
-        result = { ok: true, finalUrl: greenhouse.finalUrl };
-      } else if (greenhouse.needsHuman) {
-        result = greenhouse;
-      } else {
-        console.info("[apply] greenhouse fast path failed, falling back to playwright", {
-          reason: greenhouse.reason,
-          finalUrl: greenhouse.finalUrl,
+        for (const field of form.fields) {
+          const hasAnswer = Object.prototype.hasOwnProperty.call(answers, field.name);
+          const answerValue = normalizeAnswer(answers[field.name], field);
+          const prefillValue = normalizeAnswer(prefillValues[field.name], field);
+          finalValuesToSubmit[field.name] = mergeValue(field, answerValue, hasAnswer, prefillValue);
+        }
+      } catch (error) {
+        console.log("[PW_APPLY] greenhouse parse failed, using merged answers", {
+          reason: error instanceof Error ? error.message : String(error),
         });
-        const pwResult = await applyWithPlaywright({
-          jobUrl: application.jobUrl,
-          answers,
-          resume: resumePayload,
-          timeoutMs: 90_000,
-        });
-        result = pwResult;
       }
-    } else {
+    }
+
+    const tempResume = await writeResumeToTemp(application.userProfileId);
+
+    console.log("[PW_APPLY] start", {
+      jobUrl: application.jobUrl,
+      valuesCount: Object.keys(finalValuesToSubmit).length,
+      hasResume: Boolean(tempResume?.path),
+    });
+
+    let result: PlaywrightApplyResult;
+    try {
       result = await applyWithPlaywright({
         jobUrl: application.jobUrl,
-        answers,
-        resume: resumePayload,
-        timeoutMs: 90_000,
+        values: finalValuesToSubmit,
+        resumePath: tempResume?.path ?? null,
       });
+    } finally {
+      if (tempResume?.path) {
+        await unlink(tempResume.path).catch(() => undefined);
+      }
     }
 
     if (result.ok) {
@@ -288,6 +144,10 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           status: "SENT",
           submittedAt: new Date(),
           answersJson: answers,
+          auditJson: {
+            finalValuesToSubmit,
+            playwright: result.debug ?? null,
+          },
         },
       });
 
@@ -299,6 +159,10 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       data: {
         status: "READY_TO_SEND",
         answersJson: answers,
+        auditJson: {
+          finalValuesToSubmit,
+          playwright: result.debug ?? null,
+        },
       },
     });
 
@@ -306,9 +170,9 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       return NextResponse.json(
         {
           ok: false,
-          error: "This application requires human verification (captcha). Please finish in the employer tab.",
           needsHuman: true,
           openUrl: application.jobUrl,
+          error: result.message ?? "Human verification required.",
         },
         { status: 409 }
       );
@@ -317,11 +181,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     return NextResponse.json(
       {
         ok: false,
-        error: "Auto-apply failed",
-        reason: result.reason,
-        finalUrl: result.finalUrl,
-        screenshotPath: result.screenshotPath,
-        htmlSnippet: result.htmlSnippet,
+        error: result.message ?? "Submission could not be confirmed.",
+        debug: result.debug,
       },
       { status: 502 }
     );

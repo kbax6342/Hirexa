@@ -92,6 +92,20 @@ function inputTypeFor(type: string) {
   return "text";
 }
 
+function isFieldMissingNow(field: AuditFieldState, current: string | string[]) {
+  if (!field.required) return false;
+
+  // Never block UI for bot/human checks
+  if (field.path === "security_code" || /security_code/i.test(field.path)) return false;
+
+  if (field.type === "checkbox") {
+    return !Array.isArray(current) || current.length === 0;
+  }
+
+  const txt = Array.isArray(current) ? (current[0] ?? "") : current;
+  return String(txt ?? "").trim().length === 0;
+}
+
 export default function AuditClient({ applicationId }: { applicationId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +114,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [appliedFinalUrl, setAppliedFinalUrl] = useState<string | null>(null);
+  const [manualOpenUrl, setManualOpenUrl] = useState<string | null>(null);
   const [applyDebug, setApplyDebug] = useState<{
     reason?: string;
     hints?: string[];
@@ -138,7 +153,6 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     [data]
   );
 
-  const missingCount = useMemo(() => fieldStates.filter((f) => Boolean(f.isMissing)).length, [fieldStates]);
   const actionSuspicious = Boolean(data?.meta?.actionSuspicious);
   const warning = data?.warning;
 
@@ -172,11 +186,18 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     return next;
   }, [fieldStates, getCurrentValue]);
 
+  const missingNow = useMemo(
+    () => fieldStates.filter((field) => isFieldMissingNow(field, getCurrentValue(field))),
+    [fieldStates, getCurrentValue]
+  );
+  const missingCountNow = missingNow.length;
+
   const handleApplyNow = async () => {
     try {
       setApplyLoading(true);
       setApplyMessage(null);
       setAppliedFinalUrl(null);
+      setManualOpenUrl(null);
       setApplyDebug(null);
 
       const res = await fetch(`/api/applications/${applicationId}/apply`, {
@@ -194,9 +215,17 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         finalUrl?: string;
         screenshotPath?: string;
         htmlSnippet?: string;
+        needsHuman?: boolean;
+        openUrl?: string;
       };
 
       if (!res.ok || !payload.ok) {
+        if (payload.needsHuman && payload.openUrl) {
+          setApplyMessage("Human verification required. Open the application and submit there.");
+          setManualOpenUrl(payload.openUrl);
+          return;
+        }
+
         const missing = Array.isArray(payload.missingRequired)
           ? ` Missing required: ${payload.missingRequired.join(", ")}`
           : "";
@@ -292,10 +321,10 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           <span
             className={[
               "rounded-full px-2 py-1 font-semibold",
-              missingCount > 0 ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700",
+              missingCountNow > 0 ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700",
             ].join(" ")}
           >
-            Missing required: {missingCount}
+            Missing required: {missingCountNow}
           </span>
 
           {fieldStates.length ? (
@@ -328,7 +357,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               ? valueRaw
               : toDisplayText(valueRaw);
 
-          const isMissing = Boolean(field.isMissing);
+          const isMissing = isFieldMissingNow(field, getCurrentValue(field));
 
           return (
             <div
@@ -470,7 +499,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         <button
           type="button"
           onClick={handleApplyNow}
-          disabled={applyLoading || missingCount > 0 || Boolean(data?.meta?.actionSuspicious)}
+          disabled={applyLoading || missingCountNow > 0 || Boolean(data?.meta?.actionSuspicious)}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {applyLoading ? "Applying..." : "Apply Now"}
@@ -486,11 +515,19 @@ export default function AuditClient({ applicationId }: { applicationId: string }
                 </a>
               </>
             ) : null}
+            {manualOpenUrl ? (
+              <>
+                {" "}
+                <a className="underline" href={manualOpenUrl} target="_blank" rel="noreferrer">
+                  Open application
+                </a>
+              </>
+            ) : null}
           </p>
         ) : null}
       </div>
 
-      {missingCount > 0 ? (
+      {missingCountNow > 0 ? (
         <p className="mt-2 text-sm text-amber-800">Fill required fields to enable Apply Now.</p>
       ) : actionSuspicious ? (
         <p className="mt-2 text-sm text-amber-800">Apply disabled: submit endpoint not resolved.</p>

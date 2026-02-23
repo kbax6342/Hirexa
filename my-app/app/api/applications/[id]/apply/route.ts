@@ -62,7 +62,7 @@ function sanitizeSnippet(text: string, maxLen = 300) {
 
 function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
   const normalizedText = sanitizeSnippet(html, 5000);
-  const successByUrl = finalUrl ? /\/confirmation|\/thank_you|thank_you|thanks|submitted/i.test(finalUrl) : false;
+  const successByConfirmationUrl = finalUrl ? /\/confirmation/i.test(finalUrl) : false;
 
   const successPatterns = [
     /\/confirmation/i,
@@ -72,7 +72,7 @@ function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
     /your application has been received/i,
     /thanks for applying/i,
   ];
-  const successByHtml = successPatterns.some((re) => re.test(normalizedText));
+  const successByHtml = /\/confirmation/i.test(html) || successPatterns.some((re) => re.test(normalizedText));
 
   const hasGenericErrorText =
     /error/i.test(normalizedText) && /(required|missing|please|fix the errors)/i.test(normalizedText);
@@ -118,13 +118,13 @@ function detectGreenhouseOutcome(html: string, finalUrl?: string | null) {
   if (/field_with_errors|error_messages|class=["'][^"']*errors?/i.test(html)) {
     hints.push("Greenhouse returned inline field validation errors; inspect the highlighted fields in the form.");
   }
-  if (!successByUrl && !successByHtml) {
+  if (!successByConfirmationUrl && !successByHtml) {
     hints.push("No thank-you confirmation detected in response URL/body; Greenhouse may require JS-only interactions.");
   }
 
   return {
-    ok: successByUrl || successByHtml,
-    successByUrl,
+    ok: successByConfirmationUrl || successByHtml,
+    successByUrl: successByConfirmationUrl,
     successByHtml,
     hasErrorIndicators,
     hasCaptchaIndicators,
@@ -172,6 +172,10 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     }
 
     const form = await parseGreenhouseForm(application.jobUrl);
+    if (!Array.isArray(form.fields) || form.fields.length === 0) {
+      return NextResponse.json({ ok: false, error: "No fields parsed; cannot submit." }, { status: 400 });
+    }
+
     const { prefillValues } = mapProfileToForm(form.fields, application.userProfile);
 
     const savedAnswers = (application.answersJson as AnswersMap | null) ?? {};
@@ -240,7 +244,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     }
 
     const method = String(form.method || "").trim().toUpperCase();
-    if (method !== "POST" || /\/jobs\//i.test(form.action)) {
+    if (method !== "POST") {
       return NextResponse.json(
         {
           ok: false,
@@ -321,11 +325,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           error: "Greenhouse did not confirm submission",
           statusCode: submitRes.status,
           finalUrl: submitRes.url,
-          actionUsed: form.action,
-          methodUsed: "POST",
-          reason: successCheck.reason,
-          hints: successCheck.hints,
-          errorSnippet: successCheck.errorSnippet,
+          hint: "Check required questions / security code / captcha.",
         },
         { status: 502 }
       );
@@ -352,7 +352,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     return NextResponse.json({
       ok: true,
       status: "SENT",
-      confirmation: "Confirmed: Greenhouse submission successful",
+      finalUrl: submitRes.url,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Server error";

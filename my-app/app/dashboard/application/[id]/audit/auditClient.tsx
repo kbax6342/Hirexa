@@ -172,11 +172,8 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         ok?: boolean;
         error?: string;
         missingRequired?: string[];
-        confirmation?: string;
-        reason?: string;
-        hints?: string[];
+        hint?: string;
         finalUrl?: string;
-        errorSnippet?: string;
       };
 
       if (!res.ok || !payload.ok) {
@@ -184,18 +181,18 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           ? ` Missing required: ${payload.missingRequired.join(", ")}`
           : "";
         setApplyDebug({
-          reason: payload.reason,
-          hints: Array.isArray(payload.hints) ? payload.hints : [],
+          reason: payload.hint,
+          hints: [],
           finalUrl: payload.finalUrl,
-          errorSnippet: payload.errorSnippet,
+          errorSnippet: undefined,
         });
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
       setApplyMessage(
-        payload.confirmation
-          ? `${payload.confirmation}. Confirmed: You applied. Check your email for Greenhouse confirmation.`
-          : "Confirmed: You applied. Check your email for Greenhouse confirmation."
+        payload.finalUrl
+          ? `You applied. Greenhouse confirmation page reached. (${payload.finalUrl})`
+          : "You applied. Greenhouse confirmation page reached."
       );
       await loadAudit();
     } catch (e: unknown) {
@@ -445,7 +442,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         <button
           type="button"
           onClick={handleApplyNow}
-          disabled={applyLoading || actionSuspicious || missingCount > 0}
+          disabled={applyLoading || missingCount > 0 || fieldStates.length === 0}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           {applyLoading ? "Applying..." : "Apply Now"}
@@ -454,9 +451,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       </div>
 
       {actionSuspicious ? (
-        <p className="mt-2 text-sm text-amber-800">
-          Apply is disabled because we couldn&apos;t find the Greenhouse submit endpoint yet.
-        </p>
+        <p className="mt-2 text-sm text-amber-800">Submit action looks suspicious; submission may fail.</p>
       ) : null}
 
       {applyDebug ? (

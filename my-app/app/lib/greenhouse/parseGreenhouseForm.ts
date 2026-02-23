@@ -16,24 +16,30 @@ export type GhParsedForm = {
   hidden: Record<string, string>;
   fields: GhField[];
   debug: {
-    pickedFormReason: string;
-    formCount: number;
+    pickedFormReason?: string;
+    formCount?: number;
     pickedFormAction?: string;
     pickedFormMethod?: string;
     iframeUsed?: string | null;
+    iframeSrcFound?: string | null;
+    formsFoundOnJobPage?: number;
+    formsFoundOnEmbed?: number;
+    firstBytesJobPage?: string;
+    firstBytesEmbed?: string;
+    selectedFormReason?: string;
     actionSuspicious?: boolean;
     actionSuspiciousReason?: string;
-    embedTried: string[];
-    jobPagesTried: string[];
-    selectedFormHasJobApplication: boolean;
+    embedTried: Array<{ url: string; status?: number; ok?: boolean; note?: string }>;
+    jobPagesTried: Array<{ url: string; status?: number; ok?: boolean; note?: string }>;
+    selectedFormHasJobApplication?: boolean;
   };
 };
 
 type GhOption = { value: string; label: string };
 
 type FetchHtmlResult =
-  | { ok: true; url: string; html: string }
-  | { ok: false; url: string; html: "" };
+  | { ok: true; status: number; url: string; html: string; note?: string; firstBytes: string }
+  | { ok: false; status?: number; url: string; html: ""; note?: string; firstBytes: string };
 
 function norm(s: string) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
@@ -177,6 +183,10 @@ function normalizeAction(rawAction: string, baseUrl: string) {
   return toAbsUrl(baseUrl, rawAction) || baseUrl;
 }
 
+function htmlSnippet(html: string) {
+  return html.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
 function extractForm(
   $: cheerio.CheerioAPI,
   formEl: cheerio.Element,
@@ -290,33 +300,53 @@ function extractForm(
   return { action, method, hidden, fields, debug };
 }
 
-async function tryFetchHtml(url: string): Promise<FetchHtmlResult> {
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "accept-language": "en-US,en;q=0.9",
-    },
-    redirect: "follow",
-  });
+async function tryFetchHtml(url: string, note?: string): Promise<FetchHtmlResult> {
+  try {
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+    });
 
-  if (!res.ok) return { ok: false, url: res.url || url, html: "" };
-  return { ok: true, url: res.url || url, html: await res.text() };
+    const finalUrl = res.url || url;
+    const body = await res.text();
+    const firstBytes = htmlSnippet(body);
+    if (!res.ok) return { ok: false, status: res.status, url: finalUrl, html: "", note, firstBytes };
+    return { ok: true, status: res.status, url: finalUrl, html: body, note, firstBytes };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      url,
+      html: "",
+      note: note ? `${note}: ${String(error)}` : String(error),
+      firstBytes: "",
+    };
+  }
 }
 
 function extractIframeEmbedUrls($: cheerio.CheerioAPI, baseUrl: string) {
   const urls = new Set<string>();
+  let iframeSrcFound: string | null = null;
   $("iframe[src]").each((_, iframe) => {
     const src = norm($(iframe).attr("src") || "");
     if (!src) return;
-    if (src.includes("/embed/job_app") || src.includes("job_app?for=")) {
+    if (
+      src.includes("embed/job_app") ||
+      src.includes("job_app?for=") ||
+      src.includes("embed?for=") ||
+      src.includes("job_applications")
+    ) {
+      if (!iframeSrcFound) iframeSrcFound = src;
       const abs = toAbsUrl(baseUrl, src);
       if (abs) urls.add(abs);
     }
   });
-  return [...urls];
+  return { urls: [...urls], iframeSrcFound };
 }
 
 function buildEmbedFallbackUrls(jobUrl: string) {
@@ -326,6 +356,8 @@ function buildEmbedFallbackUrls(jobUrl: string) {
   return [
     `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
     `https://job-boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
+    `https://boards.greenhouse.io/embed/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}`,
+    `https://job-boards.greenhouse.io/embed/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}`,
   ];
 }
 
@@ -336,13 +368,20 @@ function unique(list: string[]) {
 function parseFromHtml(html: string, baseUrl: string, debug: GhParsedForm["debug"]): GhParsedForm | null {
   const $ = cheerio.load(html);
   const forms = $("form").toArray();
-  const strictForms = forms.filter((formEl) => hasJobApplicationInputs($, formEl));
+  const strictForms = forms.filter((formEl) => {
+    const scope = $(formEl);
+    return (
+      hasJobApplicationInputs($, formEl) ||
+      scope.find("input[name*='candidate' i], textarea[name*='candidate' i], select[name*='candidate' i]").length > 0
+    );
+  });
   const pickedForm = strictForms[0];
 
   if (!pickedForm) return null;
 
   debug.formCount = forms.length;
-  debug.pickedFormReason = `strict:job_application_fields (${strictForms.length}/${forms.length})`;
+  debug.pickedFormReason = `strict:application_like_fields (${strictForms.length}/${forms.length})`;
+  debug.selectedFormReason = debug.pickedFormReason;
   debug.iframeUsed = baseUrl;
   debug.selectedFormHasJobApplication = true;
 
@@ -351,28 +390,36 @@ function parseFromHtml(html: string, baseUrl: string, debug: GhParsedForm["debug
 
 export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm> {
   const altUrl = alternateHostUrl(jobUrl);
-  const jobPagesTried = unique([jobUrl, altUrl]);
+  const jobPageCandidates = unique([jobUrl, altUrl]);
 
+  const debug: GhParsedForm["debug"] = {
+    jobPagesTried: [],
+    embedTried: [],
+    iframeSrcFound: null,
+  };
   const embedCandidates: string[] = [];
 
-  for (const jobPageUrl of jobPagesTried) {
-    const fetched = await tryFetchHtml(jobPageUrl);
+  for (const jobPageUrl of jobPageCandidates) {
+    const fetched = await tryFetchHtml(jobPageUrl, "job_page");
+    debug.jobPagesTried.push({ url: fetched.url, status: fetched.status, ok: fetched.ok, note: fetched.note });
     if (!fetched.ok) continue;
 
+    debug.firstBytesJobPage = fetched.firstBytes;
+
     const $ = cheerio.load(fetched.html);
-    embedCandidates.push(...extractIframeEmbedUrls($, fetched.url));
+    debug.formsFoundOnJobPage = $("form").length;
+
+    const iframeInfo = extractIframeEmbedUrls($, fetched.url);
+    debug.iframeSrcFound = iframeInfo.iframeSrcFound;
+    embedCandidates.push(...iframeInfo.urls);
     embedCandidates.push(...buildEmbedFallbackUrls(fetched.url));
 
     const parsedPage = parseFromHtml(fetched.html, fetched.url, {
-      pickedFormReason: "",
-      formCount: 0,
-      embedTried: [],
-      jobPagesTried,
-      selectedFormHasJobApplication: false,
+      ...debug,
     });
     if (parsedPage) {
-      parsedPage.debug.jobPagesTried = jobPagesTried;
-      parsedPage.debug.embedTried = unique(embedCandidates);
+      parsedPage.debug.jobPagesTried = debug.jobPagesTried;
+      parsedPage.debug.embedTried = debug.embedTried;
       return parsedPage;
     }
   }
@@ -380,23 +427,24 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
   const embedTried = unique(embedCandidates);
 
   for (const embedUrl of embedTried) {
-    const fetched = await tryFetchHtml(embedUrl);
+    const fetched = await tryFetchHtml(embedUrl, "embed_candidate");
+    debug.embedTried.push({ url: fetched.url, status: fetched.status, ok: fetched.ok, note: fetched.note });
     if (!fetched.ok) continue;
 
+    debug.firstBytesEmbed = fetched.firstBytes;
+    const embed$ = cheerio.load(fetched.html);
+    debug.formsFoundOnEmbed = embed$("form").length;
+
     const parsed = parseFromHtml(fetched.html, fetched.url, {
-      pickedFormReason: "",
-      formCount: 0,
-      embedTried,
-      jobPagesTried,
-      selectedFormHasJobApplication: false,
+      ...debug,
     });
 
     if (parsed) {
-      parsed.debug.embedTried = embedTried;
-      parsed.debug.jobPagesTried = jobPagesTried;
+      parsed.debug.embedTried = debug.embedTried;
+      parsed.debug.jobPagesTried = debug.jobPagesTried;
       return parsed;
     }
   }
 
-  throw new Error("No application form found after trying job page + embed on both hosts.");
+  throw new Error("No application form found. DEBUG=" + JSON.stringify(debug));
 }

@@ -20,6 +20,19 @@ type AuditFieldState = {
   isCountryField?: boolean;
 };
 
+type GhParseDebug = {
+  jobPagesTried?: Array<{ url: string; status?: number; ok?: boolean; note?: string }>;
+  embedTried?: Array<{ url: string; status?: number; ok?: boolean; note?: string }>;
+  iframeSrcFound?: string | null;
+  formsFoundOnJobPage?: number;
+  formsFoundOnEmbed?: number;
+  firstBytesJobPage?: string;
+  firstBytesEmbed?: string;
+  selectedFormReason?: string;
+  actionSuspicious?: boolean;
+  actionSuspiciousReason?: string;
+};
+
 type AuditResponse = {
   ok: boolean;
   status?: string;
@@ -37,6 +50,7 @@ type AuditResponse = {
 
   warning?: string;
   error?: string;
+  debug?: GhParseDebug;
 };
 
 function isTextValueLabel(label: string) {
@@ -246,6 +260,15 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {data.error}
           </div>
+        ) : null}
+
+        {data?.ok === false && data?.debug ? (
+          <details className="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3 text-xs text-slate-800">
+            <summary className="cursor-pointer text-sm font-semibold">Debug</summary>
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2">
+              {JSON.stringify(data.debug, null, 2)}
+            </pre>
+          </details>
         ) : null}
 
         {data?.company || data?.location ? (

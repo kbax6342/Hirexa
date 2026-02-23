@@ -86,9 +86,20 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
     let form: GhParsedForm;
     try {
       form = await parseGreenhouseForm(application.jobUrl);
+      console.log("GH parse debug:", form.debug);
     } catch (parseError: unknown) {
       const message = parseError instanceof Error ? parseError.message : "Unable to parse Greenhouse form";
-      return NextResponse.json({ ok: false, error: message }, { status: 200 });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: message,
+          jobTitle: application.jobTitle,
+          company: application.company,
+          location: application.location ?? null,
+          meta: { fieldStates: [] },
+        },
+        { status: 200 }
+      );
     }
 
     const mapped = mapProfileToForm(form.fields, application.userProfile);
@@ -123,7 +134,6 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
 
     const status = missingRequired.length > 0 ? "IN_PREPARATION" : "READY_TO_SEND";
 
-    console.log("GH parse debug:", form.debug);
     console.log("GH fields count:", form.fields.length, "method:", form.method, "action:", form.action);
 
     const fieldStates = form.fields.map((f) => {
@@ -174,12 +184,7 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
     return NextResponse.json({
       ok: true,
       status,
-      ...(actionSuspicious
-        ? {
-            warning:
-              "Parsed submit action looks like a job page. Apply is disabled until submit endpoint is resolved.",
-          }
-        : {}),
+      ...(actionSuspicious ? { warning: "Parsed submit action looks suspicious, but fields were extracted." } : {}),
 
       jobTitle: application.jobTitle,
       company: application.company,

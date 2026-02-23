@@ -1,9 +1,8 @@
-// my-app/app/lib/greenhouse/parseGreenhouseForm.ts
 import * as cheerio from "cheerio";
 
 export type GhField = {
   name: string;
-  type: string; // text | email | tel | textarea | select | file | radio | checkbox | hidden | etc.
+  type: string;
   label: string;
   required: boolean;
   placeholder?: string;
@@ -24,25 +23,20 @@ export type GhParsedForm = {
     iframeUsed?: string | null;
     actionSuspicious?: boolean;
     actionSuspiciousReason?: string;
+    embedTried: string[];
+    jobPagesTried: string[];
+    selectedFormHasJobApplication: boolean;
   };
 };
 
 type GhOption = { value: string; label: string };
 
-function toAbsUrl(base: string, url: string) {
-  try {
-    return new URL(url, base).toString();
-  } catch {
-    return url;
-  }
-}
+type FetchHtmlResult =
+  | { ok: true; url: string; html: string }
+  | { ok: false; url: string; html: "" };
 
 function norm(s: string) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
-}
-
-function guessRequiredFromLabel(label: string) {
-  return /\*/.test(label) || /\brequired\b/i.test(label);
 }
 
 function safeMethod(m: string | undefined | null): "POST" | "GET" {
@@ -50,102 +44,18 @@ function safeMethod(m: string | undefined | null): "POST" | "GET" {
   return up === "GET" ? "GET" : "POST";
 }
 
-function isJobsPageUrl(url: string): boolean {
-  if (!url) return false;
+function toAbsUrl(base: string, url: string) {
   try {
-    const u = new URL(url);
-    const path = u.pathname.toLowerCase();
-    return /\/jobs\/\d+/.test(path) || /\/embed\/[^/]+\/jobs\/\d+/.test(path) || path.includes("/jobs/");
+    return new URL(url, base).toString();
   } catch {
-    return /\/jobs\//i.test(url);
+    return "";
   }
 }
 
-function normalizeAction($form: cheerio.Cheerio, baseUrl: string) {
-  const rawAction = $form.attr("action") || "";
-  return new URL(rawAction, baseUrl).toString();
-}
-
-function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
-  const action = norm($form.attr("action") || "");
-  const hasFile = $form.find("input[type='file']").length > 0;
-  const hasEmail = $form.find("input[type='email'], input[name*='email' i]").length > 0;
-  const hasName =
-    $form.find("input[name*='first' i], input[name*='last' i], input[name*='name' i]").length > 0;
-
-  const actionLooks =
-    /applications|apply|job_application|candidate/i.test(action) || /greenhouse/i.test(action);
-
-  const hasGhFieldNames =
-    $form.find(
-      "input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate' i], textarea[name*='candidate' i], select[name*='candidate' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i], input[name*='question' i]"
-    ).length > 0;
-  const hasStrictApplicationInputs =
-    $form.find(
-      "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate[' i], textarea[name*='candidate[' i], select[name*='candidate[' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
-    ).length > 0;
-  const hasAnswersAttributes =
-    $form.find(
-      "input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
-    ).length > 0;
-
-  const inputCount = $form.find("input, textarea, select").length;
-
-  let score = 0;
-  if (hasFile) score += 5;
-  if (actionLooks) score += 3;
-  if (hasGhFieldNames) score += 3;
-  if (hasStrictApplicationInputs) score += 25;
-  if (hasAnswersAttributes) score += 10;
-  if (hasEmail) score += 2;
-  if (hasName) score += 1;
-  if (inputCount >= 8) score += 2;
-
-  return { score, action, hasFile, inputCount };
-}
-
-function hasApplicationInputs($: cheerio.CheerioAPI, formEl: cheerio.Element) {
-  return (
-    $(formEl).find(
-      "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate[' i], textarea[name*='candidate[' i], select[name*='candidate[' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
-    ).length > 0
-  );
-}
-
-function findBestForm($: cheerio.CheerioAPI) {
-  const forms = $("form").toArray();
-  const strictForms = forms.filter((el) => hasApplicationInputs($, el));
-  const candidateForms = strictForms.length > 0 ? strictForms : forms;
-  let best: { el: cheerio.Element; score: number; reason: string } | null = null;
-
-  for (const el of candidateForms) {
-    const $form = $(el);
-    const { score, action, hasFile, inputCount } = looksLikeGreenhouseApplicationForm($form);
-
-    const id = norm($form.attr("id") || "");
-    const cls = norm($form.attr("class") || "");
-    const isSearchy = /search|newsletter|subscribe/i.test(`${id} ${cls} ${action}`);
-
-    if (isSearchy) continue;
-    if (inputCount === 0) continue;
-
-    const reasonParts = [
-      `score=${score}`,
-      hasFile ? "hasFile" : "",
-      action ? `action=${action}` : "",
-      `inputs=${inputCount}`,
-    ].filter(Boolean);
-
-    if (!best || score > best.score) {
-      best = { el, score, reason: reasonParts.join(" | ") };
-    }
-  }
-
-  if (!best && candidateForms.length > 0) {
-    best = { el: candidateForms[0], score: 0, reason: "fallback:first_form" };
-  }
-
-  return best;
+function toQuestionKey(name: string) {
+  const match = name.match(/job_application\[answers_attributes\]\[(\d+)\]\[(.+?)\]/);
+  if (!match) return undefined;
+  return `answers_attributes_${match[1]}`;
 }
 
 function findQuestionScope($el: cheerio.Cheerio) {
@@ -165,7 +75,6 @@ function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el
   }
 
   const scope = findQuestionScope($el);
-
   const scopeLegend = norm(scope.find("legend").first().text());
   if (scopeLegend) return scopeLegend;
 
@@ -178,9 +87,6 @@ function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el
   const anyScopeLabel = norm(scope.find("label").first().text());
   if (anyScopeLabel) return anyScopeLabel;
 
-  const questionLike = norm(scope.find(".question, .field-label, .application-question, p").first().text());
-  if (questionLike) return questionLike;
-
   if (aria) return aria;
   if (ph) return ph;
   if (name) return name;
@@ -189,31 +95,19 @@ function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el
 }
 
 function isRequiredEl($el: cheerio.Cheerio, label: string) {
-  const reqAttr = $el.attr("required");
-  if (reqAttr !== undefined) return true;
-
+  if ($el.attr("required") !== undefined) return true;
   const ariaReq = norm($el.attr("aria-required") || "");
   if (ariaReq === "true") return true;
-
   const dataReq = norm($el.attr("data-required") || "");
   if (dataReq === "true" || dataReq === "required") return true;
-
-  if (guessRequiredFromLabel(label)) return true;
+  if (/\*/.test(label) || /\brequired\b/i.test(label)) return true;
 
   const scope = findQuestionScope($el);
-  const scopeRequired =
+  return (
     scope.attr("aria-required") === "true" ||
     scope.attr("data-required") === "true" ||
-    /\brequired\b/i.test(norm(scope.attr("class") || ""));
-  if (scopeRequired) return true;
-
-  return false;
-}
-
-function toQuestionKey(name: string) {
-  const match = name.match(/job_application\[answers_attributes\]\[(\d+)\]\[(.+?)\]/);
-  if (!match) return undefined;
-  return `answers_attributes_${match[1]}`;
+    /\brequired\b/i.test(norm(scope.attr("class") || ""))
+  );
 }
 
 function optionLabelFromInput($: cheerio.CheerioAPI, $optEl: cheerio.Cheerio) {
@@ -224,12 +118,7 @@ function optionLabelFromInput($: cheerio.CheerioAPI, $optEl: cheerio.Cheerio) {
   const wrapped = norm($optEl.closest("label").text());
   if (wrapped) return wrapped;
 
-  const sibling = norm(
-    $optEl
-      .nextAll("label, span")
-      .first()
-      .text()
-  );
+  const sibling = norm($optEl.nextAll("label, span").first().text());
   if (sibling) return sibling;
 
   return String($optEl.attr("value") ?? "Option");
@@ -245,29 +134,47 @@ function dedupeOptions(options: GhOption[]) {
   });
 }
 
-function pickStrictSubmitForm($: cheerio.CheerioAPI, selectedFormEl: cheerio.Element, baseUrl: string): {
-  formEl: cheerio.Element;
-  reason: string;
-} {
-  const $selected = $(selectedFormEl);
-  const selectedAction = normalizeAction($selected, baseUrl);
-  const selectedRawAction = norm($selected.attr("action") || "");
-  const selectedLooksWrong = !selectedRawAction || isJobsPageUrl(selectedAction);
-
-  if (!selectedLooksWrong) {
-    return { formEl: selectedFormEl, reason: "selected:action-ok" };
+function parseBoardAndJobId(jobUrl: string) {
+  try {
+    const u = new URL(jobUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const board = parts[0] || "";
+    const jobsIdx = parts.findIndex((p) => p === "jobs");
+    const jobId = jobsIdx >= 0 ? parts[jobsIdx + 1] || "" : "";
+    return { board, jobId };
+  } catch {
+    return { board: "", jobId: "" };
   }
+}
 
-  const alt = $("form")
-    .filter((_, form) => hasApplicationInputs($, form))
-    .first()
-    .get(0);
-
-  if (alt) {
-    return { formEl: alt, reason: `selected:replaced_due_to_action(${selectedAction})` };
+function alternateHostUrl(inputUrl: string) {
+  try {
+    const u = new URL(inputUrl);
+    if (u.hostname.startsWith("job-boards.greenhouse.io")) {
+      u.hostname = "boards.greenhouse.io";
+      return u.toString();
+    }
+    if (u.hostname.startsWith("boards.greenhouse.io")) {
+      u.hostname = "job-boards.greenhouse.io";
+      return u.toString();
+    }
+    return "";
+  } catch {
+    return "";
   }
+}
 
-  return { formEl: selectedFormEl, reason: `selected:kept_suspicious_action(${selectedAction})` };
+function hasJobApplicationInputs($: cheerio.CheerioAPI, formEl: cheerio.Element) {
+  return (
+    $(formEl).find(
+      "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
+    ).length > 0
+  );
+}
+
+function normalizeAction(rawAction: string, baseUrl: string) {
+  if (!norm(rawAction)) return baseUrl;
+  return toAbsUrl(baseUrl, rawAction) || baseUrl;
 }
 
 function extractForm(
@@ -275,32 +182,26 @@ function extractForm(
   formEl: cheerio.Element,
   baseUrl: string,
   debug: GhParsedForm["debug"]
-) {
-  const strictPick = pickStrictSubmitForm($, formEl, baseUrl);
-  const $form = $(strictPick.formEl);
-
-  const action = normalizeAction($form, baseUrl);
+): GhParsedForm {
+  const $form = $(formEl);
+  const rawAction = $form.attr("action") || "";
+  const action = normalizeAction(rawAction, baseUrl);
   let method = safeMethod($form.attr("method"));
   if (method === "GET") method = "POST";
 
   const hidden: Record<string, string> = {};
-  $form
-    .find(
-      "input[type='hidden'], input[name*='csrf' i], input[name*='token' i], input[name*='security' i], input[id*='security' i]"
-    )
-    .each((_, el) => {
-      const $el = $(el);
-      const name = norm($el.attr("name") || "");
-      if (!name) return;
-      hidden[name] = String($el.attr("value") ?? "");
-    });
+  $form.find("input[type='hidden']").each((_, el) => {
+    const $el = $(el);
+    const name = norm($el.attr("name") || "");
+    if (!name) return;
+    hidden[name] = String($el.attr("value") ?? "");
+  });
 
   const fieldsByName = new Map<string, GhField>();
   const orderedNames: string[] = [];
 
   const upsertField = (field: GhField) => {
     const existing = fieldsByName.get(field.name);
-
     const next: GhField = existing
       ? {
           ...existing,
@@ -311,10 +212,7 @@ function extractForm(
           required: existing.required || field.required,
           options: field.options ?? existing.options ?? [],
         }
-      : {
-          ...field,
-          options: field.options ?? [],
-        };
+      : { ...field, options: field.options ?? [] };
 
     fieldsByName.set(field.name, next);
     if (!orderedNames.includes(field.name)) orderedNames.push(field.name);
@@ -340,19 +238,9 @@ function extractForm(
     if (type === "radio" || type === "checkbox") {
       const value = String($el.attr("value") ?? (type === "checkbox" ? "on" : ""));
       const optionLabel = optionLabelFromInput($, $el).replace(/\*/g, "").trim() || value || "Option";
-
       const current = fieldsByName.get(name);
       const options = dedupeOptions([...(current?.options ?? []), { value, label: optionLabel }]);
-
-      upsertField({
-        name,
-        type,
-        label,
-        placeholder,
-        required,
-        questionKey,
-        options,
-      });
+      upsertField({ name, type, label, placeholder, required, questionKey, options });
       return;
     }
 
@@ -379,121 +267,136 @@ function extractForm(
       return;
     }
 
-    upsertField({
-      name,
-      type: tag === "textarea" ? "textarea" : type,
-      label,
-      placeholder,
-      required,
-      questionKey,
-    });
+    upsertField({ name, type: tag === "textarea" ? "textarea" : type, label, placeholder, required, questionKey });
   });
 
   const fields: GhField[] = orderedNames
     .map((name) => fieldsByName.get(name))
     .filter((f): f is GhField => Boolean(f && f.type !== "hidden"))
-    .map((f) => ({
-      ...f,
-      label: f.label || f.placeholder || f.name,
-      options: f.options ?? [],
-    }));
+    .map((f) => ({ ...f, label: f.label || f.placeholder || f.name, options: f.options ?? [] }));
 
-  debug.pickedFormReason = `${debug.pickedFormReason || ""}${debug.pickedFormReason ? " | " : ""}${strictPick.reason}`;
   debug.pickedFormAction = action;
   debug.pickedFormMethod = method;
+
+  const rawActionNorm = norm(rawAction);
+  if (!rawActionNorm) {
+    debug.actionSuspicious = true;
+    debug.actionSuspiciousReason = "missing_action";
+  } else if (!/^https?:\/\//i.test(action)) {
+    debug.actionSuspicious = true;
+    debug.actionSuspiciousReason = "non_absolute_action";
+  }
 
   return { action, method, hidden, fields, debug };
 }
 
-function parseBoardAndJobId(jobUrl: string) {
-  try {
-    const u = new URL(jobUrl);
-    const parts = u.pathname.split("/").filter(Boolean);
-
-    const board = parts[0] || "";
-    const jobsIdx = parts.findIndex((p) => p === "jobs");
-    const jobId = jobsIdx >= 0 ? parts[jobsIdx + 1] || "" : "";
-
-    return { board, jobId };
-  } catch {
-    return { board: "", jobId: "" };
-  }
-}
-
-function buildEmbedJobAppUrl(jobUrl: string) {
-  const { board, jobId } = parseBoardAndJobId(jobUrl);
-  if (!board || !jobId) return "";
-
-  return `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`;
-}
-
-async function parseFromHtml(html: string, baseUrl: string, debugPrefix: string): Promise<GhParsedForm | null> {
-  const $ = cheerio.load(html);
-  const best = findBestForm($);
-  const fallbackForm = $("form").first().get(0);
-  const picked =
-    best ??
-    (fallbackForm
-      ? { el: fallbackForm, score: 0, reason: "fallback:first_form" }
-      : null);
-
-  if (!picked) return null;
-
-  const debug: GhParsedForm["debug"] = {
-    pickedFormReason: `${debugPrefix}:${picked.reason}`,
-    formCount: $("form").length,
-    iframeUsed: baseUrl,
-  };
-
-  const parsed = extractForm($, picked.el, baseUrl, debug);
-  if (isJobsPageUrl(parsed.action)) {
-    parsed.debug.actionSuspicious = true;
-    parsed.debug.actionSuspiciousReason = "looks_like_jobs_page";
-  }
-  return parsed;
-}
-
-/**
- * Main entry
- */
-export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm> {
-  const defaultHeaders = {
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
-    accept: "text/html",
-  };
-
-  const res = await fetch(jobUrl, {
+async function tryFetchHtml(url: string): Promise<FetchHtmlResult> {
+  const res = await fetch(url, {
     cache: "no-store",
-    headers: defaultHeaders,
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "en-US,en;q=0.9",
+    },
+    redirect: "follow",
   });
 
-  if (!res.ok) {
-    throw new Error(`Failed to load job page: ${res.status}`);
-  }
+  if (!res.ok) return { ok: false, url: res.url || url, html: "" };
+  return { ok: true, url: res.url || url, html: await res.text() };
+}
 
-  const html = await res.text();
+function extractIframeEmbedUrls($: cheerio.CheerioAPI, baseUrl: string) {
+  const urls = new Set<string>();
+  $("iframe[src]").each((_, iframe) => {
+    const src = norm($(iframe).attr("src") || "");
+    if (!src) return;
+    if (src.includes("/embed/job_app") || src.includes("job_app?for=")) {
+      const abs = toAbsUrl(baseUrl, src);
+      if (abs) urls.add(abs);
+    }
+  });
+  return [...urls];
+}
+
+function buildEmbedFallbackUrls(jobUrl: string) {
+  const { board, jobId } = parseBoardAndJobId(jobUrl);
+  if (!board || !jobId) return [];
+
+  return [
+    `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
+    `https://job-boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
+  ];
+}
+
+function unique(list: string[]) {
+  return [...new Set(list.filter(Boolean))];
+}
+
+function parseFromHtml(html: string, baseUrl: string, debug: GhParsedForm["debug"]): GhParsedForm | null {
   const $ = cheerio.load(html);
+  const forms = $("form").toArray();
+  const strictForms = forms.filter((formEl) => hasJobApplicationInputs($, formEl));
+  const pickedForm = strictForms[0];
 
-  const iframeSrc =
-    $("iframe[src*='/embed/job_app']").attr("src") || $("iframe[src*='job_app?for=']").attr("src") || "";
+  if (!pickedForm) return null;
 
-  const fallbackEmbedUrl = buildEmbedJobAppUrl(jobUrl);
-  const iframeUrl = iframeSrc ? toAbsUrl(jobUrl, iframeSrc) : fallbackEmbedUrl;
+  debug.formCount = forms.length;
+  debug.pickedFormReason = `strict:job_application_fields (${strictForms.length}/${forms.length})`;
+  debug.iframeUsed = baseUrl;
+  debug.selectedFormHasJobApplication = true;
 
-  if (iframeUrl) {
-    const iframeRes = await fetch(iframeUrl, { cache: "no-store", headers: defaultHeaders });
-    if (iframeRes.ok) {
-      const iframeHtml = await iframeRes.text();
-      const parsedIframe = await parseFromHtml(iframeHtml, iframeUrl, "iframe");
-      if (parsedIframe) return parsedIframe;
+  return extractForm($, pickedForm, baseUrl, debug);
+}
+
+export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm> {
+  const altUrl = alternateHostUrl(jobUrl);
+  const jobPagesTried = unique([jobUrl, altUrl]);
+
+  const embedCandidates: string[] = [];
+
+  for (const jobPageUrl of jobPagesTried) {
+    const fetched = await tryFetchHtml(jobPageUrl);
+    if (!fetched.ok) continue;
+
+    const $ = cheerio.load(fetched.html);
+    embedCandidates.push(...extractIframeEmbedUrls($, fetched.url));
+    embedCandidates.push(...buildEmbedFallbackUrls(fetched.url));
+
+    const parsedPage = parseFromHtml(fetched.html, fetched.url, {
+      pickedFormReason: "",
+      formCount: 0,
+      embedTried: [],
+      jobPagesTried,
+      selectedFormHasJobApplication: false,
+    });
+    if (parsedPage) {
+      parsedPage.debug.jobPagesTried = jobPagesTried;
+      parsedPage.debug.embedTried = unique(embedCandidates);
+      return parsedPage;
     }
   }
 
-  const parsedPage = await parseFromHtml(html, jobUrl, "page");
-  if (!parsedPage) {
-    throw new Error("No form detected on job page (and no usable iframe).");
+  const embedTried = unique(embedCandidates);
+
+  for (const embedUrl of embedTried) {
+    const fetched = await tryFetchHtml(embedUrl);
+    if (!fetched.ok) continue;
+
+    const parsed = parseFromHtml(fetched.html, fetched.url, {
+      pickedFormReason: "",
+      formCount: 0,
+      embedTried,
+      jobPagesTried,
+      selectedFormHasJobApplication: false,
+    });
+
+    if (parsed) {
+      parsed.debug.embedTried = embedTried;
+      parsed.debug.jobPagesTried = jobPagesTried;
+      return parsed;
+    }
   }
 
-  return parsedPage;
+  throw new Error("No application form found after trying job page + embed on both hosts.");
 }

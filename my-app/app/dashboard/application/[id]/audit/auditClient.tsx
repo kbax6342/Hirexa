@@ -115,6 +115,11 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [appliedFinalUrl, setAppliedFinalUrl] = useState<string | null>(null);
   const [manualOpenUrl, setManualOpenUrl] = useState<string | null>(null);
+  const [needsHuman, setNeedsHuman] = useState(false);
+  const [liveViewerUrl, setLiveViewerUrl] = useState<string | null>(null);
+  const [liveSessionId, setLiveSessionId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
   const [applyDebug, setApplyDebug] = useState<{
     reason?: string;
     hints?: string[];
@@ -199,6 +204,10 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       setAppliedFinalUrl(null);
       setManualOpenUrl(null);
       setApplyDebug(null);
+      setNeedsHuman(false);
+      setLiveViewerUrl(null);
+      setLiveSessionId(null);
+      setStatusMessage(null);
 
       const res = await fetch(`/api/applications/${applicationId}/apply`, {
         method: "POST",
@@ -217,11 +226,17 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         htmlSnippet?: string;
         needsHuman?: boolean;
         openUrl?: string;
+        viewerUrl?: string;
+        sessionId?: string;
+        message?: string;
       };
 
       if (res.status === 409 && payload.needsHuman) {
-        setApplyMessage("Human verification required. Open the application and submit there.");
-        setManualOpenUrl(payload.openUrl ?? null);
+        setNeedsHuman(true);
+        setApplyMessage(payload.message ?? "Almost done — verification required.");
+        setLiveViewerUrl(payload.viewerUrl ?? null);
+        setLiveSessionId(payload.sessionId ?? null);
+        setManualOpenUrl(payload.openUrl ?? payload.viewerUrl ?? null);
         return;
       }
 
@@ -240,9 +255,14 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
+      setNeedsHuman(false);
       setApplyMessage("You applied");
       setAppliedFinalUrl(payload.finalUrl ?? null);
       setApplyDebug(null);
+      setNeedsHuman(false);
+      setLiveViewerUrl(null);
+      setLiveSessionId(null);
+      setStatusMessage(null);
       await loadAudit();
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
@@ -250,6 +270,42 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       setApplyLoading(false);
     }
   };
+
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      setStatusLoading(true);
+      const res = await fetch(`/api/applications/${applicationId}/status`, { cache: "no-store" });
+      const payload = (await res.json()) as { ok?: boolean; status?: string; submittedAt?: string; finalUrl?: string };
+
+      if (!res.ok || !payload.ok) {
+        throw new Error("Unable to refresh status");
+      }
+
+      if (payload.status === "SENT") {
+        setNeedsHuman(false);
+        setApplyMessage("Application submitted successfully.");
+        setAppliedFinalUrl(payload.finalUrl ?? null);
+        setStatusMessage("Status updated: SENT");
+      } else {
+        setStatusMessage(`Current status: ${payload.status ?? "UNKNOWN"}`);
+      }
+
+      await loadAudit();
+    } catch (e: unknown) {
+      setStatusMessage(e instanceof Error ? e.message : "Unable to refresh status");
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [applicationId, loadAudit]);
+
+  const handleSubmittedCheck = useCallback(async () => {
+    setStatusMessage("Checking status...");
+    for (let i = 0; i < 20; i += 1) {
+      await refreshStatus();
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }, [refreshStatus]);
 
   if (loading) {
     return (
@@ -527,6 +583,44 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           </p>
         ) : null}
       </div>
+
+
+      {needsHuman ? (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">Almost done — verification required.</p>
+          <p className="mt-1">Complete captcha/security checks and click Submit in the live browser window.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {liveViewerUrl ? (
+              <a
+                href={liveViewerUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md bg-amber-600 px-3 py-2 font-semibold text-white"
+              >
+                Open Live Application Window
+              </a>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleSubmittedCheck}
+              disabled={statusLoading}
+              className="rounded-md border border-amber-400 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
+            >
+              {statusLoading ? "Checking..." : "I Submitted"}
+            </button>
+            <button
+              type="button"
+              onClick={refreshStatus}
+              disabled={statusLoading}
+              className="rounded-md border border-amber-300 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
+            >
+              Refresh status
+            </button>
+          </div>
+          {liveSessionId ? <p className="mt-2 text-xs">Session: {liveSessionId}</p> : null}
+          {statusMessage ? <p className="mt-2">{statusMessage}</p> : null}
+        </div>
+      ) : null}
 
       {missingCountNow > 0 ? (
         <p className="mt-2 text-sm text-amber-800">Fill required fields to enable Apply Now.</p>

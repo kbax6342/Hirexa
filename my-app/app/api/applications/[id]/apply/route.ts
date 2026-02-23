@@ -61,8 +61,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       return NextResponse.json(
         {
           ok: false,
-          error:
-            'Playwright apply is disabled. Set PLAYWRIGHT_ENABLED="true", run "npm i playwright" and "npx playwright install chromium".',
+          error: 'Playwright apply is disabled. Set PLAYWRIGHT_ENABLED="true".',
         },
         { status: 501 }
       );
@@ -110,7 +109,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           finalValuesToSubmit[field.name] = mergeValue(field, answerValue, hasAnswer, prefillValue);
         }
       } catch (error) {
-        console.log("[PW_APPLY] greenhouse parse failed, using merged answers", {
+        console.log("[REMOTE_APPLY] greenhouse parse failed, using merged answers", {
           reason: error instanceof Error ? error.message : String(error),
         });
       }
@@ -118,7 +117,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     const tempResume = await writeResumeToTemp(application.userProfileId);
 
-    console.log("[PW_APPLY] start", {
+    console.log("[REMOTE_APPLY] start", {
       jobUrl: application.jobUrl,
       valuesCount: Object.keys(finalValuesToSubmit).length,
       hasResume: Boolean(tempResume?.path),
@@ -137,6 +136,11 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       }
     }
 
+    const playwrightAudit = {
+      finalValuesToSubmit,
+      playwright: result.debug ?? null,
+    };
+
     if (result.ok) {
       await prisma.jobApplication.update({
         where: { id: application.id },
@@ -144,14 +148,33 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
           status: "SENT",
           submittedAt: new Date(),
           answersJson: answers,
-          auditJson: {
-            finalValuesToSubmit,
-            playwright: result.debug ?? null,
-          },
+          auditJson: playwrightAudit,
         },
       });
 
       return NextResponse.json({ ok: true, status: "SENT", finalUrl: result.finalUrl });
+    }
+
+    if (result.needsHuman) {
+      await prisma.jobApplication.update({
+        where: { id: application.id },
+        data: {
+          status: "READY_TO_SEND",
+          answersJson: answers,
+          auditJson: playwrightAudit,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          ok: false,
+          needsHuman: true,
+          viewerUrl: result.debug?.viewerUrl,
+          message: "Almost done — please complete verification and click Submit in the live window.",
+          sessionId: result.debug?.sessionId,
+        },
+        { status: 409 }
+      );
     }
 
     await prisma.jobApplication.update({
@@ -159,24 +182,9 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
       data: {
         status: "READY_TO_SEND",
         answersJson: answers,
-        auditJson: {
-          finalValuesToSubmit,
-          playwright: result.debug ?? null,
-        },
+        auditJson: playwrightAudit,
       },
     });
-
-    if (result.needsHuman) {
-      return NextResponse.json(
-        {
-          ok: false,
-          needsHuman: true,
-          openUrl: application.jobUrl,
-          error: result.message ?? "Human verification required.",
-        },
-        { status: 409 }
-      );
-    }
 
     return NextResponse.json(
       {

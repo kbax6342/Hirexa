@@ -99,6 +99,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   const [overrides, setOverrides] = useState<Record<string, string | string[]>>({});
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [appliedFinalUrl, setAppliedFinalUrl] = useState<string | null>(null);
   const [applyDebug, setApplyDebug] = useState<{
     reason?: string;
     hints?: string[];
@@ -175,6 +176,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     try {
       setApplyLoading(true);
       setApplyMessage(null);
+      setAppliedFinalUrl(null);
       setApplyDebug(null);
 
       const res = await fetch(`/api/applications/${applicationId}/apply`, {
@@ -208,8 +210,9 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
-      setApplyMessage(payload.finalUrl ? "You applied." : "You applied.");
-      setApplyDebug(payload.finalUrl ? { finalUrl: payload.finalUrl } : null);
+      setApplyMessage("You applied");
+      setAppliedFinalUrl(payload.finalUrl ?? null);
+      setApplyDebug(null);
       await loadAudit();
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
@@ -472,7 +475,19 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         >
           {applyLoading ? "Applying..." : "Apply Now"}
         </button>
-        {applyMessage ? <p className="text-sm text-gray-700">{applyMessage}</p> : null}
+        {applyMessage ? (
+          <p className="text-sm text-gray-700">
+            {applyMessage}
+            {appliedFinalUrl ? (
+              <>
+                {" "}
+                <a className="underline" href={appliedFinalUrl} target="_blank" rel="noreferrer">
+                  {appliedFinalUrl}
+                </a>
+              </>
+            ) : null}
+          </p>
+        ) : null}
       </div>
 
       {actionSuspicious ? (

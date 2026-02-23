@@ -1,7 +1,7 @@
 // Install: npm i playwright
 // Install browser: npx playwright install chromium
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
 
@@ -55,7 +55,6 @@ function pickBestAnswer(answers: AnswersMap, candidate: FillCandidate): { key: s
   return null;
 }
 
-
 function resolveTmpDir() {
   const cwd = process.cwd();
   if (cwd.endsWith(`${path.sep}my-app`) || cwd === "my-app") return path.join(cwd, ".tmp");
@@ -79,17 +78,20 @@ export async function applyWithPlaywright(args: {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
+  page.setDefaultTimeout(Math.min(timeoutMs, 20_000));
 
   let screenshotPath: string | undefined;
+  let resumeTempPath: string | undefined;
 
   try {
-    console.info("[apply:pw] opening job URL", { jobUrl: args.jobUrl, timeoutMs });
+    console.info("[apply:pw] opening job URL", { jobUrl: args.jobUrl, timeoutMs, answerKeys: Object.keys(args.answers).length });
 
     await page.goto(args.jobUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
 
     const bodyText = flattenText(await page.locator("body").innerText().catch(() => ""));
     if (CAPTCHA_RE.test(bodyText)) {
+      console.info("[apply:pw] captcha detected before fill");
       return {
         ok: false,
         finalUrl: page.url(),
@@ -133,6 +135,8 @@ export async function applyWithPlaywright(args: {
       });
     });
 
+    console.info("[apply:pw] field candidates", { count: candidates.length });
+
     for (const candidate of candidates as FillCandidate[]) {
       const match = pickBestAnswer(args.answers, candidate);
       if (!match) continue;
@@ -157,7 +161,7 @@ export async function applyWithPlaywright(args: {
           const selected = Array.isArray(raw) ? raw.map((v) => String(v)) : [String(raw)];
           await locator.selectOption(selected.map((v) => ({ value: v })));
         } else if (candidate.type === "checkbox") {
-          if (toBooleanAnswer(raw)) {
+          if (toBooleanAnswer(raw) || (Array.isArray(raw) && raw.length > 0)) {
             await locator.check().catch(() => undefined);
           }
         } else if (candidate.type === "radio") {
@@ -165,7 +169,20 @@ export async function applyWithPlaywright(args: {
         } else if (["email", "tel", "url", "text", "number", "date", "search"].includes(candidate.type)) {
           await locator.fill(textValue);
         }
+
+        console.info("[apply:pw] filled field", { field: candidate.key, answerKey: match.key });
       } catch (error) {
+        try {
+          if (candidate.tag === "select") {
+            const selected = Array.isArray(raw) ? raw.map((v) => ({ label: String(v) })) : [{ label: String(raw) }];
+            await locator.selectOption(selected);
+            console.info("[apply:pw] selected by label fallback", { field: candidate.key, answerKey: match.key });
+            continue;
+          }
+        } catch {
+          // no-op, handled by log below
+        }
+
         console.info("[apply:pw] field fill skipped", {
           candidate: candidate.key,
           reason: error instanceof Error ? error.message : String(error),
@@ -176,22 +193,26 @@ export async function applyWithPlaywright(args: {
     if (args.resume) {
       const fileInput = page.locator('input[type="file"]').first();
       if ((await fileInput.count()) > 0) {
-        await fileInput.setInputFiles({
-          name: args.resume.fileName || "resume.pdf",
-          mimeType: args.resume.mimeType || "application/pdf",
-          buffer: args.resume.buffer,
-        });
-        console.info("[apply:pw] resume uploaded");
+        const tmpDir = resolveTmpDir();
+        await mkdir(tmpDir, { recursive: true });
+        resumeTempPath = path.join(tmpDir, `resume-upload-${Date.now()}.pdf`);
+        await writeFile(resumeTempPath, args.resume.buffer);
+
+        await fileInput.setInputFiles(resumeTempPath);
+        console.info("[apply:pw] resume uploaded", { path: resumeTempPath });
       }
     }
 
+    const beforeSubmitUrl = page.url();
     const submitButton = page.getByRole("button", { name: /submit application|submit|apply|send application|finish/i }).first();
     if ((await submitButton.count()) > 0) {
       await submitButton.click({ timeout: 10_000 });
+      console.info("[apply:pw] clicked button submit");
     } else {
       const submitInput = page.locator('input[type="submit"]').first();
       if ((await submitInput.count()) > 0) {
         await submitInput.click({ timeout: 10_000 });
+        console.info("[apply:pw] clicked input submit");
       } else {
         return {
           ok: false,
@@ -201,13 +222,19 @@ export async function applyWithPlaywright(args: {
       }
     }
 
-    await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-    await page.waitForTimeout(1_500);
+    await Promise.race([
+      page.waitForURL((url) => url.toString() !== beforeSubmitUrl, { timeout: 12_000 }),
+      page.waitForLoadState("domcontentloaded", { timeout: 12_000 }),
+      page.waitForSelector("text=/thank you|application submitted|we have received/i", { timeout: 12_000 }),
+    ]).catch(() => undefined);
+
+    await page.waitForTimeout(1_000);
 
     const finalUrl = page.url();
     const finalText = flattenText(await page.locator("body").innerText().catch(() => ""));
 
     if (SUCCESS_URL_RE.test(finalUrl) || SUCCESS_TEXT_RE.test(finalText)) {
+      console.info("[apply:pw] submission confirmed", { finalUrl });
       return { ok: true, finalUrl };
     }
 
@@ -239,6 +266,9 @@ export async function applyWithPlaywright(args: {
       screenshotPath,
     };
   } finally {
+    if (resumeTempPath) {
+      await unlink(resumeTempPath).catch(() => undefined);
+    }
     await context.close().catch(() => undefined);
     await browser.close().catch(() => undefined);
   }

@@ -78,7 +78,15 @@ function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
 
   const hasGhFieldNames =
     $form.find(
-      "input[name*='job_application' i], input[name*='candidate' i], input[name*='question' i]"
+      "input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate' i], textarea[name*='candidate' i], select[name*='candidate' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i], input[name*='question' i]"
+    ).length > 0;
+  const hasStrictApplicationInputs =
+    $form.find(
+      "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate[' i], textarea[name*='candidate[' i], select[name*='candidate[' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
+    ).length > 0;
+  const hasAnswersAttributes =
+    $form.find(
+      "input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
     ).length > 0;
 
   const inputCount = $form.find("input, textarea, select").length;
@@ -87,6 +95,8 @@ function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
   if (hasFile) score += 5;
   if (actionLooks) score += 3;
   if (hasGhFieldNames) score += 3;
+  if (hasStrictApplicationInputs) score += 25;
+  if (hasAnswersAttributes) score += 10;
   if (hasEmail) score += 2;
   if (hasName) score += 1;
   if (inputCount >= 8) score += 2;
@@ -94,11 +104,21 @@ function looksLikeGreenhouseApplicationForm($form: cheerio.Cheerio) {
   return { score, action, hasFile, inputCount };
 }
 
+function hasApplicationInputs($: cheerio.CheerioAPI, formEl: cheerio.Element) {
+  return (
+    $(formEl).find(
+      "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='candidate[' i], textarea[name*='candidate[' i], select[name*='candidate[' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
+    ).length > 0
+  );
+}
+
 function findBestForm($: cheerio.CheerioAPI) {
   const forms = $("form").toArray();
+  const strictForms = forms.filter((el) => hasApplicationInputs($, el));
+  const candidateForms = strictForms.length > 0 ? strictForms : forms;
   let best: { el: cheerio.Element; score: number; reason: string } | null = null;
 
-  for (const el of forms) {
+  for (const el of candidateForms) {
     const $form = $(el);
     const { score, action, hasFile, inputCount } = looksLikeGreenhouseApplicationForm($form);
 
@@ -121,8 +141,8 @@ function findBestForm($: cheerio.CheerioAPI) {
     }
   }
 
-  if (!best && forms.length > 0) {
-    best = { el: forms[0], score: 0, reason: "fallback:first_form" };
+  if (!best && candidateForms.length > 0) {
+    best = { el: candidateForms[0], score: 0, reason: "fallback:first_form" };
   }
 
   return best;
@@ -225,11 +245,10 @@ function dedupeOptions(options: GhOption[]) {
   });
 }
 
-function pickStrictSubmitForm(
-  $: cheerio.CheerioAPI,
-  selectedFormEl: cheerio.Element,
-  baseUrl: string
-): { formEl: cheerio.Element; reason: string } {
+function pickStrictSubmitForm($: cheerio.CheerioAPI, selectedFormEl: cheerio.Element, baseUrl: string): {
+  formEl: cheerio.Element;
+  reason: string;
+} {
   const $selected = $(selectedFormEl);
   const selectedAction = normalizeAction($selected, baseUrl);
   const selectedRawAction = norm($selected.attr("action") || "");
@@ -240,12 +259,9 @@ function pickStrictSubmitForm(
   }
 
   const alt = $("form")
-    .toArray()
-    .find((el) => {
-      const action = norm($(el).attr("action") || "").toLowerCase();
-      if (!action) return false;
-      return /applications|job_application|candidate|apply/.test(action);
-    });
+    .filter((_, form) => hasApplicationInputs($, form))
+    .first()
+    .get(0);
 
   if (alt) {
     return { formEl: alt, reason: `selected:replaced_due_to_action(${selectedAction})` };
@@ -447,16 +463,6 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     accept: "text/html",
   };
 
-  const embedUrl = buildEmbedJobAppUrl(jobUrl);
-  if (embedUrl) {
-    const embedRes = await fetch(embedUrl, { cache: "no-store", headers: defaultHeaders });
-    if (embedRes.ok) {
-      const embedHtml = await embedRes.text();
-      const parsedEmbed = await parseFromHtml(embedHtml, embedUrl, "embed");
-      if (parsedEmbed) return parsedEmbed;
-    }
-  }
-
   const res = await fetch(jobUrl, {
     cache: "no-store",
     headers: defaultHeaders,
@@ -470,13 +476,12 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
   const $ = cheerio.load(html);
 
   const iframeSrc =
-    $("iframe[src*='embed/job_app']").attr("src") ||
-    $("iframe[src*='job_app']").attr("src") ||
-    $("iframe[src*='greenhouse']").attr("src") ||
-    "";
+    $("iframe[src*='/embed/job_app']").attr("src") || $("iframe[src*='job_app?for=']").attr("src") || "";
 
-  if (iframeSrc) {
-    const iframeUrl = toAbsUrl(jobUrl, iframeSrc);
+  const fallbackEmbedUrl = buildEmbedJobAppUrl(jobUrl);
+  const iframeUrl = iframeSrc ? toAbsUrl(jobUrl, iframeSrc) : fallbackEmbedUrl;
+
+  if (iframeUrl) {
     const iframeRes = await fetch(iframeUrl, { cache: "no-store", headers: defaultHeaders });
     if (iframeRes.ok) {
       const iframeHtml = await iframeRes.text();

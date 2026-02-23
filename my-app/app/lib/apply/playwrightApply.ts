@@ -6,6 +6,8 @@ export type PlaywrightApplyResult = {
   ok: boolean;
   finalUrl?: string;
   needsHuman?: boolean;
+  openUrl?: string;
+  viewerUrl?: string;
   message?: string;
   debug?: {
     attemptedSelectors: string[];
@@ -17,6 +19,7 @@ export type PlaywrightApplyResult = {
     pageHtml?: string;
     sessionId?: string;
     viewerUrl?: string;
+    targetUrl?: string;
     success: boolean;
     needsHuman: boolean;
   };
@@ -37,8 +40,50 @@ function shouldUseRemoteBrowser() {
   return process.env.REMOTE_BROWSER_PROVIDER?.toLowerCase() === "browserbase";
 }
 
+function isGreenhouseUrl(jobUrl: string) {
+  try {
+    const host = new URL(jobUrl).hostname.toLowerCase();
+    return host.includes("greenhouse.io");
+  } catch {
+    return false;
+  }
+}
+
+function buildEmbedJobAppUrl(jobUrl: string) {
+  try {
+    const u = new URL(jobUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const board = parts[0] || "";
+    const jobsIdx = parts.findIndex((p) => p === "jobs");
+    const token = jobsIdx >= 0 ? parts[jobsIdx + 1] || "" : "";
+    if (!board || !token) return null;
+    return `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(token)}`;
+  } catch {
+    return null;
+  }
+}
+
+async function detectHumanVerification(page: import("playwright-core").Page) {
+  const checks = ["verify you are human", "captcha", "turnstile", "cloudflare"];
+  const html = await page.content().catch(() => "");
+  const pageText = await page.innerText("body").catch(() => "");
+  const verificationSignals = [
+    ...new Set([...containsSignal(html, checks), ...containsSignal(pageText, checks)]),
+  ];
+
+  return {
+    html,
+    pageText,
+    verificationSignals,
+    needsHuman: verificationSignals.length > 0,
+  };
+}
+
 export async function applyWithPlaywright(args: {
   jobUrl: string;
+  form?: {
+    embedUrl?: string;
+  };
   values: Record<string, string | string[]>;
   resumePath?: string | null;
 }): Promise<PlaywrightApplyResult> {
@@ -49,7 +94,8 @@ export async function applyWithPlaywright(args: {
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
-  const verificationChecks = ["verify you are human", "captcha", "turnstile", "cloudflare", "security check"];
+  const greenhouseEmbedUrl = isGreenhouseUrl(args.jobUrl) ? buildEmbedJobAppUrl(args.jobUrl) : null;
+  const targetUrl = args.form?.embedUrl ?? greenhouseEmbedUrl ?? args.jobUrl;
 
   try {
     if (shouldUseRemoteBrowser()) {
@@ -70,9 +116,35 @@ export async function applyWithPlaywright(args: {
     context = await browser.newContext();
     const page = await context.newPage();
 
-    console.log("[REMOTE_APPLY] goto", args.jobUrl);
-    await page.goto(args.jobUrl, { waitUntil: "domcontentloaded" });
+    console.log("[REMOTE_APPLY] goto", targetUrl);
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
     console.log("[REMOTE_APPLY] landed", page.url());
+
+    const preSubmitVerification = await detectHumanVerification(page);
+    if (preSubmitVerification.needsHuman) {
+      keepRemoteAlive = true;
+      return {
+        ok: false,
+        needsHuman: true,
+        openUrl: targetUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message: "Human verification required",
+        debug: {
+          attemptedSelectors,
+          missingNames,
+          finalUrl: page.url(),
+          submitSelectorUsed: null,
+          verificationSignals: preSubmitVerification.verificationSignals,
+          pageText: preSubmitVerification.pageText,
+          pageHtml: preSubmitVerification.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          success: false,
+          needsHuman: true,
+        },
+      };
+    }
 
     await page.waitForSelector("form input, form textarea, form select", { timeout: 15_000 });
 
@@ -200,6 +272,7 @@ export async function applyWithPlaywright(args: {
           pageHtml: await page.content().catch(() => ""),
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
           success: false,
           needsHuman: false,
         },
@@ -209,16 +282,11 @@ export async function applyWithPlaywright(args: {
     await page.waitForTimeout(1500);
 
     const finalUrl = page.url();
-    const html = await page.content();
-    const pageText = await page.innerText("body").catch(() => "");
-    const verificationSignals = [
-      ...new Set([...containsSignal(html, verificationChecks), ...containsSignal(pageText, verificationChecks)]),
-    ];
+    const { html, pageText, verificationSignals, needsHuman } = await detectHumanVerification(page);
     const success =
       finalUrl.toLowerCase().includes("/confirmation") ||
       /thank you|application submitted/i.test(html) ||
       /thank you|application submitted/i.test(pageText);
-    const needsHuman = verificationSignals.length > 0;
 
     console.log("[REMOTE_APPLY] final url", finalUrl);
 
@@ -230,6 +298,8 @@ export async function applyWithPlaywright(args: {
       ok: success,
       finalUrl,
       needsHuman,
+      openUrl: targetUrl,
+      viewerUrl: remoteSession?.viewerUrl,
       message: success ? undefined : needsHuman ? "Human verification required" : "Submission could not be confirmed.",
       debug: {
         attemptedSelectors,
@@ -241,6 +311,7 @@ export async function applyWithPlaywright(args: {
         pageHtml: html,
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
+        targetUrl,
         success,
         needsHuman,
       },
@@ -259,6 +330,7 @@ export async function applyWithPlaywright(args: {
         verificationSignals: [],
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
+        targetUrl,
         success: false,
         needsHuman: false,
       },

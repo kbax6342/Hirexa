@@ -300,12 +300,35 @@ export default function AuditClient({ applicationId }: { applicationId: string }
   }, [applicationId, loadAudit]);
 
   const handleSubmittedCheck = useCallback(async () => {
+    if (!liveViewerUrl) {
+      try {
+        setStatusLoading(true);
+        setStatusMessage("Marking as submitted...");
+        const res = await fetch(`/api/applications/${applicationId}/mark-submitted`, {
+          method: "POST",
+        });
+        const payload = (await res.json()) as { ok?: boolean; error?: string; status?: string };
+        if (!res.ok || !payload.ok) {
+          throw new Error(payload.error ?? "Unable to mark as submitted");
+        }
+        setNeedsHuman(false);
+        setApplyMessage("Application marked as submitted.");
+        setStatusMessage(`Status updated: ${payload.status ?? "SENT"}`);
+        await loadAudit();
+      } catch (e: unknown) {
+        setStatusMessage(e instanceof Error ? e.message : "Unable to mark as submitted");
+      } finally {
+        setStatusLoading(false);
+      }
+      return;
+    }
+
     setStatusMessage("Checking status...");
     for (let i = 0; i < 20; i += 1) {
       await refreshStatus();
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
-  }, [refreshStatus]);
+  }, [applicationId, liveViewerUrl, loadAudit, refreshStatus]);
 
   if (loading) {
     return (
@@ -588,7 +611,11 @@ export default function AuditClient({ applicationId }: { applicationId: string }
       {needsHuman ? (
         <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-semibold">Almost done — verification required.</p>
-          <p className="mt-1">Complete captcha/security checks and click Submit in the live browser window.</p>
+          <p className="mt-1">
+            {liveViewerUrl
+              ? "Complete captcha/security checks and click Submit in the live browser window."
+              : "Complete the application in a new tab, then confirm once submitted."}
+          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {liveViewerUrl ? (
               <a
@@ -599,24 +626,38 @@ export default function AuditClient({ applicationId }: { applicationId: string }
               >
                 Open Live Application Window
               </a>
+            ) : manualOpenUrl ? (
+              <a
+                href={manualOpenUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md bg-amber-600 px-3 py-2 font-semibold text-white"
+              >
+                Open Application to Finish
+              </a>
             ) : null}
             <button
               type="button"
               onClick={handleSubmittedCheck}
-              disabled={statusLoading}
+              disabled={statusLoading || (!liveViewerUrl && !manualOpenUrl)}
               className="rounded-md border border-amber-400 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
             >
               {statusLoading ? "Checking..." : "I Submitted"}
             </button>
-            <button
-              type="button"
-              onClick={refreshStatus}
-              disabled={statusLoading}
-              className="rounded-md border border-amber-300 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
-            >
-              Refresh status
-            </button>
+            {liveViewerUrl ? (
+              <button
+                type="button"
+                onClick={refreshStatus}
+                disabled={statusLoading}
+                className="rounded-md border border-amber-300 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
+              >
+                Refresh status
+              </button>
+            ) : null}
           </div>
+          {!liveViewerUrl ? (
+            <p className="mt-2 text-xs">Live status polling requires an active viewer session.</p>
+          ) : null}
           {liveSessionId ? <p className="mt-2 text-xs">Session: {liveSessionId}</p> : null}
           {statusMessage ? <p className="mt-2">{statusMessage}</p> : null}
         </div>

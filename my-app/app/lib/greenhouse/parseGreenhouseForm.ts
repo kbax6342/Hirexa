@@ -11,6 +11,7 @@ export type GhField = {
 };
 
 export type GhParsedForm = {
+  embedUrl?: string;
   action: string;
   method: "POST" | "GET";
   hidden: Record<string, string>;
@@ -369,6 +370,10 @@ function buildEmbedFallbackUrls(jobUrl: string) {
   ];
 }
 
+function buildEmbedJobAppUrl(jobUrl: string) {
+  return buildEmbedFallbackUrls(jobUrl)[0];
+}
+
 function unique(list: string[]) {
   return [...new Set(list.filter(Boolean))];
 }
@@ -393,10 +398,15 @@ function parseFromHtml(html: string, baseUrl: string, debug: GhParsedForm["debug
   debug.iframeUsed = baseUrl;
   debug.selectedFormHasJobApplication = true;
 
-  return extractForm($, pickedForm, baseUrl, debug);
+  const parsed = extractForm($, pickedForm, baseUrl, debug);
+  return {
+    ...parsed,
+    embedUrl: buildEmbedJobAppUrl(baseUrl),
+  };
 }
 
 export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm> {
+  const embedUrl = buildEmbedJobAppUrl(jobUrl);
   const altUrl = alternateHostUrl(jobUrl);
   const jobPageCandidates = unique([jobUrl, altUrl]);
 
@@ -428,6 +438,7 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     if (parsedPage) {
       parsedPage.debug.jobPagesTried = debug.jobPagesTried;
       parsedPage.debug.embedTried = debug.embedTried;
+      parsedPage.embedUrl = embedUrl;
       return parsedPage;
     }
   }
@@ -450,6 +461,7 @@ export async function parseGreenhouseForm(jobUrl: string): Promise<GhParsedForm>
     if (parsed) {
       parsed.debug.embedTried = debug.embedTried;
       parsed.debug.jobPagesTried = debug.jobPagesTried;
+      parsed.embedUrl = embedUrl;
       return parsed;
     }
   }

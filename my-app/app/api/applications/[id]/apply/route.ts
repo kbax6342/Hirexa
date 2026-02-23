@@ -56,9 +56,14 @@ function mergeValue(field: GhField, answer: AnswerValue, hasAnswer: boolean, pre
 
 function isMissingRequired(field: GhField, value: AnswerValue, hasResume: boolean) {
   if (!field.required) return false;
+  if (field.name === "security_code") return false;
   if (field.type === "file") return !hasResume;
   if (Array.isArray(value)) return value.length === 0;
   return String(value ?? "").trim().length === 0;
+}
+
+function looksLikeBotCheck(html: string) {
+  return /captcha|turnstile|cloudflare|verify you are human|security check/i.test(html);
 }
 
 function pickResumeFieldName(fields: GhField[]) {
@@ -149,6 +154,7 @@ async function tryGreenhouseFastPath(args: {
   for (const field of form.fields) {
     if (field.type === "file") continue;
     const value = finalValuesToSubmit[field.name];
+    if (field.name === "security_code" && String(value ?? "").trim().length === 0) continue;
     if (Array.isArray(value)) {
       value.forEach((item) => fd.append(field.name, item));
     } else {
@@ -173,11 +179,13 @@ async function tryGreenhouseFastPath(args: {
   });
 
   if (!submitRes.ok || !outcome.ok) {
+    const needsHuman = !outcome.ok && looksLikeBotCheck(responseHtml);
     return {
       ok: false as const,
       reason: outcome.reason,
       finalUrl: submitRes.url,
       errorSnippet: outcome.errorSnippet,
+      needsHuman,
     };
   }
 
@@ -230,7 +238,14 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
     let result:
       | { ok: true; finalUrl?: string }
-      | { ok: false; reason?: string; finalUrl?: string; screenshotPath?: string; htmlSnippet?: string };
+      | {
+          ok: false;
+          reason?: string;
+          finalUrl?: string;
+          screenshotPath?: string;
+          htmlSnippet?: string;
+          needsHuman?: boolean;
+        };
 
     if (isGreenhouseBoardUrl(application.jobUrl)) {
       const greenhouse = await tryGreenhouseFastPath({
@@ -242,6 +257,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
       if (greenhouse.ok) {
         result = { ok: true, finalUrl: greenhouse.finalUrl };
+      } else if (greenhouse.needsHuman) {
+        result = greenhouse;
       } else {
         console.info("[apply] greenhouse fast path failed, falling back to playwright", {
           reason: greenhouse.reason,
@@ -284,6 +301,18 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         answersJson: answers,
       },
     });
+
+    if (result.needsHuman) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "This application requires human verification (captcha). Please finish in the employer tab.",
+          needsHuman: true,
+          openUrl: application.jobUrl,
+        },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json(
       {

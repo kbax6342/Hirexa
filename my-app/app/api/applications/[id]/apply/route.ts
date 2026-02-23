@@ -95,10 +95,12 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     const answers: AnswersMap = { ...savedAnswers, ...requestAnswers };
 
     let finalValuesToSubmit: AnswersMap = { ...answers };
+    let greenhouseEmbedUrl: string | undefined;
 
     if (isGreenhouseBoardUrl(application.jobUrl)) {
       try {
         const form = await parseGreenhouseForm(application.jobUrl);
+        greenhouseEmbedUrl = form.embedUrl;
         const { prefillValues } = mapProfileToForm(form.fields, application.userProfile);
         finalValuesToSubmit = {};
 
@@ -127,6 +129,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     try {
       result = await applyWithPlaywright({
         jobUrl: application.jobUrl,
+        form: { embedUrl: greenhouseEmbedUrl },
         values: finalValuesToSubmit,
         resumePath: tempResume?.path ?? null,
       });
@@ -169,7 +172,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         {
           ok: false,
           needsHuman: true,
-          viewerUrl: result.debug?.viewerUrl,
+          viewerUrl: result.viewerUrl ?? result.debug?.viewerUrl,
+          openUrl: result.openUrl ?? result.debug?.targetUrl ?? greenhouseEmbedUrl ?? application.jobUrl,
           message: "Almost done — please complete verification and click Submit in the live window.",
           sessionId: result.debug?.sessionId,
         },

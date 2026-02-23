@@ -104,6 +104,7 @@ export default function AuditClient({ applicationId }: { applicationId: string }
     hints?: string[];
     finalUrl?: string;
     errorSnippet?: string;
+    screenshotPath?: string;
   } | null>(null);
 
   const loadAudit = useCallback(async () => {
@@ -187,7 +188,10 @@ export default function AuditClient({ applicationId }: { applicationId: string }
         error?: string;
         missingRequired?: string[];
         hint?: string;
+        reason?: string;
         finalUrl?: string;
+        screenshotPath?: string;
+        htmlSnippet?: string;
       };
 
       if (!res.ok || !payload.ok) {
@@ -195,19 +199,17 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           ? ` Missing required: ${payload.missingRequired.join(", ")}`
           : "";
         setApplyDebug({
-          reason: payload.hint,
+          reason: payload.reason ?? payload.hint,
           hints: [],
           finalUrl: payload.finalUrl,
-          errorSnippet: undefined,
+          errorSnippet: payload.htmlSnippet,
+          screenshotPath: payload.screenshotPath,
         });
         throw new Error((payload.error ?? "Unable to submit application") + missing);
       }
 
-      setApplyMessage(
-        payload.finalUrl
-          ? `You applied. Greenhouse confirmation page reached. (${payload.finalUrl})`
-          : "You applied. Greenhouse confirmation page reached."
-      );
+      setApplyMessage(payload.finalUrl ? "You applied." : "You applied.");
+      setApplyDebug(payload.finalUrl ? { finalUrl: payload.finalUrl } : null);
       await loadAudit();
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
@@ -499,6 +501,15 @@ export default function AuditClient({ applicationId }: { applicationId: string }
           {applyDebug.finalUrl ? (
             <p className="mt-2 break-all">
               <span className="font-semibold">Final URL:</span> {applyDebug.finalUrl}
+            </p>
+          ) : null}
+
+          {process.env.NODE_ENV === "development" && applyDebug.screenshotPath ? (
+            <p className="mt-2 break-all">
+              <span className="font-semibold">Screenshot:</span>{" "}
+              <a className="underline" href={`/${applyDebug.screenshotPath}`} target="_blank" rel="noreferrer">
+                Download screenshot
+              </a>
             </p>
           ) : null}
 

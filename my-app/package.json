@@ -35,7 +35,8 @@
     "react-google-recaptcha-v3": "^1.11.0",
     "stripe": "^20.3.1",
     "tailwind-merge": "^3.4.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "playwright": "^1.55.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

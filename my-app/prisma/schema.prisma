@@ -120,11 +120,17 @@ model JobApplication {
   userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
   jobTitle    String
+  title       String?
+  source      String?
   company     String
   location    String?
   jobUrl      String?
   sourceJobId String?
-  status      ApplicationStatus @default(IN_PREPARATION)
+  status      String @default("READY_TO_APPLY")
+  missingFields String[] @default([])
+  submissionProof Json?
+  failureReason String?
+  verificationRequired Boolean @default(false)
 
   // ✅ ADD THESE:
   auditJson   Json?
@@ -244,11 +250,4 @@ model EmailVerificationCode {
   expiresAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-enum ApplicationStatus {
-  IN_PREPARATION
-  READY_TO_SEND
-  IN_PROGRESS
-  SENT
 }

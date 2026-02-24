@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
+import { deriveSourceFromUrl, normalizeJobUrl } from "@/app/lib/jobSources";
 
 export const runtime = "nodejs";
 
 type CreateBody = {
   jobTitle?: string;
+  title?: string;
   company?: string;
   location?: string;
   jobUrl?: string;
   sourceJobId?: string;
+  source?: string;
 };
 
 const normalizeText = (value: unknown) => String(value ?? "").trim();
@@ -24,14 +27,15 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json()) as CreateBody;
-    const jobTitle = normalizeText(body.jobTitle);
+    const title = normalizeText(body.title || body.jobTitle);
     const company = normalizeText(body.company);
     const location = normalizeText(body.location) || null;
-    const jobUrl = normalizeText(body.jobUrl) || null;
+    const jobUrl = normalizeJobUrl(normalizeText(body.jobUrl)) || null;
     const sourceJobId = normalizeText(body.sourceJobId) || null;
+    const source = normalizeText(body.source) || deriveSourceFromUrl(jobUrl ?? "");
 
-    if (!jobTitle || !company) {
-      return NextResponse.json({ error: "jobTitle and company are required." }, { status: 400 });
+    if (!title || !company) {
+      return NextResponse.json({ error: "jobTitle/title and company are required." }, { status: 400 });
     }
 
     const profile = await prisma.userProfile.upsert({
@@ -51,30 +55,36 @@ export async function POST(req: Request) {
           },
           create: {
             userProfileId: profile.id,
-            jobTitle,
+            jobTitle: title,
+            title,
+            source,
             company,
             location,
             jobUrl,
             sourceJobId,
-            status: "IN_PREPARATION",
+            status: "READY_TO_APPLY",
           },
           update: {
-            jobTitle,
+            jobTitle: title,
+            title,
+            source,
             company,
             location,
             jobUrl,
-            status: "IN_PREPARATION",
+            status: "READY_TO_APPLY",
           },
           select: { id: true },
         })
       : await prisma.jobApplication.create({
           data: {
             userProfileId: profile.id,
-            jobTitle,
+            jobTitle: title,
+            title,
+            source,
             company,
             location,
             jobUrl,
-            status: "IN_PREPARATION",
+            status: "READY_TO_APPLY",
           },
           select: { id: true },
         });

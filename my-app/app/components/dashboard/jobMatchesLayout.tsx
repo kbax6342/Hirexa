@@ -11,6 +11,7 @@ import AutofillButton from "./profileClient";
 import { decodeHtml } from "@/app/lib/utils/decodeHtml";
 import { cleanJobText, splitSections } from "@/app/lib/jobs/formatJobText";
 import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
+import { mixJobFeeds } from "@/app/lib/mixJobs";
 
 /** --------------------------
  * Greenhouse API shapes
@@ -51,6 +52,18 @@ type GreenhouseDetailsResponse = {
     description?: string;
     fullDescriptionHtml?: string;
   };
+};
+
+type AdzunaSearchResponse = {
+  jobs: Array<{
+    id: string;
+    title: string;
+    company: string;
+    location: string;
+    posted: string;
+    jobUrl: string;
+    description?: string;
+  }>;
 };
 
 /** --------------------------
@@ -164,10 +177,29 @@ export default function JobMatchesLayout() {
       const res = await fetch(url.toString(), { cache: "no-store" });
       const data = (await res.json()) as GreenhouseApiResponse;
 
+      const adzunaRes = await fetch(
+        `/api/adzuna/search?q=${encodeURIComponent("software engineer")}&page=${Math.floor(offset / LIMIT) + 1}&perPage=${LIMIT}`,
+        { cache: "no-store" }
+      );
+      const adzunaData = (await adzunaRes.json()) as AdzunaSearchResponse;
+
       const incoming = Array.isArray(data?.jobs) ? data.jobs : [];
       const mapped = incoming.map(greenhouseToJob);
+      const adzunaMapped: Job[] = Array.isArray(adzunaData?.jobs)
+        ? adzunaData.jobs.map((j) => ({
+            id: `adzuna:${j.id}`,
+            source: "adzuna",
+            title: j.title,
+            company: j.company,
+            location: j.location,
+            posted: j.posted,
+            jobUrl: j.jobUrl,
+            description: j.description,
+          }))
+        : [];
+      const mixedIncoming = mixJobFeeds(mapped, adzunaMapped);
 
-      const filtered = mapped.filter((j) => {
+      const filtered = mixedIncoming.filter((j) => {
         if (!j?.id) return false;
         if (seen.current.has(j.id)) return false;
         seen.current.add(j.id);
@@ -208,10 +240,14 @@ export default function JobMatchesLayout() {
       setFormatted(null);
 
       try {
-        const res = await fetch(
-          `/api/jobs/greenhouse/details?id=${encodeURIComponent(selectedId)}`,
-          { cache: "no-store" }
-        );
+        const selected = jobs.find((job) => job.id === selectedId) ?? null;
+        if (selected?.source === "adzuna") {
+          setSelectedDetails(selected);
+          setPretty(prettyFromDescription(String(selected.description ?? "")));
+          return;
+        }
+
+        const res = await fetch(`/api/jobs/greenhouse/details?id=${encodeURIComponent(selectedId)}`, { cache: "no-store" });
 
         const data = (await res.json()) as Partial<GreenhouseDetailsResponse> & {
           error?: string;
@@ -284,12 +320,13 @@ export default function JobMatchesLayout() {
 
   const addAppliedJob = async (job: Job) => {
     try {
-      const res = await fetch("/api/applications/create", {
+      const res = await fetch("/api/job-applications/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          source: job.source,
           sourceJobId: job.id,
-          jobTitle: job.title,
+          title: job.title,
           company: job.company,
           location: job.location,
           jobUrl: job.jobUrl ?? null,
@@ -307,7 +344,7 @@ export default function JobMatchesLayout() {
         return [job, ...prev];
       });
       setShowAppliedPanel(true);
-      router.push(`/dashboard/application/${data.applicationId}/audit`);
+      router.push(`/applications/${data.applicationId}/audit`);
     } catch (error) {
       console.error(error);
     }
@@ -360,7 +397,7 @@ export default function JobMatchesLayout() {
                           </button>
 
                           <span className="ml-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-700">
-                            {job.source}
+                            {job.source === "greenhouse" ? "Greenhouse" : job.source === "adzuna" ? "Adzuna" : job.source}
                           </span>
 
                           {job.badge ? (

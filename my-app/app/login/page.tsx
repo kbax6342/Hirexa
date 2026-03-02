@@ -7,12 +7,10 @@ import { startOnboarding } from "../api/actions/startOnboarding";
 import { useTransition, useState } from "react";
 import { Button } from "../components/ui/button";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/questions";
 
   const [isPending, startTransition] = useTransition(); // for signup action
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -40,7 +38,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push(callbackUrl);
+    router.push("/questions");
     router.refresh();
   }
 
@@ -120,14 +118,13 @@ export default function LoginPage() {
 
             {/* Social */}
             <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => signIn("google", { callbackUrl })}
+              <a
+                href="/api/auth/signin/google"
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
               >
                 <span className="text-base">G</span>
                 Google
-              </button>
+              </a>
 
               <a
                 href="/api/auth/signin/microsoft"
@@ -155,7 +152,7 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-10">
-           
+            <LoginFooter />
           </div>
         </div>
       </main>

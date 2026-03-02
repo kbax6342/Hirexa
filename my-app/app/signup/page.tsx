@@ -32,7 +32,7 @@ export default function SignupPage() {
         </div>
       </main>
 
-      <LoginFooter />
+     
     </div>
   );
 }

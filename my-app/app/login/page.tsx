@@ -152,7 +152,7 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-10">
-            <LoginFooter />
+           
           </div>
         </div>
       </main>

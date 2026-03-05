@@ -13,10 +13,14 @@ type JobCard = {
   id?: string;
   title: string;
   company: string;
+  companyName?: string;
   salary?: string;
   location: string;
   posted: string;
-  jobUrl: string;
+  jobUrl?: string;
+  url?: string;
+  description?: string;
+  descriptionText?: string;
   logoText?: string;
   logoUrl?: string;
   pill?: string;
@@ -278,6 +282,7 @@ function formatPostedDate(value: string) {
 function JobCardItem({ job }: { job: JobCard }) {
   const router = useRouter();
   const salaryText = job.salary ?? job.pill;
+  const externalUrl = job.jobUrl || job.url;
 
   return (
     <div
@@ -348,25 +353,25 @@ function JobCardItem({ job }: { job: JobCard }) {
       </div>
 
       {/* Actions pinned to bottom */}
-      <div className="mt-auto pt-5 flex items-center justify-between">
+      <div className="mt-auto pt-5 flex items-center justify-between gap-3">
         <Link
-          href={job.id ? `/jobs/details/${job.id}` : "/jobs/details"}
+          href={job.id ? `/job-hunter-pack?jobId=${encodeURIComponent(job.id)}` : "/job-hunter-pack"}
           className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
         >
-          View job
+          Get Job Hunter Pack
         </Link>
 
-        {job.jobUrl ? (
+        {externalUrl ? (
           <a
-            href={job.jobUrl}
+            href={externalUrl}
             target="_blank"
             rel="noreferrer"
             className="text-sm text-slate-500 hover:text-slate-700"
           >
-            Open source →
+            Apply Externally
           </a>
         ) : (
-          <span className="text-sm text-transparent select-none">Open source →</span>
+          <span className="text-sm text-transparent select-none">Apply Externally</span>
         )}
       </div>
     </div>

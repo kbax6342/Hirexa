@@ -19,6 +19,76 @@ model User {
   userProfile     UserProfile?
 }
 
+model LinkedInAccount {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  provider    String   @default("linkedin_sim")
+  connectedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model OutreachCampaign {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  targetCompanies String[] @default([])
+  targetRoles     String[] @default([])
+  targetTitles    String[] @default([])
+  location        String?
+  dailyLimit      Int      @default(10)
+  autoFollowUp    Boolean  @default(true)
+  followUpDays    Int      @default(5)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  templates OutreachTemplate[]
+  leads     RecruiterLead[]
+}
+
+model OutreachTemplate {
+  id         String   @id @default(cuid())
+  campaignId String
+  name       String
+  body       String
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model RecruiterLead {
+  id              String   @id @default(cuid())
+  campaignId      String
+  name            String
+  company         String
+  title           String
+  linkedinUrl     String
+  connectionLevel String   @default("2nd")
+  status          String   @default("READY")
+  lastMessagedAt  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  messages OutreachMessage[]
+
+  @@unique([campaignId, linkedinUrl])
+}
+
+model OutreachMessage {
+  id         String   @id @default(cuid())
+  leadId     String
+  templateId String?
+  body       String
+  status     String   @default("DRAFT")
+  sentAt     DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lead RecruiterLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
 model UserProfile {
   id                      String             @id @default(cuid())
   userId                  String?            @unique

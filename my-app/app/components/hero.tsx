@@ -10,28 +10,28 @@ import { useSession } from "next-auth/react";
 const jobCards = [
   {
     company: "Amazon",
-    abbr: "a",
+    abbr: "AMT",
     bgColor: "bg-[#232f3e]",
     textColor: "text-[#ff9900]",
     role: "Customer Success Manager",
   },
   {
     company: "IBM",
-    abbr: "IBM",
+    abbr: "LDM",
     bgColor: "bg-[#0f62fe]",
     textColor: "text-foreground",
     role: "Data Scientist",
   },
   {
     company: "Uber",
-    abbr: "Uber",
+    abbr: "TSD",
     bgColor: "bg-[#000000]",
     textColor: "text-foreground",
     role: "Marketing Specialist",
   },
   {
     company: "Shopify",
-    abbr: "S",
+    abbr: "SHP",
     bgColor: "bg-[#96bf48]",
     textColor: "text-foreground",
     role: "Product Designer",
@@ -81,8 +81,8 @@ export function Hero() {
                   active:scale-[0.97]
                 "
               >
-                <Link href="/dashboard">
-                  Get Started
+                <Link href="/jobs">
+                  Find Jobs
                   <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                 </Link>
               </Button>
@@ -112,11 +112,11 @@ export function Hero() {
                   {isPending ? (
                     <span className="flex items-center gap-2">
                       <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                      Getting started…
+                      Find Jobs
                     </span>
                   ) : (
                     <>
-                      Get Started
+                      Find Jobs
                       <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                     </>
                   )}

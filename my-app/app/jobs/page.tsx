@@ -1,6 +1,6 @@
 // File: /Hirexa/my-app/app/jobs/page.tsx
 "use client";
-
+import { useSession } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -275,10 +275,72 @@ function formatPostedDate(value: string) {
   });
 }
 
-
 function JobCardItem({ job }: { job: JobCard }) {
   const router = useRouter();
+  const { data: session, status } = useSession();
+
   const salaryText = job.salary ?? job.pill;
+
+  // --- Access model ---
+  // Assumption: you expose a boolean on the session like session.user.hasPaidAccess (recommended)
+  // If you instead store it as session.user.plan === "pro" or similar, update this line.
+  const isAuthed = !!session?.user;
+  const isPaid = !!(session as any)?.user?.hasPaidAccess; // <-- adjust to your session shape
+  const isLoadingAuth = status === "loading";
+
+  const jobIdQuery = job.id ? `?jobId=${encodeURIComponent(job.id)}` : "";
+
+  const goToDetails = () => {
+    sessionStorage.setItem("selectedJob", JSON.stringify(job));
+    router.push(`/jobs/details`);
+  };
+
+  const requirePaid = (paidHref: string) => {
+    // If session still loading, do nothing to avoid flicker/misroute
+    if (isLoadingAuth) return;
+
+    if (!isAuthed) {
+      // Send to login, with a return URL
+      const returnTo = encodeURIComponent(paidHref);
+      router.push(`/login?returnTo=${returnTo}`);
+      return;
+    }
+
+    if (!isPaid) {
+      // Send to paywall / pricing (keep your existing route)
+      router.push(`/job-hunter-pack${jobIdQuery}`);
+      return;
+    }
+
+    router.push(paidHref);
+  };
+
+  // --- Button labels vary by state ---
+  const applyLabel = isLoadingAuth
+    ? "Checking access…"
+    : !isAuthed
+      ? "Sign in to Apply with AI"
+      : !isPaid
+        ? "Unlock AI Apply"
+        : "Apply with AI";
+
+  const outreachLabel = isLoadingAuth
+    ? "Checking access…"
+    : !isAuthed
+      ? "Sign in for LinkedIn Outreach"
+      : !isPaid
+        ? "Unlock LinkedIn Outreach"
+        : "Message Recruiter (LinkedIn AI)";
+
+  const optimizeLabel = isLoadingAuth
+    ? "Checking access…"
+    : !isAuthed
+      ? "Sign in to Optimize Resume"
+      : !isPaid
+        ? "Unlock Resume Optimizer"
+        : "Optimize Resume";
+
+  const disabled = isLoadingAuth;
 
   return (
     <div
@@ -292,89 +354,122 @@ function JobCardItem({ job }: { job: JobCard }) {
     >
       {/* Top content */}
       <div>
-        {/* Title (clamp to keep heights consistent) */}
         <button
-          onClick={() => {
-            sessionStorage.setItem("selectedJob", JSON.stringify(job));
-            router.push(`/jobs/details`);
-          }}
+          onClick={goToDetails}
           className="block w-full text-left text-[15px] font-semibold text-slate-900 hover:underline line-clamp-2"
           title={job.title}
         >
           {job.title}
         </button>
 
-        {/* Company • Location */}
         <div className="mt-2 text-sm text-slate-600 line-clamp-1">
           {job.company} • {job.location}
         </div>
 
-        {/* Salary pill */}
         {salaryText ? (
-          <div className="mt-3 inline-flex rounded-md bg-background/40 px-2.5 py-1 text-xs font-medium text-">
+          <div className="mt-3 inline-flex rounded-md bg-background/40 px-2.5 py-1 text-xs font-medium text-slate-700">
             {salaryText}
           </div>
         ) : (
-          // keeps spacing consistent even when no salary
           <div className="mt-3 h-6" />
         )}
 
-       {/* Posted */}
-      {job.posted ? (
-        <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-          {/* calendar icon */}
-          <svg
-            className="h-4 w-4 text-sky-500"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-            <line x1="16" y1="2" x2="16" y2="6" />
-            <line x1="8" y1="2" x2="8" y2="6" />
-            <line x1="3" y1="10" x2="21" y2="10" />
-          </svg>
+        {job.posted ? (
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+            <svg
+              className="h-4 w-4 text-sky-500"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
 
-          <span className="line-clamp-1">
-            Posted on :  {formatPostedDate(job.posted)}
-          </span>
+            <span className="line-clamp-1">
+              Posted on : {formatPostedDate(job.posted)}
+            </span>
+          </div>
+        ) : (
+          <div className="mt-3 h-4" />
+        )}
+
+        <div className="mt-4 text-xs text-slate-500">
+          Hirexa AI can tailor your resume, generate a cover letter, and help you apply faster.
         </div>
-      ) : (
-        <div className="mt-3 h-4" />
-      )}
-
       </div>
 
       {/* Actions pinned to bottom */}
       <div className="mt-auto pt-5 space-y-2">
-        <Link
-          href={job.id ? `/job-hunter-pack?jobId=${job.id}` : "/job-hunter-pack"}
-          className="inline-flex w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+        {/* Primary: AI Apply Assistant (guarded) */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => requirePaid(job.id ? `/ai-apply${jobIdQuery}` : "/ai-apply")}
+          className={[
+            "inline-flex w-full items-center justify-center rounded-md px-4 py-2 text-sm font-semibold transition",
+            disabled
+              ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+              : "bg-primary text-primary-foreground hover:bg-primary/90",
+          ].join(" ")}
         >
-          Get Job Hunter Pack
-        </Link>
+          {applyLabel}
+        </button>
 
-        {(job.jobUrl || job.url) ? (
-          <a
-            href={job.jobUrl || job.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-          >
-            Apply Externally
-          </a>
-        ) : (
-          <span className="inline-flex w-full items-center justify-center rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-400">
-            Apply Externally
-          </span>
-        )}
+        {/* LinkedIn Outreach Agent (guarded) */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() =>
+            requirePaid(
+              job.id
+                ? `/agents/linkedin-outreach${jobIdQuery}`
+                : "/agents/linkedin-outreach"
+            )
+          }
+          className={[
+            "inline-flex w-full items-center justify-center rounded-md border px-4 py-2 text-sm font-medium transition",
+            disabled
+              ? "border-slate-200 text-slate-400 cursor-not-allowed"
+              : "border-slate-300 text-slate-700 hover:bg-slate-100",
+          ].join(" ")}
+        >
+          {outreachLabel}
+        </button>
+
+        {/* Resume Optimizer Agent (guarded) */}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() =>
+            requirePaid(job.id ? `/resume/optimize${jobIdQuery}` : "/resume/optimize")
+          }
+          className={[
+            "inline-flex w-full items-center justify-center rounded-md border px-4 py-2 text-sm font-medium transition",
+            disabled
+              ? "border-slate-200 text-slate-400 cursor-not-allowed"
+              : "border-slate-200 text-slate-700 hover:bg-slate-50",
+          ].join(" ")}
+        >
+          {optimizeLabel}
+        </button>
+
+        <button
+          onClick={goToDetails}
+          className="w-full text-center text-xs text-slate-500 hover:text-slate-700 underline-offset-4 hover:underline"
+        >
+          View job details
+        </button>
       </div>
     </div>
   );
 }
+
 
 
 

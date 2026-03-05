@@ -1,5 +1,6 @@
 import { Button } from "../components/ui/button"
 import { ArrowRight } from "lucide-react"
+import Link from "next/link";
 
 export function CTA() {
   return (
@@ -18,6 +19,7 @@ export function CTA() {
               Join Hirexa and start applying smarter — not harder.
             </p>
             <div className="mt-10">
+            <Link href="/questions/step2">
               <Button
                 size="lg"
                 className="bg-primary text-primary-foreground hover:bg-primary/90 h-13 rounded-full px-10 text-base font-semibold shadow-lg shadow-primary/25"
@@ -25,6 +27,7 @@ export function CTA() {
                 Get Started Today
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
+            </Link>
             </div>
           </div>
         </div>

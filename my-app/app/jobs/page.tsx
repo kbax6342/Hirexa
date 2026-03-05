@@ -17,6 +17,7 @@ type JobCard = {
   location: string;
   posted: string;
   jobUrl: string;
+  url?: string;
   logoText?: string;
   logoUrl?: string;
   pill?: string;
@@ -348,25 +349,27 @@ function JobCardItem({ job }: { job: JobCard }) {
       </div>
 
       {/* Actions pinned to bottom */}
-      <div className="mt-auto pt-5 flex items-center justify-between">
+      <div className="mt-auto pt-5 space-y-2">
         <Link
-          href={job.id ? `/jobs/details/${job.id}` : "/jobs/details"}
-          className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+          href={job.id ? `/job-hunter-pack?jobId=${job.id}` : "/job-hunter-pack"}
+          className="inline-flex w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
         >
-          View job
+          Get Job Hunter Pack
         </Link>
 
-        {job.jobUrl ? (
+        {(job.jobUrl || job.url) ? (
           <a
-            href={job.jobUrl}
+            href={job.jobUrl || job.url}
             target="_blank"
             rel="noreferrer"
-            className="text-sm text-slate-500 hover:text-slate-700"
+            className="inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
-            Open source →
+            Apply Externally
           </a>
         ) : (
-          <span className="text-sm text-transparent select-none">Open source →</span>
+          <span className="inline-flex w-full items-center justify-center rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-400">
+            Apply Externally
+          </span>
         )}
       </div>
     </div>

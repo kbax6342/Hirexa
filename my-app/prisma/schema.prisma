@@ -112,25 +112,24 @@ model StripePayment {
   @@index([stripeCheckoutSessionId])
 }
 
-
 model JobApplication {
   id String @id @default(cuid())
 
   userProfileId String
   userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
-  jobTitle    String
-  title       String?
-  source      String?
-  company     String
-  location    String?
-  jobUrl      String?
-  sourceJobId String?
-  status      String @default("READY_TO_APPLY")
-  missingFields String[] @default([])
-  submissionProof Json?
-  failureReason String?
-  verificationRequired Boolean @default(false)
+  jobTitle             String
+  title                String?
+  source               String?
+  company              String
+  location             String?
+  jobUrl               String?
+  sourceJobId          String?
+  status               String   @default("READY_TO_APPLY")
+  missingFields        String[] @default([])
+  submissionProof      Json?
+  failureReason        String?
+  verificationRequired Boolean  @default(false)
 
   // ✅ ADD THESE:
   auditJson   Json?
@@ -250,4 +249,49 @@ model EmailVerificationCode {
   expiresAt DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model JobHunterPack {
+  id              String    @id @default(cuid())
+  purchase        Purchase?
+  guestId         String
+  userId          String?
+  jobId           String?
+  jobTitle        String?
+  company         String?
+  jobUrl          String?
+  jobDescription  String?
+  resumeText      String?
+  notes           String?
+  optimizedResume String?
+  coverLetter     String?
+  interviewPrep   String?
+  status          String    @default("draft")
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([guestId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Purchase {
+  id              String        @id @default(cuid())
+  productKey      String
+  status          String        @default("pending")
+  guestId         String
+  userId          String?
+  amount          Int?
+  currency        String?
+  stripeSessionId String?       @unique
+  stripePaymentId String?
+  packId          String        @unique
+  pack            JobHunterPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([guestId])
+  @@index([userId])
+  @@index([status])
 }

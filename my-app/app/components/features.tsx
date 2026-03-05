@@ -3,75 +3,77 @@ import {
   Zap,
   FileText,
   PenTool,
-  Mail,
-  BarChart3,
+  MessageSquare,
+  Bot,
 } from "lucide-react"
+
+
 
 const features = [
   {
     icon: Search,
-    title: "Smart Job Matching",
+    title: "Smart Job Discovery",
     description:
-      "We continuously scan job listings and match you with roles that align with your skills, experience, and preferences.",
+      "Find the right opportunities faster with AI-powered job matching tailored to your skills, experience, and preferences.",
     bullets: [
-      "Personalized role recommendations",
-      "Location & remote-friendly matching",
-      "Updated opportunities added regularly",
+      "Personalized job recommendations",
+      "Matches based on your experience and skills",
+      "Remote and location-based filtering",
     ],
   },
   {
     icon: Zap,
-    title: "Easy Apply & Auto-Fill",
+    title: "AI Job Auto Apply",
     description:
-      "Apply faster with intelligent auto-fill that reuses your saved profile, resume, and work history.",
+      "Let Hirexa automatically submit job applications for you so you can focus on interviews instead of repetitive forms.",
     bullets: [
-      "Reduce repetitive form filling",
-      "Apply to more roles in less time",
-      "Consistent, accurate applications",
+      "Automatically applies to matching jobs",
+      "Uses your saved resume and profile",
+      "Submit more applications effortlessly",
     ],
   },
   {
     icon: FileText,
-    title: "Resume Management",
+    title: "Resume Optimization",
     description:
-      "Upload, store, and manage your resume in one place. AI-assisted improvements help tailor your resume to specific roles.",
+      "Improve your resume with AI-powered insights designed to pass ATS systems and impress recruiters.",
     bullets: [
-      "Secure resume storage",
-      "Role-specific resume adjustments",
-      "Clean, professional formatting",
+      "AI resume improvement suggestions",
+      "Keyword optimization for job descriptions",
+      "Role-specific resume tailoring",
     ],
   },
   {
     icon: PenTool,
-    title: "AI Cover Letters",
+    title: "AI Cover Letter Generator",
     description:
-      "Create personalized cover letters in seconds — tailored to the job description and your experience.",
+      "Generate professional cover letters tailored to every job posting in seconds.",
     bullets: [
-      "Job-specific customization",
-      "Professional, human-sounding language",
-      "Save time without sounding automated",
+      "Personalized for each job",
+      "Natural, professional language",
+      "Generated instantly",
     ],
   },
   {
-    icon: Mail,
-    title: "Follow-Up & Outreach",
+    icon: MessageSquare,
+    title: "Recruiter Outreach Automation",
     description:
-      "Stay professional and timely with structured follow-ups before and after interviews.",
+      "Connect with recruiters and hiring managers automatically using AI-powered outreach.",
     bullets: [
-      "Post-application follow-up emails",
-      "Interview thank-you notes",
-      "Pre-interview outreach templates",
+      "AI-generated LinkedIn outreach",
+      "Expand your professional network",
+      "Discover hidden job opportunities",
     ],
   },
   {
-    icon: BarChart3,
-    title: "Application Tracking",
+    icon: Bot,
+    title: "AI Career Coach",
     description:
-      "Know exactly where you stand in your job search. Track applied roles and monitor application status.",
+      "Get guidance from an AI assistant designed to help you land more interviews and job offers.",
     bullets: [
-      "Track applied roles",
-      "Monitor application status",
-      "Keep everything organized in one place",
+      "Career advice and job search strategy",
+      "Resume and profile feedback",
+      "Interview preparation support",
     ],
   },
 ]

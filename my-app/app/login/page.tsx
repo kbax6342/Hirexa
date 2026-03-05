@@ -8,6 +8,7 @@ import { useTransition, useState } from "react";
 import { Button } from "../components/ui/button";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import  GoogleButton from "../components/loginForm/GoogleButton"
 
 export default function LoginPage() {
   const router = useRouter();
@@ -43,7 +44,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-[116vh] bg-white">
       {/* soft background like the rest of your app */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-slate-50 via-white to-slate-50" />
@@ -51,7 +52,7 @@ export default function LoginPage() {
         <div className="absolute right-[-120px] bottom-[-140px] h-[420px] w-[420px] rounded-full bg-indigo-200/25 blur-3xl" />
       </div>
 
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 py-14">
+      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 pt-14">
         <div className="w-full max-w-md">
           {/* Brand */}
           <div className="mb-8 text-center">
@@ -118,13 +119,9 @@ export default function LoginPage() {
 
             {/* Social */}
             <div className="grid grid-cols-2 gap-3">
-              <a
-                href="/api/auth/signin/google"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <span className="text-base">G</span>
-                Google
-              </a>
+            <div className="mt-4">
+                <GoogleButton />
+              </div>
 
               <a
                 href="/api/auth/signin/microsoft"

@@ -6,32 +6,156 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
-import { Bars3Icon, XMarkIcon, ChevronDownIcon, UserCircleIcon } from "@heroicons/react/24/outline";
+import {
+  Bars3Icon,
+  XMarkIcon,
+  ChevronDownIcon,
+  UserCircleIcon,
+} from "@heroicons/react/24/outline";
 
-type NavItem = { label: string; href: string; dropdown?: boolean };
+type NavChild = {
+  label: string;
+  description?: string;
+  href: string;
+};
+
+type NavItem = {
+  label: string;
+  href?: string;
+  dropdown?: boolean;
+  children?: NavChild[];
+};
 
 const guestNav: NavItem[] = [
   { label: "Features", href: "#features" },
   { label: "How It Works", href: "#how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
-  { label: "Job Resources", href: "/resources", dropdown: true },
+  // { label: "Job Resources", href: "/resources", dropdown: true },
 ];
 
 const authedNav: NavItem[] = [
   { label: "Smart Matches", href: "/dashboard" },
-  { label: "Applications", href: "/applications" },
+  { label: "AI Application Assistant", href: "/job-tools/generate" },
+  //{ label: "Applications", href: "/applications" },
   { label: "Profile", href: "/profile" },
-  { label: "Job Tools", href: "/job-tools/generate" },
-  { label: "Events", href: "/job-tools/events" },
+  
+
+  // ✅ Dropdown-only parent (no /agents navigation to avoid 404)
+  {
+    label: "Agents",
+    href: "#",
+    dropdown: true,
+    children: [
+      // {
+      //   label: "Job Auto Apply Agent",
+      //   description: "Applies to jobs for you",
+      //   href: "/agents/auto-apply",
+      // },
+      {
+        label: "LinkedIn Outreach Agent",
+        description: "Messages recruiters",
+        href: "/agents/linkedin-outreach",
+      },
+      {
+        label: "Resume Optimizer Agent",
+        description: "Improves resumes",
+        href: "/agents/resume-optimizer",
+      },
+      {
+        label: "Career Coach Agent",
+        description: "AI job coach",
+        href: "/agents/career-coach",
+      },
+    ],
+  },
 ];
+
+function DesktopNav({ items }: { items: NavItem[] }) {
+  return (
+    <div className="hidden items-center gap-7 lg:flex">
+      {items.map((item) => {
+        if (!item.dropdown) {
+          return (
+            <Link
+              key={item.label}
+              href={item.href || "#"}
+              className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {item.label}
+            </Link>
+          );
+        }
+
+        return <NavDropdown key={item.label} item={item} />;
+      })}
+    </div>
+  );
+}
+
+function NavDropdown({ item }: { item: NavItem }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      {/* Parent: NOT a Link (prevents navigating to /agents 404) */}
+      <button
+        type="button"
+        className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => e.preventDefault()}
+      >
+        {item.label}
+        <ChevronDownIcon className="h-4 w-4" />
+      </button>
+
+      {/* Hover buffer (prevents flicker) */}
+      <div className="absolute left-0 top-full h-3 w-44" />
+
+      {/* Dropdown */}
+      {open && (
+        <div
+          className="absolute left-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-2xl border border-border/60 bg-background shadow-xl"
+          role="menu"
+        >
+          <div className="p-2">
+            {item.children?.map((child) => (
+              <Link
+                key={child.href}
+                href={child.href}
+                className="block rounded-xl p-3 hover:bg-secondary/60"
+                role="menuitem"
+              >
+                <div className="text-sm font-semibold text-foreground">
+                  {child.label}
+                </div>
+                {child.description ? (
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {child.description}
+                  </div>
+                ) : null}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Navbar() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const [mobileOpen, setMobileOpen] = useState(false);
-  const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(pathname || "/")}`;
+  const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(
+    pathname || "/"
+  )}`;
 
   const navLinks = isAuthed ? authedNav : guestNav;
 
@@ -49,31 +173,16 @@ export function Navbar() {
         </Link>
 
         {/* CENTER: NAV LINKS (desktop) */}
-        <div className="hidden items-center gap-7 lg:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.label}
-              href={link.href}
-              className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {link.label}
-              {link.dropdown && <ChevronDownIcon className="h-4 w-4" />}
-            </Link>
-          ))}
-        </div>
+        <DesktopNav items={navLinks} />
 
         {/* RIGHT: AUTH / ACCOUNT (desktop) */}
         <div className="hidden items-center gap-3 lg:flex">
           {status === "loading" ? (
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
           ) : !isAuthed ? (
-            <>
-              
-
-              <Button asChild className="rounded-full px-6 text-sm font-medium">
-                <Link href={signInHref}>Sign In</Link>
-              </Button>
-            </>
+            <Button asChild className="rounded-full px-6 text-sm font-medium">
+              <Link href={signInHref}>Sign In</Link>
+            </Button>
           ) : (
             <div className="relative group">
               {/* Trigger */}
@@ -125,7 +234,11 @@ export function Navbar() {
           onClick={() => setMobileOpen((v) => !v)}
           aria-label={mobileOpen ? "Close menu" : "Open menu"}
         >
-          {mobileOpen ? <XMarkIcon className="h-6 w-6" /> : <Bars3Icon className="h-6 w-6" />}
+          {mobileOpen ? (
+            <XMarkIcon className="h-6 w-6" />
+          ) : (
+            <Bars3Icon className="h-6 w-6" />
+          )}
         </button>
       </nav>
 
@@ -133,17 +246,43 @@ export function Navbar() {
       {mobileOpen && (
         <div className="border-t border-border/40 bg-background/95 backdrop-blur-xl lg:hidden">
           <div className="flex flex-col gap-1 px-6 py-6">
-            {navLinks.map((link) => (
-              <Link
-                key={link.label}
-                href={link.href}
-                className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                onClick={() => setMobileOpen(false)}
-              >
-                {link.label}
-                {link.dropdown && <ChevronDownIcon className="h-4 w-4" />}
-              </Link>
-            ))}
+            {navLinks.map((item) => {
+              // ✅ On mobile, show children as indented links when dropdown
+              if (item.dropdown && item.children?.length) {
+                return (
+                  <div key={item.label} className="flex flex-col">
+                    <div className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm font-medium text-foreground">
+                      {item.label}
+                      <ChevronDownIcon className="h-4 w-4" />
+                    </div>
+
+                    <div className="ml-3 flex flex-col gap-1 border-l border-border/50 pl-3">
+                      {item.children.map((child) => (
+                        <Link
+                          key={child.href}
+                          href={child.href}
+                          className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          onClick={() => setMobileOpen(false)}
+                        >
+                          {child.label}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href || "#"}
+                  className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
 
             <div className="mt-4 flex flex-col gap-3 border-t border-border/40 pt-4">
               {status === "loading" ? (

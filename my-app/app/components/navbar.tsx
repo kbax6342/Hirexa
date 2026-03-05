@@ -39,7 +39,6 @@ const authedNav: NavItem[] = [
   { label: "AI Application Assistant", href: "/job-tools/generate" },
   //{ label: "Applications", href: "/applications" },
   { label: "Profile", href: "/profile" },
-  
 
   // ✅ Dropdown-only parent (no /agents navigation to avoid 404)
   {
@@ -55,13 +54,13 @@ const authedNav: NavItem[] = [
       {
         label: "LinkedIn Outreach Agent",
         description: "Messages recruiters",
-        href: "/agents/linkedin-outreach",
+        href: "/job-tools/agents/linkedin-outreach",
       },
-      {
-        label: "Resume Optimizer Agent",
-        description: "Improves resumes",
-        href: "/agents/resume-optimizer",
-      },
+      // {
+      //   label: "Resume Optimizer Agent",
+      //   description: "Improves resumes",
+      //   href: "/agents/resume-optimizer",
+      // },
       {
         label: "Career Coach Agent",
         description: "AI job coach",
@@ -153,6 +152,10 @@ export function Navbar() {
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ✅ NEW: control collapse/expand for mobile "Agents"
+  const [mobileAgentsOpen, setMobileAgentsOpen] = useState(false);
+
   const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(
     pathname || "/"
   )}`;
@@ -231,7 +234,14 @@ export function Navbar() {
         <button
           type="button"
           className="text-foreground lg:hidden"
-          onClick={() => setMobileOpen((v) => !v)}
+          onClick={() => {
+            // ✅ when toggling entire mobile menu closed, also collapse agents
+            setMobileOpen((v) => {
+              const next = !v;
+              if (!next) setMobileAgentsOpen(false);
+              return next;
+            });
+          }}
           aria-label={mobileOpen ? "Close menu" : "Open menu"}
         >
           {mobileOpen ? (
@@ -247,27 +257,52 @@ export function Navbar() {
         <div className="border-t border-border/40 bg-background/95 backdrop-blur-xl lg:hidden">
           <div className="flex flex-col gap-1 px-6 py-6">
             {navLinks.map((item) => {
-              // ✅ On mobile, show children as indented links when dropdown
+              // ✅ On mobile, allow dropdown sections to collapse/expand (Agents)
               if (item.dropdown && item.children?.length) {
+                const isAgents = item.label === "Agents";
+                const expanded = isAgents ? mobileAgentsOpen : true;
+
                 return (
                   <div key={item.label} className="flex flex-col">
-                    <div className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm font-medium text-foreground">
-                      {item.label}
-                      <ChevronDownIcon className="h-4 w-4" />
-                    </div>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium text-foreground hover:bg-secondary"
+                      onClick={() => {
+                        if (isAgents) setMobileAgentsOpen((v) => !v);
+                      }}
+                      aria-expanded={expanded}
+                      aria-controls={isAgents ? "mobile-agents-panel" : undefined}
+                    >
+                      <span className="flex items-center gap-1">
+                        {item.label}
+                      </span>
+                      <ChevronDownIcon
+                        className={`h-4 w-4 transition-transform ${
+                          expanded ? "rotate-180" : ""
+                        }`}
+                      />
+                    </button>
 
-                    <div className="ml-3 flex flex-col gap-1 border-l border-border/50 pl-3">
-                      {item.children.map((child) => (
-                        <Link
-                          key={child.href}
-                          href={child.href}
-                          className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-                          onClick={() => setMobileOpen(false)}
-                        >
-                          {child.label}
-                        </Link>
-                      ))}
-                    </div>
+                    {expanded && (
+                      <div
+                        id={isAgents ? "mobile-agents-panel" : undefined}
+                        className="ml-3 flex flex-col gap-1 border-l border-border/50 pl-3"
+                      >
+                        {item.children.map((child) => (
+                          <Link
+                            key={child.href}
+                            href={child.href}
+                            className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            onClick={() => {
+                              setMobileOpen(false);
+                              setMobileAgentsOpen(false);
+                            }}
+                          >
+                            {child.label}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               }
@@ -277,7 +312,10 @@ export function Navbar() {
                   key={item.label}
                   href={item.href || "#"}
                   className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-                  onClick={() => setMobileOpen(false)}
+                  onClick={() => {
+                    setMobileOpen(false);
+                    setMobileAgentsOpen(false);
+                  }}
                 >
                   {item.label}
                 </Link>
@@ -294,13 +332,25 @@ export function Navbar() {
                     variant="ghost"
                     className="justify-start text-sm text-muted-foreground hover:bg-secondary"
                   >
-                    <Link href={signInHref} onClick={() => setMobileOpen(false)}>
+                    <Link
+                      href={signInHref}
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
                       Sign In
                     </Link>
                   </Button>
 
                   <Button asChild className="rounded-full text-sm font-medium">
-                    <Link href={signInHref} onClick={() => setMobileOpen(false)}>
+                    <Link
+                      href={signInHref}
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
                       Get Started
                     </Link>
                   </Button>
@@ -312,7 +362,13 @@ export function Navbar() {
                     variant="ghost"
                     className="justify-start text-sm text-muted-foreground hover:bg-secondary"
                   >
-                    <Link href="/settings" onClick={() => setMobileOpen(false)}>
+                    <Link
+                      href="/settings"
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
                       Settings
                     </Link>
                   </Button>
@@ -320,7 +376,11 @@ export function Navbar() {
                   <Button
                     variant="destructive"
                     className="rounded-full text-sm font-medium"
-                    onClick={() => signOut({ callbackUrl: "/" })}
+                    onClick={() => {
+                      setMobileOpen(false);
+                      setMobileAgentsOpen(false);
+                      signOut({ callbackUrl: "/" });
+                    }}
                   >
                     Log out
                   </Button>

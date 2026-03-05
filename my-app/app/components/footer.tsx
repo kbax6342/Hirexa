@@ -23,10 +23,10 @@ export function Footer() {
           <div className="flex flex-wrap items-center gap-6">
             {[
               { label: "Features", href: "#features" },
-              { label: "Find Jobs", href: "#find-jobs" },
-              { label: "Job Locations", href: "#job-locations" },
-              { label: "Privacy", href: "#" },
-              { label: "Terms", href: "#" },
+              { label: "Find Jobs", href: "/jobs" },
+              { label: "Job Locations", href: "/locations" },
+              { label: "Privacy", href: "/privacy/" },
+              { label: "Terms", href: "/terms/" },
             ].map((link) => (
               <a
                 key={link.label}

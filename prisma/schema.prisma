@@ -1,0 +1,367 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String       @id @default(cuid())
+  name            String?
+  email           String?      @unique
+  password        String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  isGuest         Boolean      @default(true)
+  emailVerifiedAt DateTime?
+  userProfile     UserProfile?
+}
+
+model LinkedInAccount {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  provider    String   @default("linkedin_sim")
+  connectedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model OutreachCampaign {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  targetCompanies String[] @default([])
+  targetRoles     String[] @default([])
+  targetTitles    String[] @default([])
+  location        String?
+  dailyLimit      Int      @default(10)
+  autoFollowUp    Boolean  @default(true)
+  followUpDays    Int      @default(5)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  templates OutreachTemplate[]
+  leads     RecruiterLead[]
+}
+
+model OutreachTemplate {
+  id         String   @id @default(cuid())
+  campaignId String
+  name       String
+  body       String
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model RecruiterLead {
+  id              String   @id @default(cuid())
+  campaignId      String
+  name            String
+  company         String
+  title           String
+  linkedinUrl     String
+  connectionLevel String   @default("2nd")
+  status          String   @default("READY")
+  lastMessagedAt  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  messages OutreachMessage[]
+
+  @@unique([campaignId, linkedinUrl])
+}
+
+model OutreachMessage {
+  id         String   @id @default(cuid())
+  leadId     String
+  templateId String?
+  body       String
+  status     String   @default("DRAFT")
+  sentAt     DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lead RecruiterLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+}
+
+model UserProfile {
+  id                      String             @id @default(cuid())
+  userId                  String?            @unique
+  firstName               String?
+  lastName                String?
+  phone                   String?
+  authorizedUS            String?
+  sponsorship             String?
+  felony                  String?
+  startDate               String?
+  screening               String?
+  relocate                String?
+  gender                  String?
+  pronouns                String?
+  ethnicity               String?
+  disability              String?
+  veteran                 String?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  guestId                 String?            @unique
+  compensationType        String?
+  minCompensation         Int?
+  resumeSkills            String[]           @default([])
+  skills                  String[]           @default([])
+  email                   String?
+  welcomeEmailSentAt      DateTime?
+  includeRemote           Boolean            @default(true)
+  workplaceLocations      Json?
+  newsletterOptIn         Boolean            @default(false)
+  newsletterSource        String?
+  emailVerifiedAt         DateTime?
+  unsubscribedAt          DateTime?
+  registrationStatus      String?            @default("pending_verification")
+  address                 String?
+  city                    String?
+  dob                     DateTime?
+  linkedinUrl             String?
+  postalCode              String?
+  state                   String?
+  countryCode             String?
+  country                 String?
+  keyQuestions            Json?
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
+  lastPaymentReceivedAt   DateTime?
+  monthlyPlanStatus       String?
+  monthlySubscriber       Boolean            @default(false)
+  profileImage            Bytes?
+  profileImageFilename    String?
+  profileImageMimeType    String?
+  subscriptionCheckedAt   DateTime?
+  subscriptionEmail       String?
+  subscriptionPurchasedAt DateTime?
+  trialPlanStatus         String?
+  trialSubscriber         Boolean            @default(false)
+  yearlyPlanStatus        String?
+  yearlySubscriber        Boolean            @default(false)
+  portfolioUrl            String?
+  benefitSelections       BenefitSelection[]
+  jobApplications         JobApplication[]
+  jobInterests            JobInterest[]
+  resume                  Resume?
+  resumeFiles             ResumeFile[]
+  stripePayments          StripePayment[]
+  user                    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+}
+
+model StripePayment {
+  id                      String       @id @default(cuid())
+  userProfileId           String?
+  stripeEventId           String       @unique
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
+  stripeCheckoutSessionId String?
+  stripeInvoiceId         String?
+  stripePaymentIntentId   String?
+  planType                String?
+  status                  String?
+  amount                  Int?
+  currency                String?
+  paidAt                  DateTime?
+  metadata                Json?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  userProfile             UserProfile? @relation(fields: [userProfileId], references: [id])
+
+  @@index([userProfileId])
+  @@index([stripeSubscriptionId])
+  @@index([stripeCheckoutSessionId])
+}
+
+model JobApplication {
+  id String @id @default(cuid())
+
+  userProfileId String
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  jobTitle             String
+  title                String?
+  source               String?
+  company              String
+  location             String?
+  jobUrl               String?
+  sourceJobId          String?
+  status               String   @default("READY_TO_APPLY")
+  missingFields        String[] @default([])
+  submissionProof      Json?
+  failureReason        String?
+  verificationRequired Boolean  @default(false)
+
+  // ✅ ADD THESE:
+  auditJson   Json?
+  answersJson Json?
+  submittedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userProfileId, sourceJobId])
+  @@index([userProfileId])
+  @@index([userProfileId, status])
+}
+
+model BenefitSelection {
+  id            String       @id @default(cuid())
+  userProfileId String?
+  guestId       String?
+  selectedPlan  String
+  benefits      String[]     @default([])
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId])
+  @@index([guestId])
+}
+
+model JobInterest {
+  id            String      @id @default(cuid())
+  userProfileId String
+  uuid          String
+  title         String
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, uuid])
+  @@index([userProfileId])
+}
+
+model Resume {
+  id                String            @id @default(cuid())
+  filename          String
+  mimeType          String
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  userProfileId     String            @unique
+  experiences       Experience[]
+  profile           UserProfile       @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  resumeExperiences ResumeExperience?
+
+  @@index([userProfileId])
+}
+
+model ResumeExperience {
+  resumeId    String   @id
+  experiences Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  resume      Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+}
+
+model Experience {
+  id        String   @id @default(cuid())
+  resumeId  String
+  order     Int
+  title     String
+  company   String
+  location  String?
+  dateRange String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bullets   Bullet[]
+  resume    Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  @@index([resumeId])
+  @@index([resumeId, order])
+}
+
+model Bullet {
+  id           String     @id @default(cuid())
+  experienceId String
+  order        Int
+  text         String
+  experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@index([experienceId])
+  @@index([experienceId, order])
+}
+
+model EmailOtp {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  resendAfter DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model ResumeFile {
+  id        String      @id @default(cuid())
+  profileId String
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  blob      Bytes
+  createdAt DateTime    @default(now())
+  profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+}
+
+model EmailVerificationCode {
+  email     String   @id
+  codeHash  String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model JobHunterPack {
+  id              String    @id @default(cuid())
+  purchase        Purchase?
+  guestId         String
+  userId          String?
+  jobId           String?
+  jobTitle        String?
+  company         String?
+  jobUrl          String?
+  jobDescription  String?
+  resumeText      String?
+  notes           String?
+  optimizedResume String?
+  coverLetter     String?
+  interviewPrep   String?
+  status          String    @default("draft")
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([guestId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Purchase {
+  id              String        @id @default(cuid())
+  productKey      String
+  status          String        @default("pending")
+  guestId         String
+  userId          String?
+  amount          Int?
+  currency        String?
+  stripeSessionId String?       @unique
+  stripePaymentId String?
+  packId          String        @unique
+  pack            JobHunterPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([guestId])
+  @@index([userId])
+  @@index([status])
+}

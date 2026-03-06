@@ -1,0 +1,116 @@
+@config "../tailwind.config.ts";
+@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================
+   Design tokens (shadcn-style)
+   ========================= */
+@layer base {
+  :root {
+    --background: 230 55% 6%;
+    --foreground: 210 40% 96%;
+
+    --card: 230 50% 9%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 230 50% 9%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 210 100% 56%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 230 40% 14%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted: 230 40% 14%;
+    --muted-foreground: 220 20% 60%;
+
+    --accent: 199 100% 55%;
+    --accent-foreground: 230 55% 6%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 230 40% 16%;
+    --input: 230 40% 16%;
+    --ring: 210 100% 56%;
+
+    --radius: 0.625rem;
+
+    --sidebar-background: 230 50% 9%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 210 100% 56%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 40% 14%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 230 40% 16%;
+    --sidebar-ring: 210 100% 56%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    /* ✅ replaces @apply bg-background text-foreground */
+    background:
+      radial-gradient(900px 500px at 12% 18%, rgba(16, 80, 240, 0.25), transparent 60%),
+      radial-gradient(700px 480px at 78% 28%, rgba(32, 160, 240, 0.18), transparent 62%),
+      radial-gradient(800px 520px at 40% 110%, rgba(32, 200, 255, 0.10), transparent 55%),
+      hsl(var(--background));
+  
+    color: hsl(var(--foreground));
+  
+    /* ✅ “antialiased” without Tailwind @apply */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Utilities */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* =========================
+   Job details legacy styles
+   (kept, but made dark-safe)
+   ========================= */
+.jd-pay {
+  font-weight: 800;
+  font-size: 1.08em;
+  color: hsl(var(--foreground));
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.12rem 0.45rem;
+  border-radius: 9999px;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.jd-kv {
+  margin-top: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 0.75rem;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.jd-kv-title {
+  font-weight: 700;
+  color: hsl(var(--foreground));
+  margin-bottom: 0.25rem;
+}
+
+.jd-kv-body {
+  color: hsl(var(--muted-foreground));
+  line-height: 1.7;
+  font-size: 0.95rem;
+}

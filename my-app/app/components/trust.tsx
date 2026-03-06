@@ -48,7 +48,7 @@ export function Trust() {
               return (
                 <div key={item.title} className="text-center">
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <Icon className="h-5 w-5" />
+                    <Icon className="h-5 w-5 text-sky-600" />
                   </div>
                   <h3 className="mt-4 text-sm font-semibold text-foreground">
                     {item.title}

@@ -1,6 +1,5 @@
 import Image from "next/image";
 import Link from "next/link";
-import {auth} from "../auth"
 import { startOnboarding } from "../app/api/actions/startOnboarding";
 import { Navbar } from "./components/navbar"
 import { Hero } from "./components/hero"
@@ -13,8 +12,6 @@ import { CTA } from "./components/cta"
 import { Footer } from "./components/footer"
 
 export default async function Home() {
-  const session = await auth();
-  
     // const router = useRouter();
   
     // const handleGetStarted = async () => {

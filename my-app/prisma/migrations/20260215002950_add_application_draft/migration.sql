@@ -1,0 +1,1 @@
+-- No-op placeholder to align migration history (logic already covered by later migrations).

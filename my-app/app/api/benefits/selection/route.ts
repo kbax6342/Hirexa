@@ -7,7 +7,7 @@ import { auth } from "@/app/lib/auth";
 export const runtime = "nodejs";
 
 type Body = {
-  selectedPlan: "trial" | "annual";
+  selectedPlan: string; // "trial" | "annual" | "custom-benefits"
   benefits: string[];
   source?: string | null;
   jobId?: string | null;
@@ -25,11 +25,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing selectedPlan." }, { status: 400 });
     }
 
+    // If this is the benefits-only flow, just persist and return.
+    if (selectedPlan === "custom-benefits") {
+      await prisma.benefitSelection.create({
+        data: {
+          selectedPlan: "custom-benefits",
+          benefits: body.benefits ?? [],
+        },
+      });
+      return NextResponse.json({ ok: true });
+    }
+
     // ✅ pick correct Stripe Price ID by plan
     const priceId =
       selectedPlan === "trial"
         ? process.env.STRIPE_TRIAL_PRICE_ID
-        : process.env.STRIPE_ANNUAL_PRICE_ID;
+        : process.env.STRIPE_FULL_PRICE_ID ?? process.env.STRIPE_ANNUAL_PRICE_ID;
 
     if (!priceId) {
       return NextResponse.json(
@@ -46,14 +57,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ OPTIONAL: save selection to DB (customize to your schema)
-    // If you don’t have a model for this, you can remove this block.
-    await prisma.planSelection.create({
+    // ✅ Save selection (matches BenefitSelection model in schema.prisma)
+    await prisma.benefitSelection.create({
       data: {
-        plan: selectedPlan,
-        perks: body.benefits ?? [],
-        source: body.source ?? null,
-        jobId: body.jobId ?? null,
+        selectedPlan: selectedPlan === "trial" ? "trial" : "annual",
+        benefits: body.benefits ?? [],
+        // userProfileId / guestId are optional; omitted here to avoid undefined relation errors
       },
     });
 

@@ -33,7 +33,7 @@ export function ComingSoon() {
         <div className="mx-auto max-w-2xl text-center">
           <Badge
             variant="outline"
-            className="mb-4 border-primary/30 text-primary bg-primary/5 px-3 py-1 text-xs font-medium"
+            className="mb-4 border-primary/30 text-sky-600 bg-primary/5 px-3 py-1 text-xs font-medium"
           >
             Coming Soon
           </Badge>
@@ -55,7 +55,7 @@ export function ComingSoon() {
                 className="relative rounded-2xl border border-dashed border-primary/20 bg-primary/[0.02] p-8"
               >
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Icon className="h-5 w-5" />
+                  <Icon className="h-5 w-5 text-sky-600" />
                 </div>
                 <h3 className="mt-5 font-heading text-lg font-semibold text-foreground">
                   {item.title}

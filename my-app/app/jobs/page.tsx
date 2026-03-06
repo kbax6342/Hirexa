@@ -1,6 +1,6 @@
 // File: /Hirexa/my-app/app/jobs/page.tsx
 "use client";
-import { useSession } from "next-auth/react";
+import { useNeonSession } from "@/lib/auth/client";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -277,7 +277,7 @@ function formatPostedDate(value: string) {
 
 function JobCardItem({ job }: { job: JobCard }) {
   const router = useRouter();
-  const { data: session, status } = useSession();
+  const { data: session, status } = useNeonSession();
 
   const salaryText = job.salary ?? job.pill;
 

@@ -4,18 +4,44 @@ import Link from "next/link";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import LoginForm from "../components/loginForm/LoginForm";
 import { startOnboarding } from "../api/actions/startOnboarding";
-import { useTransition, useState } from "react";
+import { useEffect, useTransition, useState } from "react";
 import { Button } from "../components/ui/button";
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import GoogleButton from "../components/loginForm/GoogleButton";
+import { useRouter, useSearchParams } from "next/navigation";
+import { authClient } from "@/lib/auth/client";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams?.get("callbackUrl") ?? "/dashboard";
+  const [status, setStatus] = useState<"loading" | "authenticated" | "unauthenticated">(
+    "loading",
+  );
+  const [session, setSession] = useState<any>(null);
 
   const [isPending, startTransition] = useTransition(); // for signup action
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await authClient.getSession();
+        if (!cancelled) {
+          setSession(s);
+          setStatus(s?.user ? "authenticated" : "unauthenticated");
+          if (s?.user) {
+            router.replace(callbackUrl);
+          }
+        }
+      } catch {
+        if (!cancelled) setStatus("unauthenticated");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router, callbackUrl]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -26,21 +52,31 @@ export default function LoginPage() {
     const email = String(fd.get("email") ?? "");
     const password = String(fd.get("password") ?? "");
 
-    const res = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    try {
+      const res = await authClient.signIn.emailPassword({
+        email,
+        password,
+        redirect: false,
+        callbackUrl,
+      });
 
-    setIsSigningIn(false);
+      setIsSigningIn(false);
 
-    if (res?.error) {
-      setSignInError("Incorrect email or password.");
-      return;
+      if (res.error) {
+        setSignInError(res.error);
+        return;
+      }
+
+      // Refresh session client-side
+      const s = await authClient.getSession();
+      setSession(s);
+      setStatus(s?.user ? "authenticated" : "unauthenticated");
+      router.replace(callbackUrl);
+    } catch (err: unknown) {
+      setIsSigningIn(false);
+      const message = err instanceof Error ? err.message : "Sign in failed.";
+      setSignInError(message);
     }
-
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (
@@ -109,18 +145,6 @@ export default function LoginPage() {
                 )}
               </Button>
             </form>
-
-            {/* Divider */}
-            <div className="my-6 flex items-center gap-3">
-              <div className="h-px flex-1 bg-slate-200" />
-              <span className="text-xs text-slate-500">Or continue with</span>
-              <div className="h-px flex-1 bg-slate-200" />
-            </div>
-
-            {/* Social */}
-            <div className="grid grid-cols-1 gap-3">
-              <GoogleButton />
-            </div>
 
             {/* Terms row */}
             <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-slate-500">

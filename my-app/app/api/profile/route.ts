@@ -177,59 +177,117 @@ export async function POST(req: Request) {
     }
 
     const session = await auth();
-    const userId = (session?.user as any)?.id ?? null;
+    const sessionUser = (session?.user as any) ?? {};
+    let userId: string | null = sessionUser.id ?? null;
+    const sessionEmail: string | null = sessionUser.email ?? null;
+
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
 
-    if (!userId) {
+    // Fallback: resolve userId by email if missing
+    if (!userId && sessionEmail) {
+      const user = await prisma.user.findUnique({
+        where: { email: sessionEmail },
+        select: { id: true },
+      });
+      userId = user?.id ?? null;
+    }
+
+    if (!userId && !guestId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const profile = await prisma.userProfile.upsert({
-      where: { userId },
-      create: {
-        userId,
-        firstName,
-        lastName,
-        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? null,
-        phone: normalizeText(body.phone),
-        dob: parseDob(body.dob),
-        address: normalizeText(body.address),
-        city: normalizeText(body.city),
-        postalCode: normalizeText(body.postalCode),
-        state: normalizeText(body.state),
-        linkedinUrl: normalizeText(body.linkedinUrl),
-        portfolioUrl: normalizeText(body.portfolioUrl),
-      },
-      update: {
-        firstName,
-        lastName,
-        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? undefined,
-        phone: normalizeText(body.phone),
-        dob: parseDob(body.dob),
-        address: normalizeText(body.address),
-        city: normalizeText(body.city),
-        postalCode: normalizeText(body.postalCode),
-        state: normalizeText(body.state),
-        linkedinUrl: normalizeText(body.linkedinUrl),
-        portfolioUrl: normalizeText(body.portfolioUrl),
-      },
-      select: {
-        id: true,
-        userId: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
-        dob: true,
-        address: true,
-        city: true,
-        postalCode: true,
-        state: true,
-        linkedinUrl: true,
-        portfolioUrl: true,
-      },
-    });
+    const profile = userId
+      ? await prisma.userProfile.upsert({
+          where: { userId },
+          create: {
+            userId,
+            firstName,
+            lastName,
+            email: normalizeText(body.email) ?? sessionEmail ?? null,
+            phone: normalizeText(body.phone),
+            dob: parseDob(body.dob),
+            address: normalizeText(body.address),
+            city: normalizeText(body.city),
+            postalCode: normalizeText(body.postalCode),
+            state: normalizeText(body.state),
+            linkedinUrl: normalizeText(body.linkedinUrl),
+            portfolioUrl: normalizeText(body.portfolioUrl),
+          },
+          update: {
+            firstName,
+            lastName,
+            email: normalizeText(body.email) ?? sessionEmail ?? undefined,
+            phone: normalizeText(body.phone),
+            dob: parseDob(body.dob),
+            address: normalizeText(body.address),
+            city: normalizeText(body.city),
+            postalCode: normalizeText(body.postalCode),
+            state: normalizeText(body.state),
+            linkedinUrl: normalizeText(body.linkedinUrl),
+            portfolioUrl: normalizeText(body.portfolioUrl),
+          },
+          select: {
+            id: true,
+            userId: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            dob: true,
+            address: true,
+            city: true,
+            postalCode: true,
+            state: true,
+            linkedinUrl: true,
+            portfolioUrl: true,
+          },
+        })
+      : await prisma.userProfile.upsert({
+          where: { guestId: guestId as string },
+          create: {
+            guestId: guestId as string,
+            firstName,
+            lastName,
+            email: normalizeText(body.email) ?? sessionEmail ?? null,
+            phone: normalizeText(body.phone),
+            dob: parseDob(body.dob),
+            address: normalizeText(body.address),
+            city: normalizeText(body.city),
+            postalCode: normalizeText(body.postalCode),
+            state: normalizeText(body.state),
+            linkedinUrl: normalizeText(body.linkedinUrl),
+            portfolioUrl: normalizeText(body.portfolioUrl),
+          },
+          update: {
+            firstName,
+            lastName,
+            email: normalizeText(body.email) ?? sessionEmail ?? undefined,
+            phone: normalizeText(body.phone),
+            dob: parseDob(body.dob),
+            address: normalizeText(body.address),
+            city: normalizeText(body.city),
+            postalCode: normalizeText(body.postalCode),
+            state: normalizeText(body.state),
+            linkedinUrl: normalizeText(body.linkedinUrl),
+            portfolioUrl: normalizeText(body.portfolioUrl),
+          },
+          select: {
+            id: true,
+            userId: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            dob: true,
+            address: true,
+            city: true,
+            postalCode: true,
+            state: true,
+            linkedinUrl: true,
+            portfolioUrl: true,
+          },
+        });
 
     invalidateCachedProfile({ userId, guestId });
 

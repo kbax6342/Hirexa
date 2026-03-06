@@ -3,8 +3,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { authClient } from "@/lib/auth/client";
 
 
 export default function SignupForm() {
@@ -32,14 +32,13 @@ export default function SignupForm() {
       return;
     }
   
-    const login = await signIn("credentials", {
+    const login = await authClient.signIn.emailPassword({
       email,
       password,
       redirect: false,
       callbackUrl: "/dashboard",
     });
-    console.log("signIn result:", login);
-    if (login?.error) {
+    if (login.error) {
       router.push("/login");
       return;
     }

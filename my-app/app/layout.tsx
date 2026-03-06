@@ -1,51 +1,36 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Providers from "./providers";
-import SiteNav from "./components/nav/SiteNav";
-import SiteHeaderClient from "./components/nav/SiteNav";
-//import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
-import RecaptchaProvider from "./components/providers/RecaptchaProvider";
+import RecaptchaProvider from "./components/recaptcha/RecaptchaProvider";
+import AuthProvider from "./auth-provider";
 import { Navbar } from "./components/navbar";
-import { Inter, Space_Grotesk } from "next/font/google"; // ✅ IMPORT IT
+import { Inter, Space_Grotesk } from "next/font/google";
 
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ['latin'],
-  variable: '--font-space-grotesk',
-})
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
 
 export const metadata: Metadata = {
-  title: 'Hirexa - Land the Right Job. Faster. Smarter.',
+  title: "Hirexa - Land the Right Job. Faster. Smarter.",
   description:
-    'Hirexa uses intelligent automation to help you discover better jobs, apply effortlessly, and stand out at every stage of the hiring process.',
-}
+    "Hirexa uses intelligent automation to help you discover better jobs, apply effortlessly, and stand out at every stage of the hiring process.",
+};
 
 export const viewport: Viewport = {
-  themeColor: '#0b1024',
-}
+  themeColor: "#0b1024",
+};
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
-      <body
-        className="font-sans antialiased"
-      >
-        <RecaptchaProvider
-        >
-         <Providers>
-        <Navbar/>
-        {children}</Providers> 
-        </RecaptchaProvider>    
+      <body className="font-sans antialiased">
+        <AuthProvider>
+          <RecaptchaProvider>
+            <Providers>
+              <Navbar />
+              {children}
+            </Providers>
+          </RecaptchaProvider>
+        </AuthProvider>
       </body>
     </html>
   );

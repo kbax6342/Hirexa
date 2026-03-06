@@ -1,8 +1,8 @@
-import { auth } from "@/auth";
+import { auth } from "@/lib/auth/server";
 import { prisma } from "@/app/lib/prisma";
 
 export async function getSessionUserId() {
-  const session = await auth();
+  const session = await auth.getSession();
   let userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
   if (!userId && session?.user?.email) {

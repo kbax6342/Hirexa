@@ -1,10 +1,10 @@
+// File: /Hirexa/my-app/app/components/auth/SplitAuthCard.tsx
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { authClient } from "@/lib/auth/client";
 
 type Step = "signup" | "peek" | "verify";
 
@@ -16,14 +16,15 @@ function scorePassword(pw: string) {
     number: /\d/.test(pw),
     special: /[^A-Za-z0-9]/.test(pw),
   };
+
   const passed = Object.values(rules).filter(Boolean).length;
   const label =
     passed <= 2 ? "Weak" : passed === 3 ? "Okay" : passed === 4 ? "Good" : "Strong";
+
   return { rules, passed, label };
 }
 
 function stepToTranslate(step: Step) {
-  // 3 steps → 300% rail
   if (step === "signup") return "translate-x-0";
   if (step === "peek") return "-translate-x-1/3";
   return "-translate-x-2/3";
@@ -39,7 +40,7 @@ function OtpBoxes({
   onComplete,
   disabled,
 }: {
-  value: string; // digits only, up to 6
+  value: string;
   onChange: (next: string) => void;
   onComplete?: () => void;
   disabled?: boolean;
@@ -52,12 +53,15 @@ function OtpBoxes({
     const clean = char.replace(/\D/g, "").slice(-1);
     const nextArr = digits.slice();
     nextArr[index] = clean;
+
     const next = nextArr.join("").slice(0, 6);
     onChange(next);
 
-    if (clean && index < 5) refs.current[index + 1]?.focus();
+    if (clean && index < 5) {
+      refs.current[index + 1]?.focus();
+    }
 
-    if (next.length === 6 && !next.includes("") && onComplete) {
+    if (nextArr.every(Boolean) && onComplete) {
       onComplete();
     }
   }
@@ -65,6 +69,7 @@ function OtpBoxes({
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>, index: number) {
     if (e.key === "Backspace") {
       e.preventDefault();
+
       if (digits[index]) {
         const nextArr = digits.slice();
         nextArr[index] = "";
@@ -75,6 +80,7 @@ function OtpBoxes({
         nextArr[index - 1] = "";
         onChange(nextArr.join(""));
       }
+
       return;
     }
 
@@ -87,12 +93,12 @@ function OtpBoxes({
     if (e.key === "ArrowRight") {
       e.preventDefault();
       if (index < 5) refs.current[index + 1]?.focus();
-      return;
     }
   }
 
   function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
     e.preventDefault();
+
     const text = e.clipboardData.getData("text") ?? "";
     const only = text.replace(/\D/g, "").slice(0, 6);
     if (!only) return;
@@ -102,7 +108,9 @@ function OtpBoxes({
     const nextIndex = Math.min(only.length, 6) - 1;
     refs.current[nextIndex]?.focus();
 
-    if (only.length === 6 && onComplete) onComplete();
+    if (only.length === 6 && onComplete) {
+      onComplete();
+    }
   }
 
   return (
@@ -120,6 +128,7 @@ function OtpBoxes({
           inputMode="numeric"
           autoComplete={i === 0 ? "one-time-code" : "off"}
           disabled={disabled}
+          maxLength={1}
           className={[
             "h-12 w-12 rounded-xl border border-gray-200 bg-white text-center text-lg font-semibold text-gray-900",
             "focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30",
@@ -134,19 +143,16 @@ function OtpBoxes({
 
 export default function SplitAuthCard() {
   const { executeRecaptcha } = useGoogleReCaptcha();
+  const router = useRouter();
 
   const [step, setStep] = useState<Step>("signup");
-
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
-
   const [otp, setOtp] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // teaser data (you can replace later with real counts from your backend)
   const [foundCount] = useState<number>(127);
   const [teaserJobs] = useState(() => [
     { title: "Software Engineer", company: "Nimbus Labs", location: "Remote (US)" },
@@ -157,34 +163,52 @@ export default function SplitAuthCard() {
   ]);
 
   const pwScore = useMemo(() => scorePassword(pw), [pw]);
-  const router = useRouter();
 
-  const canContinue = email.includes("@") && pwScore.passed >= 4 && pw === pw2;
+  const canContinue =
+    email.trim().includes("@") &&
+    pwScore.passed >= 4 &&
+    pw.length > 0 &&
+    pw === pw2;
+
+  async function getRecaptchaToken(action: "signup_init" | "signup_verify") {
+    const isDev = process.env.NODE_ENV !== "production";
+
+    if (executeRecaptcha) {
+      return await executeRecaptcha(action);
+    }
+
+    if (isDev) {
+      console.warn(`[SplitAuthCard] reCAPTCHA not ready for ${action}; using dev fallback token.`);
+      return "dev-recaptcha-bypass";
+    }
+
+    throw new Error("Security check not ready. Please wait a moment and try again.");
+  }
 
   async function startSignup() {
     setMsg(null);
     setLoading(true);
-  
+
     try {
-      if (!executeRecaptcha) {
-        throw new Error("Security check not ready. Try again.");
-      }
-  
-      const recaptchaToken = await executeRecaptcha("signup_init");
-  
-      // 1) Start signup (creates temp user / OTP flow, etc.)
+      const recaptchaToken = await getRecaptchaToken("signup_init");
+
       const res = await fetch("/api/auth/register/init", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pw, recaptchaToken }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password: pw,
+          recaptchaToken,
+        }),
       });
-  
+
       const data = await res.json().catch(() => ({}));
-  
+
       if (!res.ok) {
         throw new Error(data?.error ?? "Failed to start signup");
       }
-      // 2) Move UI forward
+
       setStep("peek");
       setMsg("We sent a 6-digit verification code to your email.");
     } catch (e: unknown) {
@@ -193,37 +217,47 @@ export default function SplitAuthCard() {
       setLoading(false);
     }
   }
-  
 
   async function verifyOtp() {
     setMsg(null);
     setLoading(true);
 
     try {
-      if (!executeRecaptcha) throw new Error("Security check not ready. Try again.");
+      if (otp.length !== 6) {
+        throw new Error("Enter the 6-digit verification code.");
+      }
 
-      const recaptchaToken = await executeRecaptcha("signup_verify");
+      const recaptchaToken = await getRecaptchaToken("signup_verify");
 
       const res = await fetch("/api/auth/register/verify", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code: otp, recaptchaToken }),
+        body: JSON.stringify({
+          email: email.trim(),
+          code: otp,
+          recaptchaToken,
+        }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Verification failed");
+      const data = await res.json().catch(() => ({}));
 
-      const login = await signIn("credentials", {
-        email,
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Verification failed");
+      }
+
+      const login = await authClient.signIn.emailPassword({
+        email: email.trim(),
         password: pw,
         redirect: false,
+        callbackUrl: "/onboarding/profile",
       });
 
-      if (login?.error) {
+      if (login.error) {
         throw new Error("Email verified, but automatic sign-in failed. Please log in.");
       }
 
-      router.push("/onboarding/profile")
+      router.push("/onboarding/profile");
     } catch (e: unknown) {
       setMsg(getErrorMessage(e));
     } finally {
@@ -232,202 +266,162 @@ export default function SplitAuthCard() {
   }
 
   return (
-    <div className="w-full max-w-5xl rounded-3xl overflow-hidden shadow-glow border border-white/10 bg-white/5">
-      <div className="grid md:grid-cols-2">
-        {/* LEFT BRAND PANEL — background image full height */}
-        <div
-          className="relative hidden md:flex h-full bg-cover bg-center"
-          style={{ backgroundImage: "url('/branding/loginPanel.png')" }}
-        >
-          <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-black/55 to-black/75" />
-
-          <div className="relative p-10 flex flex-col justify-between w-full">
-            <div>
-              <div className="text-white text-xl font-semibold">Hirexa AI</div>
-              <p className="text-white/70 mt-2 max-w-sm">
-                Create an account to unlock your personalized job matches.
+    <div className="w-full max-w-3xl overflow-hidden rounded-3xl border border-white/10 bg-white shadow-glow">
+      <div className="relative">
+        <div className="overflow-hidden">
+          <div
+            className={[
+              "flex w-[300%] transition-transform duration-500 ease-in-out",
+              stepToTranslate(step),
+            ].join(" ")}
+          >
+            <div className="w-1/3 p-8 md:p-10">
+              <h3 className="text-2xl font-semibold text-gray-900">Create account</h3>
+              <p className="mt-1 text-gray-500">
+                Enter a secure password and verify your email.
               </p>
-              <div className="mt-3 text-white/60 text-xs">
-                Secure signup · Email verification · Bot protection
-              </div>
-            </div>
 
-            <div className="text-white/60 text-xs">
-              By continuing, you agree to Hirexa AI’s Terms & Privacy.
-            </div>
-          </div>
-        </div>
+              <div className="mt-6 space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Email</label>
+                  <input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    type="email"
+                    placeholder="Email address"
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                  />
+                </div>
 
-        {/* RIGHT SLIDING PANEL */}
-        <div className="relative bg-white">
-          <div className="overflow-hidden">
-            <div
-              className={[
-                "flex w-[300%] transition-transform duration-500 ease-in-out",
-                stepToTranslate(step),
-              ].join(" ")}
-            >
-              {/* =======================
-                  STEP 1: SIGNUP
-                 ======================= */}
-              <div className="w-1/3 p-8 md:p-10">
-                <h3 className="text-2xl font-semibold text-gray-900">Create account</h3>
-                <p className="text-gray-500 mt-1">Enter a secure password and verify your email.</p>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Password</label>
+                  <input
+                    value={pw}
+                    onChange={(e) => setPw(e.target.value)}
+                    type="password"
+                    placeholder="Password"
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                  />
 
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Email</label>
-                    <input
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      type="email"
-                      placeholder="Email address"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Password</label>
-                    <input
-                      value={pw}
-                      onChange={(e) => setPw(e.target.value)}
-                      type="password"
-                      placeholder="Password"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
-
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">Strength</span>
-                        <span
-                          className={[
-                            "font-medium",
-                            pwScore.label === "Weak"
-                              ? "text-red-500"
-                              : pwScore.label === "Okay"
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500">Strength</span>
+                      <span
+                        className={[
+                          "font-medium",
+                          pwScore.label === "Weak"
+                            ? "text-red-500"
+                            : pwScore.label === "Okay"
                               ? "text-amber-500"
                               : pwScore.label === "Good"
-                              ? "text-hirexa-cyan"
-                              : "text-hirexa-blue",
-                          ].join(" ")}
-                        >
-                          {pwScore.label}
-                        </span>
-                      </div>
-                      <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-hirexa-blue transition-all"
-                          style={{ width: `${(pwScore.passed / 5) * 100}%` }}
-                        />
-                      </div>
+                                ? "text-hirexa-cyan"
+                                : "text-hirexa-blue",
+                        ].join(" ")}
+                      >
+                        {pwScore.label}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className="h-full rounded-full bg-hirexa-blue transition-all"
+                        style={{ width: `${(pwScore.passed / 5) * 100}%` }}
+                      />
                     </div>
                   </div>
+                </div>
 
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Confirm password</label>
-                    <input
-                      value={pw2}
-                      onChange={(e) => setPw2(e.target.value)}
-                      type="password"
-                      placeholder="Confirm password"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
-                    {pw2.length > 0 && pw !== pw2 && (
-                      <div className="mt-1 text-xs text-red-600">Passwords do not match.</div>
-                    )}
-                  </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Confirm password</label>
+                  <input
+                    value={pw2}
+                    onChange={(e) => setPw2(e.target.value)}
+                    type="password"
+                    placeholder="Confirm password"
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                  />
+                  {pw2.length > 0 && pw !== pw2 && (
+                    <div className="mt-1 text-xs text-red-600">Passwords do not match.</div>
+                  )}
+                </div>
 
-                  {msg && <div className="text-sm text-gray-700">{msg}</div>}
+                {msg && <div className="text-sm text-gray-700">{msg}</div>}
 
-                  <button
-                    disabled={!canContinue || loading}
-                    onClick={startSignup}
-                    className={[
-                      "w-full rounded-xl py-3 font-semibold text-white transition",
-                      !canContinue || loading
-                        ? "bg-gray-300 cursor-not-allowed"
-                        : "bg-hirexa-blue hover:bg-hirexa-cyan",
-                    ].join(" ")}
-                  >
-                    {loading ? "Sending code..." : "Continue"}
-                  </button>
+                <button
+                  disabled={!canContinue || loading}
+                  onClick={startSignup}
+                  className={[
+                    "w-full rounded-xl py-3 font-semibold text-white transition",
+                    !canContinue || loading
+                      ? "cursor-not-allowed bg-gray-300"
+                      : "bg-hirexa-blue hover:bg-hirexa-cyan",
+                  ].join(" ")}
+                >
+                  {loading ? "Sending code..." : "Continue"}
+                </button>
 
-                  <div className="text-center text-sm text-gray-500">
-                    Already have an account?{" "}
-                    <a className="text-hirexa-blue hover:underline" href="/login">
-                      Log in
-                    </a>
-                  </div>
+                <div className="text-center text-sm text-gray-500">
+                  Already have an account?{" "}
+                  <a className="text-hirexa-blue hover:underline" href="/login">
+                    Log in
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-1/3 p-8 md:p-10">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-2xl font-semibold text-gray-900">Jobs found</h3>
+                  <p className="mt-1 text-gray-500">
+                    We found{" "}
+                    <span className="font-semibold text-gray-900">{foundCount}</span> jobs near
+                    your locations.
+                  </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-hirexa-blue/10">
+                  <span className="text-xl text-hirexa-blue">🔒</span>
                 </div>
               </div>
 
-              {/* =======================
-                  STEP 2: PEEK (LOCKED PREVIEW)
-                 ======================= */}
-              <div className="w-1/3 p-8 md:p-10">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-2xl font-semibold text-gray-900">Jobs found</h3>
-                    <p className="text-gray-500 mt-1">
-                      We found <span className="font-semibold text-gray-900">{foundCount}</span>{" "}
-                      jobs near your locations.
-                    </p>
-                  </div>
-
-                  <div className="h-11 w-11 rounded-2xl bg-hirexa-blue/10 flex items-center justify-center">
-                    <span className="text-hirexa-blue text-xl">🔒</span>
-                  </div>
+              <div className="mt-6 overflow-hidden rounded-2xl border border-gray-200">
+                <div className="bg-gray-50 px-4 py-3 text-sm font-medium text-gray-700">
+                  Preview (locked)
                 </div>
 
-                {/* Blurred list preview */}
-                <div className="mt-6 rounded-2xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700">
-                    Preview (locked)
+                <div className="relative">
+                  <div className="divide-y divide-gray-200">
+                    {teaserJobs.map((j, idx) => (
+                      <div key={idx} className="px-4 py-4">
+                        <div className="font-semibold text-gray-900">{j.title}</div>
+                        <div className="text-sm text-gray-500">
+                          {j.company} · {j.location}
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
-                  <div className="relative">
-                    <div className="divide-y divide-gray-200">
-                      {teaserJobs.map((j, idx) => (
-                        <div key={idx} className="px-4 py-4">
-                          <div className="font-semibold text-gray-900">{j.title}</div>
-                          <div className="text-sm text-gray-500">
-                            {j.company} · {j.location}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                  {/* blur + lock overlay */}
-                  <div className="absolute inset-0 backdrop-blur-md bg-white/35 flex items-center justify-center">
-                    <div className="w-[92%] max-w-sm rounded-2xl bg-white shadow px-5 py-4 border border-gray-200 text-center">
-                      <div className="text-gray-900 font-semibold">Verify to unlock</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Enter the code we sent to <span className="font-medium">{email}</span>
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/35 backdrop-blur-md">
+                    <div className="w-[92%] max-w-sm rounded-2xl border border-gray-200 bg-white px-5 py-4 text-center shadow">
+                      <div className="font-semibold text-gray-900">Verify to unlock</div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        Enter the code we sent to{" "}
+                        <span className="font-medium">{email}</span>
                       </div>
 
                       <div className="mt-3">
-                        {/* <input
+                        <OtpBoxes
                           value={otp}
-                          onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && otp.length === 6 && !loading) {
-                              verifyOtp(); // ✅ unlock from overlay
+                          onChange={setOtp}
+                          disabled={loading}
+                          onComplete={() => {
+                            if (!loading) {
+                              void verifyOtp();
                             }
                           }}
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          placeholder="123456"
-                          className="w-full rounded-xl border border-gray-200 px-4 py-3 tracking-[0.35em] text-lg text-black placeholder-black/40 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                        /> */}
-                          <OtpBoxes
-                            value={otp}
-                            onChange={setOtp}
-                            disabled={loading}
-                            onComplete={() => {
-                              // optional: auto-submit as soon as 6 digits entered
-                              if (!loading) verifyOtp();
-                            }}
-                          />
+                        />
+
                         <button
                           type="button"
                           onClick={verifyOtp}
@@ -435,7 +429,7 @@ export default function SplitAuthCard() {
                           className={[
                             "mt-3 w-full rounded-xl py-3 font-semibold text-white transition",
                             otp.length !== 6 || loading
-                              ? "bg-gray-300 cursor-not-allowed"
+                              ? "cursor-not-allowed bg-gray-300"
                               : "bg-hirexa-blue hover:bg-hirexa-cyan",
                           ].join(" ")}
                         >
@@ -446,95 +440,86 @@ export default function SplitAuthCard() {
                           type="button"
                           onClick={startSignup}
                           disabled={loading}
-                          className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition"
+                          className="mt-2 w-full rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                         >
                           Resend code
                         </button>
                       </div>
                     </div>
                   </div>
-
-                  </div>
                 </div>
-
-                {msg && <div className="mt-4 text-sm text-gray-700">{msg}</div>}
-
-                <button
-                  onClick={() => setStep("verify")}
-                  className="mt-6 w-full rounded-xl py-3 font-semibold text-white bg-hirexa-blue hover:bg-hirexa-cyan transition"
-                >
-                  Verify email to unlock
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setStep("signup")}
-                  className="mt-3 w-full rounded-xl py-3 font-semibold text-black border border-gray-200 hover:bg-gray-50 transition"
-                >
-                  Back
-                </button>
               </div>
 
-              {/* =======================
-                  STEP 3: VERIFY OTP
-                 ======================= */}
-              <div className="w-1/3 p-8 md:p-10">
-                <h3 className="text-2xl font-semibold text-gray-900">Verify your email</h3>
-                <p className="text-gray-500 mt-1">
-                  Enter the 6-digit code sent to <span className="font-medium">{email}</span>.
-                </p>
+              {msg && <div className="mt-4 text-sm text-gray-700">{msg}</div>}
 
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Verification code</label>
-                    <input
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                      inputMode="numeric"
-                      placeholder="123456"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 tracking-[0.3em] text-lg text-black placeholder-black/50 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
-                  </div>
+              <button
+                type="button"
+                onClick={() => setStep("signup")}
+                className="mt-3 w-full rounded-xl border border-gray-200 py-3 font-semibold text-black transition hover:bg-gray-50"
+              >
+                Back
+              </button>
+            </div>
 
-                  {msg && <div className="text-sm text-gray-700">{msg}</div>}
+            <div className="w-1/3 p-8 md:p-10">
+              <h3 className="text-2xl font-semibold text-gray-900">Verify your email</h3>
+              <p className="mt-1 text-gray-500">
+                Enter the 6-digit code sent to <span className="font-medium">{email}</span>.
+              </p>
 
+              <div className="mt-6 space-y-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Verification code</label>
+                  <input
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    placeholder="123456"
+                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-lg tracking-[0.3em] text-black placeholder-black/50 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                  />
+                </div>
+
+                {msg && <div className="text-sm text-gray-700">{msg}</div>}
+
+                <button
+                  disabled={otp.length !== 6 || loading}
+                  onClick={verifyOtp}
+                  className={[
+                    "w-full rounded-xl py-3 font-semibold text-white transition",
+                    otp.length !== 6 || loading
+                      ? "cursor-not-allowed bg-gray-300"
+                      : "bg-hirexa-blue hover:bg-hirexa-cyan",
+                  ].join(" ")}
+                >
+                  {loading ? "Verifying..." : "Unlock my jobs"}
+                </button>
+
+                <div className="flex items-center justify-between text-sm">
                   <button
-                    disabled={otp.length !== 6 || loading}
-                    onClick={verifyOtp}
-                    className={[
-                      "w-full rounded-xl py-3 font-semibold text-white transition",
-                      otp.length !== 6 || loading
-                        ? "bg-gray-300 cursor-not-allowed"
-                        : "bg-hirexa-blue hover:bg-hirexa-cyan",
-                    ].join(" ")}
+                    type="button"
+                    onClick={() => setStep("peek")}
+                    className="text-black hover:text-black/80"
                   >
-                    {loading ? "Verifying..." : "Unlock my jobs"}
+                    ← Back
                   </button>
 
-                  <div className="flex items-center justify-between text-sm">
-                    <button
-                      type="button"
-                      onClick={() => setStep("peek")}
-                      className="text-black hover:text-black/80"
-                    >
-                      ← Back
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={startSignup}
-                      className="text-hirexa-blue hover:underline"
-                    >
-                      Resend code
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={startSignup}
+                    className="text-hirexa-blue hover:underline"
+                  >
+                    Resend code
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Top gradient line */}
-          <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-hirexa-blue via-hirexa-cyan to-hirexa-orange" />
+          <div className="px-8 pb-6 pt-4 text-center text-xs text-gray-500">
+            By continuing, you agree to Hirexa AI&apos;s Terms & Privacy.
+          </div>
+
+          <div className="absolute left-0 right-0 top-0 h-[3px] bg-gradient-to-r from-hirexa-blue via-hirexa-cyan to-hirexa-orange" />
         </div>
       </div>
     </div>

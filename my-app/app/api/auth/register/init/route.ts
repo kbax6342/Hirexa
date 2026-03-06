@@ -18,7 +18,7 @@ export async function POST(req: Request) {
 
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_init");
     if (!rc.ok) {
-      return NextResponse.json({ error: rc.error }, { status: 403 });
+      return NextResponse.json({ error: `reCAPTCHA verification failed: ${rc.error}` }, { status: 403 });
     }
 
     const pw = validatePassword(password);
@@ -34,13 +34,13 @@ export async function POST(req: Request) {
         email,
         password: passwordHash,
         isGuest: false,
-        emailVerifiedAt: null,
+        emailVerified: null,
         userProfile: { create: { email, registrationStatus: "pending_verification" } },
       },
       update: {
         password: passwordHash,
         isGuest: false,
-        emailVerifiedAt: null,
+        emailVerified: null,
         userProfile: {
           upsert: {
             create: { email, registrationStatus: "pending_verification" },

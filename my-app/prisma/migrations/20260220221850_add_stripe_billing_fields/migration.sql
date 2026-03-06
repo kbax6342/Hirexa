@@ -1,0 +1,1 @@
+-- No-op placeholder to align migration history (stripe billing fields exist through other migrations).

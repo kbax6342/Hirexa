@@ -137,7 +137,7 @@ export default function JobBenefitsSelectionPage() {
         throw new Error(data?.error ?? "Failed to save benefits.");
       }
 
-      router.push("/onboarding/job-interest");
+      router.push("/dashboard");
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save benefits.";
       setSaveError(message);

@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession, signOut } from "next-auth/react";
+import { useNeonSession, authClient } from "@/lib/auth/client";
 import Image from "next/image";
 import { UserCircleIcon } from "@heroicons/react/24/outline";
 
 
 export default function SiteHeaderClient() {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useNeonSession();
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(pathname || "/")}`;
@@ -25,7 +25,7 @@ export default function SiteHeaderClient() {
           priority
         />
         <span className="text-2xl font-extrabold tracking-tight">
-          Hirexa<span className="text-blue-600"> AI</span>
+          Hirexa<span className="text-sky-600"> AI</span>
         </span>
       </Link>
 
@@ -107,7 +107,7 @@ export default function SiteHeaderClient() {
               <li>
                 <button
                   type="button"
-                  onClick={() => signOut({ callbackUrl: "/" })}
+                  onClick={() => authClient.signOut().then(() => window.location.replace("/"))}
                   className="w-full text-left px-4 py-2 text-red-600 hover:bg-gray-300"
                 >
                   Log out

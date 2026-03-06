@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     // ✅ reCAPTCHA first
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_verify");
     if (!rc.ok) {
-      return NextResponse.json({ error: rc.error }, { status: 403 });
+      return NextResponse.json({ error: `reCAPTCHA verification failed: ${rc.error}` }, { status: 403 });
     }
 
     // ✅ Use ONE source of truth for OTP: emailOtp
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       const user = await tx.user.update({
         where: { email },
         data: {
-          emailVerifiedAt: new Date(),
+          emailVerified: new Date(),
           isGuest: false,
         },
         select: { id: true },

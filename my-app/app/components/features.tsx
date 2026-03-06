@@ -83,7 +83,7 @@ export function Features() {
     <section id="features" className="relative py-24 md:py-32">
       <div className="mx-auto max-w-7xl px-6">
         <div className="mx-auto max-w-2xl text-center">
-          <p className="text-sm font-semibold uppercase tracking-wider text-primary">
+          <p className="text-sm font-semibold uppercase tracking-wider text-primary text-sky-600">
             Core Features
           </p>
           <h2 className="font-heading mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl text-balance">
@@ -104,7 +104,7 @@ export function Features() {
                 className="group rounded-2xl border border-border bg-card p-7 transition-all hover:border-primary/30 hover:bg-secondary/50"
               >
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Icon className="h-5 w-5" />
+                  <Icon className="h-5 w-5 text-sky-600" />
                 </div>
                 <h3 className="mt-5 font-heading text-lg font-semibold text-foreground">
                   {feature.title}

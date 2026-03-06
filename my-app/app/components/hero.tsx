@@ -5,7 +5,7 @@ import { ArrowRight, Check } from "lucide-react"
 import { startOnboarding } from "../api/actions/startOnboarding";
 import { useTransition } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import { useNeonSession } from "@/lib/auth/client";
 
 const jobCards = [
   {
@@ -39,7 +39,7 @@ const jobCards = [
 ]
 
 export function Hero() {
-  const { status } = useSession();
+  const { status } = useNeonSession();
   const isAuthed = status === "authenticated";
   const [isPending, startTransition] = useTransition();
   return (

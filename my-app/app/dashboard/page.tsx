@@ -1,15 +1,18 @@
 // app/dashboard/page.tsx
+export const dynamic = "force-dynamic";
 import Link from "next/link";
-import { auth } from "../../auth";
+import { auth } from "@/lib/auth/server";
 import { redirect } from "next/navigation";
 import DashboardShell from "../components/dashboard/dashboardShell";
 import JobMatchesLayout from "../components/dashboard/jobMatchesLayout";
 
-
-
 export default async function Dashboard() {
-    const session = await auth();
-    if (!session) redirect("/login");
+  const session = await auth.getSession();
+
+  if (!session?.user) {
+    redirect("/login");
+  }
+
   return (
     <DashboardShell active="job-matches">
       <JobMatchesLayout />

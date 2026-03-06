@@ -22,7 +22,13 @@ export function CTA() {
             <Link href="/questions/step2">
               <Button
                 size="lg"
-                className="bg-primary text-primary-foreground hover:bg-primary/90 h-13 rounded-full px-10 text-base font-semibold shadow-lg shadow-primary/25"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 h-13 rounded-full px-10 text-base font-semibold shadow-lg shadow-primary/25 bg-sky-500 text-white
+                  hover:bg-sky-400
+                  h-12 rounded-full px-8
+                  text-base font-semibold
+                  shadow-lg shadow-sky-500/25
+                  transition-all duration-200
+                  active:scale-[0.97]"
               >
                 Get Started Today
                 <ArrowRight className="ml-2 h-4 w-4" />

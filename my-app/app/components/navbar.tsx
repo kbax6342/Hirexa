@@ -4,7 +4,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
 import {
   Bars3Icon,
@@ -12,6 +11,7 @@ import {
   ChevronDownIcon,
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
+import { authClient, useNeonSession } from "@/lib/auth/client";
 
 type NavChild = {
   label: string;
@@ -148,7 +148,7 @@ function NavDropdown({ item }: { item: NavItem }) {
 }
 
 export function Navbar() {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useNeonSession();
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -168,7 +168,7 @@ export function Navbar() {
         {/* LEFT: BRAND (no image) */}
         <Link href="/" className="flex items-center gap-2">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-            <span className="text-sm font-bold text-primary-foreground">H</span>
+            <span className="text-sm font-bold text-primary-foreground bg-sky-600 py-3 px-4 rounded-2xl" >H</span>
           </div>
           <span className="text-xl font-bold tracking-tight text-foreground">
             Hirexa <span className="text-accent">AI</span>
@@ -183,9 +183,18 @@ export function Navbar() {
           {status === "loading" ? (
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
           ) : !isAuthed ? (
-            <Button asChild className="rounded-full px-6 text-sm font-medium">
-              <Link href={signInHref}>Sign In</Link>
-            </Button>
+            <Link
+              href={signInHref}
+              className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground bg-sky-500 text-white
+                  hover:bg-sky-400
+                  h-12 rounded-full px-8
+                  text-base font-semibold
+                  shadow-lg shadow-sky-500/25
+                  transition-all duration-200
+                  active:scale-[0.97]"
+            >
+              Sign In
+            </Link>
           ) : (
             <div className="relative group">
               {/* Trigger */}
@@ -219,7 +228,7 @@ export function Navbar() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => signOut({ callbackUrl: "/" })}
+                    onClick={() => authClient.signOut().then(() => window.location.replace("/"))}
                     className="w-full text-left px-4 py-2 text-red-600 hover:bg-secondary"
                   >
                     Log out
@@ -379,7 +388,7 @@ export function Navbar() {
                     onClick={() => {
                       setMobileOpen(false);
                       setMobileAgentsOpen(false);
-                      signOut({ callbackUrl: "/" });
+                      authClient.signOut().then(() => window.location.replace("/"));
                     }}
                   >
                     Log out

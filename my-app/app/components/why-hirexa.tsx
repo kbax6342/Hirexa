@@ -60,7 +60,7 @@ export function WhyHirexa() {
             </ul>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-8 md:p-10">
+          <div className="rounded-2xl border-2 bg-card p-8 md:p-10">
             <div className="flex flex-col gap-6">
               {steps.map((item) => (
                 <div key={item.step} className="flex gap-5">

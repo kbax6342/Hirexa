@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { getSessionUserId } from "@/app/lib/session-user";
 import { generateDummyLeads } from "@/app/lib/agents/linkedinSim";
 
 export async function POST() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
+  const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const campaign = await prisma.outreachCampaign.findUnique({ where: { userId } });

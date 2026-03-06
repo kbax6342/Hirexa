@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-
+import { getSessionUserId } from "@/app/lib/session-user";
 type CampaignPayload = {
   targetCompanies: string[];
   targetRoles: string[];
@@ -11,11 +10,6 @@ type CampaignPayload = {
   autoFollowUp: boolean;
   followUpDays: number;
 };
-
-async function getUserId() {
-  const session = await auth();
-  return (session?.user as { id?: string } | undefined)?.id ?? null;
-}
 
 function isValidPayload(payload: unknown): payload is CampaignPayload {
   const candidate = payload as Partial<CampaignPayload> | null;
@@ -30,7 +24,7 @@ function isValidPayload(payload: unknown): payload is CampaignPayload {
 }
 
 export async function GET() {
-  const userId = await getUserId();
+  const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const campaign = await prisma.outreachCampaign.findUnique({
@@ -45,7 +39,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const userId = await getUserId();
+  const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const payload = await req.json();

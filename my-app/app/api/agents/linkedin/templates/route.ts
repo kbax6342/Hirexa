@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-
+import { getSessionUserId } from "@/app/lib/session-user";
 async function getCampaignId() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
+  const userId = await getSessionUserId();
   if (!userId) return { unauthorized: true as const, campaign: null };
   const campaign = await prisma.outreachCampaign.findUnique({ where: { userId }, select: { id: true } });
   return { unauthorized: false as const, campaign };

@@ -435,6 +435,7 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
 
     const res = await fetch("/api/onboarding/resume", {
       method: "POST",
+      credentials: "include",
       body: fd,
     });
 

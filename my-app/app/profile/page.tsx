@@ -472,10 +472,11 @@ export default function ProfilePage() {
       const formData = new FormData();
       formData.append("resume", file);
 
-      const res = await fetch("/api/onboarding/resume", {
-        method: "POST",
-        body: formData,
-      });
+        const res = await fetch("/api/onboarding/resume", {
+          method: "POST",
+          credentials: "include",
+          body: formData,
+        });
 
       const data = await readJsonResponse<{ ok?: boolean; error?: string; parsed?: { experienceCount?: number } }>(res);
 

@@ -428,8 +428,8 @@ function JobCardItem({ job }: { job: JobCard }) {
           onClick={() =>
             requirePaid(
               job.id
-                ? `/agents/linkedin-outreach${jobIdQuery}`
-                : "/agents/linkedin-outreach"
+                ? `/job-tools/agents/linkedin-outreach${jobIdQuery}`
+                : "/job-tools/agents/linkedin-outreach"
             )
           }
           className={[

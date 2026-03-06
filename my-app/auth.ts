@@ -6,46 +6,6 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/app/lib/prisma";
 
-const PAID_PAYMENT_STATUSES = ["paid", "succeeded", "active", "trialing"];
-const ACTIVE_PLAN_STATUSES = ["active", "trialing", "paid", "succeeded"];
-
-async function resolvePaidAccess(userId: string): Promise<boolean> {
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: {
-      registrationStatus: true,
-      trialSubscriber: true,
-      monthlySubscriber: true,
-      yearlySubscriber: true,
-      trialPlanStatus: true,
-      monthlyPlanStatus: true,
-      yearlyPlanStatus: true,
-      lastPaymentReceivedAt: true,
-      stripePayments: {
-        where: { status: { in: PAID_PAYMENT_STATUSES } },
-        select: { id: true },
-        take: 1,
-      },
-    },
-  });
-
-  if (!profile) return false;
-  if (profile.stripePayments.length > 0) return true;
-  if (profile.trialSubscriber || profile.monthlySubscriber || profile.yearlySubscriber) return true;
-  if (
-    [profile.trialPlanStatus, profile.monthlyPlanStatus, profile.yearlyPlanStatus].some(
-      (status) => status && ACTIVE_PLAN_STATUSES.includes(status),
-    )
-  ) {
-    return true;
-  }
-  if (profile.registrationStatus === "paid" || profile.registrationStatus === "active") {
-    return true;
-  }
-
-  return Boolean(profile.lastPaymentReceivedAt);
-}
-
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
@@ -87,16 +47,14 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, user }) {
       if (user?.id) {
-        (token as { id?: string }).id = user.id;
+        (token as any).id = user.id;
         token.sub = user.id;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        const userId = (token as { id?: string }).id ?? token.sub;
-        (session.user as { id?: string; hasPaidAccess?: boolean }).id = userId;
-        (session.user as { id?: string; hasPaidAccess?: boolean }).hasPaidAccess = userId ? await resolvePaidAccess(userId) : false;
+        (session.user as any).id = (token as any).id ?? token.sub;
       }
       return session;
     },

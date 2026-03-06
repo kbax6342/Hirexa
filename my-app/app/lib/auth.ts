@@ -30,16 +30,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user?.id) token.id = user.id;
-       // Ensure sub is set (NextAuth typically sets this, but safe)
-    if (!token.sub && (user as any)?.id) token.sub = (user as any).id;
-
+      if (user) token.id = (user as any).id;
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        // Put id onto session.user.id every time
-        (session.user as any).id = (token as any).id ?? token.sub;
+        (session.user as any).id = (token as any).id;
       }
       return session;
     },

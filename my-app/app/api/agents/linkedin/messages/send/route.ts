@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { getSessionUserId } from "@/app/lib/session-user";
 import { interpolateTemplate } from "@/app/lib/agents/linkedinSim";
 
 type SendPayload = { leadId: string; templateId?: string; body?: string };
 
 export async function POST(req: Request) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
+  const userId = await getSessionUserId();
   if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const payload = (await req.json()) as SendPayload;

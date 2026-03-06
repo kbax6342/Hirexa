@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-
-async function getUserId() {
-  const session = await auth();
-  return (session?.user as { id?: string } | undefined)?.id ?? null;
-}
+import { getSessionUserId } from "@/app/lib/session-user";
 
 export async function POST() {
-  const userId = await getUserId();
+  const userId = await getSessionUserId();
   if (!userId) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
@@ -23,7 +18,7 @@ export async function POST() {
 }
 
 export async function GET() {
-  const userId = await getUserId();
+  const userId = await getSessionUserId();
   if (!userId) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
@@ -33,7 +28,7 @@ export async function GET() {
 }
 
 export async function DELETE() {
-  const userId = await getUserId();
+  const userId = await getSessionUserId();
   if (!userId) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }

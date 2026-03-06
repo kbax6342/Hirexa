@@ -261,13 +261,26 @@ async function parseResumeWithLLM(args: { mimeType: string; buffer: Buffer }): P
 export async function POST(req: Request) {
   try {
     const session = await auth();
-    const userId = (session?.user as any)?.id ?? null;
+    let userId = (session?.user as any)?.id ?? null;
+
+    if (!userId && session?.user?.email) {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: session.user.email },
+        select: { id: true },
+      });
+      userId = dbUser?.id ?? null;
+    }
 
     const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
+    let guestId = c.get("guest_user_id")?.value ?? null;
 
     if (!userId && !guestId) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      guestId = crypto.randomUUID();
+      c.set("guest_user_id", guestId, {
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+      });
     }
 
     // ✅ ALWAYS ensure profile exists

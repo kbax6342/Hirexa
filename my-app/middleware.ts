@@ -1,8 +1,14 @@
+// middleware.ts
 import { NextResponse } from "next/server";
 
 import { auth } from "./auth";
 
-const AUTH_REQUIRED_PREFIXES = ["/benefits", "/plans", "/onboarding/profile"];
+const AUTH_REQUIRED_PREFIXES = [
+  "/dashboard",
+  "/benefits",
+  "/plans",
+  "/onboarding/profile",
+];
 
 const AUTHENTICATED_REDIRECT_PREFIXES = [
   "/questions/step2",
@@ -26,7 +32,10 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/dashboard", origin));
   }
 
-  if (!isAuthenticated && AUTH_REQUIRED_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+  if (
+    !isAuthenticated &&
+    AUTH_REQUIRED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  ) {
     const loginUrl = new URL("/login", origin);
     loginUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
 
@@ -38,6 +47,7 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
+    "/dashboard/:path*",
     "/benefits/:path*",
     "/plans/:path*",
     "/onboarding/profile/:path*",

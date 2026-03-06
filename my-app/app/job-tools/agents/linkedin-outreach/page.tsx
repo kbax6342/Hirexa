@@ -1,7 +1,12 @@
-import { requirePaidAccess } from "@/app/lib/access";
+import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import LinkedInOutreachClient from "./LinkedInOutreachClient";
 
 export default async function LinkedInOutreachPage() {
-  await requirePaidAccess("/job-tools/agents/linkedin-outreach");
+  const session = await auth();
+  if (!session?.user) {
+    redirect("/login");
+  }
+
   return <LinkedInOutreachClient />;
 }

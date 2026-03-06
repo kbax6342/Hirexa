@@ -85,6 +85,40 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   secret: process.env.AUTH_SECRET,
 
   callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider !== "google") return true;
+
+      const email = String(user?.email ?? profile?.email ?? "")
+        .toLowerCase()
+        .trim();
+
+      if (!email) return false;
+
+      const dbUser = await prisma.user.upsert({
+        where: { email },
+        create: {
+          email,
+          name: user?.name ?? (profile as { name?: string } | undefined)?.name ?? null,
+          isGuest: false,
+          emailVerifiedAt: new Date(),
+        },
+        update: {
+          name: user?.name ?? undefined,
+          isGuest: false,
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true, email: true },
+      });
+
+      await prisma.userProfile.upsert({
+        where: { userId: dbUser.id },
+        create: { userId: dbUser.id, email: dbUser.email },
+        update: {},
+      });
+
+      (user as { id?: string }).id = dbUser.id;
+      return true;
+    },
     async jwt({ token, user }) {
       if (user?.id) {
         (token as { id?: string }).id = user.id;

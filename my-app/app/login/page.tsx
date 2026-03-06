@@ -8,7 +8,7 @@ import { useTransition, useState } from "react";
 import { Button } from "../components/ui/button";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import  GoogleButton from "../components/loginForm/GoogleButton"
+import GoogleButton from "../components/loginForm/GoogleButton";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -118,18 +118,8 @@ export default function LoginPage() {
             </div>
 
             {/* Social */}
-            <div className="grid grid-cols-2 gap-3">
-            <div className="mt-4">
-                <GoogleButton />
-              </div>
-
-              <a
-                href="/api/auth/signin/microsoft"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <span className="text-base">▦</span>
-                Microsoft
-              </a>
+            <div className="grid grid-cols-1 gap-3">
+              <GoogleButton />
             </div>
 
             {/* Terms row */}

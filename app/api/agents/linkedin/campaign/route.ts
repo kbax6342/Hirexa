@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { buildSuggestedShortBio, generateDefaultTemplate } from "@/app/lib/agents/linkedinSim";
 
 type CampaignPayload = {
   targetCompanies: string[];
@@ -10,6 +11,8 @@ type CampaignPayload = {
   dailyLimit: number;
   autoFollowUp: boolean;
   followUpDays: number;
+  tone?: string;
+  shortBio?: string | null;
 };
 
 async function getUserId() {
@@ -53,6 +56,44 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
   }
 
+  const existingCampaign = await prisma.outreachCampaign.findUnique({
+    where: { userId },
+    select: { id: true, shortBio: true },
+  });
+
+  const linkedInAccount = await prisma.linkedInAccount.findUnique({
+    where: { userId },
+    select: {
+      importedName: true,
+      importedHeadline: true,
+      importedSkills: true,
+      importedLocation: true,
+    },
+  });
+
+  const suggestedShortBio = linkedInAccount
+    ? buildSuggestedShortBio({
+        importedName: linkedInAccount.importedName ?? null,
+        importedHeadline: linkedInAccount.importedHeadline ?? null,
+        importedSkills: linkedInAccount.importedSkills ?? [],
+        location: linkedInAccount.importedLocation ?? null,
+      })
+    : "";
+
+  const normalizedShortBio =
+    typeof payload.shortBio === "string" ? payload.shortBio.trim() : null;
+
+  const shortBioToSave =
+    normalizedShortBio && normalizedShortBio.length > 0
+      ? normalizedShortBio
+      : existingCampaign?.shortBio?.trim() ||
+        (existingCampaign ? null : suggestedShortBio || null);
+
+  const tone =
+    typeof payload.tone === "string" && payload.tone.trim().length > 0
+      ? payload.tone.trim()
+      : "professional";
+
   const campaign = await prisma.outreachCampaign.upsert({
     where: { userId },
     create: {
@@ -64,6 +105,8 @@ export async function POST(req: Request) {
       dailyLimit: Math.max(1, Math.min(100, payload.dailyLimit)),
       autoFollowUp: payload.autoFollowUp,
       followUpDays: Math.max(1, Math.min(30, payload.followUpDays)),
+      tone,
+      shortBio: shortBioToSave,
     },
     update: {
       targetCompanies: payload.targetCompanies,
@@ -73,17 +116,36 @@ export async function POST(req: Request) {
       dailyLimit: Math.max(1, Math.min(100, payload.dailyLimit)),
       autoFollowUp: payload.autoFollowUp,
       followUpDays: Math.max(1, Math.min(30, payload.followUpDays)),
+      tone,
+      shortBio: shortBioToSave,
     },
   });
 
   const existingTemplates = await prisma.outreachTemplate.count({ where: { campaignId: campaign.id } });
   if (existingTemplates === 0) {
+    const focusCompany =
+      campaign.targetCompanies?.[0] || payload.targetCompanies?.[0] || "your company";
+    const focusTitle =
+      campaign.targetTitles?.[0] ||
+      payload.targetTitles?.[0] ||
+      payload.targetRoles?.[0] ||
+      "the role";
+
+    const body = generateDefaultTemplate({
+      company: focusCompany,
+      jobTitle: focusTitle,
+      importedName: linkedInAccount?.importedName ?? null,
+      importedHeadline: linkedInAccount?.importedHeadline ?? null,
+      importedSkills: linkedInAccount?.importedSkills ?? [],
+      shortBio: shortBioToSave,
+    });
+
     await prisma.outreachTemplate.create({
       data: {
         campaignId: campaign.id,
         name: "Default Intro",
         isDefault: true,
-        body: "Hi {first_name}, I came across your work at {company}. I'd love to connect about {job_title} opportunities.",
+        body,
       },
     });
   }

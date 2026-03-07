@@ -20,12 +20,22 @@ model User {
 }
 
 model LinkedInAccount {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  provider    String   @default("linkedin_sim")
-  connectedAt DateTime @default(now())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  provider         String   @default("linkedin_sim")
+  providerAccountId String? @unique
+  email            String?
+  accessToken      String?
+  refreshToken     String?
+  tokenExpiresAt   DateTime?
+  tokenScope       String?
+  connectedAt      DateTime @default(now())
+  importedName     String?
+  importedHeadline String?
+  importedLocation String?
+  importedSkills   String[] @default([])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model OutreachCampaign {
@@ -38,11 +48,14 @@ model OutreachCampaign {
   dailyLimit      Int      @default(10)
   autoFollowUp    Boolean  @default(true)
   followUpDays    Int      @default(5)
+  tone            String   @default("professional")
+  shortBio        String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  templates OutreachTemplate[]
-  leads     RecruiterLead[]
+  templates  OutreachTemplate[]
+  leads      RecruiterLead[]
+  jobTargets OutreachJobTarget[]
 }
 
 model OutreachTemplate {
@@ -58,22 +71,28 @@ model OutreachTemplate {
 }
 
 model RecruiterLead {
-  id              String   @id @default(cuid())
-  campaignId      String
-  name            String
-  company         String
-  title           String
-  linkedinUrl     String
-  connectionLevel String   @default("2nd")
-  status          String   @default("READY")
-  lastMessagedAt  DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  campaignId           String
+  outreachJobTargetId  String?
+  name                 String
+  company              String
+  title                String
+  linkedinUrl          String
+  leadType             String   @default("recruiter_search")
+  contactEmail         String?
+  confidence           Int      @default(60)
+  connectionLevel      String   @default("2nd")
+  status               String   @default("READY")
+  lastMessagedAt       DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  messages OutreachMessage[]
+  campaign         OutreachCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  outreachJobTarget OutreachJobTarget? @relation(fields: [outreachJobTargetId], references: [id])
+  messages         OutreachMessage[]
 
   @@unique([campaignId, linkedinUrl])
+  @@index([campaignId])
 }
 
 model OutreachMessage {
@@ -87,6 +106,31 @@ model OutreachMessage {
   updatedAt  DateTime @updatedAt
 
   lead RecruiterLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+}
+
+model OutreachJobTarget {
+  id          String   @id @default(cuid())
+  campaignId  String
+  userId      String
+  jobId       String
+  company     String
+  title       String
+  location    String?
+  source      String?
+  status      String   @default("ACTIVE")
+  leadsFound  Int      @default(0)
+  messagesSent Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaign OutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leads    RecruiterLead[]
+
+  @@index([userId])
+  @@index([campaignId])
+  @@unique([userId, jobId])
 }
 
 model UserProfile {

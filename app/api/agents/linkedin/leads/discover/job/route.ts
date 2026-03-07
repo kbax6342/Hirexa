@@ -111,7 +111,7 @@ function buildContactLeads(params: { company: string; jobUrl?: string | null }) 
   return leads;
 }
 
-function dedupeLeads<T extends { title: string; linkedinUrl: string; contactEmail?: string | null }>(
+function dedupeLeads<T extends { company?: string; title: string; linkedinUrl: string; contactEmail?: string | null }>(
   company: string,
   leads: T[]
 ) {
@@ -129,97 +129,95 @@ function dedupeLeads<T extends { title: string; linkedinUrl: string; contactEmai
   });
 }
 
+type Payload = { jobTargetId?: string };
+
 export async function POST(req: Request) {
   const userId = await getAuthedUserId();
   if (!userId) return unauthorizedJson();
 
-  const campaign = await prisma.outreachCampaign.findUnique({
-    where: { userId },
-    select: { id: true },
-  });
-  if (!campaign)
-    return NextResponse.json({ ok: false, error: "Campaign not found" }, { status: 404 });
-
-  const jobTargets = await prisma.outreachJobTarget.findMany({
-    where: { campaignId: campaign.id },
-    select: { id: true, company: true, jobId: true },
-  });
-
-  if (!jobTargets.length) {
-    return NextResponse.json(
-      { ok: false, error: "No outreach job targets found." },
-      { status: 404 }
-    );
+  const payload = (await req.json()) as Payload | null;
+  const jobTargetId = typeof payload?.jobTargetId === "string" ? payload.jobTargetId.trim() : "";
+  if (!jobTargetId) {
+    return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
   }
 
-  let created = 0;
+  const jobTarget = await prisma.outreachJobTarget.findFirst({
+    where: { id: jobTargetId, userId },
+    select: {
+      id: true,
+      campaignId: true,
+      jobId: true,
+      company: true,
+      title: true,
+    },
+  });
 
+  if (!jobTarget) {
+    return NextResponse.json({ ok: false, error: "Job target not found" }, { status: 404 });
+  }
+
+  const company = jobTarget.company?.trim() || "Company";
   const origin = new URL(req.url).origin;
+  const smartJob = await fetchSmartMatchJobById({
+    userId,
+    jobId: jobTarget.jobId,
+    origin,
+  });
+  const jobUrl = smartJob?.jobUrl ?? null;
 
-  for (const jobTarget of jobTargets) {
-    const company = jobTarget.company?.trim() || "Company";
-    const smartJob = await fetchSmartMatchJobById({
-      userId,
-      jobId: jobTarget.jobId,
-      origin,
+  const recruiterLeads = RECRUITER_TITLES.map((title) => ({
+    name: `${company} ${title}`,
+    company,
+    title,
+    linkedinUrl: buildLinkedInSearchUrl(company, title),
+    leadType: "recruiter_search",
+    confidence: 55,
+    connectionLevel: "search",
+  }));
+
+  const hiringManagerLeads = HIRING_MANAGER_TITLES.map((title) => ({
+    name: `${company} ${title}`,
+    company,
+    title,
+    linkedinUrl: buildLinkedInSearchUrl(company, title),
+    leadType: "hiring_manager_search",
+    confidence: 50,
+    connectionLevel: "search",
+  }));
+
+  const contactLeads = buildContactLeads({ company, jobUrl }).map((lead) => ({
+    ...lead,
+    company,
+  }));
+
+  const leads = dedupeLeads(company, [
+    ...recruiterLeads,
+    ...hiringManagerLeads,
+    ...contactLeads,
+  ]);
+
+  const createResult = await prisma.recruiterLead.createMany({
+    data: leads.map((lead) => ({
+      campaignId: jobTarget.campaignId,
+      outreachJobTargetId: jobTarget.id,
+      name: lead.name,
+      company: lead.company,
+      title: lead.title,
+      linkedinUrl: lead.linkedinUrl,
+      leadType: lead.leadType,
+      contactEmail: lead.contactEmail ?? null,
+      confidence: lead.confidence,
+      connectionLevel: lead.connectionLevel ?? "search",
+    })),
+    skipDuplicates: true,
+  });
+
+  if (createResult.count > 0) {
+    await prisma.outreachJobTarget.update({
+      where: { id: jobTarget.id },
+      data: { leadsFound: { increment: createResult.count } },
     });
-    const jobUrl = smartJob?.jobUrl ?? null;
-
-    const recruiterLeads = RECRUITER_TITLES.map((title) => ({
-      name: `${company} ${title}`,
-      company,
-      title,
-      linkedinUrl: buildLinkedInSearchUrl(company, title),
-      leadType: "recruiter_search",
-      confidence: 55,
-      connectionLevel: "search",
-    }));
-
-    const hiringManagerLeads = HIRING_MANAGER_TITLES.map((title) => ({
-      name: `${company} ${title}`,
-      company,
-      title,
-      linkedinUrl: buildLinkedInSearchUrl(company, title),
-      leadType: "hiring_manager_search",
-      confidence: 50,
-      connectionLevel: "search",
-    }));
-
-    const contactLeads = buildContactLeads({ company, jobUrl }).map((lead) => ({
-      ...lead,
-      company,
-    }));
-
-    const leads = dedupeLeads(company, [
-      ...recruiterLeads,
-      ...hiringManagerLeads,
-      ...contactLeads,
-    ]);
-
-    const createResult = await prisma.recruiterLead.createMany({
-      data: leads.map((lead) => ({
-        campaignId: campaign.id,
-        outreachJobTargetId: jobTarget.id,
-        name: lead.name,
-        company,
-        title: lead.title,
-        linkedinUrl: lead.linkedinUrl,
-        leadType: lead.leadType,
-        contactEmail: lead.contactEmail ?? null,
-        confidence: lead.confidence,
-        connectionLevel: lead.connectionLevel ?? "search",
-      })),
-      skipDuplicates: true,
-    });
-
-    if (createResult.count > 0) {
-      created += createResult.count;
-      await prisma.outreachJobTarget.update({
-        where: { id: jobTarget.id },
-        data: { leadsFound: { increment: createResult.count } },
-      });
-    }
   }
 
-  return NextResponse.json({ ok: true, created });
+  return NextResponse.json({ ok: true, createdCount: createResult.count });
 }

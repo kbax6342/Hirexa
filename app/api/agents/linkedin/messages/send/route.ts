@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-import { interpolateTemplate } from "@/app/lib/agents/linkedinSim";
+import {
+  applyLeadTypeTemplate,
+  buildSuggestedShortBio,
+  interpolateTemplate,
+} from "@/app/lib/agents/linkedinSim";
 
 type SendPayload = { leadId: string; templateId?: string; body?: string };
 
@@ -15,7 +19,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
   }
 
-  const campaign = await prisma.outreachCampaign.findUnique({ where: { userId }, select: { id: true } });
+  const campaign = await prisma.outreachCampaign.findUnique({
+    where: { userId },
+    select: { id: true, shortBio: true },
+  });
   if (!campaign) return NextResponse.json({ ok: false, error: "Campaign not found" }, { status: 404 });
 
   const lead = await prisma.recruiterLead.findFirst({ where: { id: payload.leadId, campaignId: campaign.id } });
@@ -50,14 +57,45 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "No message body available" }, { status: 400 });
   }
 
-  const finalBody = interpolateTemplate(resolvedBody, {
-    name: lead.name,
-    company: lead.company,
-    title: lead.title,
+  const linkedInAccount = await prisma.linkedInAccount.findUnique({
+    where: { userId },
+    select: {
+      importedName: true,
+      importedHeadline: true,
+      importedSkills: true,
+      importedLocation: true,
+    },
   });
 
+  const fallbackShortBio = linkedInAccount
+    ? buildSuggestedShortBio({
+        importedName: linkedInAccount.importedName ?? null,
+        importedHeadline: linkedInAccount.importedHeadline ?? null,
+        importedSkills: linkedInAccount.importedSkills ?? [],
+        location: linkedInAccount.importedLocation ?? null,
+      })
+    : "";
+
+  const leadAwareBody = applyLeadTypeTemplate(resolvedBody, lead.leadType ?? null);
+
+  const finalBody = interpolateTemplate(
+    leadAwareBody,
+    {
+      name: lead.name,
+      company: lead.company,
+      title: lead.title,
+    },
+    { shortBio: campaign.shortBio ?? fallbackShortBio ?? null },
+    linkedInAccount
+      ? {
+          importedName: linkedInAccount.importedName ?? null,
+          importedHeadline: linkedInAccount.importedHeadline ?? null,
+        }
+      : null
+  );
+
   const sentAt = new Date();
-  const [message, updatedLead] = await prisma.$transaction([
+  const operations = [
     prisma.outreachMessage.create({
       data: {
         leadId: lead.id,
@@ -71,7 +109,18 @@ export async function POST(req: Request) {
       where: { id: lead.id },
       data: { status: "SENT", lastMessagedAt: sentAt },
     }),
-  ]);
+  ];
 
-  return NextResponse.json({ ok: true, lead: updatedLead, message });
+  if (lead.outreachJobTargetId) {
+    operations.push(
+      prisma.outreachJobTarget.update({
+        where: { id: lead.outreachJobTargetId },
+        data: { messagesSent: { increment: 1 } },
+      })
+    );
+  }
+
+  const [message, updatedLead] = (await prisma.$transaction(operations)) as [any, any];
+
+  return NextResponse.json({ ok: true, preview: finalBody, lead: updatedLead, message });
 }

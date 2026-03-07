@@ -52,8 +52,8 @@ const authedNav: NavItem[] = [
       //   href: "/agents/auto-apply",
       // },
       {
-        label: "LinkedIn Outreach Agent",
-        description: "Messages recruiters",
+        label: "Outreach Copilot",
+        description: "AI-assisted recruiter outreach for your best-fit job matches",
         href: "/job-tools/agents/linkedin-outreach",
       },
       // {

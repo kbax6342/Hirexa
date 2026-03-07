@@ -56,11 +56,11 @@ const features = [
   },
   {
     icon: MessageSquare,
-    title: "Recruiter Outreach Automation",
+    title: "Outreach Copilot",
     description:
-      "Connect with recruiters and hiring managers automatically using AI-powered outreach.",
+      "AI-assisted recruiter outreach for your best-fit job matches.",
     bullets: [
-      "AI-generated LinkedIn outreach",
+      "Personalized outreach templates",
       "Expand your professional network",
       "Discover hidden job opportunities",
     ],

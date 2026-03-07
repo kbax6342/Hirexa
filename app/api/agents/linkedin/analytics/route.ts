@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { getAuthedUserId, unauthorizedJson } from "@/app/lib/agents/getAuthedUser";
 
 export async function GET() {
-  const session = await auth();
-  const userId = (session?.user as { id?: string } | undefined)?.id;
-  if (!userId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  const userId = await getAuthedUserId();
+  if (!userId) return unauthorizedJson();
 
   const campaign = await prisma.outreachCampaign.findUnique({ where: { userId }, select: { id: true } });
   if (!campaign) {

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
 export const runtime = "nodejs";
-export const revalidate = 1800;
+export const dynamic = "force-dynamic";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -129,7 +129,11 @@ Example: "/jobs/category/customer-service"
 
     const withUuids = addUuids(parsed);
     //console.log(withUuids)
-    return NextResponse.json(withUuids);
+    return NextResponse.json(withUuids, {
+      headers: {
+        "Cache-Control": "s-maxage=1800, stale-while-revalidate=86400",
+      },
+    });
   } catch (err: any) {
     console.error("home-sections error:", err);
     return NextResponse.json(

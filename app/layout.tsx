@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import Providers from "./providers";
 import SiteNav from "./components/nav/SiteNav";
@@ -19,6 +20,9 @@ const spaceGrotesk = Space_Grotesk({
   subsets: ['latin'],
   variable: '--font-space-grotesk',
 })
+
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Hirexa AI",
   description:
@@ -50,6 +54,7 @@ export default function RootLayout({
         <Navbar/>
         {children}</Providers> 
         </RecaptchaProvider>    
+        <Analytics />
       </body>
     </html>
   );

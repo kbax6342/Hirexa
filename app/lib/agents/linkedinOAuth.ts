@@ -1,5 +1,7 @@
 import "server-only";
 
+import { getSiteUrl } from "@/app/lib/site-url";
+
 const LINKEDIN_AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization";
 const LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken";
 const LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
@@ -25,12 +27,7 @@ export type LinkedInUserInfo = {
 };
 
 export function getBaseUrl(req: Request) {
-  return (
-    process.env.NEXTAUTH_URL ||
-    process.env.AUTH_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    new URL(req.url).origin
-  );
+  return getSiteUrl(req);
 }
 
 export function buildLinkedInAuthUrl(params: {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
+import { getSiteUrl } from "@/app/lib/site-url";
 import { getStripeClient } from "@/app/lib/stripeClient";
 
 export const runtime = "nodejs";
@@ -63,11 +64,11 @@ export async function POST(req: Request) {
     });
 
     const stripePrice = process.env.STRIPE_PRICE_JOB_HUNTER_PACK;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+    const appUrl = getSiteUrl(req);
 
-    if (!stripePrice || !appUrl) {
+    if (!stripePrice) {
       return NextResponse.json(
-        { ok: false, error: "Missing STRIPE_PRICE_JOB_HUNTER_PACK or NEXT_PUBLIC_APP_URL" },
+        { ok: false, error: "Missing STRIPE_PRICE_JOB_HUNTER_PACK" },
         { status: 500 }
       );
     }

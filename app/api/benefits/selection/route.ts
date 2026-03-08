@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getStripeClient } from "@/app/lib/stripeClient";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
+import { getSiteUrl } from "@/app/lib/site-url";
 
 export const runtime = "nodejs";
 
@@ -116,13 +117,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-    if (!appUrl) {
-      return NextResponse.json(
-        { ok: false, error: "Missing NEXT_PUBLIC_APP_URL in my-app/.env.local" },
-        { status: 500 }
-      );
-    }
+    const appUrl = getSiteUrl(req);
 
     const stripe = getStripeClient();
 

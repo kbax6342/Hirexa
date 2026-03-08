@@ -10,7 +10,9 @@ function formatGreeting(name?: string | null) {
 }
 
 const WELCOME_EMAIL_CATEGORY =
-  process.env.WELCOME_EMAIL_CATEGORY === "transactional" ? "transactional" : "marketing";
+  process.env.WELCOME_EMAIL_CATEGORY === "transactional"
+    ? "transactional"
+    : "marketing";
 
 export async function sendWelcomeEmail(to: string, name?: string | null) {
   const { appUrl } = getEmailConfig();
@@ -38,7 +40,7 @@ export async function sendWelcomeEmail(to: string, name?: string | null) {
       <p><a href="${appUrl}" style="color:#145efc">Get started</a></p>
       <p style="margin-top:24px;color:#6b7280;font-size:12px">
         If you did not request this email, you can ignore it.<br />
-        <strong>Hirexa AI</strong> � ${appUrl}
+        <strong>Hirexa AI</strong> &middot; ${appUrl}
       </p>
     </div>
   `;
@@ -48,7 +50,6 @@ export async function sendWelcomeEmail(to: string, name?: string | null) {
     subject,
     html,
     text,
-    // Welcome emails can be marketing or transactional depending on your policy.
     category: WELCOME_EMAIL_CATEGORY,
   });
 }
@@ -78,7 +79,7 @@ export async function sendVerificationCodeEmail(to: string, code: string) {
       <p>This code expires in <strong>10 minutes</strong>.</p>
       <p style="margin-top:24px;color:#6b7280;font-size:12px">
         If you did not request this code, you can ignore this email.<br />
-        <strong>Hirexa AI</strong> � ${appUrl}
+        <strong>Hirexa AI</strong> &middot; ${appUrl}
       </p>
     </div>
   `;

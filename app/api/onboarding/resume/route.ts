@@ -7,6 +7,7 @@ import { cookies } from "next/headers";
 import OpenAI from "openai";
 import crypto from "crypto";
 import { z } from "zod";
+import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 export const runtime = "nodejs";
@@ -113,43 +114,7 @@ const ExperiencesSchema = z.object({
   experiences: z.array(ExperienceSchema),
 });
 
-type PdfTextResult = {
-  pages: { page: number; text: string }[];
-  fullText: string;
-};
-
 /* ------------------------------ PDF extraction --------------------------- */
-
-async function extractPdfText(buffer: Buffer): Promise<PdfTextResult> {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-  const loadingTask = pdfjs.getDocument({
-    data: new Uint8Array(buffer),
-  });
-
-  const pdf = await loadingTask.promise;
-
-  const pages: { page: number; text: string }[] = [];
-  let fullText = "";
-
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const content = await page.getTextContent();
-
-    const pageText = content.items
-      .map((it: any) => (typeof it.str === "string" ? it.str : ""))
-      .join(" ")
-      .replace(/\u00a0/g, " ")
-      .replace(/[ \t]+/g, " ")
-      .trim();
-
-    pages.push({ page: pageNum, text: pageText });
-    fullText += pageText + "\n";
-  }
-
-  fullText = fullText.replace(/\n{3,}/g, "\n\n").trim();
-  return { pages, fullText };
-}
 
 /* ------------------------- OpenAI resume parsing ------------------------- */
 

@@ -1,43 +1,38 @@
-import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "@/app/lib/prisma";
-import { randomUUID } from "crypto";
+import { NextResponse } from "next/server";
+
+import {
+  ensureGuestOnboardingProfile,
+  getGuestUserCookieOptions,
+  GUEST_USER_COOKIE,
+} from "@/app/lib/onboarding/start";
 
 export const runtime = "nodejs";
 
 export async function POST() {
-
   try {
-    const c = await cookies();
-  let guestId = c.get("guest_user_id")?.value;
+    const cookieStore = await cookies();
+    const existingGuestId = cookieStore.get(GUEST_USER_COOKIE)?.value;
+    const guestId = await ensureGuestOnboardingProfile(existingGuestId);
 
-  if (!guestId) {
-    guestId = `guest_${randomUUID()}`;
-  }
+    const response = NextResponse.json({ ok: true, guestId });
+    if (!existingGuestId) {
+      response.cookies.set(
+        GUEST_USER_COOKIE,
+        guestId,
+        getGuestUserCookieOptions()
+      );
+    }
 
-  // ensure profile exists
-  await prisma.userProfile.upsert({
-    where: { guestId },
-    create: { guestId },
-    update: {},
-  });
-
-  const res = NextResponse.json({ ok: true, guestId });
-
-  res.cookies.set("guest_user_id", guestId, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    console.error("❌ /api/onboarding/start failed:", e);
+    return response;
+  } catch (error: unknown) {
+    console.error("Failed to start onboarding:", error);
     return NextResponse.json(
-      { ok: false, error: e?.message ?? "Unknown error" },
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 }
     );
   }
-
 }

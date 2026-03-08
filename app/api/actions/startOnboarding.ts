@@ -1,22 +1,21 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import {
+  ensureGuestOnboardingProfile,
+  getGuestUserCookieOptions,
+  GUEST_USER_COOKIE,
+} from "@/app/lib/onboarding/start";
+
 export async function startOnboarding() {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const cookieStore = await cookies();
+  const existingGuestId = cookieStore.get(GUEST_USER_COOKIE)?.value;
+  const guestId = await ensureGuestOnboardingProfile(existingGuestId);
 
-  if (!baseUrl) {
-    throw new Error("NEXT_PUBLIC_APP_URL is not set");
-  }
-
-  const res = await fetch(`${baseUrl}/api/onboarding/start`, {
-    method: "POST",
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Failed to start onboarding: ${res.status} ${text}`);
+  if (!existingGuestId) {
+    cookieStore.set(GUEST_USER_COOKIE, guestId, getGuestUserCookieOptions());
   }
 
   redirect("/questions/step2");

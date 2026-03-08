@@ -2,17 +2,11 @@ import { NextResponse } from "next/server";
 import { getStripeClient } from "../../../../lib/stripeClient";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
+import { getSiteUrl } from "@/app/lib/site-url";
 
 export async function POST() {
   const stripeClient = getStripeClient();
-
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (!appUrl) {
-    return NextResponse.json(
-      { error: "Missing NEXT_PUBLIC_APP_URL in /Hirexa/my-app/.env.local" },
-      { status: 500 }
-    );
-  }
+  const appUrl = getSiteUrl();
 
   const annualPriceId = process.env.STRIPE_ANNUAL_PRICE_ID;
   if (!annualPriceId) {

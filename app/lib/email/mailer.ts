@@ -1,5 +1,7 @@
 import sgMail from "@sendgrid/mail";
 
+import { getSiteUrl } from "@/app/lib/site-url";
+
 type EmailCategory = "transactional" | "marketing";
 
 type SendEmailParams = {
@@ -49,14 +51,6 @@ function buildReplyTo() {
   return replyTo || undefined;
 }
 
-function getAppUrl() {
-  return (
-    process.env.APP_URL ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    "http://localhost:3000"
-  );
-}
-
 function stripHtml(html: string) {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -70,7 +64,7 @@ export function getEmailConfig() {
     from: buildFromAddress(),
     replyTo: buildReplyTo(),
     supportEmail: (process.env.EMAIL_SUPPORT ?? "").trim() || undefined,
-    appUrl: getAppUrl(),
+    appUrl: getSiteUrl(),
   };
 }
 

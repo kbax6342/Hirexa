@@ -51,7 +51,7 @@ type ToggleProps = {
 export default function NotificationsPage() {
      // default states shown in screenshot:
   const [emailNotifs, setEmailNotifs] = useState(true);
-  const [smsNotifs, setSmsNotifs] = useState(false);
+  // const [smsNotifs, setSmsNotifs] = useState(false);
   const [marketing, setMarketing] = useState(true);
   // TODO: replace these with real values from your DB/session
   const accountId = "732604371";
@@ -101,11 +101,15 @@ export default function NotificationsPage() {
             checked={emailNotifs}
             onChange={setEmailNotifs}
           />
+          {/* SMS notifications are intentionally disabled in the UI for now.
+              Uncomment the block below when SMS preferences are ready to re-enable. */}
+          {/*
           <Toggle
             label="SMS notifications"
             checked={smsNotifs}
             onChange={setSmsNotifs}
           />
+          */}
         </div>
 
         <h3 className="mt-8 text-sm font-semibold text-gray-900">

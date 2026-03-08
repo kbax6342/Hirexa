@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
 export const runtime = "nodejs";
-export const revalidate = 60 * 30;
+export const revalidate = 1800;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -45,8 +45,8 @@ function addUuids(data: HomeSectionsResponse): HomeSectionsResponse {
     sections: data.sections.map((section) => ({
       ...section,
       jobs: section.jobs.map((job) => ({
-        id: Buffer.from(job.jobUrl).toString("base64url"), // server-generated stable id for this response
         ...job,
+        stableId: Buffer.from(job.jobUrl).toString("base64url"), // server-generated stable id for this response without clobbering job.id
       })),
     })),
   };

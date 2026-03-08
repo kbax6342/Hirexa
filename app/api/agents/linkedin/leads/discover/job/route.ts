@@ -171,6 +171,7 @@ export async function POST(req: Request) {
     title,
     linkedinUrl: buildLinkedInSearchUrl(company, title),
     leadType: "recruiter_search",
+    contactEmail: null,
     confidence: 55,
     connectionLevel: "search",
   }));
@@ -181,6 +182,7 @@ export async function POST(req: Request) {
     title,
     linkedinUrl: buildLinkedInSearchUrl(company, title),
     leadType: "hiring_manager_search",
+    contactEmail: null,
     confidence: 50,
     connectionLevel: "search",
   }));

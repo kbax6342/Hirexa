@@ -9,6 +9,84 @@ function normalizeLabel(s: string) {
   return s.trim().replace(/\s+/g, " ");
 }
 
+function readFirstLocation(raw: unknown): LocationInput | null {
+  if (!Array.isArray(raw)) return null;
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const label = normalizeLabel(String((item as { label?: unknown }).label ?? ""));
+    if (!label) continue;
+
+    const lat = (item as { lat?: unknown }).lat;
+    const lon = (item as { lon?: unknown }).lon;
+    return {
+      label,
+      lat: Number.isFinite(lat as any) ? Number(lat) : undefined,
+      lon: Number.isFinite(lon as any) ? Number(lon) : undefined,
+    };
+  }
+
+  return null;
+}
+
+export async function GET() {
+  try {
+    const session = await auth();
+    const userId = (session?.user as any)?.id ?? null;
+
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
+
+    let location: LocationInput | null = null;
+    let includeRemote: boolean | null = null;
+
+    if (userId || guestId) {
+      const profile = await prisma.userProfile.findUnique({
+        where: userId ? { userId } : { guestId: guestId as string },
+        select: {
+          workplaceLocations: true,
+          includeRemote: true,
+        },
+      });
+
+      if (profile?.workplaceLocations) {
+        location = readFirstLocation(profile.workplaceLocations);
+      }
+
+      if (typeof profile?.includeRemote === "boolean") {
+        includeRemote = profile.includeRemote;
+      }
+    }
+
+    if (!location) {
+      const cookieLocations = c.get("onboarding_locations")?.value ?? null;
+      if (cookieLocations) {
+        try {
+          const parsed = JSON.parse(cookieLocations);
+          location = readFirstLocation(parsed);
+        } catch {
+          // ignore cookie parse errors
+        }
+      }
+    }
+
+    if (includeRemote === null) {
+      const cookieRemote = c.get("onboarding_include_remote")?.value;
+      if (cookieRemote === "true" || cookieRemote === "false") {
+        includeRemote = cookieRemote === "true";
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      location,
+      includeRemote,
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Failed to load locations" }, { status: 500 });
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const session = await auth();
@@ -24,34 +102,30 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => null);
     const includeRemote = Boolean(body?.includeRemote);
 
-    const incoming: LocationInput[] = Array.isArray(body?.locations) ? body.locations : [];
+    const incomingArray: LocationInput[] = Array.isArray(body?.locations) ? body.locations : [];
+    const incomingSingle: LocationInput | null =
+      body?.location && typeof body.location === "object" ? body.location : null;
 
-    // sanitize + dedupe (max 5)
-    const seen = new Set<string>();
+    // Single-select: take the first valid location only.
+    const candidate = incomingSingle ?? incomingArray[0] ?? null;
     const cleaned: LocationInput[] = [];
 
-    for (const item of incoming) {
-      const label = normalizeLabel(String(item?.label ?? ""));
-      if (!label) continue;
+    if (candidate) {
+      const label = normalizeLabel(String(candidate?.label ?? ""));
+      if (label) {
+        const lat = candidate?.lat;
+        const lon = candidate?.lon;
 
-      const key = label.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const lat = item?.lat;
-      const lon = item?.lon;
-
-      cleaned.push({
-        label,
-        lat: Number.isFinite(lat as any) ? Number(lat) : undefined,
-        lon: Number.isFinite(lon as any) ? Number(lon) : undefined,
-      });
-
-      if (cleaned.length >= 5) break;
+        cleaned.push({
+          label,
+          lat: Number.isFinite(lat as any) ? Number(lat) : undefined,
+          lon: Number.isFinite(lon as any) ? Number(lon) : undefined,
+        });
+      }
     }
 
     if (cleaned.length === 0) {
-      return NextResponse.json({ ok: false, error: "Please add at least 1 location." }, { status: 400 });
+      return NextResponse.json({ ok: false, error: "Please select a city." }, { status: 400 });
     }
 
     // ✅ SAVE TO DB (UserProfile)

@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { getStripeClient } from "../../../lib/stripeClient";
 import { prisma } from "@/app/lib/prisma";
 import type Stripe from "stripe";
+import { Prisma } from "@prisma/client";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -114,7 +115,7 @@ async function saveStripePayment(data: {
       amount: data.amount ?? null,
       currency: data.currency ?? null,
       paidAt: data.paidAt ?? null,
-      metadata: data.metadata ?? undefined,
+      metadata: (data.metadata as Prisma.InputJsonValue | undefined) ?? undefined,
     },
     update: {
       userProfileId: data.userProfileId ?? null,
@@ -128,7 +129,7 @@ async function saveStripePayment(data: {
       amount: data.amount ?? null,
       currency: data.currency ?? null,
       paidAt: data.paidAt ?? null,
-      metadata: data.metadata ?? undefined,
+      metadata: (data.metadata as Prisma.InputJsonValue | undefined) ?? undefined,
     },
   });
 }
@@ -149,7 +150,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const sig = headers().get("stripe-signature");
+  const headerList = await headers();
+  const sig = headerList.get("stripe-signature");
   if (!sig) {
     return NextResponse.json({ error: "Missing stripe-signature header" }, { status: 400 });
   }
@@ -175,28 +177,24 @@ export async function POST(req: Request) {
       const sub = await stripeClient.subscriptions.retrieve(subscriptionId);
 
       const introPriceId =
-        session?.subscription_data?.metadata?.hirexa_intro_price_id ??
+        session?.metadata?.hirexa_intro_price_id ??
         sub.metadata?.hirexa_intro_price_id ??
         process.env.STRIPE_TRIAL_PRICE_ID;
 
       const fullPriceId =
-        session?.subscription_data?.metadata?.hirexa_full_price_id ??
+        session?.metadata?.hirexa_full_price_id ??
         sub.metadata?.hirexa_full_price_id ??
         process.env.STRIPE_FULL_PRICE_ID;
 
-      const introDaysRaw =
-        session?.subscription_data?.metadata?.hirexa_intro_days ??
-        sub.metadata?.hirexa_intro_days ??
-        "14";
+      const introDaysRaw = session?.metadata?.hirexa_intro_days ?? sub.metadata?.hirexa_intro_days ?? "14";
 
       const introDays = Math.max(1, Math.min(30, Number(introDaysRaw || 14)));
 
-      const planFromMetadata =
-        session?.subscription_data?.metadata?.hirexa_plan ?? sub.metadata?.hirexa_plan;
+      const planFromMetadata = session?.metadata?.hirexa_plan ?? sub.metadata?.hirexa_plan;
 
       const userProfileId =
         session.client_reference_id ??
-        session?.subscription_data?.metadata?.hirexa_user_profile_id ??
+        session?.metadata?.hirexa_user_profile_id ??
         sub.metadata?.hirexa_user_profile_id ??
         null;
 
@@ -252,19 +250,21 @@ export async function POST(req: Request) {
             },
           ],
           end_behavior: "release",
-        });
+        } as any);
       }
     }
   }
 
   if (event.type === "invoice.payment_succeeded") {
     const invoice = event.data.object as Stripe.Invoice;
-    const subscriptionId = typeof invoice.subscription === "string" ? invoice.subscription : null;
+    const subscriptionId =
+      typeof (invoice as any).subscription === "string" ? (invoice as any).subscription : null;
 
     if (subscriptionId) {
       const userProfileId = await getUserProfileIdFromSubscription(stripeClient, subscriptionId);
       const line = invoice.lines.data[0];
-      const interval = line?.price?.recurring?.interval;
+      const linePrice = (line as any)?.price;
+      const interval = linePrice?.recurring?.interval;
       const paidAt = new Date(
         (invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
       );
@@ -288,8 +288,10 @@ export async function POST(req: Request) {
         stripeCustomerId: normalizeCustomerId(invoice.customer),
         stripeSubscriptionId: subscriptionId,
         stripeInvoiceId: invoice.id,
-        stripePaymentIntentId:
-          typeof invoice.payment_intent === "string" ? invoice.payment_intent : invoice.payment_intent?.id,
+        stripePaymentIntentId: (() => {
+          const pi = (invoice as any).payment_intent;
+          return typeof pi === "string" ? pi : pi?.id;
+        })(),
         planType,
         status: invoice.status,
         amount: invoice.amount_paid ?? null,

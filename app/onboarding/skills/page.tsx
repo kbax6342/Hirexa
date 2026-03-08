@@ -352,7 +352,7 @@ export default function SkillsOnboardingPage() {
               type="button"
               onClick={onSave}
               disabled={saving || !minOk || !maxOk}
-              className="px-8 py-3 rounded-full font-medium bg-black text-white disabled:opacity-50"
+              className="px-8 py-3 rounded-full font-medium text-white disabled:opacity-50 disabled:bg-black bg-[#145efc] hover:bg-[#0f4ed6]"
             >
               {saving ? "Saving..." : "Next"}
             </button>

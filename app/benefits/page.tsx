@@ -127,7 +127,7 @@ export default function JobBenefitsSelectionPage() {
         credentials: "include",
         body: JSON.stringify({
           selectedPlan: "custom-benefits",
-          benefits: Array.from(selected),
+          selectedBenefits: Array.from(selected),
         }),
       });
 
@@ -301,7 +301,7 @@ export default function JobBenefitsSelectionPage() {
               className={[
                 "rounded-full px-8 py-2.5 font-semibold text-white transition-all",
                 nextEnabled && !saving
-                  ? "cursor-pointer bg-slate-800 hover:bg-slate-900"
+                  ? "cursor-pointer bg-sky-600 hover:bg-sky-700"
                   : "cursor-not-allowed bg-slate-500 opacity-50",
               ].join(" ")}
             >

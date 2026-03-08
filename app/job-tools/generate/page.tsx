@@ -1,7 +1,7 @@
 // /Hirexa/my-app/app/(no-nav)/job-tools/generate/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowPathIcon,
@@ -52,7 +52,7 @@ const focusOptions = [
   { key: "projects", label: "Project Achievements" },
 ] as const;
 
-export default function JobToolsGeneratePage() {
+function JobToolsGeneratePageContent() {
   const searchParams = useSearchParams();
   const [url, setUrl] = useState("");
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -362,7 +362,9 @@ export default function JobToolsGeneratePage() {
     endView.setUint32(16, offset, true);
     endView.setUint16(20, 0, true);
 
-    return new Blob([...localEntries, ...centralEntries, endRecord], { type: "application/zip" });
+    return new Blob([...localEntries, ...centralEntries, endRecord] as BlobPart[], {
+      type: "application/zip",
+    });
   }
 
   async function downloadActive() {
@@ -371,7 +373,8 @@ export default function JobToolsGeneratePage() {
 
     const { filename, title } = getDocumentFileMeta(activeTab);
     const bytes = createPdfBytes(text, title);
-    downloadBlob(filename, new Blob([bytes], { type: "application/pdf" }));
+    const pdfBuffer = Uint8Array.from(bytes).buffer;
+    downloadBlob(filename, new Blob([pdfBuffer], { type: "application/pdf" }));
   }
 
   function downloadAll() {
@@ -402,6 +405,25 @@ export default function JobToolsGeneratePage() {
 
     setLoading(true);
     try {
+      const planRes = await fetch("/api/billing/plan-status", { cache: "no-store" });
+      if (planRes.status === 401) {
+        const nextUrl = `/job-tools/generate${url.trim() ? `?jobUrl=${encodeURIComponent(url.trim())}` : ""}`;
+        window.location.href = `/login?next=${encodeURIComponent(nextUrl)}`;
+        return;
+      }
+      if (!planRes.ok) {
+        throw new Error("Unable to verify subscription status.");
+      }
+
+      const planData = await planRes.json();
+      if (!planData?.active) {
+        const params = new URLSearchParams();
+        params.set("source", "job-tools-generate");
+        if (url.trim()) params.set("jobUrl", url.trim());
+        window.location.href = `/plans?${params.toString()}`;
+        return;
+      }
+
       const selectedFocus = Object.entries(focus)
         .filter(([, v]) => v)
         .map(([k]) => k);
@@ -749,6 +771,14 @@ export default function JobToolsGeneratePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function JobToolsGeneratePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-white" />}>
+      <JobToolsGeneratePageContent />
+    </Suspense>
   );
 }
 

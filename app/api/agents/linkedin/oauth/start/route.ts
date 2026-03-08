@@ -25,7 +25,10 @@ export async function GET(req: Request) {
   }
 
   const state = randomUUID();
-  const redirectUri = "http://localhost:3000/api/agents/linkedin/oauth/callback";
+  const redirectUri = new URL(
+    "/api/agents/linkedin/oauth/callback",
+    baseUrl
+  ).toString();
 
   const cookieStore = await cookies();
   cookieStore.set("linkedin_oauth_state", state, {

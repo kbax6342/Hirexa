@@ -65,12 +65,16 @@ function toQuestionKey(name: string) {
   return `answers_attributes_${match[1]}`;
 }
 
-function findQuestionScope($el: cheerio.Cheerio) {
+function findQuestionScope($el: cheerio.Cheerio<any>) {
   const scope = $el.closest("li, .field, .question, .application-question, [data-qa], fieldset, div");
   return scope.length ? scope.first() : $el.parent();
 }
 
-function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el: cheerio.Cheerio) {
+function extractQuestionLabel(
+  $: cheerio.CheerioAPI,
+  $form: cheerio.Cheerio<any>,
+  $el: cheerio.Cheerio<any>
+) {
   const id = norm($el.attr("id") || "");
   const aria = norm($el.attr("aria-label") || "");
   const ph = norm($el.attr("placeholder") || "");
@@ -101,7 +105,7 @@ function extractQuestionLabel($: cheerio.CheerioAPI, $form: cheerio.Cheerio, $el
   return "Field";
 }
 
-function isRequiredEl($el: cheerio.Cheerio, label: string) {
+function isRequiredEl($el: cheerio.Cheerio<any>, label: string) {
   if ($el.attr("required") !== undefined) return true;
   const ariaReq = norm($el.attr("aria-required") || "");
   if (ariaReq === "true") return true;
@@ -117,7 +121,7 @@ function isRequiredEl($el: cheerio.Cheerio, label: string) {
   );
 }
 
-function optionLabelFromInput($: cheerio.CheerioAPI, $optEl: cheerio.Cheerio) {
+function optionLabelFromInput($: cheerio.CheerioAPI, $optEl: cheerio.Cheerio<any>) {
   const id = norm($optEl.attr("id") || "");
   const byFor = id ? norm($(`label[for="${id}"]`).first().text()) : "";
   if (byFor) return byFor;
@@ -171,7 +175,7 @@ function alternateHostUrl(inputUrl: string) {
   }
 }
 
-function hasJobApplicationInputs($: cheerio.CheerioAPI, formEl: cheerio.Element) {
+function hasJobApplicationInputs($: cheerio.CheerioAPI, formEl: any) {
   return (
     $(formEl).find(
       "input[name*='job_application[' i], textarea[name*='job_application[' i], select[name*='job_application[' i], input[name*='job_application' i], textarea[name*='job_application' i], select[name*='job_application' i], input[name*='answers_attributes' i], textarea[name*='answers_attributes' i], select[name*='answers_attributes' i]"
@@ -190,7 +194,7 @@ function htmlSnippet(html: string) {
 
 function extractForm(
   $: cheerio.CheerioAPI,
-  formEl: cheerio.Element,
+  formEl: any,
   baseUrl: string,
   debug: GhParsedForm["debug"]
 ): GhParsedForm {
@@ -231,7 +235,7 @@ function extractForm(
 
   $form.find("input, textarea, select").each((_, el) => {
     const $el = $(el);
-    const tag = ($el.get(0) as cheerio.Element).tagName.toLowerCase();
+    const tag = (($el.get(0) as any)?.tagName ?? "").toLowerCase();
     const inputType = norm($el.attr("type") || "text").toLowerCase();
     const type = tag === "input" ? inputType : tag;
 

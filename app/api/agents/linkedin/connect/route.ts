@@ -21,9 +21,7 @@ async function logDbDebugInfo() {
   console.info("[outreach] NODE_ENV =", process.env.NODE_ENV ?? "unknown");
 
   try {
-    const columns = (await prisma.$queryRawUnsafe<
-      Array<{ column_name: string }>
-    >(
+    const columns = (await prisma.$queryRawUnsafe(
       `select column_name from information_schema.columns where table_schema = 'public' and table_name ilike 'linkedinaccount' order by ordinal_position`
     )) as Array<{ column_name: string }>;
     console.info(

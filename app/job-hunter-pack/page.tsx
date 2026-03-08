@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getOrCreateGuestId } from "@/app/lib/guestId";
 
@@ -13,7 +13,7 @@ type JobPayload = {
   description?: string;
 };
 
-export default function JobHunterPackLandingPage() {
+function JobHunterPackLandingPageContent() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,5 +100,13 @@ export default function JobHunterPackLandingPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function JobHunterPackLandingPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-white" />}>
+      <JobHunterPackLandingPageContent />
+    </Suspense>
   );
 }

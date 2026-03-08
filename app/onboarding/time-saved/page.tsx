@@ -38,7 +38,7 @@ export default function JobApplicationsPage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-16">
+      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-8">
         <div className="w-full max-w-2xl">
           {/* Title */}
           <h1 className="text-4xl font-bold text-center text-gray-900 mb-3">
@@ -76,7 +76,7 @@ export default function JobApplicationsPage() {
           </div>
 
           {/* Time Savings Card */}
-          <div className="bg-gray-100 rounded-2xl p-8">
+          <div className="bg-gray-100 rounded-2xl p-8 mb-8">
             <h2 className="text-xl font-bold text-center text-gray-900 mb-2">
               Imagine what you could do with more time
             </h2>

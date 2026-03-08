@@ -4,6 +4,11 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
+import {
+  parseSalaryInputToNumber,
+  SALARY_BOUNDS,
+  type CompensationType,
+} from "@/app/lib/salary";
 
 type PreferencesBody = {
   minCompensation?: number | null;
@@ -43,15 +48,25 @@ export async function POST(req: Request) {
     const body = (await req.json()) as PreferencesBody;
 
     const includeRemote = Boolean(body.includeRemote);
-    const compensationType = body.compensationType === "hourly" ? "hourly" : "yearly";
-    const minCompensation =
-      body.minCompensation === null || body.minCompensation === undefined
-        ? null
-        : Math.max(0, Math.round(Number(body.minCompensation) || 0));
+    const compensationType: CompensationType =
+      body.compensationType === "hourly" ? "hourly" : "yearly";
+    let minCompensation: number | null = null;
+
+    if (body.minCompensation !== null && body.minCompensation !== undefined) {
+      const parsed = parseSalaryInputToNumber(body.minCompensation);
+      if (parsed === null) {
+        return NextResponse.json({ error: "Invalid min compensation." }, { status: 400 });
+      }
+
+      const max = SALARY_BOUNDS[compensationType].max;
+      minCompensation = Math.min(max, Math.max(0, parsed));
+    }
 
     const workplaceLocations = body.workplaceLocations === null ? null : normalizeList(body.workplaceLocations);
+    const normalizedWorkplaceLocations =
+      workplaceLocations && workplaceLocations.length ? [workplaceLocations[0]] : workplaceLocations;
     const selectedPlan = body.selectedPlan === "annual" ? "annual" : "trial";
-    const workplaceLocationsJson = workplaceLocations as Prisma.InputJsonValue | null;
+    const workplaceLocationsJson = normalizedWorkplaceLocations as Prisma.InputJsonValue | null;
     const benefits = Array.isArray(body.benefits)
       ? body.benefits.map((item) => String(item).trim()).filter(Boolean)
       : [];
@@ -65,7 +80,7 @@ export async function POST(req: Request) {
         ...(userId ? { userId } : { guestId: guestId as string }),
         minCompensation,
         compensationType,
-        workplaceLocations: workplaceLocationsJson,
+        workplaceLocations: workplaceLocationsJson ?? undefined,
         includeRemote,
         keyQuestions: {
           roleFocus,
@@ -75,7 +90,7 @@ export async function POST(req: Request) {
       update: {
         minCompensation,
         compensationType,
-        workplaceLocations: workplaceLocationsJson,
+        workplaceLocations: workplaceLocationsJson ?? undefined,
         includeRemote,
         keyQuestions: {
           roleFocus,
@@ -114,7 +129,7 @@ export async function POST(req: Request) {
       preferences: {
         minCompensation,
         compensationType,
-        workplaceLocations,
+        workplaceLocations: normalizedWorkplaceLocations,
         includeRemote,
         selectedPlan,
         benefits,

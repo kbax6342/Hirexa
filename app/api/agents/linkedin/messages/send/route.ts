@@ -25,7 +25,24 @@ export async function POST(req: Request) {
   });
   if (!campaign) return NextResponse.json({ ok: false, error: "Campaign not found" }, { status: 404 });
 
-  const lead = await prisma.recruiterLead.findFirst({ where: { id: payload.leadId, campaignId: campaign.id } });
+  const lead = (await prisma.recruiterLead.findFirst({
+    where: { id: payload.leadId, campaignId: campaign.id },
+    select: {
+      id: true,
+      name: true,
+      company: true,
+      title: true,
+      leadType: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true,
+      linkedinUrl: true,
+      outreachJobTargetId: true,
+      campaignId: true,
+      connectionLevel: true,
+      lastMessagedAt: true,
+    },
+  })) as any;
   if (!lead) return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
 
   let templateId: string | null = null;
@@ -95,7 +112,7 @@ export async function POST(req: Request) {
   );
 
   const sentAt = new Date();
-  const operations = [
+  const operations: any[] = [
     prisma.outreachMessage.create({
       data: {
         leadId: lead.id,

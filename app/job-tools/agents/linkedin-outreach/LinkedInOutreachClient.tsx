@@ -21,6 +21,7 @@ import {
   applyLeadTypeTemplate,
   generateDraftTemplate,
   interpolateTemplate,
+  type ContactLeadType,
   parseCommaList,
 } from "@/app/lib/agents/linkedinSim";
 
@@ -76,7 +77,7 @@ type Lead = {
   title: string;
   linkedinUrl?: string | null;
   contactEmail?: string | null;
-  leadType?: string | null;
+  leadType?: ContactLeadType | null;
   confidence?: number | null;
   connectionLevel: string;
   status: string;
@@ -210,6 +211,35 @@ export default function LinkedInOutreachClient() {
   const [skillsDraft, setSkillsDraft] = useState("");
   const [skillsSaving, setSkillsSaving] = useState(false);
   const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
+
+  const ensurePaid = useCallback(async () => {
+    try {
+      const res = await fetch("/api/billing/plan-status", { cache: "no-store" });
+      if (res.status === 401) {
+        const nextUrl = `${window.location.pathname}${window.location.search}`;
+        window.location.href = `/login?next=${encodeURIComponent(nextUrl)}`;
+        return false;
+      }
+      if (!res.ok) {
+        throw new Error("Unable to verify subscription status.");
+      }
+
+      const data = await res.json();
+      if (!data?.active) {
+        const params = new URLSearchParams({ source: "linkedin-outreach" });
+        window.location.href = `/plans?${params.toString()}`;
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      showNotice({
+        type: "error",
+        text: err instanceof Error ? err.message : "Unable to verify subscription status.",
+      });
+      return false;
+    }
+  }, [showNotice]);
 
   const defaultTemplate = useMemo(
     () => campaign?.templates.find((template) => template.isDefault) ?? null,
@@ -434,6 +464,7 @@ export default function LinkedInOutreachClient() {
 
   const handleConnectToggle = async () => {
     if (connectLoading) return;
+    if (!(await ensurePaid())) return;
     try {
       setConnectLoading(true);
       if (connected) {
@@ -457,6 +488,7 @@ export default function LinkedInOutreachClient() {
 
   const handleSaveSkills = async () => {
     if (skillsSaving || !connected) return;
+    if (!(await ensurePaid())) return;
     try {
       setSkillsSaving(true);
       const importedSkills = parseCommaList(skillsDraft);
@@ -479,6 +511,7 @@ export default function LinkedInOutreachClient() {
 
   const handleRefreshProfile = async () => {
     if (!connected || refreshLoading) return;
+    if (!(await ensurePaid())) return;
 
     try {
       setRefreshLoading(true);
@@ -496,6 +529,7 @@ export default function LinkedInOutreachClient() {
   };
 
   const handleDiscoverLeads = async () => {
+    if (!(await ensurePaid())) return;
     try {
       await fetchJson("/api/agents/linkedin/leads/discover", { method: "POST" });
       await refreshAll();
@@ -509,6 +543,7 @@ export default function LinkedInOutreachClient() {
   };
 
   const handleSaveCampaign = async () => {
+    if (!(await ensurePaid())) return;
     try {
       await fetchJson("/api/agents/linkedin/campaign", {
         method: "POST",
@@ -536,7 +571,8 @@ export default function LinkedInOutreachClient() {
     }
   };
 
-  const handleSmarterDraft = () => {
+  const handleSmarterDraft = async () => {
+    if (!(await ensurePaid())) return;
     const focusCompany = parseCommaList(companies)[0] ?? "your company";
     const focusTitle = parseCommaList(titles)[0] ?? parseCommaList(roles)[0] ?? "the role";
 
@@ -556,6 +592,7 @@ export default function LinkedInOutreachClient() {
   };
 
   const handleCreateTemplate = async () => {
+    if (!(await ensurePaid())) return;
     try {
       await fetchJson("/api/agents/linkedin/templates", {
         method: "POST",
@@ -578,6 +615,7 @@ export default function LinkedInOutreachClient() {
 
   const handleSaveTemplate = async () => {
     if (!selectedTemplate) return;
+    if (!(await ensurePaid())) return;
 
     try {
       await fetchJson("/api/agents/linkedin/templates", {
@@ -603,6 +641,7 @@ export default function LinkedInOutreachClient() {
 
   const handleSetDefaultTemplate = async () => {
     if (!selectedTemplate) return;
+    if (!(await ensurePaid())) return;
 
     try {
       await fetchJson("/api/agents/linkedin/templates", {
@@ -628,6 +667,7 @@ export default function LinkedInOutreachClient() {
 
   const handleDeleteTemplate = async () => {
     if (!selectedTemplate) return;
+    if (!(await ensurePaid())) return;
 
     try {
       await fetchJson("/api/agents/linkedin/templates", {
@@ -648,6 +688,7 @@ export default function LinkedInOutreachClient() {
 
   const handleSendMessage = async (lead: Lead, overrideBody?: string) => {
     if (!lead.id) return;
+    if (!(await ensurePaid())) return false;
 
     try {
       setSendingLeadId(lead.id);
@@ -678,11 +719,13 @@ export default function LinkedInOutreachClient() {
 
   const handleSendPreview = async () => {
     if (!previewLead) return;
+    if (!(await ensurePaid())) return;
     const success = await handleSendMessage(previewLead, previewBody);
     if (success) setPreviewLead(null);
   };
 
   const handleDiscoverForJob = async (jobTarget: JobTarget) => {
+    if (!(await ensurePaid())) return;
     setJobTargetLoading((prev) => ({ ...prev, [jobTarget.id]: true }));
 
     try {
@@ -705,12 +748,14 @@ export default function LinkedInOutreachClient() {
   };
 
   const handleViewLeads = async (jobTargetId: string | null) => {
+    if (!(await ensurePaid())) return;
     setLeadFilterJobTargetId(jobTargetId);
     await refreshLeads(jobTargetId);
   };
 
   const handleDeleteLead = async (lead: Lead) => {
     if (deletingLeadId) return;
+    if (!(await ensurePaid())) return;
     try {
       setDeletingLeadId(lead.id);
       await fetchJson(`/api/agents/linkedin/leads?leadId=${encodeURIComponent(lead.id)}`, {
@@ -753,12 +798,14 @@ export default function LinkedInOutreachClient() {
     }
   };
 
-  const handleOpenLeadUrl = (lead: Lead) => {
+  const handleOpenLeadUrl = async (lead: Lead) => {
+    if (!(await ensurePaid())) return;
     if (!lead.linkedinUrl) return;
     window.open(lead.linkedinUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleCopyLeadEmail = async (lead: Lead) => {
+    if (!(await ensurePaid())) return;
     if (!lead.contactEmail) return;
     try {
       await navigator.clipboard.writeText(lead.contactEmail);
@@ -769,6 +816,7 @@ export default function LinkedInOutreachClient() {
   };
 
   const handleCopyLeadMessage = async (lead: Lead) => {
+    if (!(await ensurePaid())) return;
     try {
       const message = buildMessageForLead(lead);
       await navigator.clipboard.writeText(message);
@@ -776,6 +824,11 @@ export default function LinkedInOutreachClient() {
     } catch {
       showLeadsNotice({ type: "error", text: "Failed to copy message." });
     }
+  };
+
+  const handlePreviewLead = async (lead: Lead) => {
+    if (!(await ensurePaid())) return;
+    setPreviewLead(lead);
   };
 
   if (loading) {
@@ -1321,7 +1374,7 @@ export default function LinkedInOutreachClient() {
                             Copy Email
                           </Button>
                         ) : null}
-                        <Button size="sm" variant="outline" onClick={() => setPreviewLead(lead)}>
+                        <Button size="sm" variant="outline" onClick={() => void handlePreviewLead(lead)}>
                           Preview Message
                         </Button>
                         <Button size="sm" variant="outline" onClick={() => void handleCopyLeadMessage(lead)}>

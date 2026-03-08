@@ -140,6 +140,8 @@ export default function SplitAuthCard() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [showPw2, setShowPw2] = useState(false);
 
   const [otp, setOtp] = useState("");
 
@@ -232,34 +234,8 @@ export default function SplitAuthCard() {
   }
 
   return (
-    <div className="w-full max-w-5xl rounded-3xl overflow-hidden shadow-glow border border-white/10 bg-white/5">
-      <div className="grid md:grid-cols-2">
-        {/* LEFT BRAND PANEL — background image full height */}
-        <div
-          className="relative hidden md:flex h-full bg-cover bg-center"
-          style={{ backgroundImage: "url('/branding/loginPanel.png')" }}
-        >
-          <div className="absolute inset-0 bg-gradient-to-b from-black/35 via-black/55 to-black/75" />
-
-          <div className="relative p-10 flex flex-col justify-between w-full">
-            <div>
-              <div className="text-white text-xl font-semibold">Hirexa AI</div>
-              <p className="text-white/70 mt-2 max-w-sm">
-                Create an account to unlock your personalized job matches.
-              </p>
-              <div className="mt-3 text-white/60 text-xs">
-                Secure signup · Email verification · Bot protection
-              </div>
-            </div>
-
-            <div className="text-white/60 text-xs">
-              By continuing, you agree to Hirexa AI’s Terms & Privacy.
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT SLIDING PANEL */}
-        <div className="relative bg-white">
+    <div className="w-full max-w-lg  mt-[50] max-h-[85vh] shadow-glow border border-white/10 bg-white">
+      <div className="relative bg-white h-[670] ">
           <div className="overflow-hidden">
             <div
               className={[
@@ -288,13 +264,23 @@ export default function SplitAuthCard() {
 
                   <div>
                     <label className="text-sm font-medium text-gray-700">Password</label>
-                    <input
-                      value={pw}
-                      onChange={(e) => setPw(e.target.value)}
-                      type="password"
-                      placeholder="Password"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
+                    <div className="relative mt-1">
+                      <input
+                        value={pw}
+                        onChange={(e) => setPw(e.target.value)}
+                        type={showPw ? "text" : "password"}
+                        placeholder="Password"
+                        className="w-full rounded-xl border border-gray-200 px-4 py-3 pr-12 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPw((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500 hover:text-gray-700"
+                        aria-label={showPw ? "Hide password" : "Show password"}
+                      >
+                        {showPw ? "Hide" : "Show"}
+                      </button>
+                    </div>
 
                     <div className="mt-3">
                       <div className="flex items-center justify-between text-xs">
@@ -325,13 +311,23 @@ export default function SplitAuthCard() {
 
                   <div>
                     <label className="text-sm font-medium text-gray-700">Confirm password</label>
-                    <input
-                      value={pw2}
-                      onChange={(e) => setPw2(e.target.value)}
-                      type="password"
-                      placeholder="Confirm password"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
+                    <div className="relative mt-1">
+                      <input
+                        value={pw2}
+                        onChange={(e) => setPw2(e.target.value)}
+                        type={showPw2 ? "text" : "password"}
+                        placeholder="Confirm password"
+                        className="w-full rounded-xl border border-gray-200 px-4 py-3 pr-12 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPw2((prev) => !prev)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500 hover:text-gray-700"
+                        aria-label={showPw2 ? "Hide confirm password" : "Show confirm password"}
+                      >
+                        {showPw2 ? "Hide" : "Show"}
+                      </button>
+                    </div>
                     {pw2.length > 0 && pw !== pw2 && (
                       <div className="mt-1 text-xs text-red-600">Passwords do not match.</div>
                     )}
@@ -352,6 +348,9 @@ export default function SplitAuthCard() {
                     {loading ? "Sending code..." : "Continue"}
                   </button>
 
+                  <div className="border-t border-gray-100 px-6 py-4 text-center text-xs text-gray-500">
+                    By continuing, you agree to Hirexa AI's Terms &amp; Privacy.
+                  </div>
                   <div className="text-center text-sm text-gray-500">
                     Already have an account?{" "}
                     <a className="text-hirexa-blue hover:underline" href="/login">
@@ -436,7 +435,7 @@ export default function SplitAuthCard() {
                             "mt-3 w-full rounded-xl py-3 font-semibold text-white transition",
                             otp.length !== 6 || loading
                               ? "bg-gray-300 cursor-not-allowed"
-                              : "bg-hirexa-blue hover:bg-hirexa-cyan",
+                              : "bg-sky-600 hover:bg-sky-700",
                           ].join(" ")}
                         >
                           {loading ? "Verifying..." : "Unlock now"}
@@ -460,16 +459,9 @@ export default function SplitAuthCard() {
                 {msg && <div className="mt-4 text-sm text-gray-700">{msg}</div>}
 
                 <button
-                  onClick={() => setStep("verify")}
-                  className="mt-6 w-full rounded-xl py-3 font-semibold text-white bg-hirexa-blue hover:bg-hirexa-cyan transition"
-                >
-                  Verify email to unlock
-                </button>
-
-                <button
                   type="button"
                   onClick={() => setStep("signup")}
-                  className="mt-3 w-full rounded-xl py-3 font-semibold text-black border border-gray-200 hover:bg-gray-50 transition"
+                  className="mt-3 w-full rounded-xl py-3 font-semibold text-red-700 border border-red-200 bg-red-50 hover:bg-red-100 transition "
                 >
                   Back
                 </button>
@@ -515,7 +507,7 @@ export default function SplitAuthCard() {
                     <button
                       type="button"
                       onClick={() => setStep("peek")}
-                      className="text-black hover:text-black/80"
+                    className="text-red-600 hover:text-red-700"
                     >
                       ← Back
                     </button>
@@ -536,7 +528,10 @@ export default function SplitAuthCard() {
           {/* Top gradient line */}
           <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-hirexa-blue via-hirexa-cyan to-hirexa-orange" />
         </div>
+
       </div>
-    </div>
   );
 }
+
+
+

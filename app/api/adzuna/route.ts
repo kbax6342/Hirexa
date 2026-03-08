@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const revalidate = 60; // keeps Next fetch caching benefits
+export const dynamic = "force-dynamic";
 
 type Job = {
   id: string;

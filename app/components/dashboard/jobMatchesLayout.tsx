@@ -120,6 +120,7 @@ export default function JobMatchesLayout() {
 
   const [appliedJobs, setAppliedJobs] = useState<Job[]>([]);
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
+  const [aiApplyLoading, setAiApplyLoading] = useState(false);
 
   const [offset, setOffset] = useState<number>(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -425,6 +426,16 @@ export default function JobMatchesLayout() {
     }
   };
 
+  const handleAiApplyFromDetails = async () => {
+    if (!right?.id) return;
+    setAiApplyLoading(true);
+    try {
+      await addAppliedJob(right);
+    } finally {
+      setAiApplyLoading(false);
+    }
+  };
+
   const htmlToRender = decodeHtml(String(selectedDetails?.description || ""));
   const parsedSections = splitSections(cleanJobText(htmlToRender));
 
@@ -643,9 +654,11 @@ export default function JobMatchesLayout() {
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
+                  onClick={handleAiApplyFromDetails}
+                  disabled={!right?.id || aiApplyLoading}
                   className="rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(146,64,14,0.22)] bg-[linear-gradient(135deg,#C2410C_0%,#B45309_100%)] hover:shadow-[0_10px_22px_rgba(146,64,14,0.28)] hover:bg-[linear-gradient(135deg,#B45309_0%,#92400E_100%)] active:bg-[#7C2D12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(194,65,12,0.24)]"
                 >
-                  AI Assistant Apply
+                  {aiApplyLoading ? "Opening..." : "AI Assistant Apply"}
                 </button>
                 <button
                   type="button"

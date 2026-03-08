@@ -5,6 +5,7 @@ import { getAuthedUserId } from "@/app/lib/agents/getAuthedUser";
 import {
   exchangeLinkedInCodeForToken,
   fetchLinkedInUserInfo,
+  getBaseUrl,
   parseLinkedInIdToken,
 } from "@/app/lib/agents/linkedinOAuth";
 
@@ -79,8 +80,8 @@ async function loadProfileSnapshot(userId: string) {
 
 export async function GET(req: Request) {
   const userId = await getAuthedUserId();
-  const appUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
-  const redirectToOutreach = new URL("/job-tools/agents/linkedin-outreach", appUrl);
+  const baseUrl = getBaseUrl(req);
+  const redirectToOutreach = new URL("/job-tools/agents/linkedin-outreach", baseUrl);
 
   if (!userId) {
     redirectToOutreach.searchParams.set("linkedin_error", "unauthorized");
@@ -123,7 +124,10 @@ export async function GET(req: Request) {
   }
 
   try {
-    const redirectUri = "http://localhost:3000/api/agents/linkedin/oauth/callback";
+    const redirectUri = new URL(
+      "/api/agents/linkedin/oauth/callback",
+      baseUrl
+    ).toString();
     const token = await exchangeLinkedInCodeForToken({
       code,
       redirectUri,

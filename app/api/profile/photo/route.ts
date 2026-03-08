@@ -55,9 +55,9 @@ export async function POST(req: Request) {
           },
         })
       : await prisma.userProfile.upsert({
-          where: { guestId },
+          where: { guestId: guestId! },
           create: {
-            guestId,
+            guestId: guestId!,
             profileImage: fileBuffer,
             profileImageMimeType: image.type,
             profileImageFilename: image.name || null,

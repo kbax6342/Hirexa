@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { buildProfileFieldMap, computeMissingFromFields } from "@/app/lib/jobApplicationAudit";
@@ -62,7 +63,7 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
         action,
         method,
         auditItems,
-      },
+      } as Prisma.InputJsonValue,
     },
   });
 

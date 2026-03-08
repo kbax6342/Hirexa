@@ -185,13 +185,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const normalizedEmail = normalizeText(body.email) ?? (session?.user as any)?.email ?? null;
+
     const profile = await prisma.userProfile.upsert({
       where: { userId },
       create: {
         userId,
         firstName,
         lastName,
-        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? null,
+        email: normalizedEmail,
+        subscriptionEmail: normalizedEmail,
         phone: normalizeText(body.phone),
         dob: parseDob(body.dob),
         address: normalizeText(body.address),
@@ -204,7 +207,8 @@ export async function POST(req: Request) {
       update: {
         firstName,
         lastName,
-        email: normalizeText(body.email) ?? (session?.user as any)?.email ?? undefined,
+        email: normalizedEmail ?? undefined,
+        subscriptionEmail: normalizedEmail ?? undefined,
         phone: normalizeText(body.phone),
         dob: parseDob(body.dob),
         address: normalizeText(body.address),
@@ -297,16 +301,19 @@ export async function GET() {
     const responseProfile = profile
       ? {
           ...profile,
-          expertise:
-            profile.keyQuestions &&
-            typeof profile.keyQuestions === "object" &&
-            !Array.isArray(profile.keyQuestions)
-              ? Array.isArray((profile.keyQuestions as Record<string, unknown>).expertise)
-                ? (profile.keyQuestions as Record<string, unknown>).expertise.map((item) =>
-                    String(item)
-                  )
-                : []
-              : [],
+          expertise: (() => {
+            if (
+              profile.keyQuestions &&
+              typeof profile.keyQuestions === "object" &&
+              !Array.isArray(profile.keyQuestions)
+            ) {
+              const rawExpertise = (profile.keyQuestions as Record<string, unknown>).expertise;
+              if (Array.isArray(rawExpertise)) {
+                return rawExpertise.map((item) => String(item ?? ""));
+              }
+            }
+            return [];
+          })(),
           profileImageUrl:
             profile.profileImage && profile.profileImageMimeType
               ? `data:${profile.profileImageMimeType};base64,${Buffer.from(

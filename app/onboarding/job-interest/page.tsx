@@ -11,13 +11,21 @@ interface Job {
 
 const DEFAULT_TERM = "manager"; // ✅ default dropdown content on focus
 
+function slugify(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-");
+}
+
 export default function JobSearchPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Job[]>([]);
-  const [selectedJobs, setSelectedJobs] = useState<Job[]>([]);
+  const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [draftSelectedJobs, setDraftSelectedJobs] = useState<Job[]>([]);
+  const [draftSelectedTitles, setDraftSelectedTitles] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   const router = useRouter();
@@ -25,9 +33,13 @@ export default function JobSearchPage() {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  const totalSelectedCount = useMemo(() => {
+    return new Set([...selectedTitles, ...draftSelectedTitles]).size;
+  }, [selectedTitles, draftSelectedTitles]);
+
   const draftRemaining = useMemo(
-    () => Math.max(0, 5 - (selectedJobs.length + draftSelectedJobs.length)),
-    [selectedJobs.length, draftSelectedJobs.length],
+    () => Math.max(0, 5 - totalSelectedCount),
+    [totalSelectedCount],
   );
 
     
@@ -73,52 +85,42 @@ export default function JobSearchPage() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  const toggleJob = (job: Job) => {
-    setSelectedJobs((prev) => {
-      const exists = prev.some((j) => j.uuid === job.uuid);
-  
-      // remove
-      if (exists) return prev.filter((j) => j.uuid !== job.uuid);
-  
-      // add (limit 5)
+  const toggleTitle = (title: string) => {
+    setSelectedTitles((prev) => {
+      if (prev.includes(title)) {
+        return prev.filter((t) => t !== title);
+      }
       if (prev.length >= 5) return prev;
-  
-      return [...prev, job];
+      return [...prev, title];
     });
   };
 
-  const toggleDraftJob = (job: Job) => {
-    setDraftSelectedJobs((prev) => {
-      const exists = prev.some((selected) => selected.uuid === job.uuid);
+  const toggleDraftTitle = (title: string) => {
+    setDraftSelectedTitles((prev) => {
+      const exists = prev.includes(title);
+      if (exists) return prev.filter((t) => t !== title);
 
-      if (exists) {
-        return prev.filter((selected) => selected.uuid !== job.uuid);
-      }
+      const combined = new Set([...selectedTitles, ...prev, title]);
+      if (combined.size > 5) return prev;
 
-      if (selectedJobs.length + prev.length >= 5) {
-        return prev;
-      }
-
-      return [...prev, job];
+      return [...prev, title];
     });
   };
 
   const handleDone = () => {
-    if (draftSelectedJobs.length > 0) {
-      setSelectedJobs((prev) => {
+    if (draftSelectedTitles.length > 0) {
+      setSelectedTitles((prev) => {
         const next = [...prev];
-
-        for (const job of draftSelectedJobs) {
-          if (next.some((selected) => selected.uuid === job.uuid)) continue;
+        for (const title of draftSelectedTitles) {
+          if (next.includes(title)) continue;
           if (next.length >= 5) break;
-          next.push(job);
+          next.push(title);
         }
-
         return next;
       });
     }
 
-    setDraftSelectedJobs([]);
+    setDraftSelectedTitles([]);
     setShowDropdown(false);
   };
   
@@ -162,11 +164,16 @@ export default function JobSearchPage() {
   const handleNext = async () => {
     try {
       setSaving(true);
+      const jobs = selectedTitles.map((title) => ({
+        uuid: slugify(title),
+        title,
+      }));
+
       const res = await fetch("/api/job-interests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ jobs: selectedJobs }),
+        body: JSON.stringify({ jobs }),
       });
   
       const text = await res.text();
@@ -218,7 +225,10 @@ export default function JobSearchPage() {
                 onChange={(e) => setQuery(e.target.value)}
                 onFocus={() => {
                   // ✅ show dropdown even with empty input; will fetch DEFAULT_TERM
-                  setShowDropdown(true);
+                  if (!showDropdown) {
+                    setDraftSelectedTitles(selectedTitles);
+                    setShowDropdown(true);
+                  }
                 }}
                 placeholder="Project manager, marketing, driver, etc."
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-700 placeholder-gray-400"
@@ -234,7 +244,7 @@ export default function JobSearchPage() {
                     {query.trim().length > 0 ? `Results for “${query.trim()}”` : `Popular “${DEFAULT_TERM}” titles`}
                   </div>
                   <div className="text-xs text-gray-600">
-                    {selectedJobs.length} of 5 selected
+                    {totalSelectedCount} of 5 selected
                   </div>
                 </div>
 
@@ -252,8 +262,8 @@ export default function JobSearchPage() {
 
                   {!loading &&
                     results.map((job) => {
-                      const isSelected = draftSelectedJobs.some((selected) => selected.uuid === job.uuid);
-                      const isDisabled = !isSelected && selectedJobs.length + draftSelectedJobs.length >= 5;
+                      const isSelected = draftSelectedTitles.includes(job.title);
+                      const isDisabled = !isSelected && totalSelectedCount >= 5;
                       return (
                         <label
                           key={job.uuid}
@@ -264,7 +274,7 @@ export default function JobSearchPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() => !isDisabled && toggleDraftJob(job)}
+                            onChange={() => !isDisabled && toggleDraftTitle(job.title)}
                             // onChange={(e) => setQuery(e.target.value)}
                             disabled={isDisabled}
                             className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
@@ -279,7 +289,7 @@ export default function JobSearchPage() {
                 <div className="p-3 border-t border-gray-200 bg-gray-50">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-gray-600">{draftRemaining} more recommended</span>
-                    {selectedJobs.length + draftSelectedJobs.length >= 5 && (
+                    {totalSelectedCount >= 5 && (
                       <span className="text-xs text-amber-600 font-medium">Maximum reached</span>
                     )}
                   </div>
@@ -289,7 +299,7 @@ export default function JobSearchPage() {
                       type="button"
                       onClick={() => {
                         setQuery("");
-                        setDraftSelectedJobs([]);
+                        setDraftSelectedTitles([]);
                         // keep dropdown open showing defaults
                         setShowDropdown(true);
                       }}
@@ -312,26 +322,26 @@ export default function JobSearchPage() {
           </div>
 
           {/* Selected Jobs Tags */}
-          {selectedJobs.length > 0 && (
+          {selectedTitles.length > 0 && (
             <div className="mt-6 flex flex-wrap gap-2">
-              {selectedJobs.map((job) => (
+              {selectedTitles.map((title) => (
                 <button
-                  key={job.uuid}
-                  onClick={() => toggleJob(job)}
+                  key={title}
+                  onClick={() => toggleTitle(title)}
                   className="inline-flex items-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-full text-base font-medium hover:bg-blue-600 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  aria-label={`Remove ${job.title}`}
+                  aria-label={`Remove ${title}`}
                   type="button"
                 >
                   <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
-                  <span>{job.title}</span>
+                  <span>{title}</span>
                 </button>
               ))}
 
-              {selectedJobs.length < 5 && (
+              {selectedTitles.length < 5 && (
                 <span className="text-sm text-gray-500 self-center">
-                  {5 - selectedJobs.length} more {5 - selectedJobs.length === 1 ? "title" : "titles"} recommended
+                  {5 - selectedTitles.length} more {5 - selectedTitles.length === 1 ? "title" : "titles"} recommended
                 </span>
               )}
             </div>
@@ -354,7 +364,7 @@ export default function JobSearchPage() {
 
         <button
           onClick={handleNext}
-          disabled={selectedJobs.length === 0 || saving}
+          disabled={selectedTitles.length === 0 || saving}
           className="px-8 py-3 rounded-full font-medium bg-black text-white disabled:opacity-50"
         >
           {saving ? "Saving..." : "Next"}

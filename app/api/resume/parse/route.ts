@@ -53,7 +53,6 @@ async function extractPdfText(buffer: Buffer): Promise<PdfTextResult> {
 
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
-    disableWorker: true, // ✅ prevents fake worker/module resolution errors
   });
 
   const pdf = await loadingTask.promise;
@@ -490,4 +489,3 @@ export async function POST(req: Request) {
     );
   }
 }
-

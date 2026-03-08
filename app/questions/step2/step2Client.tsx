@@ -8,6 +8,15 @@ import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLo
 
 declare global {
   interface Window {
+    Dropbox?: {
+      choose: (options: {
+        success: (files: any[]) => void;
+        cancel?: () => void;
+        linkType?: "direct" | "preview";
+        multiselect?: boolean;
+        extensions?: string[];
+      }) => void;
+    };
     gapi?: {
       load: (
         name: string,
@@ -115,6 +124,21 @@ export default function Step2Client({
   resumeId,
 }: Step2ClientProps) {
   const router = useRouter();
+
+  useEffect(() => {
+    if (document.getElementById("dropboxjs")) return;
+
+    const script = document.createElement("script");
+    script.id = "dropboxjs";
+    script.src = "https://www.dropbox.com/static/api/2/dropins.js";
+    script.setAttribute(
+      "data-app-key",
+      process.env.NEXT_PUBLIC_DROPBOX_APP_KEY!
+    );
+    script.async = true;
+
+    document.body.appendChild(script);
+  }, []);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -256,27 +280,18 @@ export default function Step2Client({
         .setSelectFolderEnabled(false)
         // ✅ IMPORTANT: show resumes (PDF/DOC/DOCX/etc)
         .setMimeTypes(
-          [
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "text/plain",
-            "application/rtf",
-            "text/rtf",
-            "text/html",
-          ].join(",")
+          "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document"
         );
 
 
 
-          const picker = new window.google!.picker!.PickerBuilder()
+          const pickerBuilder = new pickerAny.PickerBuilder()
           .setDeveloperKey(apiKey)
           .setOAuthToken(accessToken)
           // helps picker know your exact origin (localhost / prod)
-          // @ts-expect-error setOrigin exists at runtime on PickerBuilder
-          .setOrigin(window.location.origin)
+          .setOrigin(window.location.origin as any)
           .addView(docsView)
-          .setCallback((data) => {
+          .setCallback((data: any) => {
             if (data.action === window.google?.picker?.Action.CANCEL) {
               reject(new Error("Google Drive selection was canceled."));
               return;
@@ -291,13 +306,20 @@ export default function Step2Client({
             resolve(pickedFile);
           })
           .build();
+
+        const picker = pickerBuilder;
         
         picker.setVisible(true);
       });
 
-      const downloadUrl =
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selectedDoc.id)}` +
-      `?alt=media&supportsAllDrives=true`;
+      const isGoogleDoc = selectedDoc.mimeType === "application/vnd.google-apps.document";
+      const downloadUrl = isGoogleDoc
+        ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+            selectedDoc.id
+          )}/export?mimeType=application/pdf`
+        : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+            selectedDoc.id
+          )}?alt=media&supportsAllDrives=true`;
     
     const fileResponse = await fetch(downloadUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -310,12 +332,11 @@ export default function Step2Client({
 
       const blob = await fileResponse.blob();
       const pickedFile = new File([blob], selectedDoc.name, {
-        type: selectedDoc.mimeType || blob.type || "application/octet-stream",
+        type: isGoogleDoc ? "application/pdf" : selectedDoc.mimeType || blob.type || "application/octet-stream",
       });
 
       setSelectedSource("google-drive");
       handleFile(pickedFile);
-      await uploadResumeAndContinue(pickedFile);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Google Drive import failed.";
       const maybeInvalidApiKey = /developer key|api key|invalid/i.test(errorMessage);
@@ -336,12 +357,35 @@ export default function Step2Client({
       void pickFromGoogleDrive();
       return;
     }
-
-    const cloudUrl =
-      "https://www.dropbox.com/home";
-
-    window.open(cloudUrl, "_blank", "noopener,noreferrer");
+    importFromDropbox();
   }
+
+  const importFromDropbox = () => {
+    if (!window.Dropbox) {
+      alert("Dropbox is still loading. Please try again.");
+      return;
+    }
+
+    window.Dropbox.choose({
+      success: async (files: any[]) => {
+        const file = files[0];
+
+        const response = await fetch(file.link);
+        const blob = await response.blob();
+        const fileObj = new File([blob], file.name, { type: blob.type });
+        setSelectedSource("dropbox");
+        handleFile(fileObj);
+      },
+
+      cancel: () => {},
+
+      linkType: "direct",
+
+      multiselect: false,
+
+      extensions: [".pdf", ".doc", ".docx"],
+    });
+  };
 
   function handleFile(f: File) {
     setFile(f);
@@ -409,15 +453,16 @@ export default function Step2Client({
 // /app/questions/step2/step2Client.tsx
 
 async function uploadResumeAndContinue(fileToUpload?: File) {
-  const candidate = fileToUpload ?? file;
+  const candidate: File | null | undefined = fileToUpload ?? file;
 
   // ✅ Guard: must be a real File/Blob
   if (!(candidate instanceof File)) {
+    const debugCandidate: any = candidate;
     console.error("UPLOAD ERROR: candidate is not a File", {
-      candidate,
-      type: typeof candidate,
-      isBlob: candidate instanceof Blob,
-      isFile: candidate instanceof File,
+      candidate: debugCandidate,
+      type: typeof debugCandidate,
+      isBlob: debugCandidate instanceof Blob,
+      isFile: debugCandidate instanceof File,
     });
     setSaveError("Please choose a valid resume file (PDF/DOCX) and try again.");
     return;
@@ -440,22 +485,20 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
 
     const data = await res.json().catch(() => null);
 
-    if (!res.ok || !data?.resume?.id) {
+    const resumeId = data?.resumeId ?? data?.resume?.id;
+
+    if (!res.ok || !resumeId) {
       throw new Error(data?.error || "Upload failed");
     }
 
     setProof({ savedTo: data.savedTo, resume: data.resume });
-
-    router.push(`/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`);
+    router.push(`/questions/step2Resume?resumeId=${encodeURIComponent(resumeId)}`);
   } catch (e: unknown) {
     setSaveError(e instanceof Error ? e.message : "Something went wrong while saving your resume.");
   } finally {
     setIsSaving(false);
   }
 }
-
-
-  console.log("KEY VALUE:", process.env.NEXT_PUBLIC_GOOGLE_API_KEY);
 
   if (isSaving) {
     return <ResumeParsingLoadingScreen />;
@@ -657,7 +700,7 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
 
               <button
                 type="button"
-                onClick={() => pickFromCloud("dropbox")}
+                onClick={importFromDropbox}
                 className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
               >
                 Import from Dropbox

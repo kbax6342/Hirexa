@@ -33,9 +33,9 @@ export async function POST(req: Request) {
     const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId! },
       create: userId
-        ? { userId, email }
-        : { guestId: guestId!, email },
-      update: { email },
+        ? { userId, email, subscriptionEmail: email }
+        : { guestId: guestId!, email, subscriptionEmail: email },
+      update: { email, subscriptionEmail: email },
       select: {
         id: true,
         userId: true,

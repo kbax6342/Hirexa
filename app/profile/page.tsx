@@ -10,6 +10,7 @@ import {
   ChevronUpIcon,
   TrashIcon,
 } from "@heroicons/react/24/outline";
+import { formatSalary, type CompensationType } from "@/app/lib/salary";
 
 type ExperienceItem = {
   id: string;
@@ -209,7 +210,7 @@ export default function ProfilePage() {
         throw new Error(message);
       }
 
-      setProfile(data.profile ?? null);
+      setProfile(data?.profile ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load profile");
     } finally {
@@ -270,6 +271,12 @@ export default function ProfilePage() {
       profile?.yearlySubscriber,
     ]
   );
+
+  const formattedMinCompensation = useMemo(() => {
+    const type: CompensationType =
+      profile?.compensationType === "hourly" ? "hourly" : "yearly";
+    return formatSalary(profile?.minCompensation ?? null, type);
+  }, [profile?.minCompensation, profile?.compensationType]);
 
   const experience: ExperienceItem[] = useMemo(() => {
     if (!profile?.resume?.experiences?.length) return [];
@@ -349,7 +356,7 @@ export default function ProfilePage() {
       }
 
       if (data?.profile) {
-        setProfile((prev) => (prev ? { ...prev, ...data.profile } : data.profile));
+        setProfile(data.profile);
       }
 
       setIsEditingPersonal(false);
@@ -844,6 +851,9 @@ function ToggleField({
               <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
               <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
                 Add more details (roles, locations, salary, availability) to boost match quality.
+              </p>
+              <p className="mt-2 text-sm text-slate-600">
+                Minimum salary: <span className="font-semibold">{formattedMinCompensation}</span>
               </p>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">

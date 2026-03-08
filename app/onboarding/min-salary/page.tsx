@@ -5,20 +5,17 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { useRouter } from "next/navigation";
+import {
+  clampSalaryForType,
+  formatSalary,
+  parseSalaryInputToNumber,
+  SALARY_BOUNDS,
+  type CompensationType,
+} from "@/app/lib/salary";
 
-
-type CompensationType = "yearly" | "hourly";
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
-}
-
-function formatMoney(n: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(n);
 }
 
 export default function MinSalaryPage() {
@@ -30,33 +27,38 @@ export default function MinSalaryPage() {
   const config = useMemo(() => {
     if (type === "yearly") {
       return {
-        min: 20000,
-        max: 300000,
+        min: SALARY_BOUNDS.yearly.min,
+        max: SALARY_BOUNDS.yearly.max,
         step: 1000,
         unitLabel: "/ year",
         tinyUnit: "USD/year",
         storageKey: "onboarding_min_salary_yearly",
       };
     }
-    return {
-      min: 10,
-      max: 200,
-      step: 1,
-      unitLabel: "/ hour",
-      tinyUnit: "USD/hour",
-      storageKey: "onboarding_min_salary_hourly",
+      return {
+        min: SALARY_BOUNDS.hourly.min,
+        max: SALARY_BOUNDS.hourly.max,
+        step: 1,
+        unitLabel: "/ hour",
+        tinyUnit: "USD/hour",
+        storageKey: "onboarding_min_salary_hourly",
     };
   }, [type]);
 
   async function saveMinSalaryToProfile(nextType: CompensationType, nextValue: number) {
+    const parsed = parseSalaryInputToNumber(nextValue);
+    if (parsed === null || parsed <= 0) {
+      throw new Error("Please enter a valid minimum salary.");
+    }
+
+    const bounded = clampSalaryForType(parsed, nextType);
     const res = await fetch("/api/onboarding/min-salary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({
         compensationType: nextType,
-        minCompCompensation: undefined, // (intentionally unused)
-        minCompensation: nextValue,
+        minCompensation: bounded,
       }),
     });
   
@@ -96,6 +98,42 @@ export default function MinSalaryPage() {
     } catch {
       // ignore
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/onboarding/min-salary", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || !data) return;
+
+        const nextType: CompensationType =
+          data.compensationType === "hourly" ? "hourly" : "yearly";
+        const parsed = parseSalaryInputToNumber(data.minCompensation);
+        if (parsed === null) return;
+
+        const bounded = clampSalaryForType(parsed, nextType);
+
+        if (!cancelled) {
+          setType(nextType);
+          setValue(bounded);
+          persist(nextType, bounded);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -186,14 +224,14 @@ export default function MinSalaryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
   
 
       {/* Content */}
-      <main className="mx-auto w-full max-w-5xl px-6 pb-28 pt-10">
-        <div className="mx-auto max-w-2xl">
-          <div className="flex items-center justify-center gap-2">
-            <h1 className="text-center text-3xl font-semibold tracking-tight text-gray-900">
+      <main className="flex-1 flex flex-col items-center justify-start px-6 pt-8">
+        <div className="w-full max-w-2xl">
+          <div className="flex items-center justify-center gap-2 mt-[50]">
+            <h1 className="text-center text-4xl font-bold text-gray-900">
               How much would you like to earn?
             </h1>
             <span
@@ -298,6 +336,10 @@ export default function MinSalaryPage() {
               </div>
             </div>
 
+            <div className="mt-2 text-sm text-gray-700">
+              Minimum salary: <span className="font-semibold">{formatSalary(value, type)}</span>
+            </div>
+
             {/* Little helper line spacing like screenshot */}
             <div className="mt-2 text-xs text-gray-400">
               {type === "yearly"
@@ -309,37 +351,25 @@ export default function MinSalaryPage() {
       </main>
 
       {/* Bottom actions */}
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-white">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="inline-flex items-center gap-2 rounded-full border border-gray-900 px-5 py-2 text-sm font-semibold text-black hover:bg-gray-100"
-          >
-            <span className="text-base">←</span> Back
-          </button>
+      <footer className="px-6 py-6 flex justify-between items-center border-t border-gray-200 bg-white">
+        <button
+          onClick={() => router.back()}
+          className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Back
+        </button>
 
-          <div className="flex items-center gap-6">
-            <button
-              type="button"
-              onClick={onSkip}
-              className="text-sm font-medium text-gray-700 hover:text-gray-900"
-            >
-              Skip for now
-            </button>
+        <button
+          onClick={onContinue}
+          className="px-8 py-3 bg-blue-600 text-white rounded-full font-medium hover:bg-blue-700 transition-colors"
+        >
+          Next
+        </button>
+      </footer>
 
-            <button
-              type="button"
-              onClick={onContinue}
-              className="rounded-full bg-blue-700 px-6 py-2 text-sm font-semibold text-white hover:bg-blue-800"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Optional: if you want the logo to link somewhere */}
       <div className="sr-only">
         <Link href="/">Home</Link>
       </div>

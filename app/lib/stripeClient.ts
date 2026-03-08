@@ -11,7 +11,7 @@ export function getStripeClient() {
 
   if (!stripe) {
     stripe = new Stripe(key, {
-      apiVersion: "2025-01-27.acacia",
+      apiVersion: "2026-01-28.clover",
     });
   }
 

@@ -2,7 +2,6 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
-import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 
 import OpenAI from "openai";
@@ -126,7 +125,6 @@ async function extractPdfText(buffer: Buffer): Promise<PdfTextResult> {
 
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
-    disableWorker: true,
   });
 
   const pdf = await loadingTask.promise;
@@ -260,20 +258,18 @@ async function parseResumeWithLLM(args: { mimeType: string; buffer: Buffer }): P
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    const userId = (session?.user as any)?.id ?? null;
-
     const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
+    let guestId = c.get("guest_user_id")?.value ?? null;
+    const shouldSetGuestCookie = !guestId;
 
-    if (!userId && !guestId) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    if (!guestId) {
+      guestId = `guest_${crypto.randomUUID()}`;
     }
 
     // ✅ ALWAYS ensure profile exists
     const profile = await prisma.userProfile.upsert({
-      where: userId ? { userId } : { guestId: guestId! },
-      create: userId ? { userId } : { guestId: guestId! },
+      where: { guestId: guestId! },
+      create: { guestId: guestId! },
       update: {},
       select: { id: true },
     });
@@ -345,11 +341,12 @@ export async function POST(req: Request) {
       });
     });
 
-    invalidateCachedProfile({ userId, guestId });
+    invalidateCachedProfile({ userId: null, guestId });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       ok: true,
-      savedTo: { sessionUserId: userId, guestId, profileId: profile.id },
+      success: true,
+      savedTo: { sessionUserId: null, guestId, profileId: profile.id },
       resume: {
         id: resume.id,
         profileId: resume.userProfileId,
@@ -360,6 +357,18 @@ export async function POST(req: Request) {
       },
       parsed: { experienceCount: parsedExperiences.length },
     });
+
+    if (shouldSetGuestCookie) {
+      response.cookies.set("guest_user_id", guestId!, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30,
+      });
+    }
+
+    return response;
   } catch (e: any) {
     const info = extractStatusAndRequestId(e);
 

@@ -39,6 +39,17 @@ export default function JobAlertsOnboardingPage() {
 
     (async () => {
       try {
+        await fetch("/api/onboarding/start", { method: "POST" }).catch(() => {});
+
+        const emailRes = await fetch("/api/onboarding/email", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const emailData = await emailRes.json().catch(() => null);
+        if (!cancelled && emailData?.email) {
+          setEmail(String(emailData.email));
+        }
+
         setJobsLoading(true);
         const res = await fetch("/api/onboarding/selected-jobs", { cache: "no-store" });
         const data: { jobs?: string[] } = await res.json();
@@ -84,11 +95,12 @@ export default function JobAlertsOnboardingPage() {
     setSaveError(null);
 
     try {
+      const normalizedEmail = email.trim().toLowerCase();
       const res = await fetch("/api/onboarding/email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: normalizedEmail }),
       });
 
       const text = await res.text();
@@ -197,7 +209,9 @@ export default function JobAlertsOnboardingPage() {
               disabled={!emailLooksValid || saving}
               className={[
                 "px-8 py-3 rounded-full font-medium text-white disabled:opacity-50 transition",
-                emailLooksValid && !saving ? "bg-black hover:bg-black/90" : "bg-gray-300 text-gray-600",
+                emailLooksValid && !saving
+                  ? "bg-[#145efc] hover:bg-[#0f4ed6]"
+                  : "bg-gray-300 text-gray-600",
               ].join(" ")}
             >
               {saving ? "Saving..." : "Next"}

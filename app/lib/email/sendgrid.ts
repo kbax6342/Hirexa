@@ -1,44 +1,93 @@
-import sgMail from "@sendgrid/mail";
+import { getEmailConfig, sendEmail } from "./mailer";
 
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const SENDGRID_FROM = process.env.SENDGRID_FROM; // e.g. "Hirexa <hirexa@gmail.com>"
+function normalizeName(name?: string | null) {
+  return (name ?? "").trim();
+}
 
-if (!SENDGRID_API_KEY) throw new Error("Missing SENDGRID_API_KEY");
-if (!SENDGRID_FROM) throw new Error("Missing SENDGRID_FROM");
+function formatGreeting(name?: string | null) {
+  const safeName = normalizeName(name);
+  return safeName ? `Hi ${safeName},` : "Hi there,";
+}
 
-sgMail.setApiKey(SENDGRID_API_KEY);
+const WELCOME_EMAIL_CATEGORY =
+  process.env.WELCOME_EMAIL_CATEGORY === "transactional" ? "transactional" : "marketing";
 
 export async function sendWelcomeEmail(to: string, name?: string | null) {
-  const safeName = (name ?? "").trim();
+  const { appUrl } = getEmailConfig();
+  const greeting = formatGreeting(name);
 
-  await sgMail.send({
+  const subject = "Welcome to Hirexa AI";
+
+  const text = [
+    greeting,
+    "",
+    "Welcome to Hirexa AI. Your account is ready, and you can continue onboarding anytime.",
+    "",
+    `Get started: ${appUrl}`,
+    "",
+    "If you did not request this email, you can ignore it.",
+    "",
+    "Hirexa AI",
+    appUrl,
+  ].join("\n");
+
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111">
+      <p>${greeting}</p>
+      <p>Welcome to <strong>Hirexa AI</strong>. Your account is ready, and you can continue onboarding anytime.</p>
+      <p><a href="${appUrl}" style="color:#145efc">Get started</a></p>
+      <p style="margin-top:24px;color:#6b7280;font-size:12px">
+        If you did not request this email, you can ignore it.<br />
+        <strong>Hirexa AI</strong> � ${appUrl}
+      </p>
+    </div>
+  `;
+
+  await sendEmail({
     to,
-    from: SENDGRID_FROM,
-    subject: "Welcome to Hirexa!",
-    text: `Welcome${safeName ? `, ${safeName}` : ""} — thanks for signing up to Hirexa.`,
-    html: `
-      <div style="font-family:Arial,sans-serif;line-height:1.5">
-        <h2>Welcome${safeName ? `, ${safeName}` : ""}!</h2>
-        <p>Thanks for signing up to <b>Hirexa</b>.</p>
-        <p>You’re all set ✅</p>
-      </div>
-    `,
+    subject,
+    html,
+    text,
+    // Welcome emails can be marketing or transactional depending on your policy.
+    category: WELCOME_EMAIL_CATEGORY,
   });
 }
 
 export async function sendVerificationCodeEmail(to: string, code: string) {
-  await sgMail.send({
+  const { appUrl } = getEmailConfig();
+
+  const subject = "Your Hirexa AI verification code";
+
+  const text = [
+    "Your Hirexa AI verification code is:",
+    code,
+    "",
+    "This code expires in 10 minutes.",
+    "",
+    "If you did not request this code, you can ignore this email.",
+    "",
+    "Hirexa AI",
+    appUrl,
+  ].join("\n");
+
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111">
+      <h2 style="margin:0 0 12px">Verify your email</h2>
+      <p>Your Hirexa AI verification code is:</p>
+      <div style="font-size:28px;font-weight:700;letter-spacing:6px;margin:16px 0">${code}</div>
+      <p>This code expires in <strong>10 minutes</strong>.</p>
+      <p style="margin-top:24px;color:#6b7280;font-size:12px">
+        If you did not request this code, you can ignore this email.<br />
+        <strong>Hirexa AI</strong> � ${appUrl}
+      </p>
+    </div>
+  `;
+
+  await sendEmail({
     to,
-    from: SENDGRID_FROM,
-    subject: "Your Hirexa verification code",
-    text: `Your Hirexa verification code is ${code}. It expires in 10 minutes.`,
-    html: `
-      <div style="font-family:Arial,sans-serif;line-height:1.5">
-        <h2>Verify your email</h2>
-        <p>Your Hirexa verification code is:</p>
-        <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:16px 0">${code}</p>
-        <p>This code expires in <b>10 minutes</b>.</p>
-      </div>
-    `,
+    subject,
+    html,
+    text,
+    category: "transactional",
   });
 }

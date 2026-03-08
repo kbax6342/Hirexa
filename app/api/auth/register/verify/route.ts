@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
 import { hashOtp } from "@/app/lib/security/otp";
+import { sendWelcomeEmail } from "@/app/lib/email/sendgrid";
 
 export async function POST(req: Request) {
   try {
@@ -89,6 +90,27 @@ export async function POST(req: Request) {
       // If this model/table still exists in your schema, this is safe:
       await tx.emailVerificationCode.deleteMany({ where: { email } });
     });
+
+    const profile = await prisma.userProfile.findFirst({
+      where: { email },
+      select: { id: true, firstName: true, welcomeEmailSentAt: true },
+    });
+
+    if (profile && !profile.welcomeEmailSentAt) {
+      const claimed = await prisma.userProfile.updateMany({
+        where: { id: profile.id, welcomeEmailSentAt: null },
+        data: { welcomeEmailSentAt: new Date() },
+      });
+
+      if (claimed.count === 1) {
+        try {
+          await sendWelcomeEmail(email, profile.firstName ?? undefined);
+        } catch (emailError) {
+          // Do not block verification if email fails.
+          console.warn("Welcome email failed after verification:", emailError);
+        }
+      }
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {

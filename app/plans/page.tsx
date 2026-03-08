@@ -1,10 +1,12 @@
 // app/plans/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   CheckCircleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   DocumentTextIcon,
   MagnifyingGlassIcon,
   ShieldCheckIcon,
@@ -24,8 +26,7 @@ type Plan = {
   perks: string[];
 };
 
-export default function PlansPage() {
-  const router = useRouter();
+function PlansPageContent() {
   const searchParams = useSearchParams();
 
   // Optional context from the Auto-fill button:
@@ -52,7 +53,7 @@ export default function PlansPage() {
       {
         id: "annual",
         label: "Annual access",
-        price: "$4.95",
+        price: "$59.40",
         cadence: "/mo",
         perks: [
           "AI-powered job search",
@@ -69,6 +70,7 @@ export default function PlansPage() {
   const [selected, setSelected] = useState<PlanId>("trial");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [featureView, setFeatureView] = useState<0 | 1>(0);
 
   const selectedPlan = plans.find((p) => p.id === selected)!;
 
@@ -85,7 +87,7 @@ export default function PlansPage() {
         credentials: "include",
         body: JSON.stringify({
           selectedPlan: selectedPlan.id,
-          benefits: selectedPlan.perks,
+          selectedBenefits: selectedPlan.perks,
           source,
           jobId,
         }),
@@ -177,44 +179,83 @@ export default function PlansPage() {
           {/* RIGHT: Benefits + Next */}
           <section className="lg:col-span-8">
             <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-              <h2 className="text-center text-lg font-extrabold text-gray-900">
-                All subscription features
-              </h2>
+              <div className="mt-8">
+                {featureView === 0 ? (
+                  <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+                      <div className="aspect-video w-full">
+                        <video
+                          className="h-full w-full object-cover"
+                          controls
+                          muted
+                          preload="metadata"
+                        >
+                          <source src="https://qwdnuz3g8p1kfebz.public.blob.vercel-storage.com/invideo-ai-1080%20Land%20Jobs%20Faster%20with%20Hirexa%20AI%20%28In%2060s%29%202026-03-07.mp4" type="video/mp4" />
+                        </video>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4">
+                    <h2 className="text-center text-lg font-extrabold text-gray-900">
+                      All subscription features
+                    </h2>
+                    <div className="mt-6 grid gap-8 md:grid-cols-2">
+                      <Feature
+                        icon={<MagnifyingGlassIcon className="h-6 w-6 text-emerald-700" />}
+                        title="Job searching, fully automated"
+                        desc="Hirexa finds and applies to relevant jobs for you - continuously and intelligently."
+                      />
+                      <Feature
+                        icon={<DocumentTextIcon className="h-6 w-6 text-emerald-700" />}
+                        title="One profile. Unlimited reach."
+                        desc="Turn a single setup into hundreds of tailored applications without extra effort."
+                      />
+                      <Feature
+                        icon={<SparklesIcon className="h-6 w-6 text-emerald-700" />}
+                        title="More time. Less stress. Better results."
+                        desc="No more copy-pasting applications. Hirexa handles it so you do not have to."
+                      />
+                      <Feature
+                        icon={<ShieldCheckIcon className="h-6 w-6 text-emerald-700" />}
+                        title="Support that works around your schedule"
+                        desc="Reach out anytime - we respond as quickly as possible during business hours."
+                      />
+                    </div>
+                  </div>
+                )}
 
-              <div className="mt-8 grid gap-8 md:grid-cols-2">
-                <Feature
-                  icon={<MagnifyingGlassIcon className="h-6 w-6 text-emerald-700" />}
-                  title="Job searching, fully automated"
-                  desc="Hirexa finds and applies to relevant jobs for you — continuously and intelligently."
-                />
-                <Feature
-                  icon={<DocumentTextIcon className="h-6 w-6 text-emerald-700" />}
-                  title="One profile. Unlimited reach."
-                  desc="Turn a single setup into hundreds of tailored applications without extra effort."
-                />
-                <Feature
-                  icon={<SparklesIcon className="h-6 w-6 text-emerald-700" />}
-                  title="More time. Less stress. Better results."
-                  desc="No more copy-pasting applications. Hirexa handles it so you don’t have to."
-                />
-                <Feature
-                  icon={<ShieldCheckIcon className="h-6 w-6 text-emerald-700" />}
-                  title="Support that works around your schedule"
-                  desc="Reach out anytime — we respond as quickly as possible during business hours.."
-                />
-              
-             
+                <button
+                  type="button"
+                  onClick={onNext}
+                  disabled={saving}
+                  className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-6 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {saving ? "Saving..." : "Next"}
+                  <ArrowRightIcon className="h-5 w-5" />
+                </button>
+
+                <div className="mt-4 flex items-center justify-between gap-2 px-3">
+                  <button
+                    type="button"
+                    onClick={() => setFeatureView(0)}
+                    disabled={featureView === 0}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 transition hover:bg-gray-50 disabled:opacity-50"
+                    aria-label="Show video"
+                  >
+                    <ChevronLeftIcon className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFeatureView(1)}
+                    disabled={featureView === 1}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-500 transition hover:bg-gray-50 disabled:opacity-50"
+                    aria-label="Show features"
+                  >
+                    <ChevronRightIcon className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
-
-              <button
-                type="button"
-                onClick={onNext}
-                disabled={saving}
-                className="mt-10 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-6 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {saving ? "Saving..." : "Next"}
-                <ArrowRightIcon className="h-5 w-5" />
-              </button>
 
               {saveError && (
                 <p className="mt-4 text-center text-sm text-red-600">{saveError}</p>
@@ -241,6 +282,14 @@ export default function PlansPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function PlansPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-white" />}>
+      <PlansPageContent />
+    </Suspense>
   );
 }
 

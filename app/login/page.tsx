@@ -1,23 +1,50 @@
 "use client";
 
 import Link from "next/link";
-import LoginFooter from "../components/loginFooter/LoginFooter";
-import LoginForm from "../components/loginForm/LoginForm";
-import { startOnboarding } from "../api/actions/startOnboarding";
-import { useTransition, useState } from "react";
-import { Button } from "../components/ui/button";
-import { signIn } from "next-auth/react";
+import { useEffect, useState, useTransition, type FormEvent } from "react";
+import { getProviders, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import  GoogleButton from "../components/loginForm/GoogleButton"
+
+import { startOnboarding } from "../api/actions/startOnboarding";
+import LoginForm from "../components/loginForm/LoginForm";
+import { Button } from "../components/ui/button";
+
+type OAuthProvider = {
+  id: string;
+  name: string;
+};
 
 export default function LoginPage() {
   const router = useRouter();
 
-  const [isPending, startTransition] = useTransition(); // for signup action
+  const [isPending, startTransition] = useTransition();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
+  const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
 
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    let active = true;
+
+    void getProviders()
+      .then((providers) => {
+        if (!active) return;
+
+        const nextProviders = Object.values(providers ?? {})
+          .filter((provider) => provider.id !== "credentials")
+          .map((provider) => ({ id: provider.id, name: provider.name }));
+
+        setOauthProviders(nextProviders);
+      })
+      .catch(() => {
+        if (active) setOauthProviders([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setSignInError(null);
     setIsSigningIn(true);
@@ -45,7 +72,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-[116vh] bg-white">
-      {/* soft background like the rest of your app */}
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-slate-50 via-white to-slate-50" />
         <div className="absolute left-1/2 top-[-120px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-sky-200/30 blur-3xl" />
@@ -54,7 +80,6 @@ export default function LoginPage() {
 
       <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 pt-14">
         <div className="w-full max-w-md">
-          {/* Brand */}
           <div className="mb-8 text-center">
             <Link href="/" className="inline-flex items-center justify-center">
               <span className="text-3xl font-extrabold tracking-tight text-slate-900">
@@ -63,7 +88,6 @@ export default function LoginPage() {
             </Link>
           </div>
 
-          {/* Card */}
           <div className="rounded-2xl border border-slate-200 bg-white/90 p-7 shadow-sm backdrop-blur">
             <div className="text-center">
               <h1 className="text-xl font-semibold text-slate-900">
@@ -74,11 +98,9 @@ export default function LoginPage() {
               </p>
             </div>
 
-            {/* ✅ ONE form only */}
             <form className="mt-6" onSubmit={onSubmit}>
               <LoginForm isSigningIn={isSigningIn} signInError={signInError} />
 
-              {/* Sign up for free (secondary action, NOT another form) */}
               <Button
                 type="button"
                 size="lg"
@@ -96,13 +118,13 @@ export default function LoginPage() {
                   shadow-lg shadow-sky-500/25
                   transition-all duration-200
                   active:scale-[0.97]
-                  disabled:opacity-70 disabled:cursor-not-allowed
+                  disabled:cursor-not-allowed disabled:opacity-70
                 "
               >
                 {isPending ? (
                   <span className="flex items-center justify-center gap-2">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    Getting started…
+                    Getting started...
                   </span>
                 ) : (
                   "Sign up for free"
@@ -110,29 +132,42 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            {/* Divider */}
-            <div className="my-6 flex items-center gap-3">
-              <div className="h-px flex-1 bg-slate-200" />
-              <span className="text-xs text-slate-500">Or continue with</span>
-              <div className="h-px flex-1 bg-slate-200" />
-            </div>
+            {oauthProviders.length > 0 ? (
+              <>
+                <div className="my-6 flex items-center gap-3">
+                  <div className="h-px flex-1 bg-slate-200" />
+                  <span className="text-xs text-slate-500">Or continue with</span>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
 
-            {/* Social */}
-            <div className="grid grid-cols-2 gap-3">
-            <div className="mt-4">
-                <GoogleButton />
-              </div>
+                <div
+                  className={`grid gap-3 ${
+                    oauthProviders.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                  }`}
+                >
+                  {oauthProviders.map((provider) => (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      onClick={() => signIn(provider.id, { callbackUrl: "/" })}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                    >
+                      <span className="text-base">
+                        {provider.id === "google"
+                          ? "G"
+                          : provider.name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span>
+                        {provider.id === "google"
+                          ? "Continue with Google"
+                          : `Continue with ${provider.name}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
 
-              <a
-                href="/api/auth/signin/microsoft"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <span className="text-base">▦</span>
-                Microsoft
-              </a>
-            </div>
-
-            {/* Terms row */}
             <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-slate-500">
               <Link href="/terms" className="hover:text-slate-700">
                 Terms
@@ -146,10 +181,6 @@ export default function LoginPage() {
                 Help Center
               </Link>
             </div>
-          </div>
-
-          <div className="mt-10">
-           
           </div>
         </div>
       </main>

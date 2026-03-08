@@ -161,11 +161,7 @@ export default function Step2ResumeClient() {
 
         <div className="pt-10 flex items-center justify-between">
           <h1 className="text-3xl font-bold text-gray-900">Work experience</h1>
-          {resumeId && (
-            <div className="text-xs text-gray-500">
-              Resume ID: <span className="font-mono">{resumeId}</span>
-            </div>
-          )}
+          {resumeId ? null : null}
         </div>
 
         {error && (
@@ -188,7 +184,7 @@ export default function Step2ResumeClient() {
             return (
               <div key={exp.id} className="rounded-xl border bg-white">
                 <div className="flex items-start gap-4 px-5 py-4">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border text-sm font-semibold">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border text-sm font-semibold text-blue-800">
                     {i + 1}
                   </div>
 

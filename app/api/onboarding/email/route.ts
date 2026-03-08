@@ -1,7 +1,42 @@
 import { NextResponse } from "next/server";
-import { prisma } from "../../../lib/prisma";
-import { auth } from "../../../lib/auth";
+import crypto from "crypto";
+import { prisma } from "@/app/lib/prisma";
+import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
+
+// Canonical source of truth: UserProfile.email (subscriptionEmail mirrors email for billing use).
+function normalizeEmail(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+export async function GET() {
+  try {
+    const session = await auth();
+    const userId = session?.user?.id ?? null;
+
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
+    const cookieEmail = normalizeEmail(c.get("onboarding_email")?.value ?? "");
+
+    if (!userId && !guestId) {
+      return NextResponse.json({ ok: true, email: cookieEmail || null });
+    }
+
+    const profile = await prisma.userProfile.findFirst({
+      where: userId ? { userId } : { guestId: guestId as string },
+      select: { email: true, subscriptionEmail: true },
+    });
+
+    const email = normalizeEmail(profile?.email ?? profile?.subscriptionEmail ?? cookieEmail);
+
+    return NextResponse.json({ ok: true, email: email || null });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Failed to load email" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -9,14 +44,15 @@ export async function POST(req: Request) {
     const userId = session?.user?.id ?? null;
 
     const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
+    let guestId = c.get("guest_user_id")?.value ?? null;
+    const shouldSetGuestCookie = !guestId;
 
-    if (!userId && !guestId) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    if (!guestId) {
+      guestId = `guest_${crypto.randomUUID()}`;
     }
 
     const body = await req.json().catch(() => null);
-    const email = String(body?.email ?? "").trim().toLowerCase();
+    const email = normalizeEmail(body?.email);
 
     const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     if (!okEmail) {
@@ -31,19 +67,21 @@ export async function POST(req: Request) {
       where: userId ? { userId } : { guestId: guestId! },
       update: {
         email,
+        subscriptionEmail: email,
         newsletterOptIn,
         newsletterSource,
         // emailVerifiedAt: null, // keep null unless you add verification
         // unsubscribedAt: null,  // only set when they unsubscribe
       },
       create: userId
-        ? { userId, email, newsletterOptIn, newsletterSource }
-        : { guestId: guestId!, email, newsletterOptIn, newsletterSource },
+        ? { userId, email, subscriptionEmail: email, newsletterOptIn, newsletterSource }
+        : { guestId: guestId!, email, subscriptionEmail: email, newsletterOptIn, newsletterSource },
       select: {
         id: true,
         userId: true,
         guestId: true,
         email: true,
+        subscriptionEmail: true,
         newsletterOptIn: true,
         newsletterSource: true,
         emailVerifiedAt: true,
@@ -51,8 +89,15 @@ export async function POST(req: Request) {
       },
     });
 
+    console.info("[onboarding/email] saved", {
+      userId,
+      guestId,
+      email,
+    });
+
     const res = NextResponse.json({
       ok: true,
+      email,
       proof: {
         session: { userId, guestId },
         savedToProfile: profile,
@@ -62,6 +107,16 @@ export async function POST(req: Request) {
         },
       },
     });
+
+    if (shouldSetGuestCookie) {
+      res.cookies.set("guest_user_id", guestId!, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 30,
+      });
+    }
 
     // ✅ Cookies: httpOnly so they’re safe (client JS cannot read them)
     res.cookies.set("onboarding_email", email, {

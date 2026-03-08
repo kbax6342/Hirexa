@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
 
     // 2) Fallback: decode JWT directly
     if (!userId) {
-      const secret = process.env.NEXTAUTH_SECRET;
+      const secret = process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET;
       const token = await getToken({ req, secret });
       userId = ((token as any)?.id as string | undefined) ?? token?.sub ?? undefined;
     }
@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
     const incoming = Array.isArray(body?.skills) ? body.skills.map(String) : [];
     const skills = incoming
-      .map((s) => s.trim().replace(/\s+/g, " "))
+      .map((s: string) => s.trim().replace(/\s+/g, " "))
       .filter(Boolean);
 
     // dedupe case-insensitive

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
@@ -54,28 +55,34 @@ export async function POST(req: Request) {
     const profile = existing
       ? await prisma.userProfile.update({
           where: { id: existing.id },
-          data: { keyQuestions },
+          data: { keyQuestions: keyQuestions as Prisma.InputJsonValue },
           select: { id: true, keyQuestions: true },
         })
       : await prisma.userProfile.create({
           data: {
             ...(userId ? { userId } : { guestId: guestId! }),
-            keyQuestions,
+            keyQuestions: keyQuestions as Prisma.InputJsonValue,
           },
           select: { id: true, keyQuestions: true },
         });
 
     invalidateCachedProfile({ userId, guestId });
 
+    let expertiseList: string[] = [];
+    if (
+      profile.keyQuestions &&
+      typeof profile.keyQuestions === "object" &&
+      !Array.isArray(profile.keyQuestions)
+    ) {
+      const rawExpertise = (profile.keyQuestions as Record<string, unknown>).expertise;
+      if (Array.isArray(rawExpertise)) {
+        expertiseList = rawExpertise.map((item) => String(item ?? ""));
+      }
+    }
+
     return NextResponse.json({
       ok: true,
-      expertise:
-        profile.keyQuestions &&
-        typeof profile.keyQuestions === "object" &&
-        !Array.isArray(profile.keyQuestions) &&
-        Array.isArray((profile.keyQuestions as Record<string, unknown>).expertise)
-          ? (profile.keyQuestions as Record<string, unknown>).expertise.map((item) => String(item))
-          : [],
+      expertise: expertiseList,
     });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";

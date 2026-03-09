@@ -25,7 +25,8 @@ function cacheKeyFromUrl(url: URL) {
   const page = url.searchParams.get("page") ?? "1";
   const perPage = url.searchParams.get("perPage") ?? "10";
   const country = url.searchParams.get("country") ?? "us";
-  return `${country}|${q}|${page}|${perPage}`;
+  const location = url.searchParams.get("location") ?? "";
+  return `${country}|${q}|${location}|${page}|${perPage}`;
 }
 
 async function sleep(ms: number) {
@@ -126,16 +127,20 @@ export async function GET(req: Request) {
 
   const promise = (async () => {
     try {
-      const q = url.searchParams.get("q") ?? "software engineer";
+      const q = (url.searchParams.get("q") ?? "").trim() || "jobs";
       const page = Number(url.searchParams.get("page") ?? "1") || 1;
       const perPage = Number(url.searchParams.get("perPage") ?? "10") || 10;
       const country = url.searchParams.get("country") ?? "us";
+      const location = (url.searchParams.get("location") ?? "").trim();
 
       const adzunaUrl = new URL(`http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`);
       adzunaUrl.searchParams.set("app_id", appId);
       adzunaUrl.searchParams.set("app_key", appKey);
       adzunaUrl.searchParams.set("results_per_page", String(perPage));
       adzunaUrl.searchParams.set("what", q);
+      if (location) {
+        adzunaUrl.searchParams.set("where", location);
+      }
 
       const res = await fetchWithRetry(adzunaUrl.toString(), 2);
 

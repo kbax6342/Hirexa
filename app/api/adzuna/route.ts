@@ -1,9 +1,8 @@
-// File: /Hirexa/my-app/app/api/adzuna/route.ts
 import "server-only";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const revalidate = 60; // keeps Next fetch caching benefits
+export const revalidate = 60;
 export const dynamic = "force-dynamic";
 
 type Job = {
@@ -35,35 +34,46 @@ type CacheValue = {
   payload: Payload;
 };
 
-const CACHE = new Map<string, CacheValue>();
-const IN_FLIGHT = new Map<string, Promise<Payload>>();
-const DEFAULT_JOBS_PER_SECTION = 3;
-const MAX_PAGES_PER_SOURCE = 4;
+type JobCacheValue = {
+  data: Job[];
+  timestamp: number;
+};
 
 type JobSearchSource = {
   name: string;
   searchJobs: (args: { term: string; page: number; perPage: number }) => Promise<Job[]>;
 };
 
-/**
- * ✅ Added: global in-memory cache (5 minutes) to reduce Adzuna calls across Back/Forward
- * This does NOT replace your 30s section CACHE; it sits above it as a "super cache".
- */
-type GlobalCached = { expiresAt: number; body: Payload };
+type GlobalCached = {
+  expiresAt: number;
+  body: Payload;
+};
+
 declare global {
   // eslint-disable-next-line no-var
   var __adzunaCache: GlobalCached | undefined;
 }
-const GLOBAL_CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
+
+const CACHE = new Map<string, CacheValue>();
+const IN_FLIGHT = new Map<string, Promise<Payload>>();
+const JOB_CACHE = new Map<string, JobCacheValue>();
+const DEFAULT_JOBS_PER_SECTION = 3;
+const MAX_PAGES_PER_SOURCE = 4;
+const GLOBAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const JOB_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function getGlobalCache() {
-  const c = globalThis.__adzunaCache;
-  if (!c) return null;
-  if (Date.now() > c.expiresAt) return null;
-  return c.body;
+  const cached = globalThis.__adzunaCache;
+  if (!cached) return null;
+  if (Date.now() > cached.expiresAt) return null;
+  return cached.body;
 }
+
 function setGlobalCache(body: Payload) {
-  globalThis.__adzunaCache = { expiresAt: Date.now() + GLOBAL_CACHE_TTL_MS, body };
+  globalThis.__adzunaCache = {
+    expiresAt: Date.now() + GLOBAL_CACHE_TTL_MS,
+    body,
+  };
 }
 
 function cacheKeyFromUrl(url: URL) {
@@ -73,8 +83,39 @@ function cacheKeyFromUrl(url: URL) {
   return `homeSections|${health}|${tech}|${finance}`;
 }
 
+function jobCacheKey(args: { term: string; page: number; perPage: number }) {
+  return `${args.term.trim().toLowerCase()}|${args.page}|${args.perPage}`;
+}
+
+function getCachedJobs(cacheKey: string) {
+  const cached = JOB_CACHE.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp < JOB_CACHE_TTL_MS) return cached.data;
+  return null;
+}
+
+function cleanText(value: unknown, maxLength?: number) {
+  if (typeof value !== "string") return "";
+
+  const text = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
+
+function emptyPayload(error?: string): Payload & { error?: string } {
+  return {
+    sections: [],
+    generatedAt: new Date().toISOString(),
+    ...(error ? { error } : {}),
+  };
+}
+
+function hasJobs(payload: Payload) {
+  return payload.sections.some((section) => section.jobs.length > 0);
+}
+
 async function sleep(ms: number) {
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchWithRetry(input: string, tries = 2) {
@@ -105,25 +146,24 @@ async function fetchWithRetry(input: string, tries = 2) {
   return lastRes!;
 }
 
-function formatSalary(j: any): string | undefined {
-  const min = typeof j?.salary_min === "number" ? j.salary_min : null;
-  const max = typeof j?.salary_max === "number" ? j.salary_max : null;
+function formatSalary(job: any): string | undefined {
+  const min = typeof job?.salary_min === "number" ? job.salary_min : null;
+  const max = typeof job?.salary_max === "number" ? job.salary_max : null;
 
   if (min == null && max == null) return undefined;
 
-  const currency = String(j?.salary_currency ?? "USD");
-  const interval = String(j?.salary_interval ?? "year"); // year/month/week/day
-
-  const nf = new Intl.NumberFormat("en-US", {
+  const currency = String(job?.salary_currency ?? "USD");
+  const interval = String(job?.salary_interval ?? "year");
+  const formatter = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
     maximumFractionDigits: 0,
   });
 
-  const left = min != null ? nf.format(min) : null;
-  const right = max != null ? nf.format(max) : null;
+  const left = min != null ? formatter.format(min) : null;
+  const right = max != null ? formatter.format(max) : null;
 
-  if (left && right) return `${left} – ${right} / ${interval}`;
+  if (left && right) return `${left} - ${right} / ${interval}`;
   if (left) return `${left} / ${interval}`;
   if (right) return `${right} / ${interval}`;
   return undefined;
@@ -134,7 +174,7 @@ function dedupeKey(job: Job): string {
   return String(job.id || fallback).trim().toLowerCase();
 }
 
-function titleKey(title: string): string {
+function titleKey(title: string) {
   return title.trim().toLowerCase();
 }
 
@@ -144,46 +184,59 @@ async function getJobsFromAdzuna(args: {
   perPage?: number;
 }): Promise<Job[]> {
   const { term, page = 1, perPage = DEFAULT_JOBS_PER_SECTION } = args;
+  const key = jobCacheKey({ term, page, perPage });
+  const cachedJobs = getCachedJobs(key);
+  if (cachedJobs) {
+    return cachedJobs;
+  }
+
+  const staleJobs = JOB_CACHE.get(key)?.data ?? null;
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
   if (!appId || !appKey) {
-    throw new Error("Missing ADZUNA_APP_ID or ADZUNA_APP_KEY in .env.local");
+    return staleJobs ?? [];
   }
 
-  const country = "us";
+  try {
+    const url = new URL(`https://api.adzuna.com/v1/api/jobs/us/search/${page}`);
+    url.searchParams.set("app_id", appId);
+    url.searchParams.set("app_key", appKey);
+    url.searchParams.set("results_per_page", String(perPage));
+    url.searchParams.set("what", term);
 
-  const url = new URL(`http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`);
-  url.searchParams.set("app_id", appId);
-  url.searchParams.set("app_key", appKey);
-  url.searchParams.set("results_per_page", String(perPage));
-  url.searchParams.set("what", term);
+    const res = await fetchWithRetry(url.toString(), 2);
+    if (!res.ok) {
+      throw new Error(`Adzuna failed (${res.status})`);
+    }
 
-  const res = await fetchWithRetry(url.toString(), 2);
+    const data = await res.json();
+    const jobs: Job[] = (data.results ?? []).slice(0, perPage).map((item: any, index: number) => {
+      const id = String(item.id ?? `fallback-${term}-${index}`);
 
-  if (!res.ok) {
-    const text = await res.text();
-    // keep your exact error format
-    throw new Error(`Adzuna failed (${res.status}): ${text.slice(0, 300)}`);
+      return {
+        id,
+        title: cleanText(item.title) || "Untitled role",
+        company: cleanText(item.company?.display_name) || "Unknown company",
+        location: cleanText(item.location?.display_name) || "Unknown location",
+        posted: String(item.created ?? ""),
+        jobUrl: cleanText(item.redirect_url),
+        salary: formatSalary(item),
+        description: cleanText(item.description, 240) || undefined,
+        detailsHref: `/jobs/details/${id}`,
+      };
+    });
+
+    JOB_CACHE.set(key, {
+      data: jobs,
+      timestamp: Date.now(),
+    });
+
+    return jobs;
+  } catch (error) {
+    console.error(`Adzuna home feed fetch failed for "${term}":`, error);
+    return staleJobs ?? [];
   }
-
-  const data = await res.json();
-
-  return (data.results ?? []).slice(0, perPage).map((j: any, idx: number) => {
-    const id = String(j.id ?? `fallback-${term}-${idx}`);
-
-    return {
-      id,
-      title: String(j.title ?? "Untitled role"),
-      company: String(j.company?.display_name ?? "Unknown company"),
-      location: String(j.location?.display_name ?? "Unknown location"),
-      posted: String(j.created ?? ""),
-      jobUrl: String(j.redirect_url ?? ""),
-      salary: formatSalary(j),
-      description: typeof j.description === "string" ? j.description : undefined,
-      detailsHref: `/jobs/details/${id}`,
-    };
-  });
 }
 
 const ATS_JOB_SOURCES: JobSearchSource[] = [
@@ -244,25 +297,18 @@ export async function GET(req: Request) {
   const key = cacheKeyFromUrl(url);
   const now = Date.now();
 
-  /**
-   * ✅ Added: serve from global cache first (protects Adzuna on back button)
-   * This does NOT delete your section cache; it short-circuits before it.
-   */
   const globalCached = getGlobalCache();
   if (globalCached) {
     return NextResponse.json({ ...globalCached, cached: true }, { status: 200 });
   }
 
   const cached = CACHE.get(key);
-
-  // 1) Fresh cache
   if (cached && cached.expiresAt > now) {
     return NextResponse.json(cached.payload, {
       headers: { "X-Cache": "HIT", "Cache-Control": "public, max-age=30" },
     });
   }
 
-  // 2) In-flight
   const existing = IN_FLIGHT.get(key);
   if (existing) {
     try {
@@ -271,7 +317,7 @@ export async function GET(req: Request) {
         headers: { "X-Cache": "IN-FLIGHT", "Cache-Control": "public, max-age=10" },
       });
     } catch {
-      // fall through
+      // fall through to the request path below
     }
   }
 
@@ -309,31 +355,29 @@ export async function GET(req: Request) {
       excludedKeys: allSeenKeys,
     });
 
-    const sections: CategorySection[] = [
-      {
-        name: "Healthcare",
-        viewAllHref: `/jobs?cat=healthcare&q=${encodeURIComponent(healthTerm)}`,
-        jobs: healthcareJobs,
-      },
-      {
-        name: "Technology",
-        viewAllHref: `/jobs?cat=technology&q=${encodeURIComponent(techTerm)}`,
-        jobs: technologyJobs,
-      },
-      {
-        name: "Skilled Trades",
-        viewAllHref: `/jobs?cat=skilled-trades&q=${encodeURIComponent(tradeTerm)}`,
-        jobs: skilledTradeJobs,
-      },
-      {
-        name: "Finance",
-        viewAllHref: `/jobs?cat=finance&q=${encodeURIComponent(financeTerm)}`,
-        jobs: financeJobs,
-      },
-    ];
-
     return {
-      sections,
+      sections: [
+        {
+          name: "Healthcare",
+          viewAllHref: `/jobs?cat=healthcare&q=${encodeURIComponent(healthTerm)}`,
+          jobs: healthcareJobs,
+        },
+        {
+          name: "Technology",
+          viewAllHref: `/jobs?cat=technology&q=${encodeURIComponent(techTerm)}`,
+          jobs: technologyJobs,
+        },
+        {
+          name: "Skilled Trades",
+          viewAllHref: `/jobs?cat=skilled-trades&q=${encodeURIComponent(tradeTerm)}`,
+          jobs: skilledTradeJobs,
+        },
+        {
+          name: "Finance",
+          viewAllHref: `/jobs?cat=finance&q=${encodeURIComponent(financeTerm)}`,
+          jobs: financeJobs,
+        },
+      ],
       generatedAt: new Date().toISOString(),
     };
   })();
@@ -342,53 +386,35 @@ export async function GET(req: Request) {
 
   try {
     const payload = await promise;
+    const payloadHasJobs = hasJobs(payload);
 
-    // keep your 30s cache + stale window
-    CACHE.set(key, {
-      expiresAt: now + 30_000,
-      staleUntil: now + 5 * 60_000,
-      payload,
-    });
-
-    // ✅ Added: also store payload in global cache
-    setGlobalCache(payload);
-
-    return NextResponse.json(payload, {
-      headers: { "X-Cache": "MISS", "Cache-Control": "public, max-age=30" },
-    });
-  } catch (e: any) {
-    const msg = e?.message ?? "Unknown error";
-
-    /**
-     * ✅ Added: handle Adzuna 429 nicely (don't return 500)
-     * Keeps your stale fallback behavior exactly as-is.
-     */
-    if (msg.includes("(429)") || msg.includes("429 Too Many Requests") || msg.includes("Adzuna failed (429)")) {
-      // if we have stale data, serve it
-      if (cached && cached.staleUntil > now) {
-        return NextResponse.json(cached.payload, {
-          headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
-        });
-      }
-
-      return NextResponse.json(
-        {
-          error:
-            "Adzuna is rate-limiting requests right now. Please wait a moment and try again.",
-          code: "ADZUNA_RATE_LIMIT",
-        },
-        { status: 429 }
-      );
+    if (payloadHasJobs) {
+      CACHE.set(key, {
+        expiresAt: now + 30_000,
+        staleUntil: now + 5 * 60_000,
+        payload,
+      });
+      setGlobalCache(payload);
     }
 
-    // stale fallback (your exact logic)
+    return NextResponse.json(payload, {
+      headers: {
+        "X-Cache": payloadHasJobs ? "MISS" : "MISS-DEGRADED",
+        "Cache-Control": "public, max-age=30",
+      },
+    });
+  } catch (error) {
+    console.error("Adzuna route error:", error);
+
     if (cached && cached.staleUntil > now) {
       return NextResponse.json(cached.payload, {
         headers: { "X-Cache": "STALE", "Cache-Control": "public, max-age=10" },
       });
     }
 
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(emptyPayload("Job provider temporarily unavailable"), {
+      status: 200,
+    });
   } finally {
     IN_FLIGHT.delete(key);
   }

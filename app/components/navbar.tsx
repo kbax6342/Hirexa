@@ -2,21 +2,26 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ComponentType, type SVGProps } from "react";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
 import {
   Bars3Icon,
+  RocketLaunchIcon,
   XMarkIcon,
   ChevronDownIcon,
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
 
+type NavIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
 type NavChild = {
   label: string;
   description?: string;
   href: string;
+  badge?: string;
+  icon?: NavIcon;
 };
 
 type NavItem = {
@@ -27,8 +32,8 @@ type NavItem = {
 };
 
 const guestNav: NavItem[] = [
-  { label: "Features", href: "#features" },
-  { label: "How It Works", href: "#how-it-works" },
+  { label: "Features", href: "/#features" },
+  { label: "How It Works", href: "/#how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
   // { label: "Job Resources", href: "/resources", dropdown: true },
@@ -64,7 +69,14 @@ const authedNav: NavItem[] = [
       {
         label: "Career Coach Agent",
         description: "AI job coach",
-        href: "/agents/career-coach",
+        href: "/job-tools/career-coach",
+      },
+      {
+        label: "HirePilot",
+        description: "Real-time interview answers powered by your Hirexa profile",
+        href: "/job-tools/agents/hirepilot",
+        badge: "NEW",
+        icon: RocketLaunchIcon,
       },
     ],
   },
@@ -130,14 +142,31 @@ function NavDropdown({ item }: { item: NavItem }) {
                 className="block rounded-xl p-3 hover:bg-secondary/60"
                 role="menuitem"
               >
-                <div className="text-sm font-semibold text-foreground">
-                  {child.label}
-                </div>
-                {child.description ? (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {child.description}
+                <div className="flex items-start gap-3">
+                  {child.icon ? (
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <child.icon className="h-5 w-5" />
+                    </div>
+                  ) : null}
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-foreground">
+                        {child.label}
+                      </div>
+                      {child.badge ? (
+                        <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-primary-foreground">
+                          {child.badge}
+                        </span>
+                      ) : null}
+                    </div>
+                    {child.description ? (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {child.description}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                </div>
               </Link>
             ))}
           </div>
@@ -298,7 +327,17 @@ export function Navbar() {
                               setMobileAgentsOpen(false);
                             }}
                           >
-                            {child.label}
+                            <span className="flex items-center justify-between gap-3">
+                              <span className="flex items-center gap-2">
+                                {child.icon ? <child.icon className="h-4 w-4" /> : null}
+                                <span>{child.label}</span>
+                              </span>
+                              {child.badge ? (
+                                <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-primary-foreground">
+                                  {child.badge}
+                                </span>
+                              ) : null}
+                            </span>
                           </Link>
                         ))}
                       </div>

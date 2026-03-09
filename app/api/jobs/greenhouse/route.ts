@@ -252,7 +252,38 @@ function matchesSearch(job: Job, query: string): boolean {
   return haystack.includes(query);
 }
 
-function getCacheKey(params: { q: string; category: JobCategory | null; limit: number; offset: number }): string {
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function matchesLocation(job: Job, location: string) {
+  if (!location) return true;
+
+  const normalizedLocation = normalizeSearchText(location);
+  const normalizedJobLocation = normalizeSearchText(job.location ?? "");
+
+  if (!normalizedLocation || !normalizedJobLocation) return !normalizedLocation;
+  if (normalizedJobLocation.includes(normalizedLocation)) return true;
+
+  const significantTokens = normalizedLocation
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2);
+
+  if (significantTokens.length === 0) {
+    return normalizedJobLocation.includes(normalizedLocation);
+  }
+
+  return significantTokens.every((token) => normalizedJobLocation.includes(token));
+}
+
+function getCacheKey(params: {
+  q: string;
+  location: string;
+  category: JobCategory | null;
+  limit: number;
+  offset: number;
+}): string {
   const boardKey = BOARDS.map((b) => `${b.board}:${b.category}`).join(",");
   return JSON.stringify({ boardKey, ...params });
 }
@@ -261,11 +292,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
+  const location = (searchParams.get("location") ?? "").trim().toLowerCase();
   const category = parseCategory(searchParams.get("category"));
   const limit = Math.max(1, Math.min(Number(searchParams.get("limit") ?? 100), 250));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
-  const cacheKey = getCacheKey({ q, category, limit, offset });
+  const cacheKey = getCacheKey({ q, location, category, limit, offset });
   const cached = responseCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.value);
@@ -315,7 +347,8 @@ export async function GET(request: Request) {
 
   const filtered = mergedJobs.filter((job) => {
     if (category && job.category !== category) return false;
-    return matchesSearch(job, q);
+    if (!matchesSearch(job, q)) return false;
+    return matchesLocation(job, location);
   });
 
   // Optional: sort by updatedAt desc if present (fallback stable)

@@ -31,6 +31,18 @@ function asText(v: unknown) {
   return "";
 }
 
+function stripWrappingQuotes(value: string) {
+  return value.trim().replace(/^['"]+|['"]+$/g, "");
+}
+
+function normalizeWorkdayHost(value: string) {
+  return stripWrappingQuotes(value).replace(/\/+$/, "");
+}
+
+function normalizeWorkdaySegment(value: string) {
+  return stripWrappingQuotes(value).replace(/^\/+|\/+$/g, "");
+}
+
 function stripHtml(html: string) {
   // Minimal safe HTML->text conversion
   return html
@@ -157,10 +169,10 @@ async function fetchJobDetailCxs(params: {
 
 export async function GET(req: Request) {
   try {
-    const host = mustEnv("WORKDAY_HOST").replace(/\/+$/, "");
-    const tenant = mustEnv("WORKDAY_TENANT");
-    const site = mustEnv("WORKDAY_SITE");
-    const locale = process.env.WORKDAY_LOCALE || "en-US";
+    const host = normalizeWorkdayHost(mustEnv("WORKDAY_HOST"));
+    const tenant = normalizeWorkdaySegment(mustEnv("WORKDAY_TENANT"));
+    const site = normalizeWorkdaySegment(mustEnv("WORKDAY_SITE"));
+    const locale = normalizeWorkdaySegment(process.env.WORKDAY_LOCALE || "en-US") || "en-US";
 
     const url = new URL(req.url);
     const limit = Math.min(Number(url.searchParams.get("limit") ?? "10") || 10, 25);

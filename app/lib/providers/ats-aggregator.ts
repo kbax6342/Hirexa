@@ -25,6 +25,28 @@ function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" ? (value as JsonObject) : {};
 }
 
+function stripWrappingQuotes(value: string) {
+  return value.trim().replace(/^['"]+|['"]+$/g, "");
+}
+
+function normalizeWorkdayHost(value: string) {
+  return stripWrappingQuotes(value).replace(/\/+$/, "");
+}
+
+function normalizeWorkdaySegment(value: string) {
+  return stripWrappingQuotes(value).replace(/^\/+|\/+$/g, "");
+}
+
+function normalizeWorkdayBoard(board: WorkdayBoardConfig): WorkdayBoardConfig {
+  return {
+    company: stripWrappingQuotes(board.company),
+    host: normalizeWorkdayHost(board.host),
+    tenant: normalizeWorkdaySegment(board.tenant),
+    site: normalizeWorkdaySegment(board.site),
+    locale: board.locale ? normalizeWorkdaySegment(board.locale) : undefined,
+  };
+}
+
 function toPostedLabel(iso?: string) {
   if (!iso) return "Recently";
   const d = new Date(iso);
@@ -111,8 +133,9 @@ export async function fetchWorkdayJobs(args: {
   const q = query.trim().toLowerCase();
 
   const result = await Promise.all(
-    boards.map(async (board) => {
-      const url = `${board.host.replace(/\/+$/, "")}/wday/cxs/${board.tenant}/${board.site}/jobs`;
+    boards.map(async (rawBoard) => {
+      const board = normalizeWorkdayBoard(rawBoard);
+      const url = `${board.host}/wday/cxs/${board.tenant}/${board.site}/jobs`;
       const json = asObject(
         await fetchJson(url, {
           method: "POST",
@@ -144,7 +167,7 @@ export async function fetchWorkdayJobs(args: {
           location: asText(posting.locationsText, "Remote"),
           posted: toPostedLabel(asText(posting.postedOn)),
           description: "",
-          jobUrl: `${board.host.replace(/\/+$/, "")}/${board.locale ?? "en-US"}/${board.site}${externalPath}`,
+          jobUrl: `${board.host}/${board.locale ?? "en-US"}/${board.site}${externalPath}`,
         };
       });
     })
@@ -264,7 +287,10 @@ export function getWorkdayBoards() {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
-      ? (parsed.filter(Boolean) as WorkdayBoardConfig[])
+      ? (parsed
+          .filter(Boolean)
+          .map((board) => normalizeWorkdayBoard(board as WorkdayBoardConfig))
+          .filter((board) => board.host && board.tenant && board.site) as WorkdayBoardConfig[])
       : [];
   } catch {
     return [];

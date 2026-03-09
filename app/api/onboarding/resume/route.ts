@@ -3,12 +3,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { cookies } from "next/headers";
+import { auth } from "@/app/lib/auth";
 
 import OpenAI from "openai";
 import crypto from "crypto";
 import { z } from "zod";
 import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
+import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -223,20 +225,35 @@ async function parseResumeWithLLM(args: { mimeType: string; buffer: Buffer }): P
 
 export async function POST(req: Request) {
   try {
+    const session = await auth();
+    const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
     const c = await cookies();
     let guestId = c.get("guest_user_id")?.value ?? null;
     const shouldSetGuestCookie = !guestId;
+    const originalGuestId = guestId;
 
-    if (!guestId) {
+    if (userId && guestId) {
+      const existingGuestId = guestId;
+      await prisma.$transaction((tx) =>
+        mergeGuestProfileIntoUserProfile(tx, {
+          userId,
+          guestId: existingGuestId,
+          email: session?.user?.email ?? null,
+        })
+      );
+      guestId = null;
+    }
+
+    if (!userId && !guestId) {
       guestId = `guest_${crypto.randomUUID()}`;
     }
 
     // ✅ ALWAYS ensure profile exists
     const profile = await prisma.userProfile.upsert({
-      where: { guestId: guestId! },
-      create: { guestId: guestId! },
+      where: userId ? { userId } : { guestId: guestId! },
+      create: userId ? { userId } : { guestId: guestId! },
       update: {},
-      select: { id: true },
+      select: { id: true, guestId: true },
     });
 
     const formData = await req.formData();
@@ -306,12 +323,12 @@ export async function POST(req: Request) {
       });
     });
 
-    invalidateCachedProfile({ userId: null, guestId });
+    invalidateCachedProfile({ userId, guestId: originalGuestId ?? guestId });
 
     const response = NextResponse.json({
       ok: true,
       success: true,
-      savedTo: { sessionUserId: null, guestId, profileId: profile.id },
+      savedTo: { sessionUserId: userId, guestId: profile.guestId, profileId: profile.id },
       resume: {
         id: resume.id,
         profileId: resume.userProfileId,
@@ -323,7 +340,12 @@ export async function POST(req: Request) {
       parsed: { experienceCount: parsedExperiences.length },
     });
 
-    if (shouldSetGuestCookie) {
+    if (userId && originalGuestId) {
+      response.cookies.set("guest_user_id", "", {
+        path: "/",
+        maxAge: 0,
+      });
+    } else if (shouldSetGuestCookie && guestId) {
       response.cookies.set("guest_user_id", guestId!, {
         httpOnly: true,
         sameSite: "lax",

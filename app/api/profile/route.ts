@@ -9,6 +9,7 @@ import {
   invalidateCachedProfile,
   setCachedProfile,
 } from "@/app/lib/profile-cache";
+import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -256,6 +257,22 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    let mergedGuestProfile = false;
+    if (userId && guestId) {
+      const mergeResult = await prisma.$transaction((tx) =>
+        mergeGuestProfileIntoUserProfile(tx, {
+          userId,
+          guestId,
+          email: (session?.user as any)?.email ?? null,
+        })
+      );
+
+      if (mergeResult.merged) {
+        mergedGuestProfile = true;
+        invalidateCachedProfile({ userId, guestId });
+      }
+    }
+
     const cachedProfile = getCachedProfile<{ ok: boolean; profile: unknown }>({
       userId,
       guestId,
@@ -326,7 +343,15 @@ export async function GET() {
     const responseData = { ok: true, profile: responseProfile };
     setCachedProfile({ userId, guestId, data: responseData });
 
-    return NextResponse.json(responseData);
+    const response = NextResponse.json(responseData);
+    if (mergedGuestProfile) {
+      response.cookies.set("guest_user_id", "", {
+        path: "/",
+        maxAge: 0,
+      });
+    }
+
+    return response;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });

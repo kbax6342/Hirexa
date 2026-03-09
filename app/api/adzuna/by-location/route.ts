@@ -13,7 +13,6 @@ type AdzunaJob = {
   description?: string;
   salary_min?: number;
   salary_max?: number;
-  salary_is_predicted?: "0" | "1";
 };
 
 type JobCard = {
@@ -29,10 +28,33 @@ type JobCard = {
 };
 
 type LocationSection = {
-  name: string; // e.g. "California"
-  href: string; // internal route
+  name: string;
+  href: string;
   jobs: JobCard[];
 };
+
+type CacheEntry<T> = {
+  data: T;
+  timestamp: number;
+};
+
+const CACHE_TTL = 5 * 60 * 1000;
+const jobCache = new Map<string, CacheEntry<JobCard[]>>();
+
+function getCachedJobs(cacheKey: string) {
+  const cached = jobCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
+  return null;
+}
+
+function cleanText(value: unknown, maxLength?: number) {
+  if (typeof value !== "string") return "";
+
+  const text = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
 
 function money(n?: number) {
   if (typeof n !== "number") return "";
@@ -51,15 +73,14 @@ function formatPosted(iso?: string) {
 }
 
 function normalizeLocationFromAdzuna(job: AdzunaJob) {
-  // location.display_name usually includes "City, State"
-  return job.location?.display_name || "United States";
+  return cleanText(job.location?.display_name) || "United States";
 }
 
 function salaryPill(job: AdzunaJob) {
   const min = job.salary_min;
   const max = job.salary_max;
   if (typeof min === "number" && typeof max === "number") {
-    return `$${money(min)} – $${money(max)} / year`;
+    return `$${money(min)} - $${money(max)} / year`;
   }
   if (typeof min === "number") return `From $${money(min)} / year`;
   if (typeof max === "number") return `Up to $${money(max)} / year`;
@@ -67,9 +88,9 @@ function salaryPill(job: AdzunaJob) {
 }
 
 function toJobCard(job: AdzunaJob): JobCard | null {
-  const title = job.title?.trim();
-  const company = job.company?.display_name?.trim() || "Unknown";
-  const jobUrl = job.redirect_url || "";
+  const title = cleanText(job.title);
+  const company = cleanText(job.company?.display_name) || "Unknown";
+  const jobUrl = cleanText(job.redirect_url);
 
   if (!title || !jobUrl) return null;
 
@@ -80,7 +101,7 @@ function toJobCard(job: AdzunaJob): JobCard | null {
     location: normalizeLocationFromAdzuna(job),
     posted: formatPosted(job.created),
     jobUrl,
-    description: job.description?.replace(/\s+/g, " ").trim().slice(0, 180),
+    description: cleanText(job.description, 180) || undefined,
     pill: salaryPill(job),
     logoText: company.slice(0, 1).toUpperCase(),
   };
@@ -91,113 +112,59 @@ async function fetchAdzunaByState(params: {
   resultsPerSection: number;
 }) {
   const { stateName, resultsPerSection } = params;
+  const cacheKey = `${stateName.trim().toLowerCase()}|${resultsPerSection}`;
+  const cachedJobs = getCachedJobs(cacheKey);
+  if (cachedJobs) {
+    return cachedJobs;
+  }
 
+  const staleJobs = jobCache.get(cacheKey)?.data ?? null;
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
 
   if (!appId || !appKey) {
-    throw new Error("Missing ADZUNA_APP_ID or ADZUNA_APP_KEY in env");
+    return staleJobs ?? [];
   }
 
-  const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
-  url.searchParams.set("app_id", appId);
-  url.searchParams.set("app_key", appKey);
-  url.searchParams.set("results_per_page", String(resultsPerSection));
-  url.searchParams.set("sort_by", "date");
-
-  // ✅ location-based (state), NOT title-based
-  // More reliable than location0 across datasets:
-  url.searchParams.set("where", stateName);
-
-  const res = await fetch(url.toString(), {
-    cache: "no-store",
-    headers: { Accept: "application/json" },
-  });
-
-  const raw = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`Adzuna error (${res.status}): ${raw.slice(0, 400)}`);
-  }
-
-  let data: { results?: AdzunaJob[] };
   try {
-    data = JSON.parse(raw);
-    //console.log(data);
-  } catch {
-    throw new Error(`Adzuna returned non-JSON: ${raw.slice(0, 200)}`);
-  }
+    const url = new URL("https://api.adzuna.com/v1/api/jobs/us/search/1");
+    url.searchParams.set("app_id", appId);
+    url.searchParams.set("app_key", appKey);
+    url.searchParams.set("results_per_page", String(resultsPerSection));
+    url.searchParams.set("sort_by", "date");
+    url.searchParams.set("where", stateName);
 
-  const jobs = (data.results || [])
-    .map(toJobCard)
-    .filter(Boolean) as JobCard[];
+    const res = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
 
-  return jobs.slice(0, resultsPerSection);
-}
-
-
-// export async function GET(request: Request) {
-//   try {
-//     const url = new URL(request.url);
-
-//     // You can pass states in query, or use defaults.
-//     // Example: /api/adzuna/by-location?states=California,Texas,Florida&n=3
-//     const statesParam = url.searchParams.get("states")?.trim();
-//     const n = Number(url.searchParams.get("n") ?? "3");
-//     const resultsPerSection = Number.isFinite(n) && n > 0 && n <= 10 ? n : 3;
-
-//     const stateNames = statesParam
-//       ? statesParam
-//           .split(",")
-//           .map((s) => s.trim())
-//           .filter(Boolean)
-//       : ["California", "Texas", "Florida"];
-
-//     const sectionJobs = await Promise.all(
-//       stateNames.map(async (stateName) => {
-//         const jobs = await fetchAdzunaByState({ stateName, resultsPerSection });
-//         const section: LocationSection = {
-//           name: stateName,
-//           href: `/jobs?state=${encodeURIComponent(stateName)}`,
-//           jobs,
-//         };
-//         return section;
-//       })
-//     );
-
-//     return NextResponse.json(
-//       {
-//         ok: true,
-//         sections: sectionJobs,
-//         generatedAt: new Date().toISOString(),
-//       },
-//       { status: 200 }
-//     );
-//   } catch (err: any) {
-//     return NextResponse.json(
-//       { error: err?.message ?? "Unknown error" },
-//       { status: 500 }
-//     );
-//   }
-// }
-
-export async function GET(request: Request) {
-  try {
-    // ✅ quick env check
-    if (!process.env.ADZUNA_APP_ID || !process.env.ADZUNA_APP_KEY) {
-      return NextResponse.json(
-        {
-          error: "Missing env vars",
-          missing: {
-            ADZUNA_APP_ID: !process.env.ADZUNA_APP_ID,
-            ADZUNA_APP_KEY: !process.env.ADZUNA_APP_KEY,
-          },
-        },
-        { status: 500 }
-      );
+    if (!res.ok) {
+      throw new Error(`Adzuna error ${res.status}`);
     }
 
-    // --- your existing logic below ---
+    const data = (await res.json()) as { results?: AdzunaJob[] };
+    const jobs = (data.results ?? [])
+      .map(toJobCard)
+      .filter(Boolean)
+      .slice(0, resultsPerSection) as JobCard[];
+
+    jobCache.set(cacheKey, {
+      data: jobs,
+      timestamp: Date.now(),
+    });
+
+    return jobs;
+  } catch (error) {
+    console.error(`Adzuna by-location fetch failed for ${stateName}:`, error);
+    return staleJobs ?? [];
+  }
+}
+
+export async function GET(request: Request) {
+  const generatedAt = new Date().toISOString();
+
+  try {
     const url = new URL(request.url);
     const statesParam = url.searchParams.get("states") ?? "California,Texas,Florida";
     const n = Number(url.searchParams.get("n") ?? "3");
@@ -205,36 +172,35 @@ export async function GET(request: Request) {
 
     const stateNames = statesParam
       .split(",")
-      .map((s) => s.trim())
+      .map((stateName) => stateName.trim())
       .filter(Boolean);
 
-      const sectionJobs = await Promise.all(
-              stateNames.map(async (stateName) => {
-                const jobs = await fetchAdzunaByState({ stateName, resultsPerSection });
-                const section: LocationSection = {
-                  name: stateName,
-                  href: `/jobs?state=${encodeURIComponent(stateName)}`,
-                  jobs,
-                };
-                return section;
-              })
-            );
+    const sections = await Promise.all(
+      stateNames.map(async (stateName) => ({
+        name: stateName,
+        href: `/jobs?state=${encodeURIComponent(stateName)}`,
+        jobs: await fetchAdzunaByState({ stateName, resultsPerSection }),
+      }))
+    );
 
-    // TEMP: just return parsed params (to confirm no crash here)
     return NextResponse.json(
       {
         ok: true,
-        sections: sectionJobs,
-        generatedAt: new Date().toISOString(),
+        sections,
+        generatedAt,
       },
       { status: 200 }
     );
-    
-  } catch (err: any) {
-    console.error("by-location route error:", err);
+  } catch (error) {
+    console.error("by-location route error:", error);
     return NextResponse.json(
-      { error: err?.message ?? "Unknown error", stack: err?.stack ?? null },
-      { status: 500 }
+      {
+        ok: false,
+        sections: [] as LocationSection[],
+        generatedAt,
+        error: "Job provider temporarily unavailable",
+      },
+      { status: 200 }
     );
   }
 }

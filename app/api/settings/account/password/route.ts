@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { hashPassword, verifyPassword } from "@/app/lib/security/password";
+import { sendPasswordChangedEmail } from "@/app/lib/email/sendgrid";
 
 export const runtime = "nodejs";
 
@@ -88,7 +89,7 @@ export async function POST(req: Request) {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, password: true },
+      select: { id: true, password: true, email: true, name: true },
     });
 
     if (!user) {
@@ -134,6 +135,14 @@ export async function POST(req: Request) {
       where: { id: userId },
       data: { password: nextHash },
     });
+
+    if (user.email) {
+      try {
+        await sendPasswordChangedEmail(user.email, user.name);
+      } catch (emailError) {
+        console.error("Password change email failed:", emailError);
+      }
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

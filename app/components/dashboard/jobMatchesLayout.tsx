@@ -82,6 +82,11 @@ type FormattedJob = {
   salary?: string | null;
 };
 
+type JobMatchesLayoutProps = {
+  searchQuery: string;
+  preferredLocation?: string | null;
+};
+
 function safePosted(iso: string | null | undefined) {
   if (!iso) return "";
   const t = Date.parse(iso);
@@ -104,8 +109,15 @@ function greenhouseToJob(j: GreenhouseApiJob): Job {
   };
 }
 
-export default function JobMatchesLayout() {
+export default function JobMatchesLayout({
+  searchQuery,
+  preferredLocation,
+}: JobMatchesLayoutProps) {
   const router = useRouter();
+  const normalizedSearchQuery = searchQuery.trim() || "jobs";
+  const normalizedLocation = preferredLocation?.trim() || "";
+  const greenhouseQuery =
+    normalizedSearchQuery.toLowerCase() === "jobs" ? "" : normalizedSearchQuery;
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
 
@@ -158,8 +170,8 @@ export default function JobMatchesLayout() {
       ? right.location
       : parsedMeta.location ?? "Unknown location";
 
-  async function loadMore() {
-    if (loadingMore || !hasMore) return;
+  async function loadPage(nextOffset: number, options?: { reset?: boolean }) {
+    if (loadingMore || (!options?.reset && !hasMore)) return;
 
     setLoadingMore(true);
 
@@ -168,16 +180,25 @@ export default function JobMatchesLayout() {
 
       const url = new URL("/api/jobs/greenhouse", window.location.origin);
       url.searchParams.set("limit", String(LIMIT));
-      url.searchParams.set("offset", String(offset));
-      url.searchParams.set("q", "software engineer");
+      url.searchParams.set("offset", String(nextOffset));
+      url.searchParams.set("q", greenhouseQuery);
+      if (normalizedLocation) {
+        url.searchParams.set("location", normalizedLocation);
+      }
 
       const res = await fetch(url.toString(), { cache: "no-store" });
       const data = (await res.json()) as GreenhouseApiResponse;
 
+      const adzunaUrl = new URL("/api/adzuna/search", window.location.origin);
+      adzunaUrl.searchParams.set("q", normalizedSearchQuery);
+      adzunaUrl.searchParams.set("page", String(Math.floor(nextOffset / LIMIT) + 1));
+      adzunaUrl.searchParams.set("perPage", String(LIMIT));
+      if (normalizedLocation) {
+        adzunaUrl.searchParams.set("location", normalizedLocation);
+      }
+
       const adzunaRes = await fetch(
-        `/api/adzuna/search?q=${encodeURIComponent(
-          "software engineer"
-        )}&page=${Math.floor(offset / LIMIT) + 1}&perPage=${LIMIT}`,
+        adzunaUrl.toString(),
         { cache: "no-store" }
       );
       const adzunaData = (await adzunaRes.json()) as AdzunaSearchResponse;
@@ -207,17 +228,17 @@ export default function JobMatchesLayout() {
         return true;
       });
 
-      setJobs((prev) => [...prev, ...filtered]);
+      setJobs((prev) => (options?.reset ? filtered : [...prev, ...filtered]));
 
-      if (!selectedId && filtered[0]?.id) {
+      if ((options?.reset || !selectedId) && filtered[0]?.id) {
         setSelectedId(filtered[0].id);
       }
 
       const total = Number(data?.meta?.total ?? 0);
-      const nextOffset = offset + incoming.length;
+      const updatedOffset = nextOffset + incoming.length;
 
-      setOffset(nextOffset);
-      setHasMore(nextOffset < total);
+      setOffset(updatedOffset);
+      setHasMore(updatedOffset < total);
     } catch {
       setHasMore(false);
     } finally {
@@ -225,10 +246,23 @@ export default function JobMatchesLayout() {
     }
   }
 
+  async function loadMore() {
+    await loadPage(offset);
+  }
+
   useEffect(() => {
-    loadMore();
+    seen.current.clear();
+    setJobs([]);
+    setSelectedId("");
+    setSelectedDetails(null);
+    setDetailsError(null);
+    setPretty({ sections: [], highlights: [] });
+    setFormatted(null);
+    setOffset(0);
+    setHasMore(true);
+    void loadPage(0, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [normalizedLocation, normalizedSearchQuery]);
 
   useEffect(() => {
     if (!selectedId) return;

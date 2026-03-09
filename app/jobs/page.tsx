@@ -1,6 +1,7 @@
 // File: /Hirexa/my-app/app/jobs/page.tsx
 "use client";
 
+import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -279,6 +280,14 @@ function formatPostedDate(value: string) {
 function JobCardItem({ job }: { job: JobCard }) {
   const router = useRouter();
   const salaryText = job.salary ?? job.pill;
+  const applyUrl = job.jobUrl || job.url || "";
+
+  function handleAiAssistantApply() {
+    if (!applyUrl) return;
+
+    const encodedUrl = encodeURIComponent(applyUrl);
+    router.push(`/job-tools/ai-assistant/apply?jobUrl=${encodedUrl}`);
+  }
 
   return (
     <div
@@ -349,28 +358,36 @@ function JobCardItem({ job }: { job: JobCard }) {
       </div>
 
       {/* Actions pinned to bottom */}
-      <div className="mt-auto pt-5 space-y-2">
-        <Link
-          href={job.id ? `/job-hunter-pack?jobId=${job.id}` : "/job-hunter-pack"}
-          className="inline-flex w-full items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+      <div className="mt-auto pt-5">
+        <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleAiAssistantApply}
+          disabled={!applyUrl}
+          className="inline-flex flex-1 items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Get Job Hunter Pack
-        </Link>
+          AI Assistant Apply
+        </button>
 
-        {(job.jobUrl || job.url) ? (
+        {applyUrl ? (
           <a
-            href={job.jobUrl || job.url}
+            href={applyUrl}
             target="_blank"
-            rel="noreferrer"
-            className="inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            rel="noopener noreferrer"
+            aria-label={`Apply externally for ${job.title}`}
+            className="inline-flex items-center justify-center rounded-md border border-slate-300 p-3 text-slate-700 hover:bg-slate-100"
           >
-            Apply Externally
+            <ArrowTopRightOnSquareIcon className="h-5 w-5" />
           </a>
         ) : (
-          <span className="inline-flex w-full items-center justify-center rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-400">
-            Apply Externally
+          <span
+            aria-hidden="true"
+            className="inline-flex items-center justify-center rounded-md border border-slate-200 p-3 text-slate-400"
+          >
+            <ArrowTopRightOnSquareIcon className="h-5 w-5" />
           </span>
         )}
+        </div>
       </div>
     </div>
   );
@@ -508,7 +525,6 @@ export default function JobsPage() {
 
   const [sectionsState, setSectionsState] = useState<CategorySection[]>([]);
   const [loadingSections, setLoadingSections] = useState(true);
-  const [workdayError, setWorkdayError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -516,7 +532,6 @@ export default function JobsPage() {
     async function load() {
       try {
         setLoadingSections(true);
-        setWorkdayError(null);
 
         const res = await fetch("/api/jobs/workday?limit=1", { cache: "no-store" });
         const data: ApiResponse = await res.json();
@@ -538,8 +553,8 @@ export default function JobsPage() {
 
         if (!cancelled) setSectionsState(nextSections);
       } catch (e: any) {
+        console.error("Workday feed failed:", e);
         if (!cancelled) {
-          setWorkdayError(e?.message ?? "Failed to load Workday");
           setSectionsState(fallbackSections);
         }
       } finally {
@@ -665,14 +680,6 @@ export default function JobsPage() {
         </div>
 
         <div className="mx-auto max-w-7xl px-6 py-12">
-          {/* Optional Workday error banner */}
-          {!loadingSections && workdayError && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
-              Workday feed error (showing fallback jobs): {workdayError}
-            </div>
-          )}
-
-         
           {/* Adzuna sections */}
           <section className="mt-10">
             {adzunaLoading ? (

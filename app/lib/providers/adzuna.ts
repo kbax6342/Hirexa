@@ -4,7 +4,7 @@ type AdzunaSearchResponse = {
   results: Array<{
     id: string | number;
     title: string;
-    created: string; // ISO date
+    created: string;
     redirect_url?: string;
     company?: { display_name?: string };
     location?: { display_name?: string };
@@ -13,6 +13,29 @@ type AdzunaSearchResponse = {
     description?: string;
   }>;
 };
+
+type CacheEntry<T> = {
+  data: T;
+  timestamp: number;
+};
+
+const CACHE_TTL = 5 * 60 * 1000;
+const jobCache = new Map<string, CacheEntry<Job[]>>();
+
+function getCachedJobs(cacheKey: string) {
+  const cached = jobCache.get(cacheKey);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
+  return null;
+}
+
+function cleanText(value: unknown, maxLength?: number) {
+  if (typeof value !== "string") return "";
+
+  const text = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
+}
 
 function moneyRange(min?: number, max?: number) {
   if (!min && !max) return undefined;
@@ -25,7 +48,7 @@ function formatPosted(iso?: string) {
   if (!iso) return "Recently";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "Recently";
-  // simple friendly label
+
   const days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
   if (days <= 0) return "Posted today";
   if (days === 1) return "Posted 1 day ago";
@@ -33,128 +56,76 @@ function formatPosted(iso?: string) {
   return "Posted 30+ days ago";
 }
 
-// export async function fetchAdzunaJobs(args: {
-//   query: string;
-//   page: number;   // 1-based
-//   limit: number;  // per page
-// }): Promise<Job[]> {
-//   const { query, page, limit } = args;
-
-//   const appId = process.env.ADZUNA_APP_ID;
-//   const appKey = process.env.ADZUNA_APP_KEY;
-//   if (!appId || !appKey) throw new Error("Missing ADZUNA_APP_ID / ADZUNA_APP_KEY");
-
-//   const params = new URLSearchParams({
-//     app_id: appId,
-//     app_key: appKey,
-//     results_per_page: String(limit),
-//     what: query,
-//     content_type: "application/json",
-//   });
-
-//   // US endpoint (adjust country if needed)
-//   const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?${params.toString()}`;
-
-//   const res = await fetch(url, { cache: "no-store" });
-//   if (!res.ok) throw new Error(`Adzuna error: ${res.status}`);
-
-//   const data = (await res.json()) as AdzunaSearchResponse;
-
-//   return (data.results ?? []).map((r) => ({
-//     id: `adzuna:${r.id}`,
-//     source: "adzuna",
-//     title: r.title ?? "Untitled role",
-//     company: r.company?.display_name ?? "Unknown",
-//     location: r.location?.display_name ?? "Unknown",
-//     posted: formatPosted(r.created),
-//     salary: moneyRange(r.salary_min, r.salary_max),
-//     // keep list description short-ish
-//     description: r.description ? r.description.slice(0, 240) + (r.description.length > 240 ? "…" : "") : "",
-//     jobUrl: r.redirect_url,
-//   }));
-// }
 export async function fetchAdzunaJobs(args: {
   query: string;
-  page: number;   // 1-based
-  limit: number;  // per page
-}) {
+  page: number;
+  limit: number;
+}): Promise<Job[]> {
   const { query, page, limit } = args;
-
-  const appId = process.env.ADZUNA_APP_ID;
-  const appKey = process.env.ADZUNA_APP_KEY;
-  if (!appId || !appKey) throw new Error("Missing ADZUNA_APP_ID / ADZUNA_APP_KEY");
-
-  const params = new URLSearchParams({
-    app_id: appId,
-    app_key: appKey,
-    results_per_page: String(limit),
-    what: query,
-
-    // ✅ IMPORTANT: Adzuna expects "content-type" (dash), not "content_type"
-    "content-type": "application/json",
-  });
-
-  const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?${params.toString()}`;
-
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  // ✅ Make the error useful (Adzuna returns JSON error details)
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Adzuna error: ${res.status} ${res.statusText} :: ${body}`);
+  const cacheKey = `${query.trim().toLowerCase()}|${page}|${limit}`;
+  const cachedJobs = getCachedJobs(cacheKey);
+  if (cachedJobs) {
+    return cachedJobs;
   }
 
-  const data = (await res.json()) as any;
+  const staleJobs = jobCache.get(cacheKey)?.data ?? null;
+  const appId = process.env.ADZUNA_APP_ID;
+  const appKey = process.env.ADZUNA_APP_KEY;
 
-  return (data.results ?? []).map((r: any) => ({
-    id: `adzuna:${r.id}`,
-    source: "adzuna",
-    title: r.title ?? "Untitled role",
-    company: r.company?.display_name ?? "Unknown",
-    location: r.location?.display_name ?? "Unknown",
-    posted: r.created ?? "Recently",
-    salary:
-      r.salary_min && r.salary_max
-        ? `$${Math.round(r.salary_min).toLocaleString()} - $${Math.round(r.salary_max).toLocaleString()} / year`
-        : undefined,
-    description: (r.description ?? "").slice(0, 240),
-    jobUrl: r.redirect_url,
-  }));
+  if (!appId || !appKey) {
+    return staleJobs ?? [];
+  }
+
+  try {
+    const params = new URLSearchParams({
+      app_id: appId,
+      app_key: appKey,
+      results_per_page: String(limit),
+      what: query,
+      "content-type": "application/json",
+    });
+
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?${params.toString()}`;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Adzuna error ${res.status}`);
+    }
+
+    const data = (await res.json()) as AdzunaSearchResponse;
+    const jobs: Job[] = (data.results ?? []).map((result) => ({
+      id: `adzuna:${result.id}`,
+      source: "adzuna",
+      title: cleanText(result.title) || "Untitled role",
+      company: cleanText(result.company?.display_name) || "Unknown",
+      location: cleanText(result.location?.display_name) || "Unknown",
+      posted: formatPosted(result.created),
+      salary: moneyRange(result.salary_min, result.salary_max),
+      description: cleanText(result.description, 240) || undefined,
+      jobUrl: cleanText(result.redirect_url) || undefined,
+    }));
+
+    jobCache.set(cacheKey, {
+      data: jobs,
+      timestamp: Date.now(),
+    });
+
+    return jobs;
+  } catch (error) {
+    console.error("Adzuna jobs fetch failed:", error);
+    return staleJobs ?? [];
+  }
 }
-
-// export async function fetchAdzunaJobDetails(fullId: string): Promise<Job | null> {
-//   // fullId looks like "adzuna:12345"
-//   const providerId = fullId.split(":")[1];
-//   if (!providerId) return null;
-
-//   // Option A (simple): fetch a page and find it (works if you already have it in list)
-//   // Better later: store jobs in DB and just read by id.
-//   const page1 = await fetchAdzunaJobs({ query: "software engineer", page: 1, limit: 50 });
-//   const match = page1.find((j) => j.id === fullId);
-
-//   if (!match) return null;
-
-//   // Ensure this field contains HTML if you have it.
-//   // If you don't, you can still display as plain text.
-//   return {
-//     ...match,
-//     description: match.description ?? "",
-//     // Add fullDescriptionHtml if you have it later
-//     // fullDescriptionHtml: "<p>...</p>"
-//   };
-// }
-
 
 export async function fetchAdzunaJobDetails(
   fullId: string,
   origin: string
 ): Promise<Job | null> {
-  // fullId = "adzuna:5610241599"
   const [, providerId] = fullId.split(":");
   if (!providerId) return null;
 
@@ -180,6 +151,5 @@ export async function fetchAdzunaJobDetails(
     salary: data.salary,
     jobUrl: data.jobUrl,
     description: data.description ?? "",
-    // fullDescriptionHtml: data.fullDescriptionHtml,
   };
 }

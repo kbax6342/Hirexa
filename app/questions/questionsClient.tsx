@@ -114,11 +114,13 @@ export default function QuestionsClient() {
 
     async function boot() {
       try {
-        const res = await fetch("/api/onboarding/key-questions");
+        const res = await fetch("/api/onboarding/key-questions", {
+          cache: "no-store",
+        });
         const data = await res.json();
 
         if (data?.completed) {
-          router.replace("/questions/step2");
+          router.replace("/dashboard");
           return;
         }
 
@@ -140,7 +142,7 @@ export default function QuestionsClient() {
 
   /* ===== ACTIONS ===== */
 
-  async function handleNext() {
+  async function handleSave() {
     setError(null);
 
     if (!requiredOk) {
@@ -161,7 +163,7 @@ export default function QuestionsClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to save");
 
-      router.push("/dashboard");
+      router.replace("/dashboard");
     } catch (e: any) {
       setError(e?.message || "Something went wrong.");
     } finally {
@@ -229,11 +231,11 @@ export default function QuestionsClient() {
           </button>
 
           <button
-            onClick={handleNext}
+            onClick={handleSave}
             disabled={saving}
             className="rounded-full bg-blue-600 px-7 py-2.5 text-sm font-semibold text-white shadow hover:bg-blue-700 disabled:opacity-60"
           >
-            {saving ? "Saving..." : "Next"}
+            {saving ? "Saving..." : "Save"}
           </button>
         </div>
       </div>

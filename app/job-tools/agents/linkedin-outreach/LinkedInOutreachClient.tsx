@@ -227,7 +227,7 @@ export default function LinkedInOutreachClient() {
       const data = await res.json();
       if (!data?.active) {
         const params = new URLSearchParams({ source: "linkedin-outreach" });
-        window.location.href = `/plans?${params.toString()}`;
+        window.location.href = `/checkout?${params.toString()}`;
         return false;
       }
 

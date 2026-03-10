@@ -11,6 +11,7 @@ import {
 } from "@heroicons/react/24/outline";
 
 import { auth } from "@/auth";
+import { prisma } from "@/app/lib/prisma";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
 import {
@@ -20,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/app/components/ui/card";
+import PremiumCareerCoachButton from "./PremiumCareerCoachButton";
 
 type FeatureCard = {
   title: string;
@@ -100,10 +102,20 @@ const platformCards: PlatformCard[] = [
 
 export default async function CareerCoachPage() {
   const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
-  const startHref = session?.user
-    ? "/dashboard"
-    : "/login?callbackUrl=%2Fjob-tools%2Fcareer-coach";
+  const userProfile = userId
+    ? await prisma.userProfile.findUnique({
+        where: { userId },
+        select: {
+          trialPlanStatus: true,
+          monthlyPlanStatus: true,
+          yearlyPlanStatus: true,
+        },
+      })
+    : null;
+
+  const startHref = session?.user ? "/dashboard" : "/login?callbackUrl=%2Fjob-tools%2Fcareer-coach";
   const uploadHref = "/onboarding/resume";
   const jobMatchesHref = session?.user ? "/dashboard" : "/jobs";
 
@@ -129,9 +141,13 @@ export default async function CareerCoachPage() {
                 </p>
 
                 <div className="mt-8 flex flex-wrap gap-3">
-                  <Button asChild className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700">
-                    <Link href={startHref}>Start Career Coaching</Link>
-                  </Button>
+                  <PremiumCareerCoachButton
+                    activeHref={startHref}
+                    className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700"
+                    planStatus={userProfile}
+                  >
+                    Start Career Coaching
+                  </PremiumCareerCoachButton>
                   <Button
                     asChild
                     variant="outline"
@@ -288,9 +304,13 @@ export default async function CareerCoachPage() {
             </p>
 
             <div className="mt-8 flex flex-wrap justify-center gap-3">
-              <Button asChild className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700">
-                <Link href={startHref}>Start Coaching</Link>
-              </Button>
+              <PremiumCareerCoachButton
+                activeHref={startHref}
+                className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700"
+                planStatus={userProfile}
+              >
+                Start Coaching
+              </PremiumCareerCoachButton>
               <Button
                 asChild
                 variant="outline"

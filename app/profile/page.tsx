@@ -45,6 +45,11 @@ type PreferenceForm = {
   benefits: string[];
 };
 
+type HirePilotStatus = {
+  hirePilotUnlimited: boolean;
+  hirePilotCredits: number;
+};
+
 type ProfileApiResponse = {
   ok: boolean;
   profile: {
@@ -146,6 +151,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(null);
+  const [hirePilotStatus, setHirePilotStatus] = useState<HirePilotStatus | null>(null);
 
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
@@ -211,6 +217,25 @@ export default function ProfilePage() {
       }
 
       setProfile(data?.profile ?? null);
+
+      const hirePilotRes = await fetch("/api/user/hirepilot-status", {
+        cache: "no-store",
+      });
+
+      if (hirePilotRes.ok) {
+        const hirePilotData = await readJsonResponse<HirePilotStatus>(hirePilotRes);
+        setHirePilotStatus(
+          hirePilotData ?? {
+            hirePilotUnlimited: false,
+            hirePilotCredits: 0,
+          }
+        );
+      } else {
+        setHirePilotStatus({
+          hirePilotUnlimited: false,
+          hirePilotCredits: 0,
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load profile");
     } finally {
@@ -997,6 +1022,30 @@ function ToggleField({
                     {subscriptionSummary.planStatus === "active" ? "Active" : "Inactive"}
                   </div>
                 </div>
+              </div>
+            </Card>
+
+            <Card className="p-6 mt-2">
+              <div className="text-sm font-semibold text-slate-900">
+                HirePilot AI Interview Assistant
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-5">
+                <div className="text-xs font-semibold text-slate-500">Access Status</div>
+                <div className="mt-2 text-sm font-semibold text-slate-900">
+                  {hirePilotStatus?.hirePilotUnlimited
+                    ? "Status: Unlimited Access"
+                    : (hirePilotStatus?.hirePilotCredits ?? 0) > 0
+                    ? `Credits Remaining: ${hirePilotStatus?.hirePilotCredits ?? 0}`
+                    : "No HirePilot access"}
+                </div>
+
+                <a
+                  href="/job-tools/agents/hirepilot"
+                  className="mt-4 inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
+                >
+                  Unlock HirePilot
+                </a>
               </div>
             </Card>
 

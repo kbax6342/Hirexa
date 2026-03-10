@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import OpenAI from "openai";
 import type { Prisma } from "@prisma/client";
 
 import { auth } from "@/auth";
+import {
+  HIREPILOT_SESSION_COOKIE,
+  getHirePilotBillingStatus,
+} from "@/app/lib/hirepilot/checkHirePilotAccess";
 import { prisma } from "@/app/lib/prisma";
 
 export const runtime = "nodejs";
@@ -309,6 +314,43 @@ export async function POST(req: Request) {
 
     if (!userId) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    const cookieStore = await cookies();
+    const sessionCookie = cookieStore.get(HIREPILOT_SESSION_COOKIE)?.value ?? null;
+
+    if (!sessionCookie) {
+      const status = await getHirePilotBillingStatus(userId);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "HirePilot access required",
+          hirePilotUnlimited: status.hirePilotUnlimited,
+          hirePilotCredits: status.hirePilotCredits,
+        },
+        { status: 403 }
+      );
+    }
+
+    const activeUsage = await prisma.hirePilotUsage.findFirst({
+      where: {
+        id: sessionCookie,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!activeUsage) {
+      const status = await getHirePilotBillingStatus(userId);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "HirePilot access required",
+          hirePilotUnlimited: status.hirePilotUnlimited,
+          hirePilotCredits: status.hirePilotCredits,
+        },
+        { status: 403 }
+      );
     }
 
     const body = (await req.json()) as HirePilotRequest;

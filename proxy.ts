@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { prisma } from "@/app/lib/prisma";
 import { auth } from "./auth";
 
 const AUTH_REQUIRED_PREFIXES = [
@@ -20,9 +21,21 @@ const AUTHENTICATED_REDIRECT_PREFIXES = [
   "/onboarding/account",
 ];
 
-export default auth((req) => {
+export default auth(async (req) => {
   const { pathname, search, origin } = req.nextUrl;
   const isAuthenticated = !!req.auth;
+  const userId = (req.auth?.user as { id?: string } | undefined)?.id ?? null;
+
+  if (isAuthenticated && pathname === "/questions" && userId) {
+    const userProfile = await prisma.userProfile.findUnique({
+      where: { userId },
+      select: { questionsCompleted: true },
+    });
+
+    if (userProfile?.questionsCompleted) {
+      return NextResponse.redirect(new URL("/dashboard", origin));
+    }
+  }
 
   if (
     isAuthenticated &&
@@ -46,6 +59,7 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
+    "/questions",
     "/dashboard/:path*",
     "/benefits/:path*",
     "/plans/:path*",

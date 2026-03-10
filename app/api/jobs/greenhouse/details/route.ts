@@ -17,6 +17,22 @@ type GreenhouseJobDetails = {
   requisition_id?: string | null;
 };
 
+const postedDateFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "numeric",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function formatPostedDate(iso: string | null | undefined) {
+  if (!iso) return "";
+
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return "";
+
+  return postedDateFormatter.format(new Date(parsed));
+}
+
 function getParam(url: URL, key: string) {
   const v = url.searchParams.get(key);
   return v ? String(v).trim() : "";
@@ -73,7 +89,7 @@ export async function GET(req: Request) {
         title: data.title ?? "Untitled role",
         company: board, // UI already displays companyLabel in list; you can override later if you want
         location: data.location?.name ?? "Unknown location",
-        posted: data.updated_at ?? "",
+        posted: formatPostedDate(data.updated_at),
         description: data.content ?? "", // HTML string usually
         fullDescriptionHtml: data.content ?? "", // keep name consistent with your existing UI pattern
         jobUrl: data.absolute_url ?? "",

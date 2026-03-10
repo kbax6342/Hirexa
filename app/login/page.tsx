@@ -66,7 +66,15 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/questions");
+    try {
+      const onboardingRes = await fetch("/api/onboarding/key-questions", {
+        cache: "no-store",
+      });
+      const onboardingData = await onboardingRes.json();
+      router.push(onboardingData?.completed ? "/dashboard" : "/questions");
+    } catch {
+      router.push("/questions");
+    }
     router.refresh();
   }
 

@@ -9,6 +9,25 @@ import { prisma } from "@/app/lib/prisma";
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 
+async function getQuestionsCompleted(userId?: string | null) {
+  if (!userId) return false;
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { userId },
+    select: {
+      questionsCompleted: true,
+      keyQuestions: true,
+      registrationStatus: true,
+    },
+  });
+
+  return Boolean(
+    profile?.questionsCompleted ||
+      profile?.keyQuestions ||
+      profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE"
+  );
+}
+
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
@@ -56,11 +75,17 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         (token as any).id = user.id;
         token.sub = user.id;
       }
+      (token as any).questionsCompleted = await getQuestionsCompleted(
+        ((token as any).id as string | undefined) ?? token.sub
+      );
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
         (session.user as any).id = (token as any).id ?? token.sub;
+        (session.user as any).questionsCompleted = Boolean(
+          (token as any).questionsCompleted
+        );
       }
       return session;
     },

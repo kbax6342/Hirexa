@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/app/components/ui/card";
+import HirePilotPaywall from "@/app/components/hirepilot/HirePilotPaywall";
 import { Textarea } from "@/app/components/ui/textarea";
 import { cn } from "@/app/lib/utils";
 
@@ -32,6 +33,21 @@ type HirePilotResponse = {
   tips?: string[];
   error?: string;
   source?: "openai" | "fallback";
+  hirePilotUnlimited?: boolean;
+  hirePilotCredits?: number;
+};
+
+type HirePilotStatusResponse = {
+  hirePilotUnlimited: boolean;
+  hirePilotCredits: number;
+};
+
+type StartInterviewResponse = {
+  ok?: boolean;
+  started?: boolean;
+  message?: string;
+  hirePilotUnlimited?: boolean;
+  hirePilotCredits?: number;
 };
 
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
@@ -164,11 +180,11 @@ function extractDetectedQuestion(transcript: string) {
   return "";
 }
 
-async function readJsonSafely(res: Response) {
+async function readJsonSafely<T>(res: Response, fallback: T) {
   try {
-    return (await res.json()) as HirePilotResponse;
+    return (await res.json()) as T;
   } catch {
-    return { ok: false, error: "Invalid server response." } satisfies HirePilotResponse;
+    return fallback;
   }
 }
 
@@ -194,6 +210,14 @@ export default function HirePilotClient() {
   const [responseSource, setResponseSource] = useState<"openai" | "fallback" | null>(null);
   const [practiceIndex, setPracticeIndex] = useState(0);
   const [autoGeneratePractice, setAutoGeneratePractice] = useState(true);
+  const [billingStatus, setBillingStatus] = useState<HirePilotStatusResponse>({
+    hirePilotUnlimited: false,
+    hirePilotCredits: 0,
+  });
+  const [billingLoading, setBillingLoading] = useState(true);
+  const [startingInterview, setStartingInterview] = useState(false);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [interviewSessionStarted, setInterviewSessionStarted] = useState(false);
 
   const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
 
@@ -212,6 +236,10 @@ export default function HirePilotClient() {
     }
     return "HirePilot uses your profile, resume, experience, and skills.";
   }, [activeRewrite, isGenerating, responseSource]);
+
+  useEffect(() => {
+    void loadHirePilotStatus();
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -316,6 +344,9 @@ export default function HirePilotClient() {
     const normalizedQuestion = normalizeSpace(question);
     if (!normalizedQuestion) return;
 
+    const accessAllowed = await ensureInterviewSession();
+    if (!accessAllowed) return;
+
     setDetectedQuestion(normalizedQuestion);
     setRequestError(null);
     setIsGenerating(true);
@@ -334,8 +365,18 @@ export default function HirePilotClient() {
         }),
       });
 
-      const data = await readJsonSafely(res);
+      const data = await readJsonSafely<HirePilotResponse>(res, {
+        ok: false,
+        error: "Invalid server response.",
+      });
       if (!res.ok || !data.ok) {
+        if (res.status === 403) {
+          setBillingStatus({
+            hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
+            hirePilotCredits: Number(data.hirePilotCredits ?? 0),
+          });
+          setShowPaywall(true);
+        }
         throw new Error(data.error || "Failed to generate an interview answer.");
       }
 
@@ -352,9 +393,89 @@ export default function HirePilotClient() {
     }
   }
 
-  function startListening() {
+  async function loadHirePilotStatus() {
+    try {
+      setBillingLoading(true);
+      const res = await fetch("/api/user/hirepilot-status", {
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) return;
+        throw new Error("Unable to load HirePilot billing status.");
+      }
+
+      const data = await readJsonSafely<HirePilotStatusResponse>(res, {
+        hirePilotUnlimited: false,
+        hirePilotCredits: 0,
+      });
+      setBillingStatus({
+        hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
+        hirePilotCredits: Number(data.hirePilotCredits ?? 0),
+      });
+    } catch {
+      setBillingStatus({
+        hirePilotUnlimited: false,
+        hirePilotCredits: 0,
+      });
+    } finally {
+      setBillingLoading(false);
+    }
+  }
+
+  async function ensureInterviewSession() {
+    if (interviewSessionStarted) {
+      return true;
+    }
+
+    try {
+      setStartingInterview(true);
+      setRequestError(null);
+
+      const res = await fetch("/api/hirepilot/start-interview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      const data = await readJsonSafely<StartInterviewResponse>(res, {
+        ok: false,
+        message: "Invalid server response.",
+      });
+
+      setBillingStatus({
+        hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
+        hirePilotCredits: Number(data.hirePilotCredits ?? 0),
+      });
+
+      if (!res.ok || !data.started) {
+        if (res.status === 403) {
+          setShowPaywall(true);
+          return false;
+        }
+
+        throw new Error(data.message ?? "Unable to start HirePilot.");
+      }
+
+      setInterviewSessionStarted(true);
+      setShowPaywall(false);
+      return true;
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Unable to start HirePilot.");
+      return false;
+    } finally {
+      setStartingInterview(false);
+    }
+  }
+
+  async function startListening() {
     const recognition = recognitionRef.current;
     if (!recognition || isListening) return;
+
+    const accessAllowed = await ensureInterviewSession();
+    if (!accessAllowed) return;
 
     transcriptRef.current = "";
     lastQuestionKeyRef.current = "";
@@ -390,7 +511,10 @@ export default function HirePilotClient() {
     }
   }
 
-  function handlePracticeQuestion(nextIndex?: number) {
+  async function handlePracticeQuestion(nextIndex?: number) {
+    const accessAllowed = await ensureInterviewSession();
+    if (!accessAllowed) return;
+
     const safeIndex = typeof nextIndex === "number" ? nextIndex : practiceIndex;
     const question = practiceQuestions[safeIndex] ?? practiceQuestions[0];
     const normalizedQuestion = ensureQuestionPunctuation(question);
@@ -407,7 +531,7 @@ export default function HirePilotClient() {
   function handleNextPracticeQuestion() {
     const nextIndex = (practiceIndex + 1) % practiceQuestions.length;
     setPracticeIndex(nextIndex);
-    handlePracticeQuestion(nextIndex);
+    void handlePracticeQuestion(nextIndex);
   }
 
   return (
@@ -425,6 +549,18 @@ export default function HirePilotClient() {
                     <div className="flex flex-wrap items-center gap-2">
                       <CardTitle className="text-3xl text-slate-950">HirePilot</CardTitle>
                       <Badge className="bg-blue-600 text-white hover:bg-blue-600">NEW</Badge>
+                      <Badge
+                        variant="outline"
+                        className="border-slate-200 bg-white text-slate-700"
+                      >
+                        {billingLoading
+                          ? "Checking access..."
+                          : billingStatus.hirePilotUnlimited
+                          ? "Unlimited Access"
+                          : billingStatus.hirePilotCredits > 0
+                          ? `Credits Remaining: ${billingStatus.hirePilotCredits}`
+                          : "Locked"}
+                      </Badge>
                     </div>
                     <CardDescription className="max-w-2xl text-sm text-slate-600">
                       Turn on your microphone, let HirePilot detect interview questions in real
@@ -490,12 +626,12 @@ export default function HirePilotClient() {
                     <div className="flex flex-wrap items-center gap-3">
                       <Button
                         type="button"
-                        onClick={startListening}
-                        disabled={!isSupported || isListening}
+                        onClick={() => void startListening()}
+                        disabled={!isSupported || isListening || startingInterview}
                         className="rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700"
                       >
                         <MicrophoneIcon className="h-5 w-5" />
-                        Start Listening
+                        {startingInterview ? "Starting..." : "Start Listening"}
                       </Button>
 
                       <Button
@@ -590,16 +726,18 @@ export default function HirePilotClient() {
                     <div className="flex flex-wrap gap-3">
                       <Button
                         type="button"
-                        onClick={() => handlePracticeQuestion()}
+                        onClick={() => void handlePracticeQuestion()}
+                        disabled={startingInterview}
                         className="rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700"
                       >
                         <SparklesIcon className="h-5 w-5" />
-                        Use This Question
+                        {startingInterview ? "Starting..." : "Use This Question"}
                       </Button>
                       <Button
                         type="button"
                         variant="outline"
                         onClick={handleNextPracticeQuestion}
+                        disabled={startingInterview}
                         className="rounded-xl border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                       >
                         <ArrowPathIcon className="h-5 w-5" />
@@ -759,6 +897,15 @@ export default function HirePilotClient() {
           </aside>
         </div>
       </div>
+
+      {showPaywall ? (
+        <HirePilotPaywall
+          onClose={() => {
+            setShowPaywall(false);
+            void loadHirePilotStatus();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

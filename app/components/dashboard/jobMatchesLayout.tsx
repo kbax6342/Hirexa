@@ -12,34 +12,6 @@ import {
 import { decodeHtml } from "@/app/lib/utils/decodeHtml";
 import { cleanJobText, splitSections } from "@/app/lib/jobs/formatJobText";
 import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
-import { mixJobFeeds } from "@/app/lib/mixJobs";
-
-/** --------------------------
- * Greenhouse API shapes
- * -------------------------- */
-type GreenhouseApiJob = {
-  source: "greenhouse";
-  sourceId: string;
-  board: string;
-  companyLabel: string;
-  title: string;
-  location: string | null;
-  department: string | null;
-  absoluteUrl: string;
-  updatedAt: string | null;
-  category: "tech" | "healthcare" | "finance" | "trades";
-};
-
-type GreenhouseApiResponse = {
-  jobs: GreenhouseApiJob[];
-  meta: {
-    total: number;
-    offset: number;
-    limit: number;
-    fetchedAt: string;
-    warnings?: Array<{ board: string; error: string }>;
-  };
-};
 
 type GreenhouseDetailsResponse = {
   job: {
@@ -55,16 +27,9 @@ type GreenhouseDetailsResponse = {
   };
 };
 
-type AdzunaSearchResponse = {
-  jobs: Array<{
-    id: string;
-    title: string;
-    company: string;
-    location: string;
-    posted: string;
-    jobUrl: string;
-    description?: string;
-  }>;
+type SmartMatchesResponse = {
+  jobs: Job[];
+  nextCursor: string;
 };
 
 /** --------------------------
@@ -82,42 +47,16 @@ type FormattedJob = {
   salary?: string | null;
 };
 
-type JobMatchesLayoutProps = {
-  searchQuery: string;
-  preferredLocation?: string | null;
-};
-
-function safePosted(iso: string | null | undefined) {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  return new Date(t).toLocaleDateString();
+function getJobIdentity(job: Pick<Job, "id" | "source">) {
+  const normalizedId = String(job.id ?? "").trim();
+  const sourcePrefix = `${job.source}:`;
+  return normalizedId.startsWith(sourcePrefix)
+    ? normalizedId
+    : `${sourcePrefix}${normalizedId}`;
 }
 
-function greenhouseToJob(j: GreenhouseApiJob): Job {
-  return {
-    id: j.sourceId,
-    source: "greenhouse",
-    title: j.title ?? "Untitled role",
-    company: j.companyLabel ?? j.board ?? "Unknown company",
-    location: j.location ?? "Unknown location",
-    posted: safePosted(j.updatedAt),
-    salary: undefined,
-    badge: undefined,
-    description: j.department ? `Department: ${j.department}` : undefined,
-    jobUrl: j.absoluteUrl ?? undefined,
-  };
-}
-
-export default function JobMatchesLayout({
-  searchQuery,
-  preferredLocation,
-}: JobMatchesLayoutProps) {
+export default function JobMatchesLayout() {
   const router = useRouter();
-  const normalizedSearchQuery = searchQuery.trim() || "jobs";
-  const normalizedLocation = preferredLocation?.trim() || "";
-  const greenhouseQuery =
-    normalizedSearchQuery.toLowerCase() === "jobs" ? "" : normalizedSearchQuery;
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
 
@@ -134,9 +73,8 @@ export default function JobMatchesLayout({
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
 
-  const [offset, setOffset] = useState<number>(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
 
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [selectedDetails, setSelectedDetails] = useState<Job | null>(null);
@@ -170,84 +108,68 @@ export default function JobMatchesLayout({
       ? right.location
       : parsedMeta.location ?? "Unknown location";
 
-  async function loadPage(nextOffset: number, options?: { reset?: boolean }) {
-    if (loadingMore || (!options?.reset && !hasMore)) return;
+  async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
+    if (loadingMore) return;
 
     setLoadingMore(true);
 
     try {
       const LIMIT = 25;
+      let requestCursor = cursor;
+      let filtered: Job[] = [];
+      let responseCursor: string | null = cursor;
 
-      const url = new URL("/api/jobs/greenhouse", window.location.origin);
-      url.searchParams.set("limit", String(LIMIT));
-      url.searchParams.set("offset", String(nextOffset));
-      url.searchParams.set("q", greenhouseQuery);
-      if (normalizedLocation) {
-        url.searchParams.set("location", normalizedLocation);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const url = new URL("/api/jobs/smart-matches", window.location.origin);
+        url.searchParams.set("limit", String(LIMIT));
+        if (requestCursor) {
+          url.searchParams.set("cursor", requestCursor);
+        }
+
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error("Failed to load smart matches");
+        }
+
+        const data = (await res.json()) as SmartMatchesResponse;
+        const incoming = Array.isArray(data?.jobs) ? data.jobs : [];
+
+        filtered = incoming.filter((job) => {
+          if (!job?.id) return false;
+          const jobIdentity = getJobIdentity(job);
+          if (seen.current.has(jobIdentity)) return false;
+          seen.current.add(jobIdentity);
+          return true;
+        });
+
+        responseCursor = data?.nextCursor ?? requestCursor;
+
+        if (
+          filtered.length > 0 ||
+          !responseCursor ||
+          responseCursor === requestCursor
+        ) {
+          break;
+        }
+
+        requestCursor = responseCursor;
       }
 
-      const res = await fetch(url.toString(), { cache: "no-store" });
-      const data = (await res.json()) as GreenhouseApiResponse;
-
-      const adzunaUrl = new URL("/api/adzuna/search", window.location.origin);
-      adzunaUrl.searchParams.set("q", normalizedSearchQuery);
-      adzunaUrl.searchParams.set("page", String(Math.floor(nextOffset / LIMIT) + 1));
-      adzunaUrl.searchParams.set("perPage", String(LIMIT));
-      if (normalizedLocation) {
-        adzunaUrl.searchParams.set("location", normalizedLocation);
-      }
-
-      const adzunaRes = await fetch(
-        adzunaUrl.toString(),
-        { cache: "no-store" }
-      );
-      const adzunaData = (await adzunaRes.json()) as AdzunaSearchResponse;
-
-      const incoming = Array.isArray(data?.jobs) ? data.jobs : [];
-      const mapped = incoming.map(greenhouseToJob);
-
-      const adzunaMapped: Job[] = Array.isArray(adzunaData?.jobs)
-        ? adzunaData.jobs.map((j) => ({
-            id: `adzuna:${j.id}`,
-            source: "adzuna",
-            title: j.title,
-            company: j.company,
-            location: j.location,
-            posted: j.posted,
-            jobUrl: j.jobUrl,
-            description: j.description,
-          }))
-        : [];
-
-      const mixedIncoming = mixJobFeeds(mapped, adzunaMapped);
-
-      const filtered = mixedIncoming.filter((j) => {
-        if (!j?.id) return false;
-        if (seen.current.has(j.id)) return false;
-        seen.current.add(j.id);
-        return true;
-      });
-
+      setNextCursor(responseCursor);
       setJobs((prev) => (options?.reset ? filtered : [...prev, ...filtered]));
 
       if ((options?.reset || !selectedId) && filtered[0]?.id) {
         setSelectedId(filtered[0].id);
       }
-
-      const total = Number(data?.meta?.total ?? 0);
-      const updatedOffset = nextOffset + incoming.length;
-
-      setOffset(updatedOffset);
-      setHasMore(updatedOffset < total);
-    } catch {
-      setHasMore(false);
+    } catch (error) {
+      console.error("Smart matches feed failed:", error);
     } finally {
       setLoadingMore(false);
     }
   }
 
   async function loadMore() {
-    await loadPage(offset);
+    await loadPage(nextCursor);
   }
 
   useEffect(() => {
@@ -258,11 +180,10 @@ export default function JobMatchesLayout({
     setDetailsError(null);
     setPretty({ sections: [], highlights: [] });
     setFormatted(null);
-    setOffset(0);
-    setHasMore(true);
-    void loadPage(0, { reset: true });
+    setNextCursor(null);
+    void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [normalizedLocation, normalizedSearchQuery]);
+  }, []);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -305,7 +226,7 @@ export default function JobMatchesLayout({
           title: job.title ?? "Untitled role",
           company: job.company ?? displayCompany,
           location: job.location ?? displayLocation,
-          posted: safePosted(job.posted),
+          posted: job.posted ?? "",
           jobUrl: job.jobUrl ?? undefined,
           description: job.description ?? job.fullDescriptionHtml ?? "",
           badge: undefined,
@@ -436,7 +357,13 @@ export default function JobMatchesLayout({
       }
 
       setAppliedJobs((prev) => {
-        if (prev.some((appliedJob) => appliedJob.id === job.id)) return prev;
+        if (
+          prev.some(
+            (appliedJob) => getJobIdentity(appliedJob) === getJobIdentity(job)
+          )
+        ) {
+          return prev;
+        }
         return [job, ...prev];
       });
 
@@ -495,7 +422,7 @@ export default function JobMatchesLayout({
 
               return (
                 <div
-                  key={job.id}
+                  key={getJobIdentity(job)}
                   className={[
                     "flex w-full flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition",
                     active
@@ -655,7 +582,7 @@ export default function JobMatchesLayout({
 
             {jobs.length === 0 && !loadingMore ? (
               <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
-                No jobs loaded yet.
+                Finding more matches for you...
               </div>
             ) : null}
           </div>
@@ -664,10 +591,10 @@ export default function JobMatchesLayout({
             <button
               type="button"
               onClick={loadMore}
-              disabled={loadingMore || !hasMore}
+              disabled={loadingMore}
               className="w-full rounded-lg bg-blue-600 py-2 font-medium text-white disabled:opacity-60"
             >
-              {loadingMore ? "Loading..." : hasMore ? "Load more" : "No more jobs"}
+              {loadingMore ? "Loading..." : "Find More Jobs"}
             </button>
           </div>
         </aside>
@@ -842,7 +769,7 @@ export default function JobMatchesLayout({
               <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
                 {appliedJobs.map((job) => (
                   <div
-                    key={job.id}
+                    key={getJobIdentity(job)}
                     className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
                   >
                     <p className="text-xs font-semibold text-gray-800">{job.title}</p>

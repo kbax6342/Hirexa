@@ -4,8 +4,11 @@ type ProfileSnapshot = {
   city?: string | null;
   state?: string | null;
   country?: string | null;
+  includeRemote?: boolean | null;
   workplaceLocations?: unknown;
   jobInterests?: Array<{ title?: string | null }>;
+  skills?: string[];
+  resumeSkills?: string[];
   resume?: {
     experiences?: Array<{
       title?: string | null;
@@ -16,7 +19,10 @@ type ProfileSnapshot = {
 export type SmartMatchSearchConfig = {
   searchQuery: string;
   jobTitles: string[];
+  skillTerms: string[];
   preferredLocation: string | null;
+  locationOptions: string[];
+  includeRemote: boolean;
 };
 
 function trimOrNull(value?: string | null) {
@@ -55,19 +61,7 @@ function readWorkplaceLocation(value: unknown) {
 }
 
 function buildPreferredLocation(profile: ProfileSnapshot | null) {
-  const workplaceLocation = readWorkplaceLocation(profile?.workplaceLocations);
-  if (workplaceLocation) return workplaceLocation;
-
-  const city = trimOrNull(profile?.city);
-  const state = trimOrNull(profile?.state);
-  const country = trimOrNull(profile?.country);
-
-  if (city && state) return `${city}, ${state}`;
-  if (city) return city;
-  if (state) return state;
-  if (country) return country;
-
-  return null;
+  return buildLocationOptions(profile)[0] ?? null;
 }
 
 function buildSearchTitles(profile: ProfileSnapshot | null) {
@@ -77,27 +71,51 @@ function buildSearchTitles(profile: ProfileSnapshot | null) {
       .filter((value): value is string => Boolean(value))
   );
 
-  if (selectedTitles.length > 0) {
-    return selectedTitles;
-  }
+  const experienceTitles = dedupeValues(
+    (profile?.resume?.experiences ?? [])
+      .map((item) => trimOrNull(item?.title ?? null))
+      .filter((value): value is string => Boolean(value))
+  );
 
-  const recentExperienceTitle = trimOrNull(profile?.resume?.experiences?.[0]?.title ?? null);
-  if (recentExperienceTitle) {
-    return [recentExperienceTitle];
-  }
+  return dedupeValues([...selectedTitles, ...experienceTitles]).slice(0, 5);
+}
 
-  return [];
+function buildSkillTerms(profile: ProfileSnapshot | null) {
+  return dedupeValues([...(profile?.skills ?? []), ...(profile?.resumeSkills ?? [])]).slice(0, 8);
+}
+
+function buildLocationOptions(profile: ProfileSnapshot | null) {
+  const workplaceLocation = readWorkplaceLocation(profile?.workplaceLocations);
+  const city = trimOrNull(profile?.city);
+  const state = trimOrNull(profile?.state);
+  const country = trimOrNull(profile?.country);
+
+  return dedupeValues(
+    [
+      workplaceLocation,
+      city && state ? `${city}, ${state}` : null,
+      city,
+      state,
+      country,
+    ].filter((value): value is string => Boolean(value))
+  );
 }
 
 export function buildSmartMatchSearchConfig(
   profile: ProfileSnapshot | null
 ): SmartMatchSearchConfig {
   const jobTitles = buildSearchTitles(profile);
+  const skillTerms = buildSkillTerms(profile);
+  const locationOptions = buildLocationOptions(profile);
+  const preferredLocation = buildPreferredLocation(profile);
 
   return {
-    searchQuery: jobTitles.length > 0 ? jobTitles.join(" OR ") : "jobs",
+    searchQuery: jobTitles[0] ?? skillTerms[0] ?? "jobs",
     jobTitles,
-    preferredLocation: buildPreferredLocation(profile),
+    skillTerms,
+    preferredLocation,
+    locationOptions,
+    includeRemote: profile?.includeRemote ?? true,
   };
 }
 
@@ -110,7 +128,10 @@ export async function getSmartMatchSearchConfigForUser(
       city: true,
       state: true,
       country: true,
+      includeRemote: true,
       workplaceLocations: true,
+      skills: true,
+      resumeSkills: true,
       jobInterests: {
         orderBy: { id: "asc" },
         take: 5,
@@ -122,7 +143,7 @@ export async function getSmartMatchSearchConfigForUser(
         select: {
           experiences: {
             orderBy: { order: "asc" },
-            take: 1,
+            take: 3,
             select: {
               title: true,
             },

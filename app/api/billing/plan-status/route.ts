@@ -1,12 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
+import { hasActivePlan } from "@/app/lib/billing/hasActivePlan";
 
 export const runtime = "nodejs";
-
-function isActivePlanStatus(planStatus: string | null | undefined) {
-  return planStatus === "active" || planStatus === "trialing";
-}
 
 export async function GET() {
   const session = await auth();
@@ -19,9 +16,6 @@ export async function GET() {
   const profile = await prisma.userProfile.findUnique({
     where: { userId },
     select: {
-      trialSubscriber: true,
-      monthlySubscriber: true,
-      yearlySubscriber: true,
       trialPlanStatus: true,
       monthlyPlanStatus: true,
       yearlyPlanStatus: true,
@@ -29,25 +23,27 @@ export async function GET() {
   });
 
   if (!profile) {
-    return NextResponse.json({ ok: false, error: "Profile not found" }, { status: 404 });
+    return NextResponse.json({
+      ok: true,
+      active: false,
+      planStatus: null,
+      planType: null,
+    });
   }
 
-  const active =
-    profile.trialSubscriber ||
-    profile.monthlySubscriber ||
-    profile.yearlySubscriber ||
-    isActivePlanStatus(profile.trialPlanStatus) ||
-    isActivePlanStatus(profile.monthlyPlanStatus) ||
-    isActivePlanStatus(profile.yearlyPlanStatus);
+  const active = hasActivePlan(profile);
 
   const planStatus =
-    profile.trialPlanStatus ?? profile.monthlyPlanStatus ?? profile.yearlyPlanStatus ?? null;
+    profile.trialPlanStatus ??
+    profile.monthlyPlanStatus ??
+    profile.yearlyPlanStatus ??
+    null;
 
-  const planType = profile.trialSubscriber
+  const planType = profile.trialPlanStatus === "active"
     ? "trial"
-    : profile.monthlySubscriber
+    : profile.monthlyPlanStatus === "active"
       ? "monthly"
-      : profile.yearlySubscriber
+      : profile.yearlyPlanStatus === "active"
         ? "yearly"
         : null;
 

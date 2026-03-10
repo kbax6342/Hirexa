@@ -4,7 +4,9 @@ import LinkedInOutreachClient from "./LinkedInOutreachClient";
 
 export default async function LinkedInOutreachPage() {
   const session = await auth();
-  if (!session?.user) {
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+
+  if (!userId) {
     redirect("/login");
   }
 

@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
+
+import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-import { auth } from "@/auth"; // adjust if needed
 
 export const runtime = "nodejs";
 
 async function getUserId() {
   const session = await auth();
-  // Auth.js sometimes exposes id directly or as session.user.id depending on callbacks
-  const userId = (session?.user as any)?.id as string | undefined;
+  const userId = (session?.user as { id?: string } | undefined)?.id;
   return userId ?? null;
 }
 
@@ -15,25 +15,35 @@ export async function GET() {
   try {
     const userId = await getUserId();
 
-    // ✅ Not logged in -> not completed (no red error)
     if (!userId) {
       return NextResponse.json({ completed: false, data: null }, { status: 200 });
     }
 
     const profile = await prisma.userProfile.findUnique({
-      where: { userId }, // ✅ this is unique in your schema
-      select: { keyQuestions: true, registrationStatus: true },
+      where: { userId },
+      select: {
+        keyQuestions: true,
+        questionsCompleted: true,
+        registrationStatus: true,
+      },
     });
 
-    const keyQuestions = (profile?.keyQuestions as any) ?? null;
-    const completed =
-      !!keyQuestions || profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE";
+    const keyQuestions = (profile?.keyQuestions as Record<string, unknown> | null) ?? null;
+    const completed = Boolean(
+      profile?.questionsCompleted ||
+        keyQuestions ||
+        profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE"
+    );
 
     return NextResponse.json({ completed, data: keyQuestions }, { status: 200 });
-  } catch (err: any) {
-    console.error("GET key-questions failed:", err);
+  } catch (error) {
     return NextResponse.json(
-      { error: err?.message || "Server error in GET key-questions." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Server error in GET key-questions.",
+      },
       { status: 500 }
     );
   }
@@ -72,16 +82,17 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Upsert profile by userId (safe even if profile row doesn't exist yet)
     await prisma.userProfile.upsert({
       where: { userId },
       create: {
         userId,
+        questionsCompleted: true,
         registrationStatus: "KEY_QUESTIONS_COMPLETE",
         keyQuestions: payload,
         ...payload,
       },
       update: {
+        questionsCompleted: true,
         registrationStatus: "KEY_QUESTIONS_COMPLETE",
         keyQuestions: payload,
         ...payload,
@@ -90,10 +101,14 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ ok: true }, { status: 200 });
-  } catch (err: any) {
-    console.error("POST key-questions failed:", err);
+  } catch (error) {
     return NextResponse.json(
-      { error: err?.message || "Server error in POST key-questions." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Server error in POST key-questions.",
+      },
       { status: 500 }
     );
   }

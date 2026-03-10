@@ -139,6 +139,71 @@ function normalizeCustomerId(customer: string | Stripe.Customer | Stripe.Deleted
   return typeof customer === "string" ? customer : customer.id;
 }
 
+async function getUserProfileIdByUserId(userId: string) {
+  const profile = await prisma.userProfile.findUnique({
+    where: { userId },
+    select: { id: true },
+  });
+
+  return profile?.id ?? null;
+}
+
+async function resolveHirePilotUserId(params: {
+  userIdFromMetadata?: string | null;
+  customerEmail?: string | null;
+}) {
+  if (params.userIdFromMetadata) {
+    return params.userIdFromMetadata;
+  }
+
+  if (!params.customerEmail) {
+    return null;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: params.customerEmail },
+    select: { id: true },
+  });
+
+  return user?.id ?? null;
+}
+
+async function syncHirePilotBilling(params: {
+  userId: string;
+  unlimited?: boolean;
+  creditDelta?: number;
+}) {
+  await prisma.userBilling.upsert({
+    where: { userId: params.userId },
+    create: {
+      userId: params.userId,
+      hirePilotUnlimited: params.unlimited ?? false,
+      hirePilotCredits: params.creditDelta ?? 0,
+    },
+    update: {
+      ...(typeof params.unlimited === "boolean"
+        ? { hirePilotUnlimited: params.unlimited }
+        : {}),
+      ...(params.creditDelta
+        ? {
+            hirePilotCredits: {
+              increment: params.creditDelta,
+            },
+          }
+        : {}),
+    },
+  });
+}
+
+async function hasProcessedStripeEvent(eventId: string) {
+  const existing = await prisma.stripePayment.findUnique({
+    where: { stripeEventId: eventId },
+    select: { id: true },
+  });
+
+  return Boolean(existing);
+}
+
 export async function POST(req: Request) {
   const stripeClient = getStripeClient();
 
@@ -171,6 +236,42 @@ export async function POST(req: Request) {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
+    const hirePilotPurchaseType = session.metadata?.hirepilot_purchase_type ?? null;
+    const hirePilotUserId = await resolveHirePilotUserId({
+      userIdFromMetadata: session.metadata?.hirepilot_user_id ?? null,
+      customerEmail:
+        session.customer_details?.email ??
+        session.customer_email ??
+        ((session.customer as Stripe.Customer | null | undefined)?.email ?? null),
+    });
+
+    if (hirePilotPurchaseType === "credit" && !(await hasProcessedStripeEvent(event.id))) {
+      if (hirePilotUserId) {
+        const creditCount = Math.max(1, Number(session.metadata?.hirepilot_credits ?? "1") || 1);
+        await syncHirePilotBilling({ userId: hirePilotUserId, creditDelta: creditCount });
+      }
+
+      await saveStripePayment({
+        stripeEventId: event.id,
+        userProfileId: hirePilotUserId ? await getUserProfileIdByUserId(hirePilotUserId) : null,
+        stripeCustomerId: normalizeCustomerId(session.customer),
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id,
+        status: session.payment_status,
+        amount: session.amount_total ?? null,
+        currency: session.currency ?? null,
+        paidAt: new Date(),
+        metadata: {
+          sessionMetadata: session.metadata,
+          purchaseType: hirePilotPurchaseType,
+        },
+      });
+    }
+
+    if (hirePilotPurchaseType === "subscription" && hirePilotUserId) {
+      await syncHirePilotBilling({ userId: hirePilotUserId, unlimited: true });
+    }
 
     if (session.mode === "subscription" && session.subscription) {
       const subscriptionId = session.subscription as string;
@@ -261,6 +362,19 @@ export async function POST(req: Request) {
       typeof (invoice as any).subscription === "string" ? (invoice as any).subscription : null;
 
     if (subscriptionId) {
+      const subscription = await stripeClient.subscriptions.retrieve(subscriptionId);
+      if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
+        const hirePilotUserId = await resolveHirePilotUserId({
+          userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
+          customerEmail:
+            typeof invoice.customer_email === "string" ? invoice.customer_email : null,
+        });
+
+        if (hirePilotUserId) {
+          await syncHirePilotBilling({ userId: hirePilotUserId, unlimited: true });
+        }
+      }
+
       const userProfileId = await getUserProfileIdFromSubscription(stripeClient, subscriptionId);
       const line = invoice.lines.data[0];
       const linePrice = (line as any)?.price;
@@ -302,6 +416,28 @@ export async function POST(req: Request) {
           billingReason: invoice.billing_reason,
         },
       });
+    }
+  }
+
+  if (
+    event.type === "customer.subscription.updated" ||
+    event.type === "customer.subscription.deleted"
+  ) {
+    const subscription = event.data.object as Stripe.Subscription;
+
+    if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
+      const hirePilotUserId = await resolveHirePilotUserId({
+        userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
+      });
+
+      if (hirePilotUserId) {
+        await syncHirePilotBilling({
+          userId: hirePilotUserId,
+          unlimited: ["active", "trialing", "past_due", "unpaid"].includes(
+            subscription.status ?? ""
+          ),
+        });
+      }
     }
   }
 

@@ -3,33 +3,24 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import type { Job, JobPretty } from "@/app/lib/jobs/types";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import {
   extractCompanyLocationFromDescription,
   prettyFromDescription,
 } from "@/app/lib/jobs/pretty-from-text";
-import { decodeHtml } from "@/app/lib/utils/decodeHtml";
-import { cleanJobText, splitSections } from "@/app/lib/jobs/formatJobText";
+import { buildJobDetailBodyHtml } from "@/app/lib/jobs/detailContent";
 import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
-
-type GreenhouseDetailsResponse = {
-  job: {
-    id: string;
-    source: "greenhouse";
-    title: string;
-    company: string;
-    location: string;
-    posted: string;
-    jobUrl?: string;
-    description?: string;
-    fullDescriptionHtml?: string;
-  };
-};
 
 type SmartMatchesResponse = {
   jobs: Job[];
   nextCursor: string;
+};
+
+type JobDetailsResponse = {
+  job: JobDetail;
+  pretty: JobPretty;
+  fullDetailsUnavailable?: boolean;
 };
 
 /** --------------------------
@@ -55,9 +46,54 @@ function getJobIdentity(job: Pick<Job, "id" | "source">) {
     : `${sourcePrefix}${normalizedId}`;
 }
 
+function getSourceLabel(source: Job["source"]) {
+  switch (source) {
+    case "greenhouse":
+      return "Greenhouse";
+    case "adzuna":
+      return "Adzuna";
+    case "lever":
+      return "Lever";
+    case "ashby":
+      return "Ashby";
+    case "workable":
+      return "Workable";
+    case "usajobs":
+      return "USAJobs";
+    case "remotive":
+      return "Remotive";
+    case "remoteok":
+      return "RemoteOK";
+    default:
+      return source;
+  }
+}
+
+function toJobDetailSummary(job: Job | null): JobDetail | null {
+  if (!job) return null;
+
+  return {
+    ...job,
+    remote: /remote/i.test(job.location || ""),
+    salaryText: job.salary ?? null,
+    applyUrl: job.jobUrl ?? null,
+    externalUrl: job.jobUrl ?? null,
+    descriptionPlain: job.searchText?.trim() || job.description?.trim() || null,
+    descriptionHtml: job.description?.includes("<") ? job.description : null,
+    detailLevel: "summary",
+    providerHasFullDetails: false,
+    metadata: {
+      source: job.source,
+    },
+  };
+}
+
 export default function JobMatchesLayout() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [includeRemote, setIncludeRemote] = useState(true);
   const [selectedId, setSelectedId] = useState<string>("");
 
   type ActionState = {
@@ -77,20 +113,26 @@ export default function JobMatchesLayout() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [selectedDetails, setSelectedDetails] = useState<Job | null>(null);
-  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [selectedDetails, setSelectedDetails] = useState<JobDetail | null>(null);
 
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
 
   const seen = useRef<Set<string>>(new Set());
+  const hadJobParam = useRef(false);
+  const detailCache = useRef<Map<string, JobDetailsResponse>>(new Map());
+  const selectedJobParam = searchParams.get("job")?.trim() || "";
 
   const selectedSummary = useMemo(
     () => jobs.find((j) => j.id === selectedId) ?? null,
     [jobs, selectedId]
   );
+  const selectedSummaryDetail = useMemo(
+    () => toJobDetailSummary(selectedSummary),
+    [selectedSummary]
+  );
 
-  const right = selectedDetails ?? selectedSummary;
+  const right = selectedDetails ?? selectedSummaryDetail;
 
   const descriptionSource = String(right?.description ?? "");
   const parsedMeta = useMemo(
@@ -108,6 +150,24 @@ export default function JobMatchesLayout() {
       ? right.location
       : parsedMeta.location ?? "Unknown location";
 
+  function replaceSelectedJobParam(jobId: string | null) {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (jobId) {
+      nextParams.set("job", jobId);
+    } else {
+      nextParams.delete("job");
+    }
+
+    const nextQuery = nextParams.toString();
+    const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
+
+  function handleSelectJob(jobId: string) {
+    setSelectedId(jobId);
+    replaceSelectedJobParam(jobId);
+  }
+
   async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
     if (loadingMore) return;
 
@@ -122,6 +182,7 @@ export default function JobMatchesLayout() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const url = new URL("/api/jobs/smart-matches", window.location.origin);
         url.searchParams.set("limit", String(LIMIT));
+        url.searchParams.set("includeRemote", includeRemote ? "1" : "0");
         if (requestCursor) {
           url.searchParams.set("cursor", requestCursor);
         }
@@ -158,7 +219,12 @@ export default function JobMatchesLayout() {
       setNextCursor(responseCursor);
       setJobs((prev) => (options?.reset ? filtered : [...prev, ...filtered]));
 
-      if ((options?.reset || !selectedId) && filtered[0]?.id) {
+      if (selectedJobParam) {
+        const selectedFromUrl = filtered.find((job) => job.id === selectedJobParam);
+        if (selectedFromUrl?.id) {
+          setSelectedId(selectedFromUrl.id);
+        }
+      } else if ((options?.reset || !selectedId) && filtered[0]?.id) {
         setSelectedId(filtered[0].id);
       }
     } catch (error) {
@@ -177,13 +243,36 @@ export default function JobMatchesLayout() {
     setJobs([]);
     setSelectedId("");
     setSelectedDetails(null);
-    setDetailsError(null);
     setPretty({ sections: [], highlights: [] });
     setFormatted(null);
     setNextCursor(null);
     void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [includeRemote]);
+
+  useEffect(() => {
+    console.log("[SMART_MATCHES] selected job changed", {
+      jobId: selectedJobParam || null,
+    });
+
+    if (selectedJobParam) {
+      hadJobParam.current = true;
+      setSelectedId((current) =>
+        current === selectedJobParam ? current : selectedJobParam
+      );
+      return;
+    }
+
+    if (!hadJobParam.current) {
+      return;
+    }
+
+    hadJobParam.current = false;
+    setSelectedId("");
+    setSelectedDetails(null);
+    setPretty({ sections: [], highlights: [] });
+    setFormatted(null);
+  }, [selectedJobParam]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -191,78 +280,131 @@ export default function JobMatchesLayout() {
     let cancelled = false;
 
     (async () => {
+      const selected = jobs.find((job) => job.id === selectedId) ?? null;
+      const selectedSummaryJob = toJobDetailSummary(selected);
+      const cachedDetail = detailCache.current.get(selectedId);
+
+      if (selectedSummaryJob) {
+        setSelectedDetails(selectedSummaryJob);
+        setPretty(
+          prettyFromDescription(
+            String(
+              selectedSummaryJob.descriptionHtml ??
+                selectedSummaryJob.descriptionPlain ??
+                selectedSummaryJob.description ??
+                ""
+            )
+          )
+        );
+      }
+
+      if (cachedDetail) {
+        setSelectedDetails(cachedDetail.job);
+        setPretty(cachedDetail.pretty);
+        if (cachedDetail.fullDetailsUnavailable) {
+          console.warn("[JOB_DETAILS] using partial cached detail", {
+            jobId: selectedId,
+            source: cachedDetail.job.source,
+          });
+        }
+        setFormatted(null);
+        return;
+      }
+
       setDetailsLoading(true);
-      setDetailsError(null);
       setFormatted(null);
 
       try {
-        const selected = jobs.find((job) => job.id === selectedId) ?? null;
-
-        if (selected?.source === "adzuna") {
-          setSelectedDetails(selected);
-          setPretty(prettyFromDescription(String(selected.description ?? "")));
-          return;
-        }
+        const requestInit = selected
+          ? {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ job: selected }),
+            }
+          : undefined;
 
         const res = await fetch(
-          `/api/jobs/greenhouse/details?id=${encodeURIComponent(selectedId)}`,
-          { cache: "no-store" }
+          selected
+            ? "/api/jobs/details"
+            : `/api/jobs/details?id=${encodeURIComponent(selectedId)}`,
+          {
+            cache: "no-store",
+            ...(requestInit ?? {}),
+          }
         );
 
-        const data = (await res.json()) as Partial<GreenhouseDetailsResponse> & {
+        const data = (await res.json()) as Partial<JobDetailsResponse> & {
           error?: string;
         };
 
-        if (!res.ok) {
+        if (!res.ok || !data?.job || !data.pretty) {
           throw new Error(data?.error ?? "Failed to load job details");
         }
         if (cancelled) return;
 
-        const job = (data as GreenhouseDetailsResponse).job;
-
-        const normalized: Job = {
-          id: job.id,
-          source: "greenhouse",
-          title: job.title ?? "Untitled role",
-          company: job.company ?? displayCompany,
-          location: job.location ?? displayLocation,
-          posted: job.posted ?? "",
-          jobUrl: job.jobUrl ?? undefined,
-          description: job.description ?? job.fullDescriptionHtml ?? "",
-          badge: undefined,
-          salary: undefined,
-        };
-
-        setSelectedDetails(normalized);
-
-        const htmlOrText = String(job.fullDescriptionHtml ?? job.description ?? "");
-
-        setPretty(prettyFromDescription(htmlOrText));
-
-        try {
-          const fmtRes = await fetch("/api/jobs/format", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ jobId: selectedId, text: htmlOrText }),
+        const resolved = data as JobDetailsResponse;
+        detailCache.current.set(selectedId, resolved);
+        setSelectedDetails(resolved.job);
+        setPretty(resolved.pretty);
+        if (resolved.fullDetailsUnavailable) {
+          console.warn("[JOB_DETAILS] rendering best available partial detail", {
+            jobId: selectedId,
+            source: resolved.job.source,
           });
+        }
 
-          if (fmtRes.ok) {
-            const fmtData = await fmtRes.json();
-            if (!cancelled && fmtData?.formatted) {
-              setFormatted(fmtData.formatted as FormattedJob);
+        const htmlOrText = String(
+          resolved.job.descriptionHtml ??
+            resolved.job.contentHtml ??
+            resolved.job.content ??
+            resolved.job.descriptionPlain ??
+            resolved.job.description ??
+            ""
+        );
+
+        if (resolved.job.source === "greenhouse" && htmlOrText) {
+          try {
+            const fmtRes = await fetch("/api/jobs/format", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ jobId: selectedId, text: htmlOrText }),
+            });
+
+            if (fmtRes.ok) {
+              const fmtData = await fmtRes.json();
+              if (!cancelled && fmtData?.formatted) {
+                setFormatted(fmtData.formatted as FormattedJob);
+              }
             }
+          } catch {
+            // ignore formatter errors
           }
-        } catch {
-          // ignore formatter errors
         }
       } catch (e: unknown) {
         if (!cancelled) {
           const message = e instanceof Error ? e.message : "Failed to load details";
-          setDetailsError(message);
-
-          const selected = jobs.find((job) => job.id === selectedId) ?? null;
-          setSelectedDetails(selected);
-          setPretty(prettyFromDescription(String(selected?.description ?? "")));
+          console.warn("[JOB_DETAILS] detail fetch failed, falling back silently", {
+            jobId: selectedId,
+            error: message,
+          });
+          if (selectedSummaryJob) {
+            setSelectedDetails(selectedSummaryJob);
+            setPretty(
+              prettyFromDescription(
+                String(
+                  selectedSummaryJob.descriptionHtml ??
+                    selectedSummaryJob.contentHtml ??
+                    selectedSummaryJob.content ??
+                    selectedSummaryJob.descriptionPlain ??
+                    selectedSummaryJob.description ??
+                    ""
+                )
+              )
+            );
+          } else {
+            setSelectedDetails(null);
+            setPretty({ sections: [], highlights: [] });
+          }
         }
       } finally {
         if (!cancelled) {
@@ -397,8 +539,13 @@ export default function JobMatchesLayout() {
     }
   };
 
-  const htmlToRender = decodeHtml(String(selectedDetails?.description || ""));
-  const parsedSections = splitSections(cleanJobText(htmlToRender));
+  const detailBodyHtml = useMemo(() => buildJobDetailBodyHtml(right), [right]);
+  const showMinimalFallback =
+    !detailsLoading &&
+    !detailBodyHtml &&
+    !formatted &&
+    pretty.sections.length === 0 &&
+    pretty.highlights.length === 0;
 
   return (
     <div className="mt-[59]">
@@ -413,6 +560,32 @@ export default function JobMatchesLayout() {
                 searching. Simply select your favorites — we’ll help fill out the
                 applications.
               </p>
+              <div className="mt-3 flex items-center gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                  Remote jobs
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIncludeRemote((prev) => !prev)}
+                  aria-pressed={includeRemote}
+                  className={[
+                    "relative inline-flex h-7 w-14 items-center rounded-full border transition",
+                    includeRemote
+                      ? "border-blue-600 bg-blue-600"
+                      : "border-gray-300 bg-gray-200",
+                  ].join(" ")}
+                >
+                  <span
+                    className={[
+                      "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition",
+                      includeRemote ? "translate-x-8" : "translate-x-1",
+                    ].join(" ")}
+                  />
+                </button>
+                <span className="text-xs text-gray-600">
+                  {includeRemote ? "On" : "Off"}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -435,18 +608,14 @@ export default function JobMatchesLayout() {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setSelectedId(job.id)}
+                          onClick={() => handleSelectJob(job.id)}
                           className="truncate text-sm font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-800"
                         >
                           {job.title}
                         </button>
 
                         <span className="ml-1 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-green-700">
-                          {job.source === "greenhouse"
-                            ? "Greenhouse"
-                            : job.source === "adzuna"
-                            ? "Adzuna"
-                            : job.source}
+                          {getSourceLabel(job.source)}
                         </span>
 
                         {job.badge ? (
@@ -644,8 +813,32 @@ export default function JobMatchesLayout() {
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
               {detailsLoading ? (
                 <JobDetailsSkeleton />
-              ) : detailsError ? (
-                <div className="text-sm text-red-600">{detailsError}</div>
+              ) : detailBodyHtml ? (
+                <div
+                  className="
+                    prose max-w-none
+                    text-gray-700
+                    prose-p:mb-4
+                    prose-p:leading-7
+                    prose-strong:text-gray-900
+                    prose-em:text-gray-700
+                    prose-ul:mb-5
+                    prose-ul:mt-3
+                    prose-ol:mb-5
+                    prose-ol:mt-3
+                    prose-li:mb-2
+                    prose-li:leading-7
+                    prose-li:marker:text-blue-500
+                    prose-h3:mb-3
+                    prose-h3:mt-8
+                    prose-h3:text-base
+                    prose-h3:font-semibold
+                    prose-a:text-blue-600
+                    prose-a:no-underline
+                    hover:prose-a:underline
+                  "
+                  dangerouslySetInnerHTML={{ __html: detailBodyHtml }}
+                />
               ) : formatted ? (
                 <div className="space-y-6">
                   {formatted.salary ? (
@@ -702,48 +895,83 @@ export default function JobMatchesLayout() {
                     </div>
                   ) : null}
                 </div>
-              ) : parsedSections.length > 0 ? (
+              ) : pretty.sections.length > 0 || pretty.highlights.length > 0 ? (
                 <div className="space-y-6">
-                  {parsedSections.map((section, idx) => (
-                    <div key={idx}>
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        {section.title}
-                      </h3>
-
-                      <ul className="mt-2 list-disc space-y-2 pl-5 text-sm text-gray-700 marker:text-blue-500">
-                        {section.bullets.map((b, i) => (
-                          <li key={i}>{b}</li>
-                        ))}
-                      </ul>
+                  {pretty.highlights.length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {pretty.highlights.map((highlight) => (
+                        <div
+                          key={`${highlight.label}-${highlight.value}`}
+                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+                        >
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            {highlight.label}
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-gray-900">
+                            {highlight.value}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : null}
+
+                  <div className="space-y-6">
+                    {pretty.sections.map((section, idx) => (
+                      <section
+                        key={`${section.title}-${idx}`}
+                        className="rounded-xl border border-gray-200 bg-white p-4"
+                      >
+                        <h3 className="text-sm font-semibold text-gray-900">
+                          {section.title}
+                        </h3>
+
+                        {section.kind === "bullets" && section.bullets?.length ? (
+                          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-gray-700 marker:text-blue-500">
+                            {section.bullets.map((bullet, bulletIndex) => (
+                              <li key={`${section.title}-${bulletIndex}`}>{bullet}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+
+                        {"paragraphs" in section && section.paragraphs?.length ? (
+                          <div className="mt-2 space-y-2">
+                            {section.paragraphs.map((paragraph, paragraphIndex) => (
+                              <p
+                                key={`${section.title}-${paragraphIndex}`}
+                                className="text-sm text-gray-700"
+                              >
+                                {paragraph}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {section.kind === "callout" && section.callout ? (
+                          <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                            {section.callout.label ? (
+                              <span className="mr-2 font-semibold">
+                                {section.callout.label}
+                              </span>
+                            ) : null}
+                            <span>{section.callout.value}</span>
+                          </div>
+                        ) : null}
+                      </section>
+                    ))}
+                  </div>
                 </div>
+              ) : showMinimalFallback ? (
+                <section className="rounded-xl border border-gray-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Job Description
+                  </h3>
+                  <p className="mt-3 text-sm leading-7 text-gray-700">
+                    Open the original posting for the latest full description and
+                    application instructions.
+                  </p>
+                </section>
               ) : (
-                <div
-                  className="
-                    prose max-w-none
-                    text-gray-700
-                    prose-p:mb-4
-                    prose-p:leading-relaxed
-                    prose-strong:mt-6
-                    prose-strong:mb-2
-                    prose-strong:block
-                    prose-strong:text-base
-                    prose-strong:text-gray-900
-                    prose-ul:mt-3
-                    prose-ul:mb-6
-                    prose-li:mb-2
-                    prose-li:marker:text-blue-500
-                    prose-h3:mt-8
-                    prose-h3:mb-3
-                    prose-h3:text-lg
-                    prose-h3:font-semibold
-                    prose-a:text-blue-600
-                    prose-a:no-underline
-                    hover:prose-a:underline
-                  "
-                  dangerouslySetInnerHTML={{ __html: htmlToRender }}
-                />
+                <div />
               )}
             </div>
           </div>

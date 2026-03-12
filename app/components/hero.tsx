@@ -1,11 +1,9 @@
 "use client"
 
-import { Button } from "../components/ui/button"
-import { ArrowRight, Check } from "lucide-react"
-import { startOnboarding } from "../api/actions/startOnboarding";
-import { useTransition } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import { ArrowRight, Check } from "lucide-react";
+
+import { Button } from "../components/ui/button";
 
 const jobCards = [
   {
@@ -36,96 +34,43 @@ const jobCards = [
     textColor: "text-foreground",
     role: "Product Designer",
   },
-]
+];
 
-export function Hero() {
-  const { status } = useSession();
-  const isAuthed = status === "authenticated";
-  const [isPending, startTransition] = useTransition();
+export function Hero({ href }: { href: string }) {
   return (
-    <section className="relative overflow-hidden pt-28 pb-20 md:pt-40 md:pb-32">
-      {/* Background glows */}
+    <section className="relative overflow-hidden pb-20 pt-28 md:pb-32 md:pt-40">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute top-1/4 left-1/3 h-[500px] w-[600px] rounded-full bg-primary/8 blur-[120px]" />
+        <div className="absolute left-1/3 top-1/4 h-[500px] w-[600px] rounded-full bg-primary/8 blur-[120px]" />
         <div className="absolute bottom-0 right-1/4 h-[400px] w-[500px] rounded-full bg-accent/6 blur-[100px]" />
       </div>
 
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
-          {/* Left content */}
           <div>
-            <h1 className="font-heading text-4xl font-bold leading-[1.1] tracking-tight text-foreground sm:text-5xl md:text-6xl text-balance">
+            <h1 className="font-heading text-4xl font-bold leading-[1.1] tracking-tight text-foreground text-balance sm:text-5xl md:text-6xl">
               Cast a wider net{" "}
-              <span className="text-muted-foreground  ">&mdash;</span>{" "}
-            
-              <span className="text-accent text-sky-500">  10x your{" "} job applications</span>
+              <span className="text-muted-foreground">&mdash;</span>{" "}
+              <span className="text-accent text-sky-500">10x your job applications</span>
             </h1>
 
             <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">
-              Our AI-powered job search automation platform continuously finds
-              and applies to relevant job openings until you{"'"}re hired.
+              Our AI-powered job search automation platform continuously finds and
+              applies to relevant job openings until you&apos;re hired.
             </p>
 
             <div className="mt-10">
-            {isAuthed ? (
               <Button
                 asChild
                 size="lg"
-                className="
-                  bg-sky-500 text-white
-                  hover:bg-sky-400
-                  h-12 rounded-full px-8
-                  text-base font-semibold
-                  shadow-lg shadow-sky-500/25
-                  transition-all duration-200
-                  active:scale-[0.97]
-                "
+                className="bg-sky-500 text-white hover:bg-sky-400 h-12 rounded-full px-8 text-base font-semibold shadow-lg shadow-sky-500/25 transition-all duration-200 active:scale-[0.97]"
               >
-                <Link href="/dashboard">
+                <Link href={href}>
                   Get Started
                   <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                 </Link>
               </Button>
-            ) : (
-              <form
-                action={() =>
-                  startTransition(async () => {
-                    await startOnboarding();
-                  })
-                }
-              >
-                <Button
-                  type="submit"
-                  size="lg"
-                  disabled={isPending}
-                  className="
-                    bg-sky-500 text-white
-                    hover:bg-sky-400
-                    h-12 rounded-full px-8
-                    text-base font-semibold
-                    shadow-lg shadow-sky-500/25
-                    transition-all duration-200
-                    active:scale-[0.97]
-                    disabled:opacity-70 disabled:cursor-not-allowed
-                  "
-                >
-                  {isPending ? (
-                    <span className="flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                      Getting started…
-                    </span>
-                  ) : (
-                    <>
-                      Get Started
-                      <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-                    </>
-                  )}
-                </Button>
-              </form>
-            )}
             </div>
 
-            {/* Stats */}
             <div className="mt-12 flex flex-wrap items-center gap-8">
               {[
                 { value: "10x", label: "More applications" },
@@ -142,10 +87,8 @@ export function Hero() {
             </div>
           </div>
 
-          {/* Right side - floating job cards */}
           <div className="relative hidden lg:block">
             <div className="relative mx-auto w-full max-w-md">
-              {/* Background workspace image placeholder - using a styled container */}
               <div className="relative rounded-2xl border border-border/50 bg-secondary/30 p-8 backdrop-blur-sm">
                 <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/5 to-accent/5" />
                 <div className="relative flex flex-col gap-4">
@@ -179,7 +122,6 @@ export function Hero() {
         </div>
       </div>
 
-      {/* Bottom wave decoration */}
       <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-32">
         <svg
           viewBox="0 0 1440 120"
@@ -202,5 +144,5 @@ export function Hero() {
         </svg>
       </div>
     </section>
-  )
+  );
 }

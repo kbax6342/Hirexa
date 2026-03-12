@@ -108,6 +108,22 @@ function extractMainDescription(html: string) {
   return cleanText(cut);
 }
 
+function extractMainDescriptionHtml(html: string) {
+  const markerIdx = html.search(/>\s*Description\s*</i);
+  if (markerIdx === -1) return "";
+
+  const slice = html.slice(markerIdx, markerIdx + 60000);
+  const footerMatch = slice.search(
+    /(Jobseekers|Recruiters|Country selection|Terms & Conditions|Adzuna|&copy;|Â©)/i
+  );
+  const chunk = (footerMatch === -1 ? slice : slice.slice(0, footerMatch))
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .trim();
+
+  return chunk.length > 200 ? `<div>${chunk}</div>` : "";
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -138,6 +154,7 @@ export async function GET(req: Request) {
 
     const title = extractTitle(html);
     const location = extractLocationFromText(title);
+    const descriptionHtml = extractMainDescriptionHtml(html);
     const description = extractMainDescription(html);
 
     return NextResponse.json({
@@ -145,6 +162,7 @@ export async function GET(req: Request) {
       title,
       location,
       heading: `Full Description\n${title}`,
+      descriptionHtml,
       description,
       detailsUrl,
     });

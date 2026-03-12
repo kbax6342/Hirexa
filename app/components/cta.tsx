@@ -1,13 +1,9 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { auth } from "@/auth";
 
 import { Button } from "../components/ui/button";
 
-export async function CTA() {
-  const session = await auth();
-  const href = session?.user ? "/dashboard" : "/onboarding/resume";
-
+export function CTA({ href }: { href: string }) {
   return (
     <section className="relative py-24 md:py-32">
       <div className="mx-auto max-w-7xl px-6">

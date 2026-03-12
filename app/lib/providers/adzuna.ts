@@ -1,4 +1,4 @@
-import type { Job } from "../jobs/types";
+import type { Job, JobDetail } from "../jobs/types";
 
 type AdzunaSearchResponse = {
   results: Array<{
@@ -125,7 +125,7 @@ export async function fetchAdzunaJobs(args: {
 export async function fetchAdzunaJobDetails(
   fullId: string,
   origin: string
-): Promise<Job | null> {
+): Promise<JobDetail | null> {
   const [, providerId] = fullId.split(":");
   if (!providerId) return null;
 
@@ -151,5 +151,9 @@ export async function fetchAdzunaJobDetails(
     salary: data.salary,
     jobUrl: data.jobUrl,
     description: data.description ?? "",
+    descriptionHtml: data.descriptionHtml ?? null,
+    descriptionPlain: data.description ?? null,
+    summary: data.description ?? null,
+    snippet: data.description ?? null,
   };
 }

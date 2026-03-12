@@ -39,14 +39,46 @@ function boardToCompanyLabel(board: string) {
   return LABEL_OVERRIDES[board] ?? toTitleCaseSlug(board);
 }
 
-async function fetchGreenhouseJob(jobId: string): Promise<SmartMatchJob | null> {
+function decodeGreenhouseJobId(jobId: string) {
+  if (jobId.startsWith("greenhouse:")) {
+    const encoded = jobId.slice("greenhouse:".length);
+
+    try {
+      const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+      const [board, rawId] = decoded.split("::");
+      if (!board || !rawId) return null;
+
+      return {
+        board,
+        rawId,
+        normalizedId: jobId,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   if (!jobId.includes(":")) return null;
   const [board, rawId] = jobId.split(":");
   if (!board || !rawId) return null;
 
+  return {
+    board,
+    rawId,
+    normalizedId: `greenhouse:${Buffer.from(
+      `${board}::${rawId}`,
+      "utf8"
+    ).toString("base64url")}`,
+  };
+}
+
+async function fetchGreenhouseJob(jobId: string): Promise<SmartMatchJob | null> {
+  const decoded = decodeGreenhouseJobId(jobId);
+  if (!decoded) return null;
+
   const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
-    board
-  )}/jobs/${encodeURIComponent(rawId)}`;
+    decoded.board
+  )}/jobs/${encodeURIComponent(decoded.rawId)}?content=true`;
 
   const res = await fetch(apiUrl, {
     headers: { accept: "application/json" },
@@ -58,10 +90,10 @@ async function fetchGreenhouseJob(jobId: string): Promise<SmartMatchJob | null> 
   const data = (await res.json()) as GreenhouseJobDetails;
 
   return {
-    id: `${board}:${String(data.id ?? rawId)}`,
+    id: decoded.normalizedId,
     source: "greenhouse",
     title: data.title ?? "Untitled role",
-    company: boardToCompanyLabel(board),
+    company: boardToCompanyLabel(decoded.board),
     location: data.location?.name ?? "Unknown location",
     jobUrl: data.absolute_url ?? null,
   };

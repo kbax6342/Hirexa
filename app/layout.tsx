@@ -29,6 +29,7 @@ export const metadata = {
   'Hirexa uses intelligent automation to help you discover better jobs, apply effortlessly, and stand out at every stage of the hiring process.',
   icons: {
     icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
     apple: "/apple-touch-icon.png",
   },
 };

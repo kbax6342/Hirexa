@@ -36,6 +36,17 @@ type Result = {
 
 type Tone = "professional" | "conversational" | "enthusiastic";
 type TabKey = "coverLetter" | "updatedResume" | "preInterview" | "postInterview";
+type PlanStatusResponse = {
+  ok?: boolean;
+  userId?: string | null;
+  active?: boolean;
+  trialSubscriber?: boolean;
+  monthlySubscriber?: boolean;
+  yearlySubscriber?: boolean;
+  trialPlanStatus?: string | null;
+  monthlyPlanStatus?: string | null;
+  yearlyPlanStatus?: string | null;
+};
 
 const textEncoder = new TextEncoder();
 
@@ -398,11 +409,6 @@ function JobToolsGeneratePageContent() {
     setError(null);
     setResult(null);
 
-    if (!canSubmit && !hasFallbackText) {
-      setError("Please paste a valid http(s) job posting link or provide at least 150 characters in the fallback text field.");
-      return;
-    }
-
     setLoading(true);
     try {
       const planRes = await fetch("/api/billing/plan-status", { cache: "no-store" });
@@ -415,12 +421,40 @@ function JobToolsGeneratePageContent() {
         throw new Error("Unable to verify subscription status.");
       }
 
-      const planData = await planRes.json();
-      if (!planData?.active) {
+      const planData = (await planRes.json()) as PlanStatusResponse;
+      const hasPaidAccess =
+        planData?.trialSubscriber === true ||
+        planData?.monthlySubscriber === true ||
+        planData?.yearlySubscriber === true ||
+        planData?.trialPlanStatus === "active" ||
+        planData?.monthlyPlanStatus === "active" ||
+        planData?.yearlyPlanStatus === "active";
+
+      console.log("[AI_GENERATE] access check", {
+        userId: planData?.userId ?? null,
+        trialSubscriber: planData?.trialSubscriber ?? false,
+        monthlySubscriber: planData?.monthlySubscriber ?? false,
+        yearlySubscriber: planData?.yearlySubscriber ?? false,
+        trialPlanStatus: planData?.trialPlanStatus ?? null,
+        monthlyPlanStatus: planData?.monthlyPlanStatus ?? null,
+        yearlyPlanStatus: planData?.yearlyPlanStatus ?? null,
+        hasPaidAccess,
+      });
+
+      if (!hasPaidAccess) {
         const params = new URLSearchParams();
         params.set("source", "job-tools-generate");
         if (url.trim()) params.set("jobUrl", url.trim());
+        console.log("[AI_GENERATE] redirecting unpaid user", {
+          userId: planData?.userId ?? null,
+          destination: `/plans?${params.toString()}`,
+        });
         window.location.href = `/plans?${params.toString()}`;
+        return;
+      }
+
+      if (!canSubmit && !hasFallbackText) {
+        setError("Please paste a valid http(s) job posting link or provide at least 150 characters in the fallback text field.");
         return;
       }
 
@@ -517,7 +551,7 @@ function JobToolsGeneratePageContent() {
             <button
               type="button"
               onClick={onGenerate}
-              disabled={(!canSubmit && !hasFallbackText) || loading}
+              disabled={loading}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-sm "
             >
               {loading ? <ArrowPathIcon className="h-5 w-5 animate-spin" /> : <SparklesIcon className="h-5 w-5" />}
@@ -642,7 +676,7 @@ function JobToolsGeneratePageContent() {
               <button
                 type="button"
                 onClick={onGenerate}
-                disabled={(!canSubmit && !hasFallbackText) || loading}
+                disabled={loading}
                 className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 <ArrowPathIcon className={["h-4 w-4", loading ? "animate-spin" : ""].join(" ")} />

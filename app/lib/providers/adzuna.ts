@@ -145,15 +145,43 @@ export async function fetchAdzunaJobDetails(
     id: `adzuna:${providerId}`,
     source: "adzuna",
     title: data.title ?? "Untitled role",
-    company: data.company ?? "Unknown company",
+    company: data.company ?? data.companyName ?? "Unknown company",
     location: data.location ?? "Unknown location",
     posted: data.posted ?? "Recently",
-    salary: data.salary,
-    jobUrl: data.jobUrl,
-    description: data.description ?? "",
+    remote:
+      data.remote === "Remote" ||
+      /remote/i.test(String(data.remote ?? "")) ||
+      /remote/i.test(String(data.location ?? ""))
+        ? true
+        : undefined,
+    salary: data.salary ?? data.compensation ?? undefined,
+    salaryText: data.salaryText ?? data.salary ?? data.compensation ?? null,
+    salaryMin:
+      typeof data.salaryMin === "number" ? data.salaryMin : null,
+    salaryMax:
+      typeof data.salaryMax === "number" ? data.salaryMax : null,
+    employmentType: data.employmentType ?? data.schedule ?? null,
+    jobUrl: data.jobUrl ?? data.url,
+    applyUrl: data.applyUrl ?? data.jobUrl ?? data.url ?? null,
+    externalUrl: data.externalUrl ?? data.jobUrl ?? data.url ?? null,
+    description: data.descriptionText ?? data.description ?? "",
     descriptionHtml: data.descriptionHtml ?? null,
-    descriptionPlain: data.description ?? null,
-    summary: data.description ?? null,
-    snippet: data.description ?? null,
+    contentHtml: data.contentHtml ?? data.descriptionHtml ?? null,
+    content: data.content ?? data.descriptionText ?? data.description ?? null,
+    descriptionPlain: data.descriptionText ?? data.description ?? null,
+    summary: data.summary ?? data.descriptionText ?? data.description ?? null,
+    snippet: data.snippet ?? data.descriptionText ?? data.description ?? null,
+    metadata:
+      data.metadata && typeof data.metadata === "object"
+        ? data.metadata
+        : {
+            source: "Adzuna",
+            category:
+              typeof data.category === "string" ? data.category : null,
+            postedLabel:
+              typeof data.postedLabel === "string" ? data.postedLabel : null,
+            remote:
+              typeof data.remote === "string" ? data.remote : null,
+          },
   };
 }

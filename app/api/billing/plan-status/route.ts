@@ -16,6 +16,9 @@ export async function GET() {
   const profile = await prisma.userProfile.findUnique({
     where: { userId },
     select: {
+      trialSubscriber: true,
+      monthlySubscriber: true,
+      yearlySubscriber: true,
       trialPlanStatus: true,
       monthlyPlanStatus: true,
       yearlyPlanStatus: true,
@@ -25,8 +28,15 @@ export async function GET() {
   if (!profile) {
     return NextResponse.json({
       ok: true,
+      userId,
       active: false,
+      trialSubscriber: false,
+      monthlySubscriber: false,
+      yearlySubscriber: false,
       planStatus: null,
+      trialPlanStatus: null,
+      monthlyPlanStatus: null,
+      yearlyPlanStatus: null,
       planType: null,
     });
   }
@@ -49,8 +59,15 @@ export async function GET() {
 
   return NextResponse.json({
     ok: true,
+    userId,
     active,
+    trialSubscriber: profile.trialSubscriber ?? false,
+    monthlySubscriber: profile.monthlySubscriber ?? false,
+    yearlySubscriber: profile.yearlySubscriber ?? false,
     planStatus,
+    trialPlanStatus: profile.trialPlanStatus,
+    monthlyPlanStatus: profile.monthlyPlanStatus,
+    yearlyPlanStatus: profile.yearlyPlanStatus,
     planType,
   });
 }

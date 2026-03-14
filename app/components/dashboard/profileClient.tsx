@@ -18,13 +18,20 @@ type AutofillButtonProps = {
 export default function AutofillButton({ job }: AutofillButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleAutofill() {
     try {
       setLoading(true);
+      setError(null);
 
       const res = await fetch("/api/billing/plan-status", { method: "GET" });
       const data = await res.json();
+
+      if (data?.pending) {
+        setError("We’re confirming your subscription. Please try auto-fill again in a moment.");
+        return;
+      }
 
       if (!data?.ok || !data.active) {
         router.push("/plans?source=autofill");
@@ -48,8 +55,9 @@ export default function AutofillButton({ job }: AutofillButtonProps) {
       }
 
       router.push(`/dashboard/application/${applyData.applicationId}/audit`);
-    } catch {
-      router.push("/plans?source=autofill");
+    } catch (error) {
+      console.error("[AUTOFILL] access check failed", error);
+      setError("Unable to verify your subscription right now. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -65,6 +73,7 @@ export default function AutofillButton({ job }: AutofillButtonProps) {
       >
         {loading ? "...applying" : "+ Auto-fill application"}
       </button>
+      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
     </div>
   );
 }

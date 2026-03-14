@@ -126,7 +126,19 @@ export async function fetchAdzunaJobDetails(
   fullId: string,
   origin: string
 ): Promise<JobDetail | null> {
-  const [, providerId] = fullId.split(":");
+  const [, rawProviderId] = fullId.split(":", 2);
+  const providerId = (() => {
+    if (!rawProviderId) return "";
+
+    try {
+      const decoded = Buffer.from(rawProviderId, "base64url").toString("utf8");
+      const [decodedId] = decoded.split("::").filter(Boolean);
+      return decodedId?.trim() || rawProviderId.trim();
+    } catch {
+      return rawProviderId.trim();
+    }
+  })();
+
   if (!providerId) return null;
 
   const res = await fetch(

@@ -236,7 +236,7 @@ export default function Step2ResumeClient() {
         </div>
 
         <div className="mt-10 flex items-center justify-between">
-          <Link href="/questions/step2" className="rounded-full border px-6 py-3 text-sm font-semibold text-black">
+          <Link href="/resume" className="rounded-full border px-6 py-3 text-sm font-semibold text-black">
             Back
           </Link>
 

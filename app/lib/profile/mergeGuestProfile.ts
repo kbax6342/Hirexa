@@ -1,4 +1,9 @@
 import type { Prisma } from "@prisma/client";
+import type { prisma } from "@/app/lib/prisma";
+import {
+  deriveSafeLocationSearchFields,
+  resolveEncryptedDobValue,
+} from "@/app/lib/profile/privateProfileFields";
 
 type MergeGuestProfileArgs = {
   userId: string;
@@ -134,7 +139,7 @@ function fingerprintJobApplication(value: {
 }
 
 export async function mergeGuestProfileIntoUserProfile(
-  tx: Prisma.TransactionClient,
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   args: MergeGuestProfileArgs
 ): Promise<MergeGuestProfileResult> {
   const guestProfile = await tx.userProfile.findUnique({
@@ -186,6 +191,24 @@ export async function mergeGuestProfileIntoUserProfile(
     };
   }
 
+  const mergedAddress = preferText(userProfile.address, guestProfile.address);
+  const mergedCity = preferText(userProfile.city, guestProfile.city);
+  const mergedPostalCode = preferText(userProfile.postalCode, guestProfile.postalCode);
+  const mergedState = preferText(userProfile.state, guestProfile.state);
+  const mergedLocationSearch = deriveSafeLocationSearchFields({
+    city: mergedCity,
+    citySearch: userProfile.citySearch ?? guestProfile.citySearch,
+    state: mergedState,
+    stateSearch: userProfile.stateSearch ?? guestProfile.stateSearch,
+    postalCode: mergedPostalCode,
+    postalCodeSearch: userProfile.postalCodeSearch ?? guestProfile.postalCodeSearch,
+  });
+  const mergedDobEncrypted =
+    resolveEncryptedDobValue({
+      dobEncrypted: userProfile.dobEncrypted ?? guestProfile.dobEncrypted,
+      dob: userProfile.dob ?? guestProfile.dob,
+    }) ?? undefined;
+
   const mergedProfileData: Prisma.UserProfileUpdateInput = {
     guestId: null,
     skills: mergeStringArrays(userProfile.skills, guestProfile.skills),
@@ -200,10 +223,13 @@ export async function mergeGuestProfileIntoUserProfile(
       userProfile.subscriptionEmail,
       guestProfile.subscriptionEmail ?? guestProfile.email ?? args.email ?? null
     ),
-    address: preferText(userProfile.address, guestProfile.address),
-    city: preferText(userProfile.city, guestProfile.city),
-    postalCode: preferText(userProfile.postalCode, guestProfile.postalCode),
-    state: preferText(userProfile.state, guestProfile.state),
+    address: mergedAddress,
+    city: mergedCity,
+    citySearch: mergedLocationSearch.citySearch ?? undefined,
+    postalCode: mergedPostalCode,
+    postalCodeSearch: mergedLocationSearch.postalCodeSearch ?? undefined,
+    state: mergedState,
+    stateSearch: mergedLocationSearch.stateSearch ?? undefined,
     country: preferText(userProfile.country, guestProfile.country),
     countryCode: preferText(userProfile.countryCode, guestProfile.countryCode),
     linkedinUrl: preferText(userProfile.linkedinUrl, guestProfile.linkedinUrl),
@@ -229,7 +255,8 @@ export async function mergeGuestProfileIntoUserProfile(
       userProfile.registrationStatus && userProfile.registrationStatus !== "pending_verification"
         ? userProfile.registrationStatus
         : guestProfile.registrationStatus ?? userProfile.registrationStatus ?? undefined,
-    dob: userProfile.dob ?? guestProfile.dob ?? undefined,
+    dob: null,
+    dobEncrypted: mergedDobEncrypted,
     keyQuestions: userProfile.keyQuestions ?? guestProfile.keyQuestions ?? undefined,
     stripeCustomerId: preferText(userProfile.stripeCustomerId, guestProfile.stripeCustomerId),
     stripeSubscriptionId: preferText(

@@ -225,6 +225,14 @@ export default function LinkedInOutreachClient() {
       }
 
       const data = await res.json();
+      if (data?.pending) {
+        showNotice({
+          type: "error",
+          text: "We’re confirming your subscription. Please wait a moment and try again.",
+        });
+        return false;
+      }
+
       if (!data?.active) {
         const params = new URLSearchParams({ source: "linkedin-outreach" });
         window.location.href = `/checkout?${params.toString()}`;

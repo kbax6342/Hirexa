@@ -10,6 +10,20 @@ type PlanStatusProfile =
   | null
   | undefined;
 
+const ACTIVE_PLAN_STATUSES = new Set([
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "payment approved",
+  "payed",
+]);
+
+export function isActivePlanStatus(value: string | null | undefined) {
+  if (typeof value !== "string") return false;
+  return ACTIVE_PLAN_STATUSES.has(value.trim().toLowerCase());
+}
+
 export function hasActivePlan(userProfile: PlanStatusProfile) {
   if (!userProfile) return false;
 
@@ -17,8 +31,8 @@ export function hasActivePlan(userProfile: PlanStatusProfile) {
     userProfile.trialSubscriber === true ||
     userProfile.monthlySubscriber === true ||
     userProfile.yearlySubscriber === true ||
-    userProfile.trialPlanStatus === "active" ||
-    userProfile.monthlyPlanStatus === "active" ||
-    userProfile.yearlyPlanStatus === "active"
+    isActivePlanStatus(userProfile.trialPlanStatus) ||
+    isActivePlanStatus(userProfile.monthlyPlanStatus) ||
+    isActivePlanStatus(userProfile.yearlyPlanStatus)
   );
 }

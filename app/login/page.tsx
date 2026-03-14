@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, useTransition, type FormEvent } from "react";
 import { getProviders, signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { startOnboarding } from "../api/actions/startOnboarding";
 import LoginForm from "../components/loginForm/LoginForm";
@@ -16,11 +16,14 @@ type OAuthProvider = {
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [isPending, startTransition] = useTransition();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
+
+  const oauthCallbackUrl = searchParams.get("callbackUrl") || "/resume";
 
   useEffect(() => {
     let active = true;
@@ -71,7 +74,11 @@ export default function LoginPage() {
         cache: "no-store",
       });
       const onboardingData = await onboardingRes.json();
-      router.push(onboardingData?.completed ? "/dashboard" : "/questions");
+      router.push(
+        onboardingData?.completed
+          ? "/dashboard"
+          : onboardingData?.nextPath || "/questions"
+      );
     } catch {
       router.push("/questions");
     }
@@ -157,7 +164,9 @@ export default function LoginPage() {
                     <button
                       key={provider.id}
                       type="button"
-                      onClick={() => signIn(provider.id, { callbackUrl: "/" })}
+                      onClick={() =>
+                        signIn(provider.id, { callbackUrl: oauthCallbackUrl })
+                      }
                       className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                     >
                       <span className="text-base">

@@ -40,6 +40,8 @@ type PlanStatusResponse = {
   ok?: boolean;
   userId?: string | null;
   active?: boolean;
+  pending?: boolean;
+  accessState?: "active" | "pending" | "inactive";
   trialSubscriber?: boolean;
   monthlySubscriber?: boolean;
   yearlySubscriber?: boolean;
@@ -422,13 +424,8 @@ function JobToolsGeneratePageContent() {
       }
 
       const planData = (await planRes.json()) as PlanStatusResponse;
-      const hasPaidAccess =
-        planData?.trialSubscriber === true ||
-        planData?.monthlySubscriber === true ||
-        planData?.yearlySubscriber === true ||
-        planData?.trialPlanStatus === "active" ||
-        planData?.monthlyPlanStatus === "active" ||
-        planData?.yearlyPlanStatus === "active";
+      const hasPaidAccess = planData?.active === true;
+      const pendingAccess = planData?.pending === true;
 
       console.log("[AI_GENERATE] access check", {
         userId: planData?.userId ?? null,
@@ -438,8 +435,18 @@ function JobToolsGeneratePageContent() {
         trialPlanStatus: planData?.trialPlanStatus ?? null,
         monthlyPlanStatus: planData?.monthlyPlanStatus ?? null,
         yearlyPlanStatus: planData?.yearlyPlanStatus ?? null,
+        accessState: planData?.accessState ?? "inactive",
+        pendingAccess,
         hasPaidAccess,
       });
+
+      if (pendingAccess) {
+        console.log("[AI_GENERATE] payment sync pending", {
+          userId: planData?.userId ?? null,
+        });
+        setError("We’re confirming your subscription. Please wait a moment and try Generate again.");
+        return;
+      }
 
       if (!hasPaidAccess) {
         const params = new URLSearchParams();

@@ -8,11 +8,11 @@ import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
 import {
   Bars3Icon,
-  RocketLaunchIcon,
   XMarkIcon,
   ChevronDownIcon,
   UserCircleIcon,
 } from "@heroicons/react/24/outline";
+import { PaperAirplaneIcon } from "@heroicons/react/24/solid";
 
 type NavIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -74,9 +74,9 @@ const authedNav: NavItem[] = [
       {
         label: "HirePilot",
         description: "Real-time interview answers powered by your Hirexa profile",
-        href: "/job-tools/agents/hirepilot",
+        href: "/hirepilot",
         badge: "NEW",
-        icon: RocketLaunchIcon,
+        icon: PaperAirplaneIcon,
       },
     ],
   },
@@ -143,14 +143,13 @@ function NavDropdown({ item }: { item: NavItem }) {
                 role="menuitem"
               >
                 <div className="flex items-start gap-3">
-                  {child.icon ? (
-                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                      <child.icon className="h-5 w-5" />
-                    </div>
-                  ) : null}
-
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
+                      {child.icon ? (
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-500 text-white">
+                          <child.icon className="h-4 w-4" />
+                        </span>
+                      ) : null}
                       <div className="text-sm font-semibold text-foreground">
                         {child.label}
                       </div>
@@ -328,8 +327,12 @@ export function Navbar() {
                             }}
                           >
                             <span className="flex items-center justify-between gap-3">
-                              <span className="flex items-center gap-2">
-                                {child.icon ? <child.icon className="h-4 w-4" /> : null}
+                            <span className="flex items-center gap-2">
+                                {child.icon ? (
+                                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-500 text-white">
+                                    <child.icon className="h-4 w-4" />
+                                  </span>
+                                ) : null}
                                 <span>{child.label}</span>
                               </span>
                               {child.badge ? (

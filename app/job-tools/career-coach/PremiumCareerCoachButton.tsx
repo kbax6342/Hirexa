@@ -4,19 +4,12 @@ import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button, type ButtonProps } from "@/app/components/ui/button";
-import { hasActivePlan } from "@/app/lib/billing/hasActivePlan";
-
-type PlanStatusProfile = {
-  trialPlanStatus?: string | null;
-  monthlyPlanStatus?: string | null;
-  yearlyPlanStatus?: string | null;
-} | null;
 
 type PremiumCareerCoachButtonProps = {
   children: ReactNode;
   activeHref: string;
   className?: string;
-  planStatus: PlanStatusProfile;
+  hasPaidAccess: boolean;
   variant?: ButtonProps["variant"];
 };
 
@@ -24,13 +17,13 @@ export default function PremiumCareerCoachButton({
   children,
   activeHref,
   className,
-  planStatus,
+  hasPaidAccess,
   variant,
 }: PremiumCareerCoachButtonProps) {
   const router = useRouter();
 
   const handleClick = () => {
-    if (!hasActivePlan(planStatus)) {
+    if (!hasPaidAccess) {
       router.push("/checkout");
       return;
     }

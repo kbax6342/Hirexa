@@ -1041,7 +1041,7 @@ function ToggleField({
                 </div>
 
                 <a
-                  href="/job-tools/agents/hirepilot"
+                  href="/hirepilot"
                   className="mt-4 inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
                 >
                   Unlock HirePilot

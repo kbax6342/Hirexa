@@ -1,4 +1,5 @@
 import { auth } from "../auth";
+import { redirect } from "next/navigation";
 import { Navbar } from "./components/navbar"
 import { Hero } from "./components/hero"
 import { WhyHirexa } from "./components/why-hirexa"
@@ -8,10 +9,20 @@ import { Trust } from "./components/trust"
 import { Audience } from "./components/audience"
 import { CTA } from "./components/cta"
 import { Footer } from "./components/footer"
+import { getOnboardingStatusForUser } from "./lib/onboarding/status";
 
 export default async function Home() {
   const session = await auth();
-  const href = session?.user ? "/dashboard" : "/onboarding/resume";
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+
+  if (userId) {
+    const onboarding = await getOnboardingStatusForUser(userId);
+    if (!onboarding.completed && onboarding.nextPath) {
+      redirect(onboarding.nextPath);
+    }
+  }
+
+  const href = session?.user ? "/dashboard" : "/resume";
 
   return (
     <>

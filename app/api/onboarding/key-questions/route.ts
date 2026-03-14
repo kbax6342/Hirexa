@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
+import {
+  getOnboardingStatusForUser,
+  isOnboardingComplete,
+} from "@/app/lib/onboarding/status";
 import { prisma } from "@/app/lib/prisma";
 
 export const runtime = "nodejs";
@@ -16,26 +20,21 @@ export async function GET() {
     const userId = await getUserId();
 
     if (!userId) {
-      return NextResponse.json({ completed: false, data: null }, { status: 200 });
+      return NextResponse.json(
+        { completed: false, data: null, nextPath: "/resume" },
+        { status: 200 }
+      );
     }
 
-    const profile = await prisma.userProfile.findUnique({
-      where: { userId },
-      select: {
-        keyQuestions: true,
-        questionsCompleted: true,
-        registrationStatus: true,
-      },
-    });
+    const onboarding = await getOnboardingStatusForUser(userId);
+    const keyQuestions =
+      (onboarding.profile?.keyQuestions as Record<string, unknown> | null) ?? null;
+    const completed = isOnboardingComplete(onboarding.profile);
 
-    const keyQuestions = (profile?.keyQuestions as Record<string, unknown> | null) ?? null;
-    const completed = Boolean(
-      profile?.questionsCompleted ||
-        keyQuestions ||
-        profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE"
+    return NextResponse.json(
+      { completed, data: keyQuestions, nextPath: onboarding.nextPath },
+      { status: 200 }
     );
-
-    return NextResponse.json({ completed, data: keyQuestions }, { status: 200 });
   } catch (error) {
     return NextResponse.json(
       {

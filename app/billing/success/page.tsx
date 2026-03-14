@@ -11,6 +11,8 @@ import {
 } from "@heroicons/react/24/outline";
 import { Card, CardContent } from "@/app/components/ui/card";
 import { Button } from "@/app/components/ui/button";
+import { auth } from "@/auth";
+import { getHirexaAccessForUser } from "@/app/lib/billing/getHirexaAccess";
 import { getStripeClient } from "@/app/lib/stripeClient";
 
 export const dynamic = "force-dynamic";
@@ -177,6 +179,25 @@ async function getBillingSummary(
 export default async function BillingSuccessPage({ searchParams }: Props) {
   const params = await searchParams;
   const sessionId = readParam(params.session_id);
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+
+  if (userId) {
+    try {
+      await getHirexaAccessForUser({
+        userId,
+        sessionEmail: session?.user?.email ?? null,
+        forceSync: true,
+      });
+    } catch (error) {
+      console.warn("[BILLING_SUCCESS] access sync failed", {
+        userId,
+        sessionId: sessionId || null,
+        error: error instanceof Error ? error.message : "Unknown billing sync error",
+      });
+    }
+  }
+
   const summary = sessionId ? await getBillingSummary(sessionId) : null;
 
   const display = summary ?? {

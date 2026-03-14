@@ -9,15 +9,16 @@ datasource db {
 }
 
 model User {
-  id              String       @id @default(cuid())
+  id              String        @id @default(cuid())
   name            String?
-  email           String?      @unique
+  email           String?       @unique
   password        String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  isGuest         Boolean      @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  isGuest         Boolean       @default(true)
   emailVerifiedAt DateTime?
   userProfile     UserProfile?
+  billings        UserBilling[]
 }
 
 model LinkedInAccount {
@@ -164,10 +165,14 @@ model UserProfile {
   registrationStatus      String?            @default("pending_verification")
   address                 String?
   city                    String?
+  citySearch              String?
   dob                     DateTime?
+  dobEncrypted            String?
   linkedinUrl             String?
   postalCode              String?
+  postalCodeSearch        String?
   state                   String?
+  stateSearch             String?
   keyQuestions            Json?
   profileImage            Bytes?
   profileImageMimeType    String?
@@ -197,6 +202,9 @@ model UserProfile {
   user                    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([email])
+  @@index([citySearch])
+  @@index([stateSearch])
+  @@index([postalCodeSearch])
 }
 
 model StripePayment {
@@ -427,8 +435,40 @@ model HirePilotUsage {
 }
 
 model UserBilling {
-  id                 String  @id @default(cuid())
-  userId             String  @unique
+  id     String @id @default(cuid())
+  userId String
+
+  productKey String
+  planType   String?
+  status     String?
+
   hirePilotCredits   Int     @default(0)
   hirePilotUnlimited Boolean @default(false)
+
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
+  stripePriceId           String?
+  stripeProductId         String?
+  stripeCheckoutSessionId String?
+
+  currentPeriodStart      DateTime?
+  currentPeriodEnd        DateTime?
+  cancelAtPeriodEnd       Boolean   @default(false)
+  canceledAt              DateTime?
+  trialStart              DateTime?
+  trialEnd                DateTime?
+  lastPaymentReceivedAt   DateTime?
+  subscriptionPurchasedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productKey])
+  @@index([userId])
+  @@index([productKey])
+  @@index([status])
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
 }

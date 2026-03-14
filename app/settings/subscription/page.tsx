@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import LoginFooter from "../../components/loginFooter/LoginFooter";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/auth";
+import { BILLING_PRODUCT_KEYS } from "@/app/lib/billing/userBilling";
 
 function formatDate(value?: Date | null) {
   if (!value) return "Not available";
@@ -77,6 +78,23 @@ export default async function SubscriptionSettingsPage() {
       yearlyPlanStatus: true,
     },
   });
+  const billing = await prisma.userBilling.findUnique({
+    where: {
+      userId_productKey: {
+        userId,
+        productKey: BILLING_PRODUCT_KEYS.HIREXA_CORE,
+      },
+    },
+    select: {
+      planType: true,
+      status: true,
+      stripeCustomerId: true,
+      stripeSubscriptionId: true,
+      currentPeriodEnd: true,
+      subscriptionPurchasedAt: true,
+      lastPaymentReceivedAt: true,
+    },
+  });
 
   const lastPayment = profile?.id
     ? await prisma.stripePayment.findFirst({
@@ -86,15 +104,21 @@ export default async function SubscriptionSettingsPage() {
       })
     : null;
 
-  const planType = profile?.trialSubscriber
-    ? "trial"
-    : profile?.monthlySubscriber
-      ? "monthly"
-      : profile?.yearlySubscriber
-        ? "yearly"
-        : null;
+  const planType =
+    billing?.planType === "trial" ||
+    billing?.planType === "monthly" ||
+    billing?.planType === "yearly"
+      ? billing.planType
+      : profile?.trialSubscriber
+        ? "trial"
+        : profile?.monthlySubscriber
+          ? "monthly"
+          : profile?.yearlySubscriber
+            ? "yearly"
+            : null;
 
   const rawStatus =
+    billing?.status ??
     profile?.trialPlanStatus ??
     profile?.monthlyPlanStatus ??
     profile?.yearlyPlanStatus ??
@@ -107,7 +131,9 @@ export default async function SubscriptionSettingsPage() {
   const supportEmail = process.env.EMAIL_SUPPORT;
 
   const hasSubscription =
-    Boolean(planType) || Boolean(rawStatus) || Boolean(profile?.stripeSubscriptionId);
+    Boolean(planType) ||
+    Boolean(rawStatus) ||
+    Boolean(billing?.stripeSubscriptionId ?? profile?.stripeSubscriptionId);
 
   return (
     <div className="min-h-[calc(100vh-64px)] bg-white">
@@ -174,9 +200,14 @@ export default async function SubscriptionSettingsPage() {
               <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                 <InfoRow
                   label="Started on"
-                  value={formatDate(profile?.subscriptionPurchasedAt)}
+                  value={formatDate(
+                    billing?.subscriptionPurchasedAt ?? profile?.subscriptionPurchasedAt
+                  )}
                 />
-                <InfoRow label="Next renewal" value="Not available" />
+                <InfoRow
+                  label="Next renewal"
+                  value={formatDate(billing?.currentPeriodEnd)}
+                />
                 <InfoRow
                   label="Last charge"
                   value={

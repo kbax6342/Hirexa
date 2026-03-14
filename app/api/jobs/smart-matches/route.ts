@@ -42,6 +42,62 @@ const TITLE_NOISE_WORDS = new Set([
   "contract",
   "temporary",
 ]);
+const LATER_PAGE_EXPANSION_LIMIT = 5;
+const ROLE_FAMILY_EXPANSIONS: Array<{
+  test: RegExp;
+  queries: string[];
+}> = [
+  {
+    test: /\b(qa|quality assurance|testing|test engineer|sdet|automation tester|software tester|cypress)\b/i,
+    queries: [
+      "Quality Assurance",
+      "QA Engineer",
+      "Test Engineer",
+      "SDET",
+      "Automation Engineer",
+    ],
+  },
+  {
+    test: /\b(registered nurse|rn|nurse|nursing|clinical|patient care)\b/i,
+    queries: [
+      "Registered Nurse",
+      "Nursing",
+      "Clinical Nurse",
+      "Patient Care",
+      "Care Coordinator",
+    ],
+  },
+  {
+    test: /\b(sales|account executive|business development|sdr|bdr)\b/i,
+    queries: [
+      "Sales",
+      "Account Executive",
+      "Business Development",
+      "Sales Representative",
+      "Customer Success",
+    ],
+  },
+  {
+    test: /\b(data analyst|data engineer|analytics|business intelligence|bi)\b/i,
+    queries: [
+      "Data Analyst",
+      "Analytics",
+      "Business Intelligence",
+      "Data Engineer",
+      "Reporting Analyst",
+    ],
+  },
+  {
+    test: /\b(product manager|product|program manager|project manager)\b/i,
+    queries: [
+      "Product Manager",
+      "Program Manager",
+      "Project Manager",
+      "Product Operations",
+      "Product Analyst",
+    ],
+  },
+];
 
 type Cursor = {
   variantIndex: number;
@@ -82,6 +138,18 @@ type BatchCacheMeta = {
     adzuna: QueryProviderCacheResult["cache"];
     usajobs: QueryProviderCacheResult["cache"];
   };
+};
+
+type QueryProviderPlanReason =
+  | "exact"
+  | "location-relaxed"
+  | "role-family-strict"
+  | "role-family-broad";
+
+type QueryProviderPlan = {
+  query: string;
+  location: string;
+  reason: QueryProviderPlanReason;
 };
 
 type SmartMatchesApiResponse = {
@@ -286,6 +354,129 @@ function buildProviderFallbackVariants(variant: SearchVariant): SearchVariant[] 
   });
 }
 
+function buildRoleFamilyQueries(
+  config: SmartMatchSearchConfig,
+  baseQuery: string
+) {
+  const normalizedSeed = normalizeText(
+    [
+      baseQuery,
+      config.searchQuery,
+      ...config.jobTitles,
+      ...config.skillTerms,
+    ].join(" ")
+  );
+  const matchedRoleFamily = ROLE_FAMILY_EXPANSIONS.find((entry) =>
+    entry.test.test(normalizedSeed)
+  );
+  const fallbackQueries = dedupeStrings([
+    ...config.jobTitles.map((title) => simplifyTitle(title)),
+    ...config.skillTerms,
+  ]);
+
+  return dedupeStrings([
+    baseQuery,
+    ...(matchedRoleFamily?.queries ?? []),
+    ...fallbackQueries,
+  ]).slice(0, LATER_PAGE_EXPANSION_LIMIT);
+}
+
+function buildQueryProviderPlans(
+  variant: SearchVariant,
+  config: SmartMatchSearchConfig,
+  expandedMode: boolean
+) {
+  const plans: QueryProviderPlan[] = [
+    {
+      query: variant.query,
+      location: variant.location,
+      reason: "exact",
+    },
+  ];
+
+  if (!expandedMode) {
+    return plans;
+  }
+
+  const extraQueries = buildRoleFamilyQueries(config, variant.query).filter(
+    (query) => query.toLowerCase() !== variant.query.toLowerCase()
+  );
+
+  if (variant.location) {
+    plans.push({
+      query: variant.query,
+      location: "",
+      reason: "location-relaxed",
+    });
+  }
+
+  if (extraQueries[0]) {
+    plans.push({
+      query: extraQueries[0],
+      location: variant.location,
+      reason: "role-family-strict",
+    });
+  }
+
+  for (const query of extraQueries.slice(1, 4)) {
+    plans.push({
+      query,
+      location: "",
+      reason: "role-family-broad",
+    });
+  }
+
+  const dedupedPlans: QueryProviderPlan[] = [];
+  const seen = new Set<string>();
+  for (const plan of plans) {
+    const key = `${plan.query.toLowerCase()}|${plan.location.toLowerCase()}|${plan.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dedupedPlans.push(plan);
+  }
+
+  return dedupedPlans.slice(0, LATER_PAGE_EXPANSION_LIMIT);
+}
+
+function summarizeJobsByProvider(jobs: Job[]) {
+  return jobs.reduce<Record<string, number>>((acc, job) => {
+    acc[job.source] = (acc[job.source] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+function lightlyDiversifyJobs(jobs: Job[]) {
+  const queues = new Map<Job["source"], Job[]>();
+  const order: Job["source"][] = [];
+
+  for (const job of jobs) {
+    if (!queues.has(job.source)) {
+      queues.set(job.source, []);
+      order.push(job.source);
+    }
+    queues.get(job.source)?.push(job);
+  }
+
+  const leadingJobs: Job[] = [];
+  const remainder: Job[] = [];
+
+  for (const source of order) {
+    const queue = queues.get(source);
+    const firstJob = queue?.shift();
+    if (firstJob) {
+      leadingJobs.push(firstJob);
+    }
+  }
+
+  for (const source of order) {
+    const queue = queues.get(source);
+    if (!queue?.length) continue;
+    remainder.push(...queue);
+  }
+
+  return [...leadingJobs, ...remainder];
+}
+
 function emptyProviderCounts(): ProviderCounts {
   return {
     greenhouse: 0,
@@ -411,10 +602,17 @@ async function fetchProviderBatch(
   page: number,
   limit: number,
   includeRemote: boolean,
+  searchConfig: SmartMatchSearchConfig,
+  expandedMode: boolean,
   cache: RequestScopedProviderCache,
   requestKey: string
 ): Promise<{ jobs: Job[]; counts: ProviderCounts; cacheMeta: BatchCacheMeta }> {
   ensureSharedProviderRefreshStarted();
+  const queryProviderPlans = buildQueryProviderPlans(
+    variant,
+    searchConfig,
+    expandedMode
+  );
 
   console.log("[SMART_MATCHES] request", {
     query: variant.query,
@@ -422,7 +620,70 @@ async function fetchProviderBatch(
     includeRemote,
     limit,
     page,
+    expandedMode,
   });
+  if (expandedMode) {
+    console.log("[SMART_MATCHES] later-page expansions", {
+      query: variant.query,
+      location: variant.location || null,
+      page,
+      plans: queryProviderPlans.map((plan) => ({
+        query: plan.query,
+        location: plan.location || null,
+        reason: plan.reason,
+      })),
+    });
+  }
+
+  async function fetchPlannedQueryProviderJobs(provider: "adzuna" | "usajobs") {
+    let jobs: Job[] = [];
+    let latestCache: QueryProviderCacheResult["cache"] = {
+      provider,
+      key: "",
+      hit: false,
+      fresh: false,
+      stale: false,
+      ageMs: null,
+    };
+
+    for (const plan of queryProviderPlans) {
+      const result = await fetchCachedQueryProviderJobs(
+        provider,
+        plan.query,
+        plan.location,
+        page,
+        limit,
+        includeRemote,
+        cache
+      );
+
+      latestCache = result.cache;
+      jobs = dedupeJobs([...jobs, ...result.jobs]);
+
+      if (plan.reason !== "exact") {
+        console.log("[SMART_MATCHES] provider fallback", {
+          provider,
+          fromQuery: variant.query,
+          fromLocation: variant.location || null,
+          toQuery: plan.query,
+          toLocation: plan.location || null,
+          page,
+          results: result.jobs.length,
+          cacheHit: result.cache.hit,
+          reason: plan.reason,
+        });
+      }
+
+      if (!expandedMode && jobs.length >= limit) {
+        break;
+      }
+    }
+
+    return {
+      jobs,
+      cache: latestCache,
+    };
+  }
 
   const [
     sharedProviders,
@@ -430,24 +691,8 @@ async function fetchProviderBatch(
     usajobsResult,
   ] = await Promise.all([
     fetchCachedSharedProviderSnapshot(variant.query, cache),
-    fetchCachedQueryProviderJobs(
-      "adzuna",
-      variant.query,
-      variant.location,
-      page,
-      limit,
-      includeRemote,
-      cache
-    ),
-    fetchCachedQueryProviderJobs(
-      "usajobs",
-      variant.query,
-      variant.location,
-      page,
-      limit,
-      includeRemote,
-      cache
-    ),
+    fetchPlannedQueryProviderJobs("adzuna"),
+    fetchPlannedQueryProviderJobs("usajobs"),
   ]);
 
   console.log("[SMART_MATCHES] cache status", {
@@ -548,11 +793,20 @@ async function fetchProviderBatch(
   console.log("[SMART_MATCHES] total jobs after cross-provider dedupe", dedupedJobs.length);
 
   const shuffledJobs = shuffleArray(dedupedJobs);
-  const results = shuffledJobs.slice(0, limit);
+  const orderedJobs = expandedMode ? lightlyDiversifyJobs(shuffledJobs) : shuffledJobs;
+  const results = orderedJobs.slice(0, limit);
+
+  if (expandedMode) {
+    console.log("[SMART_MATCHES] provider mix", {
+      before: summarizeJobsByProvider(shuffledJobs.slice(0, limit)),
+      after: summarizeJobsByProvider(results),
+    });
+  }
 
   console.log("[SMART_MATCHES] returning jobs", {
     returned: results.length,
     page,
+    byProvider: summarizeJobsByProvider(results),
   });
 
   return {
@@ -573,6 +827,8 @@ async function fetchVariantJobs(
   page: number,
   limit: number,
   includeRemote: boolean,
+  searchConfig: SmartMatchSearchConfig,
+  expandedMode: boolean,
   cache: RequestScopedProviderCache,
   requestKey: string
 ): Promise<{ jobs: Job[]; counts: ProviderCounts; cacheMeta: BatchCacheMeta }> {
@@ -613,6 +869,8 @@ async function fetchVariantJobs(
       page,
       limit,
       includeRemote,
+      searchConfig,
+      expandedMode,
       cache,
       requestKey
     );
@@ -663,16 +921,26 @@ export async function GET(request: Request) {
   const session = await auth();
   const userId = session?.user?.id ?? null;
   ensureSharedProviderRefreshStarted();
-  const baseSearchConfig = userId
-    ? await getSmartMatchSearchConfigForUser(userId)
-    : {
-        searchQuery: "jobs",
-        jobTitles: [],
-        skillTerms: [],
-        preferredLocation: null,
-        locationOptions: [],
-        includeRemote: true,
-      };
+  const fallbackSearchConfig: SmartMatchSearchConfig = {
+    searchQuery: "jobs",
+    jobTitles: [],
+    skillTerms: [],
+    preferredLocation: null,
+    locationOptions: [],
+    includeRemote: true,
+  };
+  let baseSearchConfig = fallbackSearchConfig;
+
+  if (userId) {
+    try {
+      baseSearchConfig = await getSmartMatchSearchConfigForUser(userId);
+    } catch (error) {
+      console.error("[SMART_MATCHES] failed to read profile search config", {
+        userId,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
 
   const url = new URL(request.url);
   const requestedQuery =
@@ -713,6 +981,7 @@ export async function GET(request: Request) {
 
   const variants = buildSearchVariants(searchConfig);
   const rawCursor = url.searchParams.get("cursor")?.trim() || "";
+  const expandedMode = Boolean(rawCursor) || requestedPage > 1;
   const initialCursor = decodeCursor(rawCursor);
   const searchFingerprint = JSON.stringify({
     searchQuery: searchConfig.searchQuery,
@@ -759,6 +1028,11 @@ export async function GET(request: Request) {
   const usedVariants: SmartMatchesApiResponse["meta"]["usedVariants"] = [];
   const maxAttempts = Math.max(variants.length, 4);
 
+  console.log("[SMART_MATCHES] request mode", {
+    page: rawCursor ? initialCursor.page : requestedPage,
+    expandedMode,
+  });
+
   for (let attempt = 0; attempt < maxAttempts && jobs.length < limit; attempt += 1) {
     const currentVariant = variants[Math.min(variantIndex, variants.length - 1)];
     const batch = await fetchVariantJobs(
@@ -766,6 +1040,8 @@ export async function GET(request: Request) {
       page,
       limit,
       searchConfig.includeRemote,
+      searchConfig,
+      expandedMode,
       providerCache,
       requestKey
     );
@@ -823,6 +1099,8 @@ export async function GET(request: Request) {
       1,
       limit,
       searchConfig.includeRemote,
+      searchConfig,
+      expandedMode,
       providerCache,
       requestKey
     );

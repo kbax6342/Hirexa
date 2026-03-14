@@ -120,6 +120,10 @@ const ExperiencesSchema = z.object({
 
 /* ------------------------- OpenAI resume parsing ------------------------- */
 
+function normalizeResumeText(value: string) {
+  return value.replace(/\r/g, "").trim();
+}
+
 async function openaiExtractExperiences(fullText: string): Promise<Experience[]> {
   const system = `
 You are an expert resume parser.
@@ -221,6 +225,16 @@ async function parseResumeWithLLM(args: { mimeType: string; buffer: Buffer }): P
   return await openaiExtractExperiences(fullText);
 }
 
+async function parsePastedResumeWithLLM(fullText: string): Promise<Experience[]> {
+  const normalized = normalizeResumeText(fullText);
+
+  if (!normalized) {
+    throw new Error("Resume text is empty.");
+  }
+
+  return openaiExtractExperiences(normalized);
+}
+
 /* --------------------------------- Route -------------------------------- */
 
 export async function POST(req: Request) {
@@ -258,25 +272,37 @@ export async function POST(req: Request) {
 
     const formData = await req.formData();
     const file = formData.get("resume");
+    const rawResumeText = formData.get("resumeText");
+    const pastedResumeText =
+      typeof rawResumeText === "string" ? normalizeResumeText(rawResumeText) : "";
 
-    if (!(file instanceof File)) {
+    let filename = "pasted-resume.txt";
+    let mimeType = "text/plain";
+    let parsedExperiences: Experience[];
+
+    if (file instanceof File) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      filename = file.name;
+      mimeType = file.type || "application/pdf";
+      parsedExperiences = await parseResumeWithLLM({ mimeType, buffer });
+    } else if (pastedResumeText) {
+      parsedExperiences = await parsePastedResumeWithLLM(pastedResumeText);
+    } else {
       return NextResponse.json(
-        { ok: false, error: "Missing resume file (field name must be 'resume')." },
+        {
+          ok: false,
+          error: "Missing resume input. Upload a file or paste your resume text.",
+        },
         { status: 400 }
       );
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const mimeType = file.type || "application/pdf";
-
     const resume = await prisma.resume.upsert({
       where: { userProfileId: profile.id },
-      update: { filename: file.name, mimeType },
-      create: { userProfileId: profile.id, filename: file.name, mimeType },
+      update: { filename, mimeType },
+      create: { userProfileId: profile.id, filename, mimeType },
       select: { id: true, userProfileId: true, filename: true, mimeType: true },
     });
-
-    const parsedExperiences = await parseResumeWithLLM({ mimeType, buffer });
 
     await prisma.$transaction(async (tx) => {
       const existingExperiences = await tx.experience.findMany({

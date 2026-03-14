@@ -11,7 +11,6 @@ import {
 } from "@heroicons/react/24/outline";
 
 import { auth } from "@/auth";
-import { prisma } from "@/app/lib/prisma";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
 import {
@@ -21,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/app/components/ui/card";
+import { getHirexaAccessForUser } from "@/app/lib/billing/getHirexaAccess";
 import PremiumCareerCoachButton from "./PremiumCareerCoachButton";
 
 type FeatureCard = {
@@ -95,7 +95,7 @@ const platformCards: PlatformCard[] = [
     title: "HirePilot",
     description:
       "Carry your strategy into interviews with real-time answer support built from your saved profile.",
-    href: "/job-tools/agents/hirepilot",
+    href: "/hirepilot",
     icon: RocketLaunchIcon,
   },
 ];
@@ -103,20 +103,15 @@ const platformCards: PlatformCard[] = [
 export default async function CareerCoachPage() {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
-
-  const userProfile = userId
-    ? await prisma.userProfile.findUnique({
-        where: { userId },
-        select: {
-          trialPlanStatus: true,
-          monthlyPlanStatus: true,
-          yearlyPlanStatus: true,
-        },
+  const access = userId
+    ? await getHirexaAccessForUser({
+        userId,
+        sessionEmail: session?.user?.email ?? null,
       })
     : null;
 
   const startHref = session?.user ? "/dashboard" : "/login?callbackUrl=%2Fjob-tools%2Fcareer-coach";
-  const uploadHref = "/onboarding/resume";
+  const uploadHref = "/resume";
   const jobMatchesHref = session?.user ? "/dashboard" : "/jobs";
 
   return (
@@ -144,7 +139,7 @@ export default async function CareerCoachPage() {
                   <PremiumCareerCoachButton
                     activeHref={startHref}
                     className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700"
-                    planStatus={userProfile}
+                    hasPaidAccess={access?.active ?? false}
                   >
                     Start Career Coaching
                   </PremiumCareerCoachButton>
@@ -307,7 +302,7 @@ export default async function CareerCoachPage() {
               <PremiumCareerCoachButton
                 activeHref={startHref}
                 className="rounded-xl bg-blue-600 px-6 py-6 text-sm font-semibold text-white hover:bg-blue-700"
-                planStatus={userProfile}
+                hasPaidAccess={access?.active ?? false}
               >
                 Start Coaching
               </PremiumCareerCoachButton>

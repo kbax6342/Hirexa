@@ -1,6 +1,11 @@
 import "server-only";
 
 import { prisma } from "@/app/lib/prisma";
+import {
+  BILLING_PRODUCT_KEYS,
+  isActiveBillingStatus,
+  readUserBillingRecords,
+} from "@/app/lib/billing/userBilling";
 
 export const HIREPILOT_SESSION_COOKIE = "hirepilot_session_id";
 
@@ -10,20 +15,58 @@ export type HirePilotAccessResult = {
   credits: number;
 };
 
+type BillingRows = Array<{
+  id: string;
+  productKey: string;
+  status: string | null;
+  hirePilotUnlimited: boolean;
+  hirePilotCredits: number;
+}>;
+
+function summarizeHirePilotRows(rows: BillingRows) {
+  const relevantRows = rows.filter(
+    (row) =>
+      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY ||
+      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT
+  );
+
+  const unlimited = relevantRows.some(
+    (row) =>
+      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY &&
+      (row.hirePilotUnlimited || isActiveBillingStatus(row.status))
+  );
+  const credits = relevantRows.reduce(
+    (total, row) => total + Math.max(0, row.hirePilotCredits ?? 0),
+    0
+  );
+  const creditRow =
+    relevantRows.find(
+      (row) =>
+        row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT &&
+        row.hirePilotCredits > 0
+    ) ??
+    relevantRows.find((row) => row.hirePilotCredits > 0) ??
+    null;
+
+  return {
+    unlimited,
+    credits,
+    creditRowId: creditRow?.id ?? null,
+  };
+}
+
 export async function getHirePilotBillingStatus(
   userId: string
 ): Promise<{ hirePilotUnlimited: boolean; hirePilotCredits: number }> {
-  const billing = await prisma.userBilling.findUnique({
-    where: { userId },
-    select: {
-      hirePilotUnlimited: true,
-      hirePilotCredits: true,
-    },
-  });
+  const rows = await readUserBillingRecords(userId, [
+    BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
+    BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+  ]);
+  const summary = summarizeHirePilotRows(rows);
 
   return {
-    hirePilotUnlimited: billing?.hirePilotUnlimited ?? false,
-    hirePilotCredits: billing?.hirePilotCredits ?? 0,
+    hirePilotUnlimited: summary.unlimited,
+    hirePilotCredits: summary.credits,
   };
 }
 
@@ -34,25 +77,37 @@ export async function checkHirePilotAccess(
   const consumeCredit = Boolean(options?.consumeCredit);
 
   return prisma.$transaction(async (tx) => {
-    const billing = await tx.userBilling.upsert({
-      where: { userId },
-      create: { userId },
-      update: {},
+    const rows = await tx.userBilling.findMany({
+      where: {
+        userId,
+        productKey: {
+          in: [
+            BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
+            BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+          ],
+        },
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: {
+        id: true,
+        productKey: true,
+        status: true,
         hirePilotUnlimited: true,
         hirePilotCredits: true,
       },
     });
 
-    if (billing.hirePilotUnlimited) {
+    const summary = summarizeHirePilotRows(rows);
+
+    if (summary.unlimited) {
       return {
         allowed: true,
         unlimited: true,
-        credits: billing.hirePilotCredits,
+        credits: summary.credits,
       };
     }
 
-    if (billing.hirePilotCredits <= 0) {
+    if (summary.credits <= 0 || !summary.creditRowId) {
       return {
         allowed: false,
         unlimited: false,
@@ -64,14 +119,13 @@ export async function checkHirePilotAccess(
       return {
         allowed: true,
         unlimited: false,
-        credits: billing.hirePilotCredits,
+        credits: summary.credits,
       };
     }
 
     const updated = await tx.userBilling.updateMany({
       where: {
-        userId,
-        hirePilotUnlimited: false,
+        id: summary.creditRowId,
         hirePilotCredits: { gt: 0 },
       },
       data: {
@@ -79,15 +133,7 @@ export async function checkHirePilotAccess(
       },
     });
 
-    const refreshed = await tx.userBilling.findUnique({
-      where: { userId },
-      select: {
-        hirePilotUnlimited: true,
-        hirePilotCredits: true,
-      },
-    });
-
-    if (!updated.count || !refreshed) {
+    if (!updated.count) {
       return {
         allowed: false,
         unlimited: false,
@@ -95,10 +141,31 @@ export async function checkHirePilotAccess(
       };
     }
 
+    const refreshedRows = await tx.userBilling.findMany({
+      where: {
+        userId,
+        productKey: {
+          in: [
+            BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
+            BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+          ],
+        },
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        productKey: true,
+        status: true,
+        hirePilotUnlimited: true,
+        hirePilotCredits: true,
+      },
+    });
+    const refreshedSummary = summarizeHirePilotRows(refreshedRows);
+
     return {
       allowed: true,
-      unlimited: refreshed.hirePilotUnlimited,
-      credits: refreshed.hirePilotCredits,
+      unlimited: refreshedSummary.unlimited,
+      credits: refreshedSummary.credits,
     };
   });
 }

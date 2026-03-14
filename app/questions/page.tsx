@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
-import { prisma } from "@/app/lib/prisma";
+import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
 
 import QuestionsClient from "./questionsClient";
 
@@ -13,21 +13,14 @@ export default async function QuestionsPage() {
     redirect("/login");
   }
 
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: {
-      questionsCompleted: true,
-      keyQuestions: true,
-      registrationStatus: true,
-    },
-  });
+  const onboarding = await getOnboardingStatusForUser(userId);
 
-  if (
-    profile?.questionsCompleted ||
-    profile?.keyQuestions ||
-    profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE"
-  ) {
+  if (onboarding.completed) {
     redirect("/dashboard");
+  }
+
+  if (onboarding.nextPath && onboarding.nextPath !== "/questions") {
+    redirect(onboarding.nextPath);
   }
 
   return <QuestionsClient />;

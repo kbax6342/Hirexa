@@ -1,8 +1,13 @@
 import { prisma } from "@/app/lib/prisma";
+import { deriveSafeLocationSearchFields } from "@/app/lib/profile/privateProfileFields";
 
 type ProfileSnapshot = {
   city?: string | null;
+  citySearch?: string | null;
   state?: string | null;
+  stateSearch?: string | null;
+  postalCode?: string | null;
+  postalCodeSearch?: string | null;
   country?: string | null;
   includeRemote?: boolean | null;
   workplaceLocations?: unknown;
@@ -86,8 +91,16 @@ function buildSkillTerms(profile: ProfileSnapshot | null) {
 
 function buildLocationOptions(profile: ProfileSnapshot | null) {
   const workplaceLocation = readWorkplaceLocation(profile?.workplaceLocations);
-  const city = trimOrNull(profile?.city);
-  const state = trimOrNull(profile?.state);
+  const safeLocation = deriveSafeLocationSearchFields({
+    city: profile?.city,
+    citySearch: profile?.citySearch,
+    state: profile?.state,
+    stateSearch: profile?.stateSearch,
+    postalCode: profile?.postalCode,
+    postalCodeSearch: profile?.postalCodeSearch,
+  });
+  const city = trimOrNull(safeLocation.citySearch);
+  const state = trimOrNull(safeLocation.stateSearch);
   const country = trimOrNull(profile?.country);
 
   return dedupeValues(
@@ -126,7 +139,11 @@ export async function getSmartMatchSearchConfigForUser(
     where: { userId },
     select: {
       city: true,
+      citySearch: true,
       state: true,
+      stateSearch: true,
+      postalCode: true,
+      postalCodeSearch: true,
       country: true,
       includeRemote: true,
       workplaceLocations: true,

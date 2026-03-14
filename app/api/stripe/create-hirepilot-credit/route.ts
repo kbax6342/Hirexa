@@ -37,8 +37,8 @@ export async function POST(req: Request) {
       hirepilot_user_id: userId,
       hirepilot_credits: "1",
     },
-    success_url: `${appUrl}/job-tools/agents/hirepilot?checkout=success`,
-    cancel_url: `${appUrl}/job-tools/agents/hirepilot?checkout=canceled`,
+    success_url: `${appUrl}/hirepilot?checkout=success`,
+    cancel_url: `${appUrl}/hirepilot?checkout=canceled`,
   });
 
   return NextResponse.json({ url: checkoutSession.url });

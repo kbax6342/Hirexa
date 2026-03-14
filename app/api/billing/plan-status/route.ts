@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
-import { hasActivePlan } from "@/app/lib/billing/hasActivePlan";
+import {
+  getHirexaAccessForUser,
+  getHirexaAccessStateLabel,
+} from "@/app/lib/billing/getHirexaAccess";
 
 export const runtime = "nodejs";
 
@@ -13,61 +15,25 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: {
-      trialSubscriber: true,
-      monthlySubscriber: true,
-      yearlySubscriber: true,
-      trialPlanStatus: true,
-      monthlyPlanStatus: true,
-      yearlyPlanStatus: true,
-    },
+  const access = await getHirexaAccessForUser({
+    userId,
+    sessionEmail: session?.user?.email ?? null,
   });
-
-  if (!profile) {
-    return NextResponse.json({
-      ok: true,
-      userId,
-      active: false,
-      trialSubscriber: false,
-      monthlySubscriber: false,
-      yearlySubscriber: false,
-      planStatus: null,
-      trialPlanStatus: null,
-      monthlyPlanStatus: null,
-      yearlyPlanStatus: null,
-      planType: null,
-    });
-  }
-
-  const active = hasActivePlan(profile);
-
-  const planStatus =
-    profile.trialPlanStatus ??
-    profile.monthlyPlanStatus ??
-    profile.yearlyPlanStatus ??
-    null;
-
-  const planType = profile.trialPlanStatus === "active"
-    ? "trial"
-    : profile.monthlyPlanStatus === "active"
-      ? "monthly"
-      : profile.yearlyPlanStatus === "active"
-        ? "yearly"
-        : null;
+  const profile = access.profile;
 
   return NextResponse.json({
     ok: true,
     userId,
-    active,
-    trialSubscriber: profile.trialSubscriber ?? false,
-    monthlySubscriber: profile.monthlySubscriber ?? false,
-    yearlySubscriber: profile.yearlySubscriber ?? false,
-    planStatus,
-    trialPlanStatus: profile.trialPlanStatus,
-    monthlyPlanStatus: profile.monthlyPlanStatus,
-    yearlyPlanStatus: profile.yearlyPlanStatus,
-    planType,
+    active: access.active,
+    pending: access.pending,
+    accessState: getHirexaAccessStateLabel(access),
+    trialSubscriber: profile?.trialSubscriber ?? false,
+    monthlySubscriber: profile?.monthlySubscriber ?? false,
+    yearlySubscriber: profile?.yearlySubscriber ?? false,
+    planStatus: access.planStatus,
+    trialPlanStatus: profile?.trialPlanStatus ?? null,
+    monthlyPlanStatus: profile?.monthlyPlanStatus ?? null,
+    yearlyPlanStatus: profile?.yearlyPlanStatus ?? null,
+    planType: access.planType,
   });
 }

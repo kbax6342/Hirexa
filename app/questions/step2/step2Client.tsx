@@ -1,9 +1,9 @@
-// /app/questions/step2/step2Client.tsx
 "use client";
 
 import Link from "next/link";
-import React, { useMemo, useRef, useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+
 import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
 
 declare global {
@@ -43,9 +43,13 @@ declare global {
         PickerBuilder: new () => {
           setDeveloperKey: (key: string) => unknown;
           setOAuthToken: (token: string) => unknown;
+          setOrigin: (origin: string) => unknown;
           addView: (view: unknown) => unknown;
           setCallback: (
-            callback: (data: { action: string; docs?: Array<{ id: string; name: string; mimeType?: string }> }) => void
+            callback: (data: {
+              action: string;
+              docs?: Array<{ id: string; name: string; mimeType?: string }>;
+            }) => void
           ) => unknown;
           build: () => { setVisible: (visible: boolean) => void };
         };
@@ -91,19 +95,21 @@ type GoogleDriveConfig = {
   apiKey: string;
 };
 
+type ResumeInputMode = "upload" | "paste";
+
 const GOOGLE_DRIVE_DISCOVERY_DOC =
   "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 function sanitizeGoogleConfigValue(value?: string | null) {
   if (!value) return undefined;
-  const sanitized = value.trim().replace(/^['\"]|['\"]$/g, "");
+  const sanitized = value.trim().replace(/^['"]|['"]$/g, "");
   return sanitized || undefined;
 }
 
 function loadScript(src: string) {
   return new Promise<void>((resolve, reject) => {
-    const alreadyLoaded = document.querySelector(`script[src=\"${src}\"]`);
+    const alreadyLoaded = document.querySelector(`script[src="${src}"]`);
     if (alreadyLoaded) {
       resolve();
       return;
@@ -119,10 +125,7 @@ function loadScript(src: string) {
   });
 }
 
-export default function Step2Client({
-  profileId,
-  resumeId,
-}: Step2ClientProps) {
+export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
   const router = useRouter();
 
   useEffect(() => {
@@ -131,55 +134,59 @@ export default function Step2Client({
     const script = document.createElement("script");
     script.id = "dropboxjs";
     script.src = "https://www.dropbox.com/static/api/2/dropins.js";
-    script.setAttribute(
-      "data-app-key",
-      process.env.NEXT_PUBLIC_DROPBOX_APP_KEY!
-    );
+    script.setAttribute("data-app-key", process.env.NEXT_PUBLIC_DROPBOX_APP_KEY!);
     script.async = true;
 
     document.body.appendChild(script);
   }, []);
 
+  useEffect(() => {
+    void profileId;
+    void resumeId;
+  }, [profileId, resumeId]);
+
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
-
+  const [inputMode, setInputMode] = useState<ResumeInputMode>("upload");
+  const [resumeText, setResumeText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [proof, setProof] = useState<UploadProof | null>(null);
-  const [selectedSource, setSelectedSource] = useState<"device" | "google-drive" | "dropbox">("device");
+  const [selectedSource, setSelectedSource] = useState<
+    "device" | "google-drive" | "dropbox"
+  >("device");
   const [isGoogleDriveLoading, setIsGoogleDriveLoading] = useState(false);
 
-  useEffect(() => {
-    console.log("✅ Step2Client mounted", { profileId, resumeId });
-    console.log("ENV CHECK:", {
-      driveClientId: process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID ? "present" : "missing",
-      driveApiKey: process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY ? "present" : "missing",
-    });
-    
-  }, [profileId, resumeId]);
-
-  const allowed = useMemo(() => [".pdf", ".doc", ".docx", ".txt", ".rtf", ".html"], []);
+  const allowed = useMemo(
+    () => [".pdf", ".doc", ".docx", ".txt", ".rtf", ".html"],
+    []
+  );
   const accept = useMemo(() => allowed.join(","), [allowed]);
+  const canContinue =
+    inputMode === "paste" ? resumeText.trim().length > 0 : Boolean(file);
 
   function pickFile() {
+    setInputMode("upload");
     setSelectedSource("device");
     inputRef.current?.click();
   }
 
   async function testGoogleApiKey(apiKey: string) {
-    // This endpoint accepts API keys (no OAuth), returns 400 if missing params, 403 if key blocked/invalid
     const url = `https://www.googleapis.com/drive/v3/files?fields=files(id)&pageSize=1&key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url);
     const text = await res.text();
     console.log("KEY TEST 2 status:", res.status);
     console.log("KEY TEST 2 body:", text.slice(0, 500));
   }
-  async function pickFromGoogleDrive() {
-    let clientId = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID);
-    let apiKey = sanitizeGoogleConfigValue(process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY);
 
-    //await testGoogleApiKey(apiKey);
+  async function pickFromGoogleDrive() {
+    let clientId = sanitizeGoogleConfigValue(
+      process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID
+    );
+    let apiKey = sanitizeGoogleConfigValue(
+      process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY
+    );
 
     if (!clientId || !apiKey) {
       const configResponse = await fetch("/api/integrations/google-drive/config", {
@@ -188,22 +195,19 @@ export default function Step2Client({
       });
 
       if (configResponse.ok) {
-        const config = (await configResponse.json()) as { config?: GoogleDriveConfig };
+        const config = (await configResponse.json()) as {
+          config?: GoogleDriveConfig;
+        };
         clientId = sanitizeGoogleConfigValue(config.config?.clientId);
         apiKey = sanitizeGoogleConfigValue(config.config?.apiKey);
       }
     }
 
-      if (!clientId || !apiKey) {
-      setSaveError("Google Drive import is not configured yet. Missing client ID or API key.");
+    if (!clientId || !apiKey) {
+      setSaveError("Google Drive import is not configured yet.");
       return;
     }
 
-    // 🔐 Tell TypeScript these are definitely strings
-    apiKey = apiKey!;
-    clientId = clientId!;
-
-    // Now this is OK
     await testGoogleApiKey(apiKey);
 
     setIsGoogleDriveLoading(true);
@@ -219,24 +223,23 @@ export default function Step2Client({
         throw new Error("Google Drive tools are unavailable right now.");
       }
 
-     // Load the modules first
-    await new Promise<void>((resolve, reject) => {
-      window.gapi!.load("client:picker", {
-        callback: () => resolve(),
-        onerror: () => reject(new Error("Failed to load Google Picker module.")),
-        timeout: 10000,
-        ontimeout: () => reject(new Error("Google Picker module load timed out.")),
+      await new Promise<void>((resolve, reject) => {
+        window.gapi!.load("client:picker", {
+          callback: () => resolve(),
+          onerror: () => reject(new Error("Failed to load Google Picker module.")),
+          timeout: 10000,
+          ontimeout: () =>
+            reject(new Error("Google Picker module load timed out.")),
+        });
       });
-    });
 
-    // NOW check google identity + picker objects
-    if (!window.google?.accounts?.oauth2) {
-      throw new Error("Google Identity Services failed to load.");
-    }
+      if (!window.google?.accounts?.oauth2) {
+        throw new Error("Google Identity Services failed to load.");
+      }
 
-    if (!window.google?.picker) {
-      throw new Error("Google Picker failed to initialize.");
-    }
+      if (!window.google?.picker) {
+        throw new Error("Google Picker failed to initialize.");
+      }
 
       await window.gapi.client.init({
         apiKey,
@@ -249,7 +252,9 @@ export default function Step2Client({
           scope: GOOGLE_DRIVE_SCOPE,
           callback: (response) => {
             if (response.error || !response.access_token) {
-              reject(new Error(response.error || "Unable to sign in to Google Drive."));
+              reject(
+                new Error(response.error || "Unable to sign in to Google Drive.")
+              );
               return;
             }
 
@@ -264,31 +269,23 @@ export default function Step2Client({
 
         tokenClient.requestAccessToken({ prompt: "consent" });
       });
-      console.log("ACCESS TOKEN:", accessToken ? "present" : "missing");
-      console.log("ACCESS TOKEN LEN:", accessToken?.length);
-      console.log("DEV KEY DEBUG:", {
-        startsWithAIza: apiKey.startsWith("AIza"),
-        apiKeyLen: apiKey.length,
-        apiKeyPreview: `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`,
-      });
 
-      const selectedDoc = await new Promise<{ id: string; name: string; mimeType?: string }>((resolve, reject) => {
+      const selectedDoc = await new Promise<{
+        id: string;
+        name: string;
+        mimeType?: string;
+      }>((resolve, reject) => {
         const pickerAny = window.google!.picker as any;
-        // ✅ Use DOCS view id explicitly
         const docsView = new pickerAny.DocsView(pickerAny.ViewId.DOCS)
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(false)
-        // ✅ IMPORTANT: show resumes (PDF/DOC/DOCX/etc)
-        .setMimeTypes(
-          "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document"
-        );
+          .setIncludeFolders(true)
+          .setSelectFolderEnabled(false)
+          .setMimeTypes(
+            "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document"
+          );
 
-
-
-          const pickerBuilder = new pickerAny.PickerBuilder()
+        const picker = new pickerAny.PickerBuilder()
           .setDeveloperKey(apiKey)
           .setOAuthToken(accessToken)
-          // helps picker know your exact origin (localhost / prod)
           .setOrigin(window.location.origin as any)
           .addView(docsView)
           .setCallback((data: any) => {
@@ -297,22 +294,22 @@ export default function Step2Client({
               return;
             }
             if (data.action !== window.google?.picker?.Action.PICKED) return;
-        
+
             const pickedFile = data.docs?.[0];
             if (!pickedFile) {
               reject(new Error("No file was selected."));
               return;
             }
+
             resolve(pickedFile);
           })
           .build();
 
-        const picker = pickerBuilder;
-        
         picker.setVisible(true);
       });
 
-      const isGoogleDoc = selectedDoc.mimeType === "application/vnd.google-apps.document";
+      const isGoogleDoc =
+        selectedDoc.mimeType === "application/vnd.google-apps.document";
       const downloadUrl = isGoogleDoc
         ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
             selectedDoc.id
@@ -320,26 +317,33 @@ export default function Step2Client({
         : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
             selectedDoc.id
           )}?alt=media&supportsAllDrives=true`;
-    
-    const fileResponse = await fetch(downloadUrl, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    
+
+      const fileResponse = await fetch(downloadUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
 
       if (!fileResponse.ok) {
-        throw new Error("Could not download the selected file from Google Drive.");
+        throw new Error(
+          "Could not download the selected file from Google Drive."
+        );
       }
 
       const blob = await fileResponse.blob();
       const pickedFile = new File([blob], selectedDoc.name, {
-        type: isGoogleDoc ? "application/pdf" : selectedDoc.mimeType || blob.type || "application/octet-stream",
+        type:
+          isGoogleDoc
+            ? "application/pdf"
+            : selectedDoc.mimeType || blob.type || "application/octet-stream",
       });
 
       setSelectedSource("google-drive");
       handleFile(pickedFile);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Google Drive import failed.";
-      const maybeInvalidApiKey = /developer key|api key|invalid/i.test(errorMessage);
+      const errorMessage =
+        error instanceof Error ? error.message : "Google Drive import failed.";
+      const maybeInvalidApiKey = /developer key|api key|invalid/i.test(
+        errorMessage
+      );
 
       setSaveError(
         maybeInvalidApiKey
@@ -352,6 +356,7 @@ export default function Step2Client({
   }
 
   function pickFromCloud(source: "google-drive" | "dropbox") {
+    setInputMode("upload");
     setSelectedSource(source);
     if (source === "google-drive") {
       void pickFromGoogleDrive();
@@ -368,156 +373,134 @@ export default function Step2Client({
 
     window.Dropbox.choose({
       success: async (files: any[]) => {
-        const file = files[0];
-
-        const response = await fetch(file.link);
+        const selectedFile = files[0];
+        const response = await fetch(selectedFile.link);
         const blob = await response.blob();
-        const fileObj = new File([blob], file.name, { type: blob.type });
+        const fileObj = new File([blob], selectedFile.name, { type: blob.type });
         setSelectedSource("dropbox");
         handleFile(fileObj);
       },
-
       cancel: () => {},
-
       linkType: "direct",
-
       multiselect: false,
-
       extensions: [".pdf", ".doc", ".docx"],
     });
   };
 
-  function handleFile(f: File) {
-    setFile(f);
+  function handleFile(nextFile: File) {
+    setInputMode("upload");
+    setFile(nextFile);
     setProof(null);
     setSaveError(null);
   }
 
   function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) handleFile(f);
+    const nextFile = e.target.files?.[0];
+    if (nextFile) handleFile(nextFile);
   }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) handleFile(f);
+    const nextFile = e.dataTransfer.files?.[0];
+    if (nextFile) handleFile(nextFile);
   }
 
-  // async function uploadResumeAndContinue(fileToUpload?: File) {
-  //   const targetFile = fileToUpload ?? file;
+  async function uploadResumeAndContinue(fileToUpload?: File) {
+    const candidate: File | null | undefined = fileToUpload ?? file;
 
-  //   if (!targetFile) {
-  //     setSaveError("Please choose a resume file first.");
-  //     return;
-  //   }
-
-  //   setIsSaving(true);
-  //   setSaveError(null);
-  //   setProof(null);
-
-  //   try {
-  //     const fd = new FormData();
-  //     fd.append("resume", targetFile);
-
-  //     const res = await fetch("/api/onboarding/resume", {
-  //       method: "POST",
-  //       body: fd,
-  //     });
-
-  //     const data = await res.json().catch(() => null);
-
-  //     if (!res.ok || !data?.resume?.id) {
-  //       throw new Error(data?.error || "Upload failed");
-  //     }
-
-  //     setProof({ savedTo: data.savedTo, resume: data.resume });
-
-  //     router.push(
-  //       `/questions/step2Resume?resumeId=${encodeURIComponent(data.resume.id)}`
-  //     );
-  //   } catch (e: unknown) {
-  //     const errorMessage =
-  //       e instanceof Error
-  //         ? e.message
-  //         : "Something went wrong while saving your resume.";
-  //     setSaveError(errorMessage);
-  //   } finally {
-  //     setIsSaving(false);
-  //   }
-  // }
-
-// /app/questions/step2/step2Client.tsx
-
-// /app/questions/step2/step2Client.tsx
-
-async function uploadResumeAndContinue(fileToUpload?: File) {
-  const candidate: File | null | undefined = fileToUpload ?? file;
-
-  // ✅ Guard: must be a real File/Blob
-  if (!(candidate instanceof File)) {
-    const debugCandidate: any = candidate;
-    console.error("UPLOAD ERROR: candidate is not a File", {
-      candidate: debugCandidate,
-      type: typeof debugCandidate,
-      isBlob: debugCandidate instanceof Blob,
-      isFile: debugCandidate instanceof File,
-    });
-    setSaveError("Please choose a valid resume file (PDF/DOCX) and try again.");
-    return;
-  }
-
-  setIsSaving(true);
-  setSaveError(null);
-  setProof(null);
-
-  try {
-    const fd = new FormData();
-
-    // ✅ candidate is guaranteed a real File now
-    fd.append("resume", candidate, candidate.name);
-
-    const res = await fetch("/api/onboarding/resume", {
-      method: "POST",
-      body: fd,
-    });
-
-    const data = await res.json().catch(() => null);
-
-    const resumeId = data?.resumeId ?? data?.resume?.id;
-
-    if (!res.ok || !resumeId) {
-      throw new Error(data?.error || "Upload failed");
+    if (!(candidate instanceof File)) {
+      console.error("Resume upload failed: candidate is not a File", {
+        candidate,
+        type: typeof candidate,
+      });
+      setSaveError("Please choose a valid resume file and try again.");
+      return;
     }
 
-    setProof({ savedTo: data.savedTo, resume: data.resume });
-    router.push(`/questions/step2Resume?resumeId=${encodeURIComponent(resumeId)}`);
-  } catch (e: unknown) {
-    setSaveError(e instanceof Error ? e.message : "Something went wrong while saving your resume.");
-  } finally {
-    setIsSaving(false);
+    setIsSaving(true);
+    setSaveError(null);
+    setProof(null);
+
+    try {
+      const fd = new FormData();
+      fd.append("resume", candidate, candidate.name);
+
+      const res = await fetch("/api/onboarding/resume", {
+        method: "POST",
+        body: fd,
+      });
+
+      const data = await res.json().catch(() => null);
+      const nextResumeId = data?.resumeId ?? data?.resume?.id;
+
+      if (!res.ok || !nextResumeId) {
+        throw new Error(data?.error || "Upload failed");
+      }
+
+      setProof({ savedTo: data.savedTo, resume: data.resume });
+      router.push(
+        `/questions/step2Resume?resumeId=${encodeURIComponent(nextResumeId)}`
+      );
+    } catch (error) {
+      console.error("Resume upload failed", error);
+      setSaveError("We couldn't process your resume right now. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   }
-}
+
+  async function savePastedResumeAndContinue() {
+    const text = resumeText.trim();
+
+    if (!text) {
+      setSaveError("Paste your resume text to continue.");
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+    setProof(null);
+
+    try {
+      const fd = new FormData();
+      fd.append("resumeText", text);
+
+      const res = await fetch("/api/onboarding/resume", {
+        method: "POST",
+        body: fd,
+      });
+
+      const data = await res.json().catch(() => null);
+      const nextResumeId = data?.resumeId ?? data?.resume?.id;
+
+      if (!res.ok || !nextResumeId) {
+        throw new Error(data?.error || "Resume paste failed");
+      }
+
+      setProof({ savedTo: data.savedTo, resume: data.resume });
+      router.push(
+        `/questions/step2Resume?resumeId=${encodeURIComponent(nextResumeId)}`
+      );
+    } catch (error) {
+      console.error("Resume paste failed", error);
+      setSaveError("We couldn't process your resume right now. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
   if (isSaving) {
     return <ResumeParsingLoadingScreen />;
   }
 
-
   return (
-    <div className="relative min-h-[70vh] overflow-hidden mt-[50]">
-      {/* ===== Background: copy/paste Hirexa-style hero ===== */}
+    <div className="relative mt-[50] min-h-[70vh] overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        {/* Base gradient */}
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900" />
-
-        {/* Soft glow blobs */}
-        <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-sky-500/25 blur-3xl" />
+        <div className="absolute -left-40 -top-40 h-[520px] w-[520px] rounded-full bg-sky-500/25 blur-3xl" />
         <div className="absolute -bottom-56 -right-56 h-[620px] w-[620px] rounded-full bg-indigo-500/20 blur-3xl" />
-        <div className="absolute top-1/3 left-1/2 h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
-
-        {/* Subtle grid */}
+        <div className="absolute left-1/2 top-1/3 h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
         <div
           className="absolute inset-0 opacity-[0.06]"
           style={{
@@ -526,38 +509,64 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
             backgroundSize: "64px 64px",
           }}
         />
-
-        {/* Top/bottom fade */}
         <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/30" />
       </div>
-      {/* ===== End background ===== */}
 
       <div className="mx-auto max-w-5xl px-6 py-14">
-        {/* Header */}
         <div className="flex flex-col gap-2">
           <h1 className="text-3xl font-bold tracking-tight text-white">
-            Upload your resume
+            Add your resume
           </h1>
           <p className="text-sm text-white/70">
-            Drag & drop a file or import it from your cloud storage. We’ll extract
-            your work experience automatically.
+            Upload a file or paste your resume text. Hirexa will parse your work
+            experience and send you into the existing review flow.
           </p>
         </div>
 
-        {/* Status */}
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setInputMode("upload");
+              setSaveError(null);
+            }}
+            className={[
+              "rounded-full px-4 py-2 text-sm font-semibold transition",
+              inputMode === "upload"
+                ? "bg-sky-500 text-white shadow-lg shadow-sky-500/25"
+                : "border border-white/15 bg-white/5 text-white hover:bg-white/10",
+            ].join(" ")}
+          >
+            Upload Resume File
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInputMode("paste");
+              setSaveError(null);
+            }}
+            className={[
+              "rounded-full px-4 py-2 text-sm font-semibold transition",
+              inputMode === "paste"
+                ? "bg-sky-500 text-white shadow-lg shadow-sky-500/25"
+                : "border border-white/15 bg-white/5 text-white hover:bg-white/10",
+            ].join(" ")}
+          >
+            Paste Resume Text
+          </button>
+        </div>
+
         <div className="mt-6 rounded-2xl border border-white/15 bg-white/5 p-4 backdrop-blur-sm">
-          {isSaving ? (
-            <div className="text-sm text-white">Saving resume…</div>
-          ) : saveError ? (
+          {saveError ? (
             <div className="text-sm text-red-200">
               <div className="font-semibold">Not saved</div>
               <div className="mt-1 text-white/80">{saveError}</div>
             </div>
           ) : proof ? (
             <div className="text-sm text-emerald-200">
-              <div className="font-semibold">Saved ✅</div>
+              <div className="font-semibold">Saved</div>
               <div className="mt-1 text-xs text-white/70">
-                Resume ID: <span className="font-mono">{proof.resume.id}</span> •
+                Resume ID: <span className="font-mono">{proof.resume.id}</span> |{" "}
                 Profile ID:{" "}
                 <span className="font-mono">
                   {proof.savedTo?.profileId ??
@@ -567,42 +576,39 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
                 </span>
               </div>
               <div className="mt-1 text-xs text-white/70">
-                File:{" "}
+                Source:{" "}
                 <span className="font-semibold text-white">
                   {proof.resume.fileName ??
                     proof.resume.filename ??
-                    "Uploaded resume"}
-                </span>{" "}
-                {typeof proof.resume.sizeBytes === "number" ? (
-                  <>• {(proof.resume.sizeBytes / 1024 / 1024).toFixed(2)} MB</>
-                ) : null}
+                    "Resume input"}
+                </span>
               </div>
             </div>
           ) : (
             <div className="text-sm text-white/70">
-              Choose a file, then click Next to save it.
+              {inputMode === "paste"
+                ? "Paste your resume text, then click Continue to save it."
+                : "Choose a resume file, then click Continue to save it."}
             </div>
           )}
         </div>
 
-        {/* Main grid */}
         <div className="mt-10 grid gap-6 md:grid-cols-[1.4fr_1fr]">
-          {/* Dropzone */}
-          <div
-            className={[
-              "relative overflow-hidden rounded-2xl border bg-white/5 shadow-lg shadow-black/20 backdrop-blur-sm",
-              dragOver ? "border-sky-400 ring-4 ring-sky-400/20" : "border-white/15",
-            ].join(" ")}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}
-          >
-            <div className="p-7">
-              <div className="flex items-start justify-between gap-4">
-                <div>
+          {inputMode === "upload" ? (
+            <>
+              <div
+                className={[
+                  "relative overflow-hidden rounded-2xl border bg-white/5 shadow-lg shadow-black/20 backdrop-blur-sm",
+                  dragOver ? "border-sky-400 ring-4 ring-sky-400/20" : "border-white/15",
+                ].join(" ")}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={onDrop}
+              >
+                <div className="p-7">
                   <div className="inline-flex items-center gap-2 rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200">
                     Resume
                     <span className="h-1 w-1 rounded-full bg-sky-300" />
@@ -613,107 +619,152 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
                     {file ? "File ready to upload" : "Drop your file here"}
                   </h2>
                   <p className="mt-1 text-sm text-white/70">
-                    {file ? "Click Next to save it." : "Or choose a file from your device."}
+                    {file
+                      ? "Click Continue to save it."
+                      : "Or choose a file from your device."}
                   </p>
+
+                  <div className="mt-6 rounded-xl border border-white/15 bg-black/20 p-4">
+                    {file ? (
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-white">
+                            {file.name}
+                          </div>
+                          <div className="mt-1 text-xs text-white/70">
+                            {(file.size / 1024 / 1024).toFixed(2)} MB |{" "}
+                            {selectedSource === "google-drive"
+                              ? "Google Drive"
+                              : selectedSource === "dropbox"
+                                ? "Dropbox"
+                                : "Device"}{" "}
+                            | {proof ? "Saved" : "Ready"}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFile(null);
+                            setSelectedSource("device");
+                            setProof(null);
+                            setSaveError(null);
+                            if (inputRef.current) inputRef.current.value = "";
+                          }}
+                          className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={pickFile}
+                        className="inline-flex w-full items-center justify-center rounded-full bg-sky-500 px-5 py-2 text-sm font-semibold text-white transition hover:bg-sky-400"
+                      >
+                        Choose file
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept={accept}
+                    onChange={onInputChange}
+                    className="hidden"
+                  />
                 </div>
               </div>
 
-              {/* File row */}
-              <div className="mt-6 rounded-xl border border-white/15 bg-black/20 p-4">
-                {file ? (
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-white">
-                        {file.name}
-                      </div>
-                      <div className="mt-1 text-xs text-white/70">
-                        {(file.size / 1024 / 1024).toFixed(2)} MB •{" "}
-                        {selectedSource === "google-drive"
-                          ? "Google Drive"
-                          : selectedSource === "dropbox"
-                          ? "Dropbox"
-                          : "Device"}{" "}
-                        •{" "}
-                        {isSaving
-                          ? "Saving…"
-                          : proof
-                          ? "Saved"
-                          : saveError
-                          ? "Not saved"
-                          : "Ready"}
-                      </div>
-                    </div>
+              <div className="rounded-2xl border border-white/15 bg-white/5 p-6 shadow-lg shadow-black/20 backdrop-blur-sm">
+                <div className="text-sm font-semibold text-white">
+                  Import from cloud
+                </div>
+                <div className="mt-1 text-xs text-white/70">
+                  Select your resume directly from Google Drive, or import it from Dropbox.
+                </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFile(null);
-                        setSelectedSource("device");
-                        setProof(null);
-                        setSaveError(null);
-                        if (inputRef.current) inputRef.current.value = "";
-                      }}
-                      className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
-                    >
-                      Change
-                    </button>
-                  </div>
-                ) : (
+                <div className="mt-4 space-y-3">
                   <button
                     type="button"
-                    onClick={pickFile}
-                    className="inline-flex w-full items-center justify-center rounded-full bg-sky-500 px-5 py-2 text-sm font-semibold text-white transition hover:bg-sky-400"
+                    onClick={() => pickFromCloud("google-drive")}
+                    disabled={isGoogleDriveLoading}
+                    className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
                   >
-                    Choose file
+                    {isGoogleDriveLoading
+                      ? "Opening Google Drive..."
+                      : "Import from Google Drive"}
                   </button>
-                )}
+
+                  <button
+                    type="button"
+                    onClick={importFromDropbox}
+                    className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+                  >
+                    Import from Dropbox
+                  </button>
+                </div>
+
+                <div className="mt-6 rounded-xl bg-white/10 p-4 text-xs text-white/70">
+                  Google Drive files are downloaded and saved automatically after you pick one.
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="rounded-2xl border border-white/15 bg-white/5 p-7 shadow-lg shadow-black/20 backdrop-blur-sm">
+                <div className="inline-flex items-center gap-2 rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200">
+                  Resume Text
+                  <span className="h-1 w-1 rounded-full bg-sky-300" />
+                  Paste
+                </div>
+
+                <h2 className="mt-3 text-lg font-semibold text-white">
+                  Paste your resume content
+                </h2>
+                <p className="mt-1 text-sm text-white/70">
+                  Copy the full text of your resume here, including job titles,
+                  company names, dates, and bullet points.
+                </p>
+
+                <div className="mt-6">
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-white/60">
+                    Paste your resume here
+                  </label>
+                  <textarea
+                    value={resumeText}
+                    onChange={(e) => {
+                      setResumeText(e.target.value);
+                      setProof(null);
+                      setSaveError(null);
+                    }}
+                    rows={18}
+                    placeholder="Paste your full resume text here."
+                    className="min-h-[26rem] w-full rounded-2xl border border-white/15 bg-black/25 px-4 py-4 text-sm leading-7 text-white placeholder:text-white/35 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+                  />
+                  <div className="mt-2 text-xs text-white/55">
+                    {resumeText.trim().length.toLocaleString()} characters
+                  </div>
+                </div>
               </div>
 
-              <input
-                ref={inputRef}
-                type="file"
-                accept={accept}
-                onChange={onInputChange}
-                className="hidden"
-              />
-            </div>
-          </div>
+              <div className="rounded-2xl border border-white/15 bg-white/5 p-6 shadow-lg shadow-black/20 backdrop-blur-sm">
+                <div className="text-sm font-semibold text-white">Paste tips</div>
+                <div className="mt-4 space-y-3 text-sm leading-6 text-white/70">
+                  <p>Include your recent roles, companies, date ranges, and bullet points.</p>
+                  <p>Plain text works best. Keep headings like Experience and Skills when possible.</p>
+                  <p>You can switch back to Upload Resume File any time if you prefer PDF or DOCX.</p>
+                </div>
 
-          {/* Cloud imports */}
-          <div className="rounded-2xl border border-white/15 bg-white/5 p-6 shadow-lg shadow-black/20 backdrop-blur-sm">
-            <div className="text-sm font-semibold text-foreground">
-              Import from cloud
-            </div>
-            <div className="mt-1 text-xs text-gray-600">
-              Select your resume directly from Google Drive, or open Dropbox in a new tab.
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <button
-                type="button"
-                onClick={() => pickFromCloud("google-drive")}
-                disabled={isGoogleDriveLoading}
-                className="inline-flex w-full items-center justify-center rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
-              >
-                {isGoogleDriveLoading ? "Opening Google Drive..." : "Import from Google Drive"}
-              </button>
-
-              <button
-                type="button"
-                onClick={importFromDropbox}
-                className="inline-flex w-full items-center justify-center rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
-              >
-                Import from Dropbox
-              </button>
-            </div>
-
-            <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs text-gray-600">
-              Google Drive files are downloaded and saved automatically after you pick one.
-            </div>
-          </div>
+                <div className="mt-6 rounded-xl bg-white/10 p-4 text-xs text-white/70">
+                  Hirexa will save the pasted content as your resume record and continue to the same review step.
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Footer actions */}
         <div className="mt-8 flex items-center justify-between">
           <Link
             href="/onboarding/job-interest"
@@ -724,14 +775,20 @@ async function uploadResumeAndContinue(fileToUpload?: File) {
 
           <button
             type="button"
-            onClick={() => uploadResumeAndContinue()}
-            disabled={!file || isSaving}
+            onClick={() =>
+              inputMode === "paste"
+                ? void savePastedResumeAndContinue()
+                : void uploadResumeAndContinue()
+            }
+            disabled={!canContinue || isSaving}
             className={[
               "rounded-full px-8 py-3 font-medium text-white transition",
-              !file || isSaving ? "cursor-not-allowed bg-white/30" : "bg-sky-500 hover:bg-sky-400",
+              !canContinue || isSaving
+                ? "cursor-not-allowed bg-white/30"
+                : "bg-sky-500 hover:bg-sky-400",
             ].join(" ")}
           >
-            {isSaving ? "Saving..." : "Next"}
+            Continue
           </button>
         </div>
       </div>

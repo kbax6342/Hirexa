@@ -10,6 +10,11 @@ import {
   setCachedProfile,
 } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
+import {
+  getProfileDobValue,
+  PrivateProfileFieldValidationError,
+  sanitizePrivateProfileFields,
+} from "@/app/lib/profile/privateProfileFields";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -31,26 +36,6 @@ type ProfileBody = {
 function normalizeText(value: unknown) {
   const text = String(value ?? "").trim();
   return text.length > 0 ? text : null;
-}
-
-function parseDob(value: unknown) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-
-  const normalized = raw.includes("/")
-    ? (() => {
-        const [mm, dd, yyyy] = raw.split("/");
-        if (!mm || !dd || !yyyy) return null;
-        return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
-      })()
-    : raw;
-
-  if (!normalized) return null;
-
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return null;
-
-  return date;
 }
 
 function planTypeFromSubscription(
@@ -79,6 +64,30 @@ async function upsertUserProfileByUserId(userId: string, data: Record<string, an
     create: { userId, ...data },
     update: data,
   });
+}
+
+type SerializedProfile<T extends { dobEncrypted?: unknown; dob?: unknown }> = Omit<
+  T,
+  "dobEncrypted" | "dob"
+> & { dob: string | null };
+
+function serializeProfileResponse<
+  T extends {
+    dobEncrypted?: unknown;
+    dob?: unknown;
+  },
+>(profile: T | null): SerializedProfile<T> | null {
+  if (!profile) return null;
+
+  const { dobEncrypted, ...rest } = profile as Record<string, unknown>;
+
+  return {
+    ...rest,
+    dob: getProfileDobValue({
+      dobEncrypted,
+      dob: (profile as { dob?: unknown }).dob,
+    }),
+  } as SerializedProfile<T>;
 }
 
 async function syncStripeSubscriptionStatus(params: {
@@ -187,6 +196,13 @@ export async function POST(req: Request) {
     }
 
     const normalizedEmail = normalizeText(body.email) ?? (session?.user as any)?.email ?? null;
+    const privateFields = sanitizePrivateProfileFields({
+      dob: body.dob,
+      address: body.address,
+      city: body.city,
+      postalCode: body.postalCode,
+      state: body.state,
+    });
 
     const profile = await prisma.userProfile.upsert({
       where: { userId },
@@ -197,11 +213,15 @@ export async function POST(req: Request) {
         email: normalizedEmail,
         subscriptionEmail: normalizedEmail,
         phone: normalizeText(body.phone),
-        dob: parseDob(body.dob),
-        address: normalizeText(body.address),
-        city: normalizeText(body.city),
-        postalCode: normalizeText(body.postalCode),
-        state: normalizeText(body.state),
+        dob: null,
+        dobEncrypted: privateFields.dobEncrypted,
+        address: privateFields.address,
+        city: privateFields.city,
+        citySearch: privateFields.citySearch,
+        postalCode: privateFields.postalCode,
+        postalCodeSearch: privateFields.postalCodeSearch,
+        state: privateFields.state,
+        stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
       },
@@ -211,11 +231,15 @@ export async function POST(req: Request) {
         email: normalizedEmail ?? undefined,
         subscriptionEmail: normalizedEmail ?? undefined,
         phone: normalizeText(body.phone),
-        dob: parseDob(body.dob),
-        address: normalizeText(body.address),
-        city: normalizeText(body.city),
-        postalCode: normalizeText(body.postalCode),
-        state: normalizeText(body.state),
+        dob: null,
+        dobEncrypted: privateFields.dobEncrypted,
+        address: privateFields.address,
+        city: privateFields.city,
+        citySearch: privateFields.citySearch,
+        postalCode: privateFields.postalCode,
+        postalCodeSearch: privateFields.postalCodeSearch,
+        state: privateFields.state,
+        stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
       },
@@ -227,6 +251,7 @@ export async function POST(req: Request) {
         email: true,
         phone: true,
         dob: true,
+        dobEncrypted: true,
         address: true,
         city: true,
         postalCode: true,
@@ -238,8 +263,12 @@ export async function POST(req: Request) {
 
     invalidateCachedProfile({ userId, guestId });
 
-    return NextResponse.json({ ok: true, profile });
+    return NextResponse.json({ ok: true, profile: serializeProfileResponse(profile) });
   } catch (e: unknown) {
+    if (e instanceof PrivateProfileFieldValidationError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
+
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
@@ -315,16 +344,17 @@ export async function GET() {
           select: buildProfileSelect(),
         });
 
-    const responseProfile = profile
+    const serializedProfile = serializeProfileResponse(profile);
+    const responseProfile = serializedProfile
       ? {
-          ...profile,
+          ...serializedProfile,
           expertise: (() => {
             if (
-              profile.keyQuestions &&
-              typeof profile.keyQuestions === "object" &&
-              !Array.isArray(profile.keyQuestions)
+              serializedProfile.keyQuestions &&
+              typeof serializedProfile.keyQuestions === "object" &&
+              !Array.isArray(serializedProfile.keyQuestions)
             ) {
-              const rawExpertise = (profile.keyQuestions as Record<string, unknown>).expertise;
+              const rawExpertise = (serializedProfile.keyQuestions as Record<string, unknown>).expertise;
               if (Array.isArray(rawExpertise)) {
                 return rawExpertise.map((item) => String(item ?? ""));
               }
@@ -332,9 +362,9 @@ export async function GET() {
             return [];
           })(),
           profileImageUrl:
-            profile.profileImage && profile.profileImageMimeType
-              ? `data:${profile.profileImageMimeType};base64,${Buffer.from(
-                  profile.profileImage
+            serializedProfile.profileImage && serializedProfile.profileImageMimeType
+              ? `data:${serializedProfile.profileImageMimeType};base64,${Buffer.from(
+                  serializedProfile.profileImage
                 ).toString("base64")}`
               : null,
         }
@@ -401,6 +431,7 @@ function buildProfileSelect() {
     profileImageFilename: true,
 
     dob: true,
+    dobEncrypted: true,
     address: true,
     city: true,
     postalCode: true,

@@ -18,5 +18,5 @@ export async function startOnboarding() {
     cookieStore.set(GUEST_USER_COOKIE, guestId, getGuestUserCookieOptions());
   }
 
-  redirect("/questions/step2");
+  redirect("/resume");
 }

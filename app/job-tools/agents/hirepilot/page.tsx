@@ -1,15 +1,36 @@
 import { redirect } from "next/navigation";
 
-import { auth } from "@/auth";
+type HirePilotLegacyPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
 
-import HirePilotClient from "./HirePilotClient";
+function buildQueryString(
+  params: Record<string, string | string[] | undefined> | undefined
+) {
+  const search = new URLSearchParams();
 
-export default async function HirePilotPage() {
-  const session = await auth();
+  for (const [key, rawValue] of Object.entries(params ?? {})) {
+    if (typeof rawValue === "string" && rawValue.trim()) {
+      search.set(key, rawValue);
+      continue;
+    }
 
-  if (!session?.user) {
-    redirect("/login");
+    if (Array.isArray(rawValue)) {
+      for (const value of rawValue) {
+        if (value?.trim()) {
+          search.append(key, value);
+        }
+      }
+    }
   }
 
-  return <HirePilotClient />;
+  const query = search.toString();
+  return query ? `?${query}` : "";
+}
+
+export default async function HirePilotLegacyPage({
+  searchParams,
+}: HirePilotLegacyPageProps) {
+  const queryString = buildQueryString(await searchParams);
+  redirect(`/hirepilot${queryString}`);
 }

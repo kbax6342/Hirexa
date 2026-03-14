@@ -1,44 +1,84 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { getStripeClient } from "../../../lib/stripeClient";
-import { prisma } from "@/app/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
-import { Prisma } from "@prisma/client";
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+import { prisma } from "@/app/lib/prisma";
+import { getStripeClient } from "../../../lib/stripeClient";
+import {
+  BILLING_PRODUCT_KEYS,
+  getStripePriceDetailsFromSubscription,
+  getUserBillingWhere,
+  upsertUserBillingRecord,
+} from "@/app/lib/billing/userBilling";
 
 type PlanType = "trial" | "monthly" | "yearly";
 
-async function getUserProfileIdFromSubscription(
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "payment approved",
+  "payed",
+]);
+
+function normalizeCustomerId(
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
+): string | null {
+  if (!customer) return null;
+  return typeof customer === "string" ? customer : customer.id;
+}
+
+async function getUserProfileFromSubscription(
   stripeClient: Stripe,
   subscriptionId: string
-): Promise<string | null> {
+): Promise<{ id: string; userId: string | null } | null> {
   const subscription = await stripeClient.subscriptions.retrieve(subscriptionId);
 
   const profileIdFromMetadata = subscription.metadata?.hirexa_user_profile_id;
-  if (profileIdFromMetadata) return profileIdFromMetadata;
+  if (profileIdFromMetadata) {
+    const profile = await prisma.userProfile.findUnique({
+      where: { id: profileIdFromMetadata },
+      select: { id: true, userId: true },
+    });
+
+    if (profile?.id) return profile;
+  }
 
   const userIdFromMetadata = subscription.metadata?.hirexa_user_id;
   if (!userIdFromMetadata) return null;
 
   const profile = await prisma.userProfile.findUnique({
     where: { userId: userIdFromMetadata },
-    select: { id: true },
+    select: { id: true, userId: true },
   });
 
-  return profile?.id ?? null;
+  return profile ?? null;
 }
 
-async function applyPaymentStatus(
-  userProfileId: string,
-  planType: PlanType,
-  status: "payment approved" | "payed",
-  paidAt = new Date(),
-  subscriptionId?: string | null,
-  customerId?: string | null
-) {
+async function applyPaymentStatus(params: {
+  userProfileId: string;
+  userId?: string | null;
+  planType: PlanType;
+  status: "payment approved" | "payed" | "active" | "trialing" | "past_due" | "unpaid" | "canceled" | "incomplete";
+  paidAt?: Date;
+  subscriptionId?: string | null;
+  customerId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  priceId?: string | null;
+  productId?: string | null;
+  currentPeriodStart?: Date | null;
+  currentPeriodEnd?: Date | null;
+  cancelAtPeriodEnd?: boolean;
+  canceledAt?: Date | null;
+  trialStart?: Date | null;
+  trialEnd?: Date | null;
+}) {
+  const paidAt = params.paidAt ?? new Date();
   const current = await prisma.userProfile.findUnique({
-    where: { id: userProfileId },
+    where: { id: params.userProfileId },
     select: { lastPaymentReceivedAt: true },
   });
 
@@ -46,41 +86,77 @@ async function applyPaymentStatus(
     !!current?.lastPaymentReceivedAt &&
     paidAt.getTime() - current.lastPaymentReceivedAt.getTime() <= THIRTY_DAYS_MS;
 
-  const resolvedStatus = status === "payed" && within30Days ? "payed" : status;
+  const resolvedStatus =
+    params.status === "payed" && within30Days ? "payed" : params.status;
+  const hasAccess = ACTIVE_SUBSCRIPTION_STATUSES.has(resolvedStatus);
+
+  if (params.userId) {
+    await upsertUserBillingRecord({
+      userId: params.userId,
+      productKey: BILLING_PRODUCT_KEYS.HIREXA_CORE,
+      planType: params.planType,
+      status: resolvedStatus,
+      stripeCustomerId: params.customerId ?? null,
+      stripeSubscriptionId: params.subscriptionId ?? null,
+      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+      stripePriceId: params.priceId ?? null,
+      stripeProductId: params.productId ?? null,
+      currentPeriodStart: params.currentPeriodStart ?? null,
+      currentPeriodEnd: params.currentPeriodEnd ?? null,
+      cancelAtPeriodEnd: params.cancelAtPeriodEnd ?? false,
+      canceledAt: params.canceledAt ?? null,
+      trialStart: params.trialStart ?? null,
+      trialEnd: params.trialEnd ?? null,
+      lastPaymentReceivedAt: hasAccess ? paidAt : undefined,
+      subscriptionPurchasedAt: paidAt,
+    });
+  }
 
   const data =
-    planType === "trial"
+    params.planType === "trial"
       ? {
-          trialSubscriber: true,
+          trialSubscriber: hasAccess,
           trialPlanStatus: resolvedStatus,
+          monthlySubscriber: false,
+          monthlyPlanStatus: null,
+          yearlySubscriber: false,
+          yearlyPlanStatus: null,
           lastPaymentReceivedAt: paidAt,
           subscriptionPurchasedAt: paidAt,
           subscriptionCheckedAt: new Date(),
-          stripeSubscriptionId: subscriptionId ?? undefined,
-          stripeCustomerId: customerId ?? undefined,
+          stripeSubscriptionId: params.subscriptionId ?? undefined,
+          stripeCustomerId: params.customerId ?? undefined,
         }
-      : planType === "monthly"
+      : params.planType === "monthly"
         ? {
-            monthlySubscriber: true,
+            trialSubscriber: false,
+            trialPlanStatus: null,
+            monthlySubscriber: hasAccess,
             monthlyPlanStatus: resolvedStatus,
+            yearlySubscriber: false,
+            yearlyPlanStatus: null,
             lastPaymentReceivedAt: paidAt,
             subscriptionPurchasedAt: paidAt,
             subscriptionCheckedAt: new Date(),
-            stripeSubscriptionId: subscriptionId ?? undefined,
-            stripeCustomerId: customerId ?? undefined,
+            stripeSubscriptionId: params.subscriptionId ?? undefined,
+            stripeCustomerId: params.customerId ?? undefined,
           }
         : {
-            yearlySubscriber: true,
+            trialSubscriber: false,
+            trialPlanStatus: null,
+            monthlySubscriber: false,
+            monthlyPlanStatus: null,
+            yearlySubscriber: hasAccess,
             yearlyPlanStatus: resolvedStatus,
             lastPaymentReceivedAt: paidAt,
             subscriptionPurchasedAt: paidAt,
             subscriptionCheckedAt: new Date(),
-            stripeSubscriptionId: subscriptionId ?? undefined,
-            stripeCustomerId: customerId ?? undefined,
+            stripeSubscriptionId: params.subscriptionId ?? undefined,
+            stripeCustomerId: params.customerId ?? undefined,
           };
 
   await prisma.userProfile.update({
-    where: { id: userProfileId },
+    where: { id: params.userProfileId },
     data,
   });
 }
@@ -134,11 +210,6 @@ async function saveStripePayment(data: {
   });
 }
 
-function normalizeCustomerId(customer: string | Stripe.Customer | Stripe.DeletedCustomer | null): string | null {
-  if (!customer) return null;
-  return typeof customer === "string" ? customer : customer.id;
-}
-
 async function getUserProfileIdByUserId(userId: string) {
   const profile = await prisma.userProfile.findUnique({
     where: { userId },
@@ -168,29 +239,73 @@ async function resolveHirePilotUserId(params: {
   return user?.id ?? null;
 }
 
-async function syncHirePilotBilling(params: {
+async function syncHirePilotSubscription(params: {
   userId: string;
-  unlimited?: boolean;
-  creditDelta?: number;
+  status: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  priceId?: string | null;
+  productId?: string | null;
+  currentPeriodStart?: Date | null;
+  currentPeriodEnd?: Date | null;
+  cancelAtPeriodEnd?: boolean;
+  canceledAt?: Date | null;
+  trialStart?: Date | null;
+  trialEnd?: Date | null;
+  paidAt?: Date | null;
+}) {
+  const hasAccess = ACTIVE_SUBSCRIPTION_STATUSES.has((params.status ?? "").toLowerCase());
+
+  await upsertUserBillingRecord({
+    userId: params.userId,
+    productKey: BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
+    planType: "monthly",
+    status: params.status,
+    stripeCustomerId: params.stripeCustomerId ?? null,
+    stripeSubscriptionId: params.stripeSubscriptionId ?? null,
+    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+    stripePriceId: params.priceId ?? null,
+    stripeProductId: params.productId ?? null,
+    currentPeriodStart: params.currentPeriodStart ?? null,
+    currentPeriodEnd: params.currentPeriodEnd ?? null,
+    cancelAtPeriodEnd: params.cancelAtPeriodEnd ?? false,
+    canceledAt: params.canceledAt ?? null,
+    trialStart: params.trialStart ?? null,
+    trialEnd: params.trialEnd ?? null,
+    hirePilotUnlimited: hasAccess,
+    subscriptionPurchasedAt: params.paidAt ?? undefined,
+    ...(hasAccess ? { lastPaymentReceivedAt: params.paidAt ?? new Date() } : {}),
+  });
+}
+
+async function addHirePilotCredits(params: {
+  userId: string;
+  creditDelta: number;
+  stripeCustomerId?: string | null;
+  stripeCheckoutSessionId?: string | null;
 }) {
   await prisma.userBilling.upsert({
-    where: { userId: params.userId },
+    where: getUserBillingWhere(params.userId, BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT),
     create: {
       userId: params.userId,
-      hirePilotUnlimited: params.unlimited ?? false,
-      hirePilotCredits: params.creditDelta ?? 0,
+      productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+      planType: "credits",
+      status: "active",
+      stripeCustomerId: params.stripeCustomerId ?? null,
+      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+      hirePilotCredits: params.creditDelta,
+      lastPaymentReceivedAt: new Date(),
+      subscriptionPurchasedAt: new Date(),
     },
     update: {
-      ...(typeof params.unlimited === "boolean"
-        ? { hirePilotUnlimited: params.unlimited }
-        : {}),
-      ...(params.creditDelta
-        ? {
-            hirePilotCredits: {
-              increment: params.creditDelta,
-            },
-          }
-        : {}),
+      status: "active",
+      stripeCustomerId: params.stripeCustomerId ?? null,
+      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+      hirePilotCredits: {
+        increment: params.creditDelta,
+      },
+      lastPaymentReceivedAt: new Date(),
     },
   });
 }
@@ -236,6 +351,7 @@ export async function POST(req: Request) {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
+    const customerId = normalizeCustomerId(session.customer as any);
     const hirePilotPurchaseType = session.metadata?.hirepilot_purchase_type ?? null;
     const hirePilotUserId = await resolveHirePilotUserId({
       userIdFromMetadata: session.metadata?.hirepilot_user_id ?? null,
@@ -248,16 +364,23 @@ export async function POST(req: Request) {
     if (hirePilotPurchaseType === "credit" && !(await hasProcessedStripeEvent(event.id))) {
       if (hirePilotUserId) {
         const creditCount = Math.max(1, Number(session.metadata?.hirepilot_credits ?? "1") || 1);
-        await syncHirePilotBilling({ userId: hirePilotUserId, creditDelta: creditCount });
+        await addHirePilotCredits({
+          userId: hirePilotUserId,
+          creditDelta: creditCount,
+          stripeCustomerId: customerId,
+          stripeCheckoutSessionId: session.id,
+        });
       }
 
       await saveStripePayment({
         stripeEventId: event.id,
         userProfileId: hirePilotUserId ? await getUserProfileIdByUserId(hirePilotUserId) : null,
-        stripeCustomerId: normalizeCustomerId(session.customer),
+        stripeCustomerId: customerId,
         stripeCheckoutSessionId: session.id,
         stripePaymentIntentId:
-          typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id,
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.payment_intent?.id,
         status: session.payment_status,
         amount: session.amount_total ?? null,
         currency: session.currency ?? null,
@@ -270,34 +393,77 @@ export async function POST(req: Request) {
     }
 
     if (hirePilotPurchaseType === "subscription" && hirePilotUserId) {
-      await syncHirePilotBilling({ userId: hirePilotUserId, unlimited: true });
+      const subscriptionId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id ?? null;
+      const subscription = subscriptionId
+        ? await stripeClient.subscriptions.retrieve(subscriptionId)
+        : null;
+      const priceDetails = getStripePriceDetailsFromSubscription(subscription);
+
+      await syncHirePilotSubscription({
+        userId: hirePilotUserId,
+        status: subscription?.status ?? "active",
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+        stripeCheckoutSessionId: session.id,
+        priceId: priceDetails.priceId,
+        productId: priceDetails.productId,
+        currentPeriodStart: priceDetails.currentPeriodStart,
+        currentPeriodEnd: priceDetails.currentPeriodEnd,
+        cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+        canceledAt: priceDetails.canceledAt,
+        trialStart: priceDetails.trialStart,
+        trialEnd: priceDetails.trialEnd,
+        paidAt: new Date(),
+      });
     }
 
     if (session.mode === "subscription" && session.subscription) {
       const subscriptionId = session.subscription as string;
-      const sub = await stripeClient.subscriptions.retrieve(subscriptionId);
+      const subscription = await stripeClient.subscriptions.retrieve(subscriptionId);
+      const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
       const introPriceId =
-        session?.metadata?.hirexa_intro_price_id ??
-        sub.metadata?.hirexa_intro_price_id ??
+        session.metadata?.hirexa_intro_price_id ??
+        subscription.metadata?.hirexa_intro_price_id ??
         process.env.STRIPE_TRIAL_PRICE_ID;
 
       const fullPriceId =
-        session?.metadata?.hirexa_full_price_id ??
-        sub.metadata?.hirexa_full_price_id ??
+        session.metadata?.hirexa_full_price_id ??
+        subscription.metadata?.hirexa_full_price_id ??
         process.env.STRIPE_FULL_PRICE_ID;
 
-      const introDaysRaw = session?.metadata?.hirexa_intro_days ?? sub.metadata?.hirexa_intro_days ?? "14";
+      const introDaysRaw =
+        session.metadata?.hirexa_intro_days ??
+        subscription.metadata?.hirexa_intro_days ??
+        "14";
 
       const introDays = Math.max(1, Math.min(30, Number(introDaysRaw || 14)));
 
-      const planFromMetadata = session?.metadata?.hirexa_plan ?? sub.metadata?.hirexa_plan;
+      const planFromMetadata =
+        session.metadata?.hirexa_plan ?? subscription.metadata?.hirexa_plan;
 
-      const userProfileId =
-        session.client_reference_id ??
-        session?.metadata?.hirexa_user_profile_id ??
-        sub.metadata?.hirexa_user_profile_id ??
-        null;
+      const userProfile =
+        (session.client_reference_id
+          ? await prisma.userProfile.findUnique({
+              where: { id: session.client_reference_id },
+              select: { id: true, userId: true },
+            })
+          : null) ??
+        (session.metadata?.hirexa_user_profile_id
+          ? await prisma.userProfile.findUnique({
+              where: { id: session.metadata.hirexa_user_profile_id },
+              select: { id: true, userId: true },
+            })
+          : null) ??
+        (subscription.metadata?.hirexa_user_profile_id
+          ? await prisma.userProfile.findUnique({
+              where: { id: subscription.metadata.hirexa_user_profile_id },
+              select: { id: true, userId: true },
+            })
+          : null);
 
       const planType: PlanType =
         planFromMetadata === "annual"
@@ -306,25 +472,37 @@ export async function POST(req: Request) {
             ? "trial"
             : "monthly";
 
-      if (userProfileId) {
-        await applyPaymentStatus(
-          userProfileId,
+      if (userProfile?.id) {
+        await applyPaymentStatus({
+          userProfileId: userProfile.id,
+          userId: userProfile.userId ?? null,
           planType,
-          "payment approved",
-          new Date(),
+          status: "payment approved",
+          paidAt: new Date(),
           subscriptionId,
-          normalizeCustomerId(session.customer)
-        );
+          customerId,
+          stripeCheckoutSessionId: session.id,
+          priceId: priceDetails.priceId,
+          productId: priceDetails.productId,
+          currentPeriodStart: priceDetails.currentPeriodStart,
+          currentPeriodEnd: priceDetails.currentPeriodEnd,
+          cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+          canceledAt: priceDetails.canceledAt,
+          trialStart: priceDetails.trialStart,
+          trialEnd: priceDetails.trialEnd,
+        });
       }
 
       await saveStripePayment({
         stripeEventId: event.id,
-        userProfileId,
-        stripeCustomerId: normalizeCustomerId(session.customer),
+        userProfileId: userProfile?.id ?? null,
+        stripeCustomerId: customerId,
         stripeSubscriptionId: subscriptionId,
         stripeCheckoutSessionId: session.id,
         stripePaymentIntentId:
-          typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id,
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.payment_intent?.id,
         planType,
         status: session.payment_status,
         amount: session.amount_total ?? null,
@@ -332,7 +510,7 @@ export async function POST(req: Request) {
         paidAt: new Date(),
         metadata: {
           sessionMetadata: session.metadata,
-          subscriptionMetadata: sub.metadata,
+          subscriptionMetadata: subscription.metadata,
         },
       });
 
@@ -359,10 +537,14 @@ export async function POST(req: Request) {
   if (event.type === "invoice.payment_succeeded") {
     const invoice = event.data.object as Stripe.Invoice;
     const subscriptionId =
-      typeof (invoice as any).subscription === "string" ? (invoice as any).subscription : null;
+      typeof (invoice as any).subscription === "string"
+        ? (invoice as any).subscription
+        : null;
 
     if (subscriptionId) {
       const subscription = await stripeClient.subscriptions.retrieve(subscriptionId);
+      const priceDetails = getStripePriceDetailsFromSubscription(subscription);
+
       if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
         const hirePilotUserId = await resolveHirePilotUserId({
           userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
@@ -371,40 +553,64 @@ export async function POST(req: Request) {
         });
 
         if (hirePilotUserId) {
-          await syncHirePilotBilling({ userId: hirePilotUserId, unlimited: true });
+          await syncHirePilotSubscription({
+            userId: hirePilotUserId,
+            status: subscription.status ?? "active",
+            stripeCustomerId: normalizeCustomerId(invoice.customer),
+            stripeSubscriptionId: subscriptionId,
+            priceId: priceDetails.priceId,
+            productId: priceDetails.productId,
+            currentPeriodStart: priceDetails.currentPeriodStart,
+            currentPeriodEnd: priceDetails.currentPeriodEnd,
+            cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+            canceledAt: priceDetails.canceledAt,
+            trialStart: priceDetails.trialStart,
+            trialEnd: priceDetails.trialEnd,
+            paidAt: new Date(
+              (invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
+            ),
+          });
         }
       }
 
-      const userProfileId = await getUserProfileIdFromSubscription(stripeClient, subscriptionId);
+      const userProfile = await getUserProfileFromSubscription(stripeClient, subscriptionId);
       const line = invoice.lines.data[0];
       const linePrice = (line as any)?.price;
       const interval = linePrice?.recurring?.interval;
       const paidAt = new Date(
         (invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
       );
-
       const planType: PlanType = interval === "year" ? "yearly" : "monthly";
 
-      if (userProfileId) {
-        await applyPaymentStatus(
-          userProfileId,
+      if (userProfile?.id) {
+        await applyPaymentStatus({
+          userProfileId: userProfile.id,
+          userId: userProfile.userId ?? null,
           planType,
-          "payed",
+          status: "payed",
           paidAt,
           subscriptionId,
-          normalizeCustomerId(invoice.customer)
-        );
+          customerId: normalizeCustomerId(invoice.customer),
+          priceId: priceDetails.priceId,
+          productId: priceDetails.productId,
+          currentPeriodStart: priceDetails.currentPeriodStart,
+          currentPeriodEnd: priceDetails.currentPeriodEnd,
+          cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+          canceledAt: priceDetails.canceledAt,
+          trialStart: priceDetails.trialStart,
+          trialEnd: priceDetails.trialEnd,
+        });
       }
 
       await saveStripePayment({
         stripeEventId: event.id,
-        userProfileId,
+        userProfileId: userProfile?.id ?? null,
         stripeCustomerId: normalizeCustomerId(invoice.customer),
         stripeSubscriptionId: subscriptionId,
         stripeInvoiceId: invoice.id,
         stripePaymentIntentId: (() => {
-          const pi = (invoice as any).payment_intent;
-          return typeof pi === "string" ? pi : pi?.id;
+          const paymentIntent = (invoice as any).payment_intent;
+          return typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id;
         })(),
         planType,
         status: invoice.status,
@@ -424,6 +630,7 @@ export async function POST(req: Request) {
     event.type === "customer.subscription.deleted"
   ) {
     const subscription = event.data.object as Stripe.Subscription;
+    const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
     if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
       const hirePilotUserId = await resolveHirePilotUserId({
@@ -431,13 +638,60 @@ export async function POST(req: Request) {
       });
 
       if (hirePilotUserId) {
-        await syncHirePilotBilling({
+        await syncHirePilotSubscription({
           userId: hirePilotUserId,
-          unlimited: ["active", "trialing", "past_due", "unpaid"].includes(
-            subscription.status ?? ""
-          ),
+          status: subscription.status ?? null,
+          stripeCustomerId: normalizeCustomerId(subscription.customer),
+          stripeSubscriptionId: subscription.id,
+          priceId: priceDetails.priceId,
+          productId: priceDetails.productId,
+          currentPeriodStart: priceDetails.currentPeriodStart,
+          currentPeriodEnd: priceDetails.currentPeriodEnd,
+          cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+          canceledAt: priceDetails.canceledAt,
+          trialStart: priceDetails.trialStart,
+          trialEnd: priceDetails.trialEnd,
         });
       }
+    }
+
+    const userProfile = subscription.id
+      ? await getUserProfileFromSubscription(stripeClient, subscription.id)
+      : null;
+
+    if (userProfile?.id && subscription.metadata?.hirexa_plan) {
+      const planType: PlanType =
+        subscription.metadata.hirexa_plan === "annual"
+          ? "yearly"
+          : subscription.metadata.hirexa_plan === "trial"
+            ? "trial"
+            : "monthly";
+
+      await applyPaymentStatus({
+        userProfileId: userProfile.id,
+        userId: userProfile.userId ?? null,
+        planType,
+        status: (subscription.status ?? "canceled") as
+          | "payment approved"
+          | "payed"
+          | "active"
+          | "trialing"
+          | "past_due"
+          | "unpaid"
+          | "canceled"
+          | "incomplete",
+        paidAt: new Date(),
+        subscriptionId: subscription.id,
+        customerId: normalizeCustomerId(subscription.customer),
+        priceId: priceDetails.priceId,
+        productId: priceDetails.productId,
+        currentPeriodStart: priceDetails.currentPeriodStart,
+        currentPeriodEnd: priceDetails.currentPeriodEnd,
+        cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+        canceledAt: priceDetails.canceledAt,
+        trialStart: priceDetails.trialStart,
+        trialEnd: priceDetails.trialEnd,
+      });
     }
   }
 

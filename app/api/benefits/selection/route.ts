@@ -5,6 +5,7 @@ import { getStripeClient } from "@/app/lib/stripeClient";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { getSiteUrl } from "@/app/lib/site-url";
+import { getLatestStripeCustomerIdForUser } from "@/app/lib/billing/userBilling";
 
 export const runtime = "nodejs";
 
@@ -59,10 +60,28 @@ export async function POST(req: Request) {
 
     const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId as string },
-      create: userId ? { userId } : { guestId: guestId as string },
+      create: userId
+        ? {
+            userId,
+            email: email ?? null,
+            subscriptionEmail: email ?? null,
+          }
+        : {
+            guestId: guestId as string,
+            email: email ?? null,
+            subscriptionEmail: email ?? null,
+          },
       update: {},
-      select: { id: true },
+      select: {
+        id: true,
+        email: true,
+        subscriptionEmail: true,
+        stripeCustomerId: true,
+      },
     });
+    const billingStripeCustomerId = userId
+      ? await getLatestStripeCustomerIdForUser(userId)
+      : null;
 
     const existingSelection = await prisma.benefitSelection.findFirst({
       where: { userProfileId: profile.id },
@@ -121,10 +140,28 @@ export async function POST(req: Request) {
 
     const stripe = getStripeClient();
 
+    const hirexaPlan = selectedPlan === "annual" ? "annual" : "trial";
+    const checkoutMetadata = {
+      hirexa_plan: hirexaPlan,
+      hirexa_user_id: userId ?? "",
+      hirexa_user_profile_id: profile.id,
+      hirexa_guest_id: guestId ?? "",
+    };
+
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      customer_email: email,
+      ...(billingStripeCustomerId || profile.stripeCustomerId
+        ? { customer: billingStripeCustomerId ?? profile.stripeCustomerId! }
+        : {
+            customer_email:
+              profile.subscriptionEmail ?? profile.email ?? email ?? undefined,
+          }),
+      client_reference_id: profile.id,
+      metadata: checkoutMetadata,
+      subscription_data: {
+        metadata: checkoutMetadata,
+      },
       success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/plans`,
       allow_promotion_codes: true,

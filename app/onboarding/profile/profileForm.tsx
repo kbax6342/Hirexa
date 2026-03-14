@@ -47,6 +47,28 @@ const US_STATES = [
   "Wisconsin","Wyoming",
 ];
 
+function formatDobForInput(value?: string | null) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/);
+  if (isoMatch) {
+    return `${isoMatch[2]}/${isoMatch[3]}/${isoMatch[1]}`;
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString("en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      year: "numeric",
+    });
+  }
+
+  return raw;
+}
+
 export default function ProfileForm() {
   const router = useRouter();
 
@@ -89,13 +111,7 @@ export default function ProfileForm() {
           ...prev,
           firstName: profile.firstName ?? prev.firstName,
           lastName: profile.lastName ?? prev.lastName,
-          dob: profile.dob
-            ? new Date(profile.dob).toLocaleDateString("en-US", {
-                month: "2-digit",
-                day: "2-digit",
-                year: "numeric",
-              })
-            : prev.dob,
+          dob: profile.dob ? formatDobForInput(profile.dob) : prev.dob,
           address: profile.address ?? prev.address,
           city: profile.city ?? prev.city,
           postalCode: profile.postalCode ?? prev.postalCode,

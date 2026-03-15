@@ -3,6 +3,7 @@ import "server-only";
 import crypto from "crypto";
 
 const ENCRYPTED_PREFIX = "enc:v1";
+const POSTGRES_HEX_PREFIX = /^\\x[0-9a-fA-F]{2,}$/;
 const STRING_SENSITIVE_PROFILE_FIELDS = [
   "address",
   "city",
@@ -14,18 +15,36 @@ const DATE_SENSITIVE_PROFILE_FIELDS = ["dob"] as const;
 type MaybeRecord = Record<string, unknown>;
 
 let warnedMissingEncryptionKey = false;
+let warnedLegacyEncryptionKeyFallback = false;
 let warnedDecryptFailure = false;
 
+function shouldDecodeHexTextLayer(decoded: string) {
+  if (!decoded) return false;
+  if (decoded.includes("\uFFFD")) return false;
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(decoded)) return false;
+  return true;
+}
+
 function getProfileEncryptionKey() {
-  const rawKey = process.env.PROFILE_ENCRYPTION_KEY?.trim();
+  const profileKey = process.env.PROFILE_ENCRYPTION_KEY?.trim();
+  const fallbackKey = process.env.ENCRYPTION_KEY?.trim();
+  const rawKey = profileKey || fallbackKey;
+
   if (!rawKey) {
     if (!warnedMissingEncryptionKey) {
       warnedMissingEncryptionKey = true;
       console.warn(
-        "[profileEncryption] PROFILE_ENCRYPTION_KEY is not set; sensitive profile fields will pass through unchanged."
+        "[profileEncryption] Neither PROFILE_ENCRYPTION_KEY nor ENCRYPTION_KEY is set; sensitive profile fields will pass through unchanged."
       );
     }
     return null;
+  }
+
+  if (!profileKey && fallbackKey && !warnedLegacyEncryptionKeyFallback) {
+    warnedLegacyEncryptionKeyFallback = true;
+    console.warn(
+      "[profileEncryption] Using ENCRYPTION_KEY fallback for profile encryption. Set PROFILE_ENCRYPTION_KEY to make the profile key explicit."
+    );
   }
 
   return crypto.createHash("sha256").update(rawKey).digest();
@@ -35,20 +54,27 @@ function isEncryptedValue(value: string) {
   return value.startsWith(`${ENCRYPTED_PREFIX}:`);
 }
 
-function encryptFieldOperation(value: unknown) {
-  if (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    "set" in value
-  ) {
-    return {
-      ...(value as MaybeRecord),
-      set: encryptProfileField((value as { set?: unknown }).set),
-    };
+export function normalizeEncryptedValue(value: unknown) {
+  if (typeof value !== "string") {
+    return value;
   }
 
-  return encryptProfileField(value);
+  let current = value.trim();
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!POSTGRES_HEX_PREFIX.test(current) || (current.length - 2) % 2 !== 0) {
+      break;
+    }
+
+    const decoded = Buffer.from(current.slice(2), "hex").toString("utf8");
+    if (!shouldDecodeHexTextLayer(decoded) || decoded === current) {
+      break;
+    }
+
+    current = decoded.trim();
+  }
+
+  return current;
 }
 
 export function encryptProfileField(value: unknown) {
@@ -76,13 +102,16 @@ export function encryptProfileField(value: unknown) {
 export function decryptProfileField(value: unknown) {
   if (value === undefined || value === null) return value;
   if (typeof value !== "string") return value;
-  if (!isEncryptedValue(value)) return value;
+  const normalizedValue = normalizeEncryptedValue(value);
+  if (typeof normalizedValue !== "string" || !isEncryptedValue(normalizedValue)) {
+    return normalizedValue;
+  }
 
   const key = getProfileEncryptionKey();
-  if (!key) return value;
+  if (!key) return null;
 
-  const parts = value.split(":");
-  if (parts.length !== 5) return value;
+  const parts = normalizedValue.split(":");
+  if (parts.length !== 5) return null;
 
   try {
     const [, , iv, authTag, ciphertext] = parts;
@@ -104,7 +133,7 @@ export function decryptProfileField(value: unknown) {
       warnedDecryptFailure = true;
       console.error("[profileEncryption] Failed to decrypt a sensitive profile field.", error);
     }
-    return value;
+    return null;
   }
 }
 
@@ -121,7 +150,7 @@ export function encryptSensitiveUserProfileFields<T>(input: T): T {
 
   for (const field of STRING_SENSITIVE_PROFILE_FIELDS) {
     if (field in clone) {
-      clone[field] = encryptFieldOperation(clone[field]);
+      clone[field] = encryptProfileField(clone[field]);
     }
   }
 

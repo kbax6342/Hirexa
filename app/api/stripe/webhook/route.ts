@@ -6,9 +6,15 @@ import { getStripeClient } from "@/app/lib/stripeClient";
 import {
   BILLING_PRODUCT_KEYS,
   getStripePriceDetailsFromSubscription,
-  getUserBillingWhere,
   upsertUserBillingRecord,
 } from "@/app/lib/billing/userBilling";
+import {
+  HIREPILOT_PURCHASE_TYPES,
+  hasProcessedStripePayment,
+  incrementHirePilotCredits,
+  resolveHirePilotUserId,
+  upsertHirePilotMonthlyBilling,
+} from "@/app/lib/billing/hirepilotBilling";
 
 export const runtime = "nodejs";
 
@@ -138,81 +144,6 @@ async function persistHirexaSubscriptionAccess(params: {
   });
 }
 
-async function upsertHirePilotMonthlyBilling(params: {
-  userId: string;
-  status: string | null;
-  stripeCustomerId?: string | null;
-  stripeSubscriptionId?: string | null;
-  stripeCheckoutSessionId?: string | null;
-  priceId?: string | null;
-  productId?: string | null;
-  currentPeriodStart?: Date | null;
-  currentPeriodEnd?: Date | null;
-  cancelAtPeriodEnd?: boolean;
-  canceledAt?: Date | null;
-  trialStart?: Date | null;
-  trialEnd?: Date | null;
-  paidAt?: Date | null;
-}) {
-  await upsertUserBillingRecord({
-    userId: params.userId,
-    productKey: BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-    planType: "monthly",
-    status: params.status,
-    stripeCustomerId: params.stripeCustomerId ?? null,
-    stripeSubscriptionId: params.stripeSubscriptionId ?? null,
-    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-    stripePriceId: params.priceId ?? null,
-    stripeProductId: params.productId ?? null,
-    currentPeriodStart: params.currentPeriodStart ?? null,
-    currentPeriodEnd: params.currentPeriodEnd ?? null,
-    cancelAtPeriodEnd: params.cancelAtPeriodEnd ?? false,
-    canceledAt: params.canceledAt ?? null,
-    trialStart: params.trialStart ?? null,
-    trialEnd: params.trialEnd ?? null,
-    subscriptionPurchasedAt: params.paidAt ?? undefined,
-    ...(HIREXA_ACTIVE_STATUSES.has((params.status ?? "").toLowerCase())
-      ? {
-          hirePilotUnlimited: true,
-          lastPaymentReceivedAt: params.paidAt ?? new Date(),
-        }
-      : {
-          hirePilotUnlimited: false,
-        }),
-  });
-}
-
-async function incrementHirePilotCredits(params: {
-  userId: string;
-  credits: number;
-  stripeCustomerId?: string | null;
-  stripeCheckoutSessionId?: string | null;
-}) {
-  await prisma.userBilling.upsert({
-    where: getUserBillingWhere(params.userId, BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT),
-    create: {
-      userId: params.userId,
-      productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-      planType: "credits",
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      hirePilotCredits: params.credits,
-      lastPaymentReceivedAt: new Date(),
-      subscriptionPurchasedAt: new Date(),
-    },
-    update: {
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      hirePilotCredits: {
-        increment: params.credits,
-      },
-      lastPaymentReceivedAt: new Date(),
-    },
-  });
-}
-
 export async function POST(req: Request) {
   const sig = req.headers.get("stripe-signature");
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -234,7 +165,16 @@ export async function POST(req: Request) {
       const paymentId =
         typeof session.payment_intent === "string" ? session.payment_intent : null;
       const hirePilotPurchaseType = session.metadata?.hirepilot_purchase_type ?? null;
-      const hirePilotUserId = session.metadata?.hirepilot_user_id ?? null;
+      const hirePilotUserId = await resolveHirePilotUserId({
+        userIdFromMetadata: session.metadata?.hirepilot_user_id ?? null,
+        clientReferenceId: session.client_reference_id ?? null,
+        customerEmail:
+          session.customer_details?.email ??
+          session.customer_email ??
+          (typeof session.customer === "object" && session.customer && "email" in session.customer
+            ? session.customer.email
+            : null),
+      });
       const customerId =
         typeof session.customer === "string"
           ? session.customer
@@ -248,7 +188,10 @@ export async function POST(req: Request) {
         },
       });
 
-      if (hirePilotPurchaseType === "subscription" && hirePilotUserId) {
+      if (
+        hirePilotPurchaseType === HIREPILOT_PURCHASE_TYPES.SUBSCRIPTION &&
+        hirePilotUserId
+      ) {
         const subscriptionId =
           typeof session.subscription === "string"
             ? session.subscription
@@ -264,8 +207,8 @@ export async function POST(req: Request) {
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscriptionId,
           stripeCheckoutSessionId: session.id,
-          priceId: priceDetails.priceId,
-          productId: priceDetails.productId,
+          stripePriceId: priceDetails.priceId,
+          stripeProductId: priceDetails.productId,
           currentPeriodStart: priceDetails.currentPeriodStart,
           currentPeriodEnd: priceDetails.currentPeriodEnd,
           cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
@@ -276,10 +219,11 @@ export async function POST(req: Request) {
         });
       }
 
-      if (hirePilotPurchaseType === "credit" && hirePilotUserId) {
-        const existing = await prisma.stripePayment.findUnique({
-          where: { stripeEventId: event.id },
-          select: { id: true },
+      if (hirePilotPurchaseType === HIREPILOT_PURCHASE_TYPES.CREDIT && hirePilotUserId) {
+        const existing = await hasProcessedStripePayment({
+          stripeEventId: event.id,
+          stripeCheckoutSessionId: session.id,
+          stripePaymentIntentId: paymentId,
         });
 
         if (!existing) {
@@ -292,6 +236,8 @@ export async function POST(req: Request) {
             credits,
             stripeCustomerId: customerId,
             stripeCheckoutSessionId: session.id,
+            stripePriceId:
+              process.env.STRIPE_HIREPILOT_CREDIT_PRICE_ID?.trim() ?? null,
           });
         }
       }
@@ -371,6 +317,52 @@ export async function POST(req: Request) {
       });
     }
 
+    if (event.type === "invoice.payment_succeeded") {
+      const invoice = event.data.object as Stripe.Invoice;
+      const rawSubscription = (invoice as { subscription?: string | Stripe.Subscription | null })
+        .subscription;
+      const subscriptionId = typeof rawSubscription === "string" ? rawSubscription : null;
+
+      if (subscriptionId) {
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const priceDetails = getStripePriceDetailsFromSubscription(subscription);
+
+        if (
+          subscription.metadata?.hirepilot_purchase_type ===
+          HIREPILOT_PURCHASE_TYPES.SUBSCRIPTION
+        ) {
+          const hirePilotUserId = await resolveHirePilotUserId({
+            userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
+            customerEmail:
+              typeof invoice.customer_email === "string" ? invoice.customer_email : null,
+          });
+
+          if (hirePilotUserId) {
+            await upsertHirePilotMonthlyBilling({
+              userId: hirePilotUserId,
+              status: subscription.status ?? "active",
+              stripeCustomerId:
+                typeof invoice.customer === "string"
+                  ? invoice.customer
+                  : invoice.customer?.id ?? null,
+              stripeSubscriptionId: subscriptionId,
+              stripePriceId: priceDetails.priceId,
+              stripeProductId: priceDetails.productId,
+              currentPeriodStart: priceDetails.currentPeriodStart,
+              currentPeriodEnd: priceDetails.currentPeriodEnd,
+              cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+              canceledAt: priceDetails.canceledAt,
+              trialStart: priceDetails.trialStart,
+              trialEnd: priceDetails.trialEnd,
+              paidAt: new Date(
+                (invoice.status_transitions?.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
+              ),
+            });
+          }
+        }
+      }
+    }
+
     if (
       event.type === "customer.subscription.updated" ||
       event.type === "customer.subscription.deleted"
@@ -392,8 +384,8 @@ export async function POST(req: Request) {
           status: subscription.status ?? null,
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscription.id,
-          priceId: priceDetails.priceId,
-          productId: priceDetails.productId,
+          stripePriceId: priceDetails.priceId,
+          stripeProductId: priceDetails.productId,
           currentPeriodStart: priceDetails.currentPeriodStart,
           currentPeriodEnd: priceDetails.currentPeriodEnd,
           cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,

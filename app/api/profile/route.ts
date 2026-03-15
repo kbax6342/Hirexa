@@ -11,8 +11,9 @@ import {
 } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 import {
-  getProfileDobValue,
+  getSafePrivateProfileFields,
   PrivateProfileFieldValidationError,
+  readRawPrivateProfileFieldsByIds,
   sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
 import type Stripe from "stripe";
@@ -36,6 +37,21 @@ type ProfileBody = {
 function normalizeText(value: unknown) {
   const text = String(value ?? "").trim();
   return text.length > 0 ? text : null;
+}
+
+function dateFromDobString(value?: string | null) {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
+function previewProfileValue(value: unknown) {
+  if (typeof value !== "string") {
+    return value ?? null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  return trimmed.length > 48 ? `${trimmed.slice(0, 48)}...` : trimmed;
 }
 
 function planTypeFromSubscription(
@@ -69,25 +85,50 @@ async function upsertUserProfileByUserId(userId: string, data: Record<string, an
 type SerializedProfile<T extends { dobEncrypted?: unknown; dob?: unknown }> = Omit<
   T,
   "dobEncrypted" | "dob"
-> & { dob: string | null };
+> & {
+  dob: string | null;
+  displayAddress: string | null;
+  displayCity: string | null;
+  displayPostalCode: string | null;
+  displayState: string | null;
+};
 
 function serializeProfileResponse<
   T extends {
+    id?: string;
     dobEncrypted?: unknown;
     dob?: unknown;
+    address?: unknown;
+    city?: unknown;
+    postalCode?: unknown;
+    state?: unknown;
   },
->(profile: T | null): SerializedProfile<T> | null {
+>(
+  profile: T | null,
+  rawPrivateFieldsById?: Map<string, unknown>
+): SerializedProfile<T> | null {
   if (!profile) return null;
 
+  const rawPrivateFields =
+    typeof profile.id === "string" ? rawPrivateFieldsById?.get(profile.id) : undefined;
   const { dobEncrypted, ...rest } = profile as Record<string, unknown>;
+  const safePrivateFields = getSafePrivateProfileFields({
+    ...(typeof rawPrivateFields === "object" && rawPrivateFields ? rawPrivateFields : {}),
+    ...profile,
+  });
 
   return {
     ...rest,
-    dob: getProfileDobValue({
-      dobEncrypted,
-      dob: (profile as { dob?: unknown }).dob,
-    }),
-  } as SerializedProfile<T>;
+    address: safePrivateFields.address,
+    city: safePrivateFields.city,
+    postalCode: safePrivateFields.postalCode,
+    state: safePrivateFields.state,
+    dob: safePrivateFields.dob,
+    displayAddress: safePrivateFields.address,
+    displayCity: safePrivateFields.city,
+    displayPostalCode: safePrivateFields.postalCode,
+    displayState: safePrivateFields.state,
+  } as unknown as SerializedProfile<T>;
 }
 
 async function syncStripeSubscriptionStatus(params: {
@@ -213,14 +254,17 @@ export async function POST(req: Request) {
         email: normalizedEmail,
         subscriptionEmail: normalizedEmail,
         phone: normalizeText(body.phone),
-        dob: null,
-        dobEncrypted: privateFields.dobEncrypted,
-        address: privateFields.address,
-        city: privateFields.city,
+        dob: dateFromDobString(privateFields.dob),
+        address: null,
+        addressEncrypted: privateFields.addressEncrypted,
+        city: null,
+        cityEncrypted: privateFields.cityEncrypted,
         citySearch: privateFields.citySearch,
-        postalCode: privateFields.postalCode,
+        postalCode: null,
+        postalCodeEncrypted: privateFields.postalCodeEncrypted,
         postalCodeSearch: privateFields.postalCodeSearch,
-        state: privateFields.state,
+        state: null,
+        stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
@@ -231,14 +275,17 @@ export async function POST(req: Request) {
         email: normalizedEmail ?? undefined,
         subscriptionEmail: normalizedEmail ?? undefined,
         phone: normalizeText(body.phone),
-        dob: null,
-        dobEncrypted: privateFields.dobEncrypted,
-        address: privateFields.address,
-        city: privateFields.city,
+        dob: dateFromDobString(privateFields.dob),
+        address: null,
+        addressEncrypted: privateFields.addressEncrypted,
+        city: null,
+        cityEncrypted: privateFields.cityEncrypted,
         citySearch: privateFields.citySearch,
-        postalCode: privateFields.postalCode,
+        postalCode: null,
+        postalCodeEncrypted: privateFields.postalCodeEncrypted,
         postalCodeSearch: privateFields.postalCodeSearch,
-        state: privateFields.state,
+        state: null,
+        stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
@@ -250,12 +297,6 @@ export async function POST(req: Request) {
         lastName: true,
         email: true,
         phone: true,
-        dob: true,
-        dobEncrypted: true,
-        address: true,
-        city: true,
-        postalCode: true,
-        state: true,
         linkedinUrl: true,
         portfolioUrl: true,
       },
@@ -263,7 +304,17 @@ export async function POST(req: Request) {
 
     invalidateCachedProfile({ userId, guestId });
 
-    return NextResponse.json({ ok: true, profile: serializeProfileResponse(profile) });
+    return NextResponse.json({
+      ok: true,
+      profile: serializeProfileResponse({
+        ...profile,
+        address: privateFields.address,
+        city: privateFields.city,
+        postalCode: privateFields.postalCode,
+        state: privateFields.state,
+        dob: privateFields.dob,
+      }),
+    });
   } catch (e: unknown) {
     if (e instanceof PrivateProfileFieldValidationError) {
       return NextResponse.json({ error: e.message }, { status: 400 });
@@ -344,7 +395,66 @@ export async function GET() {
           select: buildProfileSelect(),
         });
 
-    const serializedProfile = serializeProfileResponse(profile);
+    const rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
+      prisma,
+      profile ? [profile.id] : []
+    );
+    const serializedProfile = serializeProfileResponse(profile, rawPrivateFieldsById);
+    if (process.env.NODE_ENV !== "production" && profile) {
+      const rawPrivateFields = rawPrivateFieldsById.get(profile.id);
+      const rawPrivateFieldRecord =
+        rawPrivateFields && typeof rawPrivateFields === "object"
+          ? (rawPrivateFields as Record<string, unknown>)
+          : null;
+
+      console.info("[profile raw db]", {
+        profileId: profile.id,
+        address: previewProfileValue(rawPrivateFieldRecord?.address),
+        addressEncrypted: previewProfileValue(rawPrivateFieldRecord?.addressEncrypted),
+        addressLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.addressLegacyDecrypted),
+        city: previewProfileValue(rawPrivateFieldRecord?.city),
+        cityEncrypted: previewProfileValue(rawPrivateFieldRecord?.cityEncrypted),
+        cityLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.cityLegacyDecrypted),
+        state: previewProfileValue(rawPrivateFieldRecord?.state),
+        stateEncrypted: previewProfileValue(rawPrivateFieldRecord?.stateEncrypted),
+        stateLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.stateLegacyDecrypted),
+        postalCode: previewProfileValue(rawPrivateFieldRecord?.postalCode),
+        postalCodeEncrypted: previewProfileValue(rawPrivateFieldRecord?.postalCodeEncrypted),
+        postalCodeLegacyDecrypted: previewProfileValue(
+          rawPrivateFieldRecord?.postalCodeLegacyDecrypted
+        ),
+      });
+      console.info("[profile mapped view]", {
+        profileId: profile.id,
+        address: serializedProfile?.displayAddress ?? null,
+        city: serializedProfile?.displayCity ?? null,
+        state: serializedProfile?.displayState ?? null,
+        postalCode: serializedProfile?.displayPostalCode ?? null,
+      });
+      console.info("[profile] resolved private display fields", {
+        profileId: profile.id,
+        addressResolved: Boolean(serializedProfile?.displayAddress),
+        cityResolved: Boolean(serializedProfile?.displayCity),
+        stateResolved: Boolean(serializedProfile?.displayState),
+        postalCodeResolved: Boolean(serializedProfile?.displayPostalCode),
+        usedPrimaryEncryptedColumns: Boolean(
+          rawPrivateFields &&
+            typeof rawPrivateFields === "object" &&
+            ((rawPrivateFields as Record<string, unknown>).addressEncrypted ||
+              (rawPrivateFields as Record<string, unknown>).cityEncrypted ||
+              (rawPrivateFields as Record<string, unknown>).stateEncrypted ||
+              (rawPrivateFields as Record<string, unknown>).postalCodeEncrypted)
+        ),
+        usedLegacyColumns: Boolean(
+          rawPrivateFields &&
+            typeof rawPrivateFields === "object" &&
+            ((rawPrivateFields as Record<string, unknown>).address ||
+              (rawPrivateFields as Record<string, unknown>).city ||
+              (rawPrivateFields as Record<string, unknown>).state ||
+              (rawPrivateFields as Record<string, unknown>).postalCode)
+        ),
+      });
+    }
     const responseProfile = serializedProfile
       ? {
           ...serializedProfile,
@@ -371,6 +481,24 @@ export async function GET() {
       : null;
 
     const responseData = { ok: true, profile: responseProfile };
+    if (process.env.NODE_ENV !== "production") {
+      const responseProfileRecord =
+        responseProfile && typeof responseProfile === "object"
+          ? (responseProfile as Record<string, unknown>)
+          : null;
+
+      console.info("[api/profile] final payload", {
+        profileId: responseProfileRecord?.id ?? null,
+        address:
+          responseProfileRecord?.displayAddress ?? responseProfileRecord?.address ?? null,
+        city: responseProfileRecord?.displayCity ?? responseProfileRecord?.city ?? null,
+        state: responseProfileRecord?.displayState ?? responseProfileRecord?.state ?? null,
+        postalCode:
+          responseProfileRecord?.displayPostalCode ??
+          responseProfileRecord?.postalCode ??
+          null,
+      });
+    }
     setCachedProfile({ userId, guestId, data: responseData });
 
     const response = NextResponse.json(responseData);
@@ -430,12 +558,6 @@ function buildProfileSelect() {
     profileImageMimeType: true,
     profileImageFilename: true,
 
-    dob: true,
-    dobEncrypted: true,
-    address: true,
-    city: true,
-    postalCode: true,
-    state: true,
     linkedinUrl: true,
     portfolioUrl: true,
 

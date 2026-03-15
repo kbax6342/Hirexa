@@ -109,6 +109,16 @@ export async function POST(req: Request) {
       });
     }
 
+    if (selectedPlan === "custom-benefits") {
+      await prisma.userProfile.update({
+        where: { id: profile.id },
+        data: {
+          questionsCompleted: true,
+        },
+        select: { id: true },
+      });
+    }
+
     const baseResponse = NextResponse.json({ ok: true });
     if (shouldSetGuestCookie && guestId) {
       baseResponse.cookies.set("guest_user_id", guestId, {

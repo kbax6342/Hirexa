@@ -15,6 +15,16 @@ type HirePilotPaywallProps = {
   onClose?: () => void;
 };
 
+type HirePilotStatusResponse = {
+  hasHirePilotAccess?: boolean;
+  hirePilotUnlimited: boolean;
+  hirePilotCredits: number;
+  productKey?: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+  error?: string;
+};
+
 async function createCheckout(path: string) {
   const res = await fetch(path, {
     method: "POST",
@@ -34,15 +44,53 @@ async function createCheckout(path: string) {
   window.location.assign(data.url);
 }
 
+async function refreshHirePilotStatus() {
+  const res = await fetch("/api/user/hirepilot-status", {
+    cache: "no-store",
+  });
+
+  const data = (await res.json().catch(() => null)) as HirePilotStatusResponse | null;
+
+  if (!res.ok) {
+    throw new Error(data?.error ?? "Unable to verify HirePilot access.");
+  }
+
+  return {
+    hasHirePilotAccess:
+      Boolean(data?.hasHirePilotAccess) ||
+      Boolean(data?.hirePilotUnlimited) ||
+      Number(data?.hirePilotCredits ?? 0) > 0,
+    hirePilotUnlimited: Boolean(data?.hirePilotUnlimited),
+    hirePilotCredits: Number(data?.hirePilotCredits ?? 0),
+  };
+}
+
 export default function HirePilotPaywall({ onClose }: HirePilotPaywallProps) {
   const [loadingAction, setLoadingAction] = useState<"subscription" | "credit" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleCheckout(action: "subscription" | "credit") {
+    if (loadingAction) {
+      return;
+    }
+
     setLoadingAction(action);
     setError(null);
 
     try {
+      const status = await refreshHirePilotStatus();
+      const hasActiveSubscription = status.hirePilotUnlimited;
+      const hasUsableCreditAccess = status.hasHirePilotAccess;
+
+      if (
+        (action === "subscription" && hasActiveSubscription) ||
+        (action === "credit" && hasUsableCreditAccess)
+      ) {
+        setLoadingAction(null);
+        onClose?.();
+        return;
+      }
+
       await createCheckout(
         action === "subscription"
           ? "/api/stripe/create-hirepilot-subscription"
@@ -107,7 +155,7 @@ export default function HirePilotPaywall({ onClose }: HirePilotPaywallProps) {
                 className="mt-6 w-full rounded-xl bg-blue-600 text-white hover:bg-blue-700"
               >
                 <CreditCardIcon className="h-5 w-5" />
-                {loadingAction === "subscription" ? "Redirecting..." : "Subscribe"}
+                {loadingAction === "subscription" ? "Checking..." : "Subscribe"}
               </Button>
             </div>
 
@@ -128,7 +176,7 @@ export default function HirePilotPaywall({ onClose }: HirePilotPaywallProps) {
                 className="mt-6 w-full rounded-xl border-slate-300 bg-white text-slate-800 hover:bg-slate-100"
               >
                 <CreditCardIcon className="h-5 w-5" />
-                {loadingAction === "credit" ? "Redirecting..." : "Buy Credit"}
+                {loadingAction === "credit" ? "Checking..." : "Buy Credit"}
               </Button>
             </div>
           </div>

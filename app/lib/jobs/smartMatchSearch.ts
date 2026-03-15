@@ -1,5 +1,9 @@
 import { prisma } from "@/app/lib/prisma";
-import { deriveSafeLocationSearchFields } from "@/app/lib/profile/privateProfileFields";
+import {
+  deriveSafeLocationSearchFields,
+  getSafePrivateProfileFields,
+  readRawPrivateProfileFieldsByIds,
+} from "@/app/lib/profile/privateProfileFields";
 
 type ProfileSnapshot = {
   city?: string | null;
@@ -135,40 +139,67 @@ export function buildSmartMatchSearchConfig(
 export async function getSmartMatchSearchConfigForUser(
   userId: string
 ): Promise<SmartMatchSearchConfig> {
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: {
-      city: true,
-      citySearch: true,
-      state: true,
-      stateSearch: true,
-      postalCode: true,
-      postalCodeSearch: true,
-      country: true,
-      includeRemote: true,
-      workplaceLocations: true,
-      skills: true,
-      resumeSkills: true,
-      jobInterests: {
-        orderBy: { id: "asc" },
-        take: 5,
-        select: {
-          title: true,
+  try {
+    const profile = await prisma.userProfile.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        country: true,
+        includeRemote: true,
+        workplaceLocations: true,
+        skills: true,
+        resumeSkills: true,
+        jobInterests: {
+          orderBy: { id: "asc" },
+          take: 5,
+          select: {
+            title: true,
+          },
         },
-      },
-      resume: {
-        select: {
-          experiences: {
-            orderBy: { order: "asc" },
-            take: 3,
-            select: {
-              title: true,
+        resume: {
+          select: {
+            experiences: {
+              orderBy: { order: "asc" },
+              take: 3,
+              select: {
+                title: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  return buildSmartMatchSearchConfig(profile);
+    if (!profile) {
+      return buildSmartMatchSearchConfig(null);
+    }
+
+    const privateFieldsById = await readRawPrivateProfileFieldsByIds(prisma, [profile.id]);
+    const rawPrivateFields = privateFieldsById.get(profile.id);
+    const safePrivateFields = getSafePrivateProfileFields(rawPrivateFields ?? {});
+    const safeLocationFields = deriveSafeLocationSearchFields({
+      city: safePrivateFields.city,
+      citySearch: rawPrivateFields?.citySearch,
+      state: safePrivateFields.state,
+      stateSearch: rawPrivateFields?.stateSearch,
+      postalCode: safePrivateFields.postalCode,
+      postalCodeSearch: rawPrivateFields?.postalCodeSearch,
+    });
+
+    return buildSmartMatchSearchConfig({
+      ...profile,
+      city: safePrivateFields.city,
+      citySearch: safeLocationFields.citySearch,
+      state: safePrivateFields.state,
+      stateSearch: safeLocationFields.stateSearch,
+      postalCode: safePrivateFields.postalCode,
+      postalCodeSearch: safeLocationFields.postalCodeSearch,
+    });
+  } catch (error) {
+    console.error("[SMART_MATCHES] failed to load safe profile search config", {
+      userId,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    return buildSmartMatchSearchConfig(null);
+  }
 }

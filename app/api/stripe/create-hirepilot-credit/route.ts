@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
+import { BILLING_PRODUCT_KEYS } from "@/app/lib/billing/userBilling";
 import { getSiteUrl } from "@/app/lib/site-url";
 import { getStripeClient } from "@/app/lib/stripeClient";
 
@@ -36,8 +37,11 @@ export async function POST(req: Request) {
       hirepilot_purchase_type: "credit",
       hirepilot_user_id: userId,
       hirepilot_credits: "1",
+      productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+      planType: "credits",
+      purchaseType: "credit",
     },
-    success_url: `${appUrl}/hirepilot?checkout=success`,
+    success_url: `${appUrl}/hirepilot?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${appUrl}/hirepilot?checkout=canceled`,
   });
 

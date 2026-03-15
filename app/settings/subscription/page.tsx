@@ -1,9 +1,12 @@
-// Hirexa/my-app/app/settings/subscription/page.tsx
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import LoginFooter from "../../components/loginFooter/LoginFooter";
-import { prisma } from "@/app/lib/prisma";
+
 import { auth } from "@/auth";
+import LoginFooter from "../../components/loginFooter/LoginFooter";
+import {
+  type SubscriptionSettingsProductView,
+  getSubscriptionSettingsViewModel,
+} from "@/app/lib/billing/subscriptionSettings";
 import { BILLING_PRODUCT_KEYS } from "@/app/lib/billing/userBilling";
 
 function formatDate(value?: Date | null) {
@@ -16,33 +19,81 @@ function formatDate(value?: Date | null) {
 }
 
 function formatAmount(amount?: number | null, currency?: string | null) {
-  if (!amount || !currency) return "Not available";
-  const value = amount / 100;
+  if (typeof amount !== "number" || !currency) return "Not available";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: currency.toUpperCase(),
-  }).format(value);
+  }).format(amount / 100);
+}
+
+function formatBillingCycle(product: SubscriptionSettingsProductView) {
+  if (!product.isSubscription) return "One-time purchase";
+  if (!product.billingInterval) return "Subscription";
+  if (!product.billingIntervalCount || product.billingIntervalCount <= 1) {
+    if (product.billingInterval === "month") return "Billed monthly";
+    if (product.billingInterval === "year") return "Billed annually";
+    if (product.billingInterval === "week") return "Billed weekly";
+    if (product.billingInterval === "day") return "Billed daily";
+  }
+
+  return `Every ${product.billingIntervalCount} ${product.billingInterval}${
+    product.billingIntervalCount === 1 ? "" : "s"
+  }`;
+}
+
+function formatCardExpiry(month?: number | null, year?: number | null) {
+  if (!month || !year) return "Not available";
+  return `${String(month).padStart(2, "0")}/${String(year).slice(-2)}`;
 }
 
 function statusBadge(status: string) {
-  const normalized = status.toLowerCase();
+  const normalized = status.trim().toLowerCase();
   if (normalized === "active" || normalized === "trialing") {
     return "bg-emerald-100 text-emerald-800";
   }
-  if (normalized === "canceled" || normalized === "cancelled") {
-    return "bg-red-100 text-red-700";
+  if (normalized === "paid" || normalized === "succeeded") {
+    return "bg-blue-100 text-blue-800";
   }
-  if (normalized === "past_due") {
+  if (normalized === "past due" || normalized === "past_due") {
     return "bg-amber-100 text-amber-700";
+  }
+  if (normalized === "canceled" || normalized === "cancelled" || normalized === "inactive") {
+    return "bg-red-100 text-red-700";
   }
   return "bg-gray-100 text-gray-700";
 }
 
-function planLabel(planType: string | null) {
-  if (planType === "trial") return "Trial";
-  if (planType === "monthly") return "Monthly";
-  if (planType === "yearly") return "Annual";
-  return "Not available";
+function displayText(value?: string | null) {
+  const text = value?.trim();
+  return text ? text : "Not available";
+}
+
+function productActions(product: SubscriptionSettingsProductView) {
+  const links = [
+    product.receiptUrl
+      ? { label: "Open receipt", href: product.receiptUrl, external: true }
+      : null,
+    product.hostedInvoiceUrl
+      ? { label: "View hosted invoice", href: product.hostedInvoiceUrl, external: true }
+      : null,
+    product.invoicePdfUrl
+      ? { label: "Download invoice PDF", href: product.invoicePdfUrl, external: true }
+      : null,
+  ].filter((link): link is { label: string; href: string; external: boolean } => Boolean(link));
+
+  if (product.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY) {
+    links.push({ label: "Open HirePilot", href: "/hirepilot", external: false });
+  }
+
+  if (product.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT) {
+    links.push({ label: "Use HirePilot", href: "/hirepilot", external: false });
+  }
+
+  if (product.productKey === BILLING_PRODUCT_KEYS.HIREXA_CORE) {
+    links.push({ label: "View plans", href: "/plans", external: false });
+  }
+
+  return links;
 }
 
 export default async function SubscriptionSettingsPage() {
@@ -52,95 +103,19 @@ export default async function SubscriptionSettingsPage() {
   const userId = (session.user as { id?: string } | undefined)?.id ?? null;
   if (!userId) redirect("/login");
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      email: true,
-    },
+  const view = await getSubscriptionSettingsViewModel({
+    userId,
+    sessionEmail: session.user?.email ?? null,
   });
 
-  if (!user) redirect("/login");
-
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: {
-      id: true,
-      stripeCustomerId: true,
-      stripeSubscriptionId: true,
-      subscriptionPurchasedAt: true,
-      lastPaymentReceivedAt: true,
-      trialSubscriber: true,
-      monthlySubscriber: true,
-      yearlySubscriber: true,
-      trialPlanStatus: true,
-      monthlyPlanStatus: true,
-      yearlyPlanStatus: true,
-    },
-  });
-  const billing = await prisma.userBilling.findUnique({
-    where: {
-      userId_productKey: {
-        userId,
-        productKey: BILLING_PRODUCT_KEYS.HIREXA_CORE,
-      },
-    },
-    select: {
-      planType: true,
-      status: true,
-      stripeCustomerId: true,
-      stripeSubscriptionId: true,
-      currentPeriodEnd: true,
-      subscriptionPurchasedAt: true,
-      lastPaymentReceivedAt: true,
-    },
-  });
-
-  const lastPayment = profile?.id
-    ? await prisma.stripePayment.findFirst({
-        where: { userProfileId: profile.id },
-        orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
-        select: { amount: true, currency: true, paidAt: true, createdAt: true },
-      })
-    : null;
-
-  const planType =
-    billing?.planType === "trial" ||
-    billing?.planType === "monthly" ||
-    billing?.planType === "yearly"
-      ? billing.planType
-      : profile?.trialSubscriber
-        ? "trial"
-        : profile?.monthlySubscriber
-          ? "monthly"
-          : profile?.yearlySubscriber
-            ? "yearly"
-            : null;
-
-  const rawStatus =
-    billing?.status ??
-    profile?.trialPlanStatus ??
-    profile?.monthlyPlanStatus ??
-    profile?.yearlyPlanStatus ??
-    null;
-
-  const status = rawStatus ?? (planType ? "active" : "inactive");
-  const planDisplay = planType ? planLabel(planType) : "No active subscription";
-  const billingCycle = planType ? planLabel(planType) : "Not available";
-
-  const supportEmail = process.env.EMAIL_SUPPORT;
-
-  const hasSubscription =
-    Boolean(planType) ||
-    Boolean(rawStatus) ||
-    Boolean(billing?.stripeSubscriptionId ?? profile?.stripeSubscriptionId);
+  if (!view) redirect("/login");
 
   return (
     <div className="min-h-[calc(100vh-64px)] bg-white">
       <main className="mx-auto max-w-6xl px-4 py-10">
         <h1 className="text-2xl font-bold text-gray-900">Account Settings</h1>
         <p className="mt-2 text-sm text-gray-600">
-          Manage your Hirexa subscription, billing details, and payment method.
+          Review Stripe-backed billing details for each product you have purchased.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-10 lg:grid-cols-12">
@@ -154,111 +129,183 @@ export default async function SubscriptionSettingsPage() {
             </div>
           </aside>
 
-          <section className="lg:col-span-9 space-y-6">
+          <section className="space-y-6 lg:col-span-9">
             <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">
-                    Plan summary
-                  </h2>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Overview of your current Hirexa plan.
-                  </p>
-                </div>
-                <span
-                  className={[
-                    "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-                    statusBadge(status),
-                  ].join(" ")}
-                >
-                  {status.replace("_", " ")}
-                </span>
-              </div>
-
-              <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <InfoRow label="Plan" value={planDisplay} />
-                <InfoRow label="Billing cycle" value={billingCycle} />
-                <InfoRow label="Account ID" value={user.id} />
-                <InfoRow label="Email" value={user.email ?? "Not available"} />
-              </div>
-
-              {!hasSubscription ? (
-                <div className="mt-6 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                  No active subscription found.{" "}
-                  <Link href="/plans" className="font-semibold underline">
-                    Choose a plan
-                  </Link>{" "}
-                  to unlock Hirexa premium features.
-                </div>
-              ) : null}
-            </div>
-
-            <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Billing details
-              </h3>
+              <h2 className="text-xl font-semibold text-gray-900">
+                Product access overview
+              </h2>
               <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <InfoRow label="Account ID" value={view.accountId} />
+                <InfoRow label="Email" value={displayText(view.email)} />
+                <InfoRow label="Hirexa AI access" value={view.access.hirexa} />
+                <InfoRow label="HirePilot access" value={view.access.hirepilot} />
                 <InfoRow
-                  label="Started on"
-                  value={formatDate(
-                    billing?.subscriptionPurchasedAt ?? profile?.subscriptionPurchasedAt
-                  )}
-                />
-                <InfoRow
-                  label="Next renewal"
-                  value={formatDate(billing?.currentPeriodEnd)}
-                />
-                <InfoRow
-                  label="Last charge"
-                  value={
-                    lastPayment
-                      ? `${formatAmount(
-                          lastPayment.amount,
-                          lastPayment.currency
-                        )} on ${formatDate(
-                          lastPayment.paidAt ?? lastPayment.createdAt
-                        )}`
-                      : "Not available"
-                  }
-                />
-                <InfoRow
-                  label="Billing status"
-                  value={status.replace("_", " ")}
+                  label="HirePilot credits remaining"
+                  value={String(view.access.hirepilotCredits)}
                 />
               </div>
             </div>
 
-            <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Payment method
-              </h3>
-              <div className="mt-4">
-                <InfoRow
-                  label="Payment method"
-                  value="No payment method on file"
-                />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <ActionButton label="Update payment method" disabled />
-              </div>
-            </div>
+            {view.products.length > 0 ? (
+              view.products.map((product) => {
+                const links = productActions(product);
+                const lastCharge =
+                  product.lastChargeAmount != null && product.lastChargeCurrency
+                    ? `${formatAmount(
+                        product.lastChargeAmount,
+                        product.lastChargeCurrency
+                      )} on ${formatDate(product.lastChargeAt)}`
+                    : "Not available";
 
-            <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Subscription actions
-              </h3>
-              <p className="mt-2 text-sm text-gray-600">
-                Manage your subscription, billing history, or cancellation.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <ActionButton label="Manage subscription" disabled />
-                <ActionButton label="View billing history" disabled />
-                <ActionButton label="Cancel subscription" disabled />
+                return (
+                  <div
+                    key={`${product.productKey}-${product.stripeSubscriptionId ?? product.stripeCheckoutSessionId ?? product.lastActivity?.toISOString() ?? "none"}`}
+                    className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h2 className="text-xl font-semibold text-gray-900">
+                          {product.productLabel}
+                          {product.isPrimary ? (
+                            <span className="ml-3 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                              Most recent
+                            </span>
+                          ) : null}
+                        </h2>
+                        <p className="mt-1 text-sm text-gray-600">
+                          {product.accessLabel}
+                        </p>
+                      </div>
+                      <span
+                        className={[
+                          "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
+                          statusBadge(product.status),
+                        ].join(" ")}
+                      >
+                        {product.status}
+                      </span>
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <InfoRow label="Product" value={product.productLabel} />
+                      <InfoRow label="Plan" value={product.planLabel} />
+                      <InfoRow
+                        label="Price"
+                        value={formatAmount(product.priceAmount, product.priceCurrency)}
+                      />
+                      <InfoRow label="Billing cycle" value={formatBillingCycle(product)} />
+                      <InfoRow label="Started on" value={formatDate(product.startedOn)} />
+                      <InfoRow
+                        label="Current period start"
+                        value={formatDate(product.currentPeriodStart)}
+                      />
+                      <InfoRow
+                        label="Current period end"
+                        value={formatDate(product.currentPeriodEnd)}
+                      />
+                      <InfoRow
+                        label="Cancel at period end"
+                        value={product.cancelAtPeriodEnd ? "Yes" : "No"}
+                      />
+                    </div>
+
+                    <div className="mt-6 border-t border-gray-100 pt-6">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        Billing details
+                      </h3>
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <InfoRow label="Last charge" value={lastCharge} />
+                        <InfoRow
+                          label="Latest invoice status"
+                          value={displayText(product.latestInvoiceStatus)}
+                        />
+                        <InfoRow
+                          label="Stripe invoice ID"
+                          value={displayText(product.stripeInvoiceId)}
+                        />
+                        <InfoRow
+                          label="Stripe customer ID"
+                          value={displayText(product.stripeCustomerId)}
+                        />
+                        <InfoRow
+                          label="Stripe subscription ID"
+                          value={displayText(product.stripeSubscriptionId)}
+                        />
+                        <InfoRow
+                          label="Checkout session ID"
+                          value={displayText(product.stripeCheckoutSessionId)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-6 border-t border-gray-100 pt-6">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        Payment method
+                      </h3>
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <InfoRow
+                          label="Payment method"
+                          value={product.paymentMethod.label}
+                        />
+                        <InfoRow
+                          label="Payment method type"
+                          value={displayText(product.paymentMethod.type)}
+                        />
+                        <InfoRow
+                          label="Card details"
+                          value={
+                            product.paymentMethod.brand && product.paymentMethod.last4
+                              ? `${product.paymentMethod.brand} ending in ${product.paymentMethod.last4}`
+                              : "Not available"
+                          }
+                        />
+                        <InfoRow
+                          label="Card expiry"
+                          value={formatCardExpiry(
+                            product.paymentMethod.expMonth,
+                            product.paymentMethod.expYear
+                          )}
+                        />
+                        <InfoRow
+                          label="Billing email"
+                          value={displayText(product.billingEmail)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-6 border-t border-gray-100 pt-6">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        Receipts and actions
+                      </h3>
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        {links.length > 0 ? (
+                          links.map((link) => (
+                            <ActionLink
+                              key={`${product.productKey}-${link.label}`}
+                              href={link.href}
+                              label={link.label}
+                              external={link.external}
+                            />
+                          ))
+                        ) : (
+                          <ActionButton label="No receipt or invoice links available" disabled />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                <h2 className="text-xl font-semibold text-gray-900">Billing products</h2>
+                <p className="mt-2 text-sm text-gray-600">
+                  No Stripe-backed billing products were found for this account yet.
+                </p>
+                <div className="mt-4">
+                  <ActionLink href="/plans" label="View plans" />
+                </div>
               </div>
-              <p className="mt-3 text-xs text-gray-500">
-                These actions will be available once billing is fully connected.
-              </p>
-            </div>
+            )}
 
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-6">
               <h3 className="text-lg font-semibold text-gray-900">Support</h3>
@@ -267,12 +314,12 @@ export default async function SubscriptionSettingsPage() {
               </p>
               <p className="mt-2 text-sm text-gray-700">
                 Contact Hirexa Support at{" "}
-                {supportEmail ? (
+                {view.supportEmail ? (
                   <Link
-                    href={`mailto:${supportEmail}`}
+                    href={`mailto:${view.supportEmail}`}
                     className="font-semibold text-blue-700 hover:underline"
                   >
-                    {supportEmail}
+                    {view.supportEmail}
                   </Link>
                 ) : (
                   <span className="font-semibold text-gray-900">
@@ -286,7 +333,7 @@ export default async function SubscriptionSettingsPage() {
         </div>
       </main>
 
-      <LoginFooter></LoginFooter>
+      <LoginFooter />
     </div>
   );
 }
@@ -321,7 +368,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
         {label}
       </div>
-      <div className="mt-1 text-sm font-semibold text-gray-900">{value}</div>
+      <div className="mt-1 break-all text-sm font-semibold text-gray-900">{value}</div>
     </div>
   );
 }
@@ -340,5 +387,32 @@ function ActionButton({ label, disabled }: { label: string; disabled?: boolean }
     >
       {label}
     </button>
+  );
+}
+
+function ActionLink({
+  href,
+  label,
+  external,
+}: {
+  href: string;
+  label: string;
+  external?: boolean;
+}) {
+  const className =
+    "inline-flex rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50";
+
+  if (external) {
+    return (
+      <a href={href} target="_blank" rel="noreferrer" className={className}>
+        {label}
+      </a>
+    );
+  }
+
+  return (
+    <Link href={href} className={className}>
+      {label}
+    </Link>
   );
 }

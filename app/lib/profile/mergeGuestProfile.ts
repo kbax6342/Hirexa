@@ -1,8 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import type { prisma } from "@/app/lib/prisma";
 import {
-  deriveSafeLocationSearchFields,
-  resolveEncryptedDobValue,
+  getSafePrivateProfileFields,
+  normalizeDobForStorage,
+  readRawPrivateProfileFieldsByIds,
+  sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
 
 type MergeGuestProfileArgs = {
@@ -28,6 +30,59 @@ type ResumeExperienceSnapshot = {
   dateRange?: string | null;
   bullets?: string[];
 };
+
+const mergeableUserProfileSelect = {
+  id: true,
+  userId: true,
+  guestId: true,
+  skills: true,
+  resumeSkills: true,
+  minCompensation: true,
+  compensationType: true,
+  firstName: true,
+  lastName: true,
+  phone: true,
+  email: true,
+  subscriptionEmail: true,
+  country: true,
+  countryCode: true,
+  linkedinUrl: true,
+  portfolioUrl: true,
+  authorizedUS: true,
+  sponsorship: true,
+  felony: true,
+  startDate: true,
+  screening: true,
+  relocate: true,
+  gender: true,
+  pronouns: true,
+  ethnicity: true,
+  disability: true,
+  veteran: true,
+  workplaceLocations: true,
+  includeRemote: true,
+  newsletterOptIn: true,
+  newsletterSource: true,
+  emailVerifiedAt: true,
+  unsubscribedAt: true,
+  registrationStatus: true,
+  keyQuestions: true,
+  stripeCustomerId: true,
+  stripeSubscriptionId: true,
+  lastPaymentReceivedAt: true,
+  monthlyPlanStatus: true,
+  monthlySubscriber: true,
+  profileImage: true,
+  profileImageFilename: true,
+  profileImageMimeType: true,
+  subscriptionCheckedAt: true,
+  subscriptionPurchasedAt: true,
+  trialPlanStatus: true,
+  trialSubscriber: true,
+  yearlyPlanStatus: true,
+  yearlySubscriber: true,
+  welcomeEmailSentAt: true,
+} satisfies Prisma.UserProfileSelect;
 
 function mergeStringArrays(primary: string[], secondary: string[]) {
   const seen = new Set<string>();
@@ -56,6 +111,11 @@ function preferDate(primary?: Date | null, secondary?: Date | null) {
   }
 
   return primary ?? secondary ?? undefined;
+}
+
+function dateFromDobString(value?: string | null) {
+  const normalized = normalizeDobForStorage(value);
+  return normalized ? new Date(`${normalized}T00:00:00.000Z`) : undefined;
 }
 
 function experienceKey(value: {
@@ -144,6 +204,7 @@ export async function mergeGuestProfileIntoUserProfile(
 ): Promise<MergeGuestProfileResult> {
   const guestProfile = await tx.userProfile.findUnique({
     where: { guestId: args.guestId },
+    select: mergeableUserProfileSelect,
   });
 
   if (!guestProfile) {
@@ -170,6 +231,7 @@ export async function mergeGuestProfileIntoUserProfile(
 
   const userProfile = await tx.userProfile.findUnique({
     where: { userId: args.userId },
+    select: mergeableUserProfileSelect,
   });
 
   if (!userProfile) {
@@ -191,23 +253,34 @@ export async function mergeGuestProfileIntoUserProfile(
     };
   }
 
-  const mergedAddress = preferText(userProfile.address, guestProfile.address);
-  const mergedCity = preferText(userProfile.city, guestProfile.city);
-  const mergedPostalCode = preferText(userProfile.postalCode, guestProfile.postalCode);
-  const mergedState = preferText(userProfile.state, guestProfile.state);
-  const mergedLocationSearch = deriveSafeLocationSearchFields({
-    city: mergedCity,
-    citySearch: userProfile.citySearch ?? guestProfile.citySearch,
-    state: mergedState,
-    stateSearch: userProfile.stateSearch ?? guestProfile.stateSearch,
-    postalCode: mergedPostalCode,
-    postalCodeSearch: userProfile.postalCodeSearch ?? guestProfile.postalCodeSearch,
+  const privateFieldsById = await readRawPrivateProfileFieldsByIds(tx, [
+    guestProfile.id,
+    userProfile.id,
+  ]);
+  const safeUserPrivateFields = getSafePrivateProfileFields({
+    ...privateFieldsById.get(userProfile.id),
   });
-  const mergedDobEncrypted =
-    resolveEncryptedDobValue({
-      dobEncrypted: userProfile.dobEncrypted ?? guestProfile.dobEncrypted,
-      dob: userProfile.dob ?? guestProfile.dob,
-    }) ?? undefined;
+  const safeGuestPrivateFields = getSafePrivateProfileFields({
+    ...privateFieldsById.get(guestProfile.id),
+  });
+  const mergedAddress = preferText(
+    safeUserPrivateFields.address,
+    safeGuestPrivateFields.address
+  );
+  const mergedCity = preferText(safeUserPrivateFields.city, safeGuestPrivateFields.city);
+  const mergedPostalCode = preferText(
+    safeUserPrivateFields.postalCode,
+    safeGuestPrivateFields.postalCode
+  );
+  const mergedState = preferText(safeUserPrivateFields.state, safeGuestPrivateFields.state);
+  const mergedDob = preferText(safeUserPrivateFields.dob, safeGuestPrivateFields.dob);
+  const mergedPrivateFields = sanitizePrivateProfileFields({
+    address: mergedAddress,
+    city: mergedCity,
+    postalCode: mergedPostalCode,
+    state: mergedState,
+    dob: mergedDob,
+  });
 
   const mergedProfileData: Prisma.UserProfileUpdateInput = {
     guestId: null,
@@ -223,13 +296,17 @@ export async function mergeGuestProfileIntoUserProfile(
       userProfile.subscriptionEmail,
       guestProfile.subscriptionEmail ?? guestProfile.email ?? args.email ?? null
     ),
-    address: mergedAddress,
-    city: mergedCity,
-    citySearch: mergedLocationSearch.citySearch ?? undefined,
-    postalCode: mergedPostalCode,
-    postalCodeSearch: mergedLocationSearch.postalCodeSearch ?? undefined,
-    state: mergedState,
-    stateSearch: mergedLocationSearch.stateSearch ?? undefined,
+    address: null,
+    addressEncrypted: mergedPrivateFields.addressEncrypted,
+    city: null,
+    cityEncrypted: mergedPrivateFields.cityEncrypted,
+    citySearch: mergedPrivateFields.citySearch,
+    postalCode: null,
+    postalCodeEncrypted: mergedPrivateFields.postalCodeEncrypted,
+    postalCodeSearch: mergedPrivateFields.postalCodeSearch,
+    state: null,
+    stateEncrypted: mergedPrivateFields.stateEncrypted,
+    stateSearch: mergedPrivateFields.stateSearch,
     country: preferText(userProfile.country, guestProfile.country),
     countryCode: preferText(userProfile.countryCode, guestProfile.countryCode),
     linkedinUrl: preferText(userProfile.linkedinUrl, guestProfile.linkedinUrl),
@@ -255,8 +332,7 @@ export async function mergeGuestProfileIntoUserProfile(
       userProfile.registrationStatus && userProfile.registrationStatus !== "pending_verification"
         ? userProfile.registrationStatus
         : guestProfile.registrationStatus ?? userProfile.registrationStatus ?? undefined,
-    dob: null,
-    dobEncrypted: mergedDobEncrypted,
+    dob: dateFromDobString(mergedPrivateFields.dob) ?? null,
     keyQuestions: userProfile.keyQuestions ?? guestProfile.keyQuestions ?? undefined,
     stripeCustomerId: preferText(userProfile.stripeCustomerId, guestProfile.stripeCustomerId),
     stripeSubscriptionId: preferText(
@@ -295,6 +371,7 @@ export async function mergeGuestProfileIntoUserProfile(
   await tx.userProfile.update({
     where: { id: userProfile.id },
     data: mergedProfileData,
+    select: { id: true },
   });
 
   await tx.resumeFile.updateMany({

@@ -16,6 +16,7 @@ type FormState = {
   postalCode: string;
   state: string;
   linkedinUrl: string;
+  portfolioUrl: string;
   phone: string;
   email: string;
 };
@@ -27,10 +28,15 @@ type ExistingProfileResponse = {
     lastName?: string | null;
     dob?: string | null;
     address?: string | null;
+    displayAddress?: string | null;
     city?: string | null;
+    displayCity?: string | null;
     postalCode?: string | null;
+    displayPostalCode?: string | null;
     state?: string | null;
+    displayState?: string | null;
     linkedinUrl?: string | null;
+    portfolioUrl?: string | null;
     phone?: string | null;
     email?: string | null;
   } | null;
@@ -69,6 +75,15 @@ function formatDobForInput(value?: string | null) {
   return raw;
 }
 
+function formatPhoneNumber(value?: string | null) {
+  const digits = String(value ?? "").replace(/\D/g, "").slice(0, 10);
+
+  if (digits.length === 0) return "";
+  if (digits.length < 4) return `(${digits}`;
+  if (digits.length < 7) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
 export default function ProfileForm() {
   const router = useRouter();
 
@@ -81,6 +96,7 @@ export default function ProfileForm() {
     postalCode: "",
     state: "",
     linkedinUrl: "",
+    portfolioUrl: "",
     phone: "",
     email: "",
   });
@@ -112,12 +128,13 @@ export default function ProfileForm() {
           firstName: profile.firstName ?? prev.firstName,
           lastName: profile.lastName ?? prev.lastName,
           dob: profile.dob ? formatDobForInput(profile.dob) : prev.dob,
-          address: profile.address ?? prev.address,
-          city: profile.city ?? prev.city,
-          postalCode: profile.postalCode ?? prev.postalCode,
-          state: profile.state ?? prev.state,
+          address: profile.displayAddress ?? profile.address ?? prev.address,
+          city: profile.displayCity ?? profile.city ?? prev.city,
+          postalCode: profile.displayPostalCode ?? profile.postalCode ?? prev.postalCode,
+          state: profile.displayState ?? profile.state ?? prev.state,
           linkedinUrl: profile.linkedinUrl ?? prev.linkedinUrl,
-          phone: profile.phone ?? prev.phone,
+          portfolioUrl: profile.portfolioUrl ?? prev.portfolioUrl,
+          phone: formatPhoneNumber(profile.phone) || prev.phone,
           email: profile.email ?? prev.email,
         }));
       } catch (e: unknown) {
@@ -205,7 +222,7 @@ export default function ProfileForm() {
     setSaving(false);
 
     // ✅ Only navigate when save succeeds
-    router.push("/benefits");
+    router.push("/questions");
   }
 
   const inputBase =
@@ -334,15 +351,29 @@ export default function ProfileForm() {
       </div>
 
       {/* Row 4 */}
-      <div>
-        <label className={labelBase}>LinkedIn profile</label>
-        <div className="mt-1">
-          <input
-            className={inputBase}
-            value={form.linkedinUrl}
-            onChange={(e) => update("linkedinUrl", e.target.value)}
-            placeholder="e.g. www.linkedin.com/in/"
-          />
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className={labelBase}>LinkedIn profile</label>
+          <div className="mt-1">
+            <input
+              className={inputBase}
+              value={form.linkedinUrl}
+              onChange={(e) => update("linkedinUrl", e.target.value)}
+              placeholder="e.g. www.linkedin.com/in/"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className={labelBase}>Portfolio link</label>
+          <div className="mt-1">
+            <input
+              className={inputBase}
+              value={form.portfolioUrl}
+              onChange={(e) => update("portfolioUrl", e.target.value)}
+              placeholder="e.g. https://yourportfolio.com"
+            />
+          </div>
         </div>
       </div>
 
@@ -354,7 +385,7 @@ export default function ProfileForm() {
             <input
               className={inputBase + " pr-10"}
               value={form.phone}
-              onChange={(e) => update("phone", e.target.value)}
+              onChange={(e) => update("phone", formatPhoneNumber(e.target.value))}
               placeholder="(###) ###-####"
               autoComplete="tel"
             />

@@ -183,10 +183,18 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         }
       }
 
-      const onboarding = await getOnboardingStatusForUser(
-        ((token as any).id as string | undefined) ?? token.sub
-      );
-      (token as any).questionsCompleted = onboarding.completed;
+      try {
+        const onboarding = await getOnboardingStatusForUser(
+          ((token as any).id as string | undefined) ?? token.sub
+        );
+        (token as any).questionsCompleted = onboarding.completed;
+      } catch (error) {
+        console.error("[auth] failed to load onboarding status for session token", {
+          userId: ((token as any).id as string | undefined) ?? token.sub ?? null,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        (token as any).questionsCompleted = false;
+      }
 
       return token;
     },

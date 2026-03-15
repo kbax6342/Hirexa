@@ -47,8 +47,12 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: true,
         started: true,
+        hasHirePilotAccess: status.hasHirePilotAccess,
         hirePilotUnlimited: status.hirePilotUnlimited,
         hirePilotCredits: status.hirePilotCredits,
+        productKey: status.productKey,
+        status: status.status,
+        currentPeriodEnd: status.currentPeriodEnd,
         usageId: existingUsage.id,
       });
     }
@@ -61,8 +65,12 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         message: "HirePilot access required",
+        hasHirePilotAccess: false,
         hirePilotUnlimited: false,
         hirePilotCredits: 0,
+        productKey: null,
+        status: null,
+        currentPeriodEnd: null,
       },
       { status: 403 }
     );
@@ -80,8 +88,12 @@ export async function POST(req: Request) {
   const response = NextResponse.json({
     ok: true,
     started: true,
+    hasHirePilotAccess: access.allowed,
     hirePilotUnlimited: access.unlimited,
     hirePilotCredits: access.credits,
+    productKey: access.unlimited ? "hirepilot_monthly" : access.credits > 0 ? "hirepilot_credit" : null,
+    status: access.allowed ? "active" : null,
+    currentPeriodEnd: null,
     usageId: usage.id,
   });
 

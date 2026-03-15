@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { getHirePilotBillingStatus } from "@/app/lib/hirepilot/checkHirePilotAccess";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await auth();

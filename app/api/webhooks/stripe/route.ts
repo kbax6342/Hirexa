@@ -8,9 +8,15 @@ import { getStripeClient } from "../../../lib/stripeClient";
 import {
   BILLING_PRODUCT_KEYS,
   getStripePriceDetailsFromSubscription,
-  getUserBillingWhere,
   upsertUserBillingRecord,
 } from "@/app/lib/billing/userBilling";
+import {
+  HIREPILOT_PURCHASE_TYPES,
+  hasProcessedStripePayment,
+  incrementHirePilotCredits,
+  resolveHirePilotUserId,
+  upsertHirePilotMonthlyBilling,
+} from "@/app/lib/billing/hirepilotBilling";
 
 type PlanType = "trial" | "monthly" | "yearly";
 
@@ -219,106 +225,6 @@ async function getUserProfileIdByUserId(userId: string) {
   return profile?.id ?? null;
 }
 
-async function resolveHirePilotUserId(params: {
-  userIdFromMetadata?: string | null;
-  customerEmail?: string | null;
-}) {
-  if (params.userIdFromMetadata) {
-    return params.userIdFromMetadata;
-  }
-
-  if (!params.customerEmail) {
-    return null;
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { email: params.customerEmail },
-    select: { id: true },
-  });
-
-  return user?.id ?? null;
-}
-
-async function syncHirePilotSubscription(params: {
-  userId: string;
-  status: string | null;
-  stripeCustomerId?: string | null;
-  stripeSubscriptionId?: string | null;
-  stripeCheckoutSessionId?: string | null;
-  priceId?: string | null;
-  productId?: string | null;
-  currentPeriodStart?: Date | null;
-  currentPeriodEnd?: Date | null;
-  cancelAtPeriodEnd?: boolean;
-  canceledAt?: Date | null;
-  trialStart?: Date | null;
-  trialEnd?: Date | null;
-  paidAt?: Date | null;
-}) {
-  const hasAccess = ACTIVE_SUBSCRIPTION_STATUSES.has((params.status ?? "").toLowerCase());
-
-  await upsertUserBillingRecord({
-    userId: params.userId,
-    productKey: BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-    planType: "monthly",
-    status: params.status,
-    stripeCustomerId: params.stripeCustomerId ?? null,
-    stripeSubscriptionId: params.stripeSubscriptionId ?? null,
-    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-    stripePriceId: params.priceId ?? null,
-    stripeProductId: params.productId ?? null,
-    currentPeriodStart: params.currentPeriodStart ?? null,
-    currentPeriodEnd: params.currentPeriodEnd ?? null,
-    cancelAtPeriodEnd: params.cancelAtPeriodEnd ?? false,
-    canceledAt: params.canceledAt ?? null,
-    trialStart: params.trialStart ?? null,
-    trialEnd: params.trialEnd ?? null,
-    hirePilotUnlimited: hasAccess,
-    subscriptionPurchasedAt: params.paidAt ?? undefined,
-    ...(hasAccess ? { lastPaymentReceivedAt: params.paidAt ?? new Date() } : {}),
-  });
-}
-
-async function addHirePilotCredits(params: {
-  userId: string;
-  creditDelta: number;
-  stripeCustomerId?: string | null;
-  stripeCheckoutSessionId?: string | null;
-}) {
-  await prisma.userBilling.upsert({
-    where: getUserBillingWhere(params.userId, BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT),
-    create: {
-      userId: params.userId,
-      productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-      planType: "credits",
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      hirePilotCredits: params.creditDelta,
-      lastPaymentReceivedAt: new Date(),
-      subscriptionPurchasedAt: new Date(),
-    },
-    update: {
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      hirePilotCredits: {
-        increment: params.creditDelta,
-      },
-      lastPaymentReceivedAt: new Date(),
-    },
-  });
-}
-
-async function hasProcessedStripeEvent(eventId: string) {
-  const existing = await prisma.stripePayment.findUnique({
-    where: { stripeEventId: eventId },
-    select: { id: true },
-  });
-
-  return Boolean(existing);
-}
-
 export async function POST(req: Request) {
   const stripeClient = getStripeClient();
 
@@ -355,20 +261,31 @@ export async function POST(req: Request) {
     const hirePilotPurchaseType = session.metadata?.hirepilot_purchase_type ?? null;
     const hirePilotUserId = await resolveHirePilotUserId({
       userIdFromMetadata: session.metadata?.hirepilot_user_id ?? null,
+      clientReferenceId: session.client_reference_id ?? null,
       customerEmail:
         session.customer_details?.email ??
         session.customer_email ??
         ((session.customer as Stripe.Customer | null | undefined)?.email ?? null),
     });
 
-    if (hirePilotPurchaseType === "credit" && !(await hasProcessedStripeEvent(event.id))) {
-      if (hirePilotUserId) {
+    if (hirePilotPurchaseType === HIREPILOT_PURCHASE_TYPES.CREDIT) {
+      const creditAlreadyProcessed = await hasProcessedStripePayment({
+        stripeEventId: event.id,
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.payment_intent?.id,
+      });
+
+      if (hirePilotUserId && !creditAlreadyProcessed) {
         const creditCount = Math.max(1, Number(session.metadata?.hirepilot_credits ?? "1") || 1);
-        await addHirePilotCredits({
+        await incrementHirePilotCredits({
           userId: hirePilotUserId,
-          creditDelta: creditCount,
+          credits: creditCount,
           stripeCustomerId: customerId,
           stripeCheckoutSessionId: session.id,
+          stripePriceId: process.env.STRIPE_HIREPILOT_CREDIT_PRICE_ID?.trim() ?? null,
         });
       }
 
@@ -392,7 +309,10 @@ export async function POST(req: Request) {
       });
     }
 
-    if (hirePilotPurchaseType === "subscription" && hirePilotUserId) {
+    if (
+      hirePilotPurchaseType === HIREPILOT_PURCHASE_TYPES.SUBSCRIPTION &&
+      hirePilotUserId
+    ) {
       const subscriptionId =
         typeof session.subscription === "string"
           ? session.subscription
@@ -402,14 +322,14 @@ export async function POST(req: Request) {
         : null;
       const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
-      await syncHirePilotSubscription({
+      await upsertHirePilotMonthlyBilling({
         userId: hirePilotUserId,
         status: subscription?.status ?? "active",
         stripeCustomerId: customerId,
         stripeSubscriptionId: subscriptionId,
         stripeCheckoutSessionId: session.id,
-        priceId: priceDetails.priceId,
-        productId: priceDetails.productId,
+        stripePriceId: priceDetails.priceId,
+        stripeProductId: priceDetails.productId,
         currentPeriodStart: priceDetails.currentPeriodStart,
         currentPeriodEnd: priceDetails.currentPeriodEnd,
         cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
@@ -545,7 +465,10 @@ export async function POST(req: Request) {
       const subscription = await stripeClient.subscriptions.retrieve(subscriptionId);
       const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
-      if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
+      if (
+        subscription.metadata?.hirepilot_purchase_type ===
+        HIREPILOT_PURCHASE_TYPES.SUBSCRIPTION
+      ) {
         const hirePilotUserId = await resolveHirePilotUserId({
           userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
           customerEmail:
@@ -553,13 +476,13 @@ export async function POST(req: Request) {
         });
 
         if (hirePilotUserId) {
-          await syncHirePilotSubscription({
+          await upsertHirePilotMonthlyBilling({
             userId: hirePilotUserId,
             status: subscription.status ?? "active",
             stripeCustomerId: normalizeCustomerId(invoice.customer),
             stripeSubscriptionId: subscriptionId,
-            priceId: priceDetails.priceId,
-            productId: priceDetails.productId,
+            stripePriceId: priceDetails.priceId,
+            stripeProductId: priceDetails.productId,
             currentPeriodStart: priceDetails.currentPeriodStart,
             currentPeriodEnd: priceDetails.currentPeriodEnd,
             cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
@@ -632,19 +555,22 @@ export async function POST(req: Request) {
     const subscription = event.data.object as Stripe.Subscription;
     const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
-    if (subscription.metadata?.hirepilot_purchase_type === "subscription") {
+    if (
+      subscription.metadata?.hirepilot_purchase_type ===
+      HIREPILOT_PURCHASE_TYPES.SUBSCRIPTION
+    ) {
       const hirePilotUserId = await resolveHirePilotUserId({
         userIdFromMetadata: subscription.metadata?.hirepilot_user_id ?? null,
       });
 
       if (hirePilotUserId) {
-        await syncHirePilotSubscription({
+        await upsertHirePilotMonthlyBilling({
           userId: hirePilotUserId,
           status: subscription.status ?? null,
           stripeCustomerId: normalizeCustomerId(subscription.customer),
           stripeSubscriptionId: subscription.id,
-          priceId: priceDetails.priceId,
-          productId: priceDetails.productId,
+          stripePriceId: priceDetails.priceId,
+          stripeProductId: priceDetails.productId,
           currentPeriodStart: priceDetails.currentPeriodStart,
           currentPeriodEnd: priceDetails.currentPeriodEnd,
           cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,

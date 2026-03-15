@@ -66,26 +66,36 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
 }
 
 export async function getOnboardingStatusForUser(userId?: string | null) {
+  const fallback = {
+    profile: null,
+    completed: false,
+    hasResume: false,
+    hasProfileDetails: false,
+    nextPath: "/resume",
+  };
+
   if (!userId) {
-    return {
-      profile: null,
-      completed: false,
-      hasResume: false,
-      hasProfileDetails: false,
-      nextPath: "/resume",
-    };
+    return fallback;
   }
 
-  const profile = await prisma.userProfile.findUnique({
-    where: { userId },
-    select: onboardingStatusSelect,
-  });
+  try {
+    const profile = await prisma.userProfile.findUnique({
+      where: { userId },
+      select: onboardingStatusSelect,
+    });
 
-  return {
-    profile,
-    completed: isOnboardingComplete(profile),
-    hasResume: hasUploadedResume(profile),
-    hasProfileDetails: hasRequiredProfileDetails(profile),
-    nextPath: getNextOnboardingPath(profile),
-  };
+    return {
+      profile,
+      completed: isOnboardingComplete(profile),
+      hasResume: hasUploadedResume(profile),
+      hasProfileDetails: hasRequiredProfileDetails(profile),
+      nextPath: getNextOnboardingPath(profile),
+    };
+  } catch (error) {
+    console.error("[onboarding] failed to read onboarding status", {
+      userId,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    return fallback;
+  }
 }

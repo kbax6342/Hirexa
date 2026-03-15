@@ -86,6 +86,12 @@ function humanizePlan(planKey?: string | null) {
   return "Hirexa AI Subscription";
 }
 
+function shortenSessionId(value?: string | null) {
+  if (!value) return "";
+  if (value.length <= 20) return value;
+  return `${value.slice(0, 12)}...${value.slice(-5)}`;
+}
+
 function summarizePaymentMethod(
   paymentMethod: Stripe.Subscription["default_payment_method"] | null | undefined
 ) {
@@ -216,6 +222,9 @@ export default async function BillingSuccessPage({ searchParams }: Props) {
     ? "Thank you for subscribing to Hirexa AI. Your account has been upgraded."
     : "Thank you for subscribing to Hirexa AI. We’re preparing your access now.";
 
+  const displayOrderNumber = shortenSessionId(display.orderNumber);
+  const displaySessionReference = shortenSessionId(display.sessionId);
+
   const summaryRows = [
     {
       label: "Plan",
@@ -234,7 +243,7 @@ export default async function BillingSuccessPage({ searchParams }: Props) {
     },
     {
       label: "Order number",
-      value: display.orderNumber,
+      value: displayOrderNumber,
       icon: HashtagIcon,
     },
     {
@@ -335,8 +344,8 @@ export default async function BillingSuccessPage({ searchParams }: Props) {
                   </div>
 
                   {display.sessionId ? (
-                    <p className="mt-5 text-xs text-slate-500">
-                      Session reference: {display.sessionId}
+                    <p className="mt-5 break-all text-xs text-slate-500">
+                      Session reference: {displaySessionReference}
                     </p>
                   ) : null}
                 </div>

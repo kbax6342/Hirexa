@@ -2,9 +2,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Footer } from "../components/footer";
-
-/* ================= TYPES ================= */
 
 type FormState = {
   authorizedUS: string;
@@ -19,8 +16,6 @@ type FormState = {
   disability: string;
   veteran: string;
 };
-
-/* ================= OPTIONS (ATS + EEO SAFE) ================= */
 
 const AUTHORIZED_OPTIONS = [
   "Yes, I am authorized to work in the United States",
@@ -72,7 +67,11 @@ const VETERAN_OPTIONS = [
   "Prefer not to say",
 ];
 
-/* ================= COMPONENT ================= */
+const inputBase =
+  "h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 " +
+  "shadow-sm outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15";
+
+const labelBase = "text-xs font-semibold text-slate-700";
 
 export default function QuestionsClient() {
   const router = useRouter();
@@ -97,18 +96,17 @@ export default function QuestionsClient() {
 
   const handleChange = (field: keyof FormState, value: string) => {
     setError(null);
-    setForm((p) => ({ ...p, [field]: value }));
+    setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const requiredOk = useMemo(() => {
-    return (
+    return Boolean(
       form.authorizedUS.trim() &&
-      form.sponsorship.trim() &&
-      form.felony.trim()
+        form.sponsorship.trim() &&
+        form.felony.trim()
     );
   }, [form.authorizedUS, form.sponsorship, form.felony]);
 
-  /* ===== CHECK COMPLETION ===== */
   useEffect(() => {
     let cancelled = false;
 
@@ -125,22 +123,23 @@ export default function QuestionsClient() {
         }
 
         if (!cancelled && data?.data) {
-          setForm((p) => ({ ...p, ...data.data }));
+          setForm((prev) => ({ ...prev, ...data.data }));
         }
       } catch {
-        // silent
+        // Intentionally silent to preserve existing behavior.
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
-    boot();
+    void boot();
+
     return () => {
       cancelled = true;
     };
   }, [router]);
-
-  /* ===== ACTIONS ===== */
 
   async function handleSave() {
     setError(null);
@@ -150,7 +149,10 @@ export default function QuestionsClient() {
       return;
     }
 
-    if (saving) return;
+    if (saving) {
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -161,11 +163,14 @@ export default function QuestionsClient() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to save");
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to save");
+      }
 
       router.replace("/dashboard");
-    } catch (e: any) {
-      setError(e?.message || "Something went wrong.");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Something went wrong.";
+      setError(message);
     } finally {
       setSaving(false);
     }
@@ -176,100 +181,155 @@ export default function QuestionsClient() {
       router.push("/questions");
       return;
     }
+
     router.back();
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    await handleSave();
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        Loading…
+      <div className="flex h-32 items-center justify-center text-sm text-slate-600">
+        Loading...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-white flex text-black flex-col">
-      <main className="flex-1">
-        <div className="max-w-3xl mx-auto px-6 pt-24 pb-36">
-          <h1 className="text-2xl font-semibold mb-2">Key questions</h1>
-          <p className="text-sm text-gray-600 mb-8">
-            These answers help us auto-fill your job applications accurately.
-          </p>
-
-          {error && (
-            <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-              {error}
-            </div>
-          )}
-
-          <div className="space-y-6">
-            <Select label="Are you authorized to work in the United States?" value={form.authorizedUS} onChange={(v) => handleChange("authorizedUS", v)} options={AUTHORIZED_OPTIONS} />
-            <Select label="Will you now or in the future require sponsorship to work in the United States?" value={form.sponsorship} onChange={(v) => handleChange("sponsorship", v)} options={SPONSORSHIP_OPTIONS} />
-            <Select label="Have you ever been convicted of a felony?" value={form.felony} onChange={(v) => handleChange("felony", v)} options={FELONY_OPTIONS} />
-            <Select label="When can you start a new job?" value={form.startDate} onChange={(v) => handleChange("startDate", v)} options={START_DATE_OPTIONS} />
-            <Select label="Are you willing to complete pre-employment screening?" value={form.screening} onChange={(v) => handleChange("screening", v)} options={SCREENING_OPTIONS} />
-            <Select label="Are you willing to relocate for a job?" value={form.relocate} onChange={(v) => handleChange("relocate", v)} options={RELOCATE_OPTIONS} />
-            <Select label="What gender do you identify as?" value={form.gender} onChange={(v) => handleChange("gender", v)} options={GENDER_OPTIONS} />
-            <Select label="What are your desired pronouns?" value={form.pronouns} onChange={(v) => handleChange("pronouns", v)} options={PRONOUN_OPTIONS} />
-            <Select label="Which race or ethnicity best describes you?" value={form.ethnicity} onChange={(v) => handleChange("ethnicity", v)} options={ETHNICITY_OPTIONS} />
-            <Select label="Do you have a disability?" value={form.disability} onChange={(v) => handleChange("disability", v)} options={DISABILITY_OPTIONS} />
-            <Select label="Are you a veteran?" value={form.veteran} onChange={(v) => handleChange("veteran", v)} options={VETERAN_OPTIONS} />
-          </div>
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {error ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          {error}
         </div>
-      </main>
+      ) : null}
 
-    
+      <div className="space-y-5">
+        <Select
+          label="Are you authorized to work in the United States?"
+          value={form.authorizedUS}
+          onChange={(value) => handleChange("authorizedUS", value)}
+          options={AUTHORIZED_OPTIONS}
+        />
+        <Select
+          label="Will you now or in the future require sponsorship to work in the United States?"
+          value={form.sponsorship}
+          onChange={(value) => handleChange("sponsorship", value)}
+          options={SPONSORSHIP_OPTIONS}
+        />
+        <Select
+          label="Have you ever been convicted of a felony?"
+          value={form.felony}
+          onChange={(value) => handleChange("felony", value)}
+          options={FELONY_OPTIONS}
+        />
+        <Select
+          label="When can you start a new job?"
+          value={form.startDate}
+          onChange={(value) => handleChange("startDate", value)}
+          options={START_DATE_OPTIONS}
+        />
+        <Select
+          label="Are you willing to complete pre-employment screening?"
+          value={form.screening}
+          onChange={(value) => handleChange("screening", value)}
+          options={SCREENING_OPTIONS}
+        />
+        <Select
+          label="Are you willing to relocate for a job?"
+          value={form.relocate}
+          onChange={(value) => handleChange("relocate", value)}
+          options={RELOCATE_OPTIONS}
+        />
+        <Select
+          label="What gender do you identify as?"
+          value={form.gender}
+          onChange={(value) => handleChange("gender", value)}
+          options={GENDER_OPTIONS}
+        />
+        <Select
+          label="What are your desired pronouns?"
+          value={form.pronouns}
+          onChange={(value) => handleChange("pronouns", value)}
+          options={PRONOUN_OPTIONS}
+        />
+        <Select
+          label="Which race or ethnicity best describes you?"
+          value={form.ethnicity}
+          onChange={(value) => handleChange("ethnicity", value)}
+          options={ETHNICITY_OPTIONS}
+        />
+        <Select
+          label="Do you have a disability?"
+          value={form.disability}
+          onChange={(value) => handleChange("disability", value)}
+          options={DISABILITY_OPTIONS}
+        />
+        <Select
+          label="Are you a veteran?"
+          value={form.veteran}
+          onChange={(value) => handleChange("veteran", value)}
+          options={VETERAN_OPTIONS}
+        />
+      </div>
 
-      {/* STICKY NAV */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-white">
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex h-11 items-center justify-center rounded-md border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+        >
+          Back
+        </button>
+
+        <div className="sm:ml-auto">
           <button
-            onClick={handleBack}
-            className="rounded-full border px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            ← Back
-          </button>
-
-          <button
-            onClick={handleSave}
+            type="submit"
             disabled={saving}
-            className="rounded-full bg-blue-600 px-7 py-2.5 text-sm font-semibold text-white shadow hover:bg-blue-700 disabled:opacity-60"
+            className={[
+              "inline-flex h-11 items-center justify-center rounded-md px-5 text-sm font-semibold text-white shadow-sm transition",
+              saving
+                ? "cursor-not-allowed bg-sky-400 opacity-60"
+                : "cursor-pointer bg-sky-600 hover:bg-sky-700",
+            ].join(" ")}
           >
-            {saving ? "Saving..." : "Save"}
+            {saving ? "Saving..." : "Continue"}
           </button>
         </div>
       </div>
-    </div>
+    </form>
   );
 }
-
-/* ================= SELECT ================= */
 
 type SelectProps = {
   label: string;
   value: string;
-  onChange: (v: string) => void;
+  onChange: (value: string) => void;
   options: string[];
 };
 
 function Select({ label, value, onChange, options }: SelectProps) {
   return (
     <div>
-      <label className="block text-sm font-medium mb-2">
-        {label} <span className="text-red-500">*</span>
+      <label className={labelBase}>
+        {label} <span className="text-rose-500">*</span>
       </label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full border rounded-md px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500"
-      >
-        <option value="">Select</option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
+      <div className="mt-1">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputBase}
+        >
+          <option value="">Select...</option>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

@@ -164,14 +164,18 @@ model UserProfile {
   unsubscribedAt          DateTime?
   registrationStatus      String?            @default("pending_verification")
   address                 String?
+  addressEncrypted        String?
   city                    String?
+  cityEncrypted           String?
   citySearch              String?
   dob                     DateTime?
   dobEncrypted            String?
   linkedinUrl             String?
   postalCode              String?
+  postalCodeEncrypted     String?
   postalCodeSearch        String?
   state                   String?
+  stateEncrypted          String?
   stateSearch             String?
   keyQuestions            Json?
   profileImage            Bytes?

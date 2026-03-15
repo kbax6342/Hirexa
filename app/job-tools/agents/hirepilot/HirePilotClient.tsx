@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowPathIcon,
   ClipboardDocumentIcon,
@@ -22,10 +23,15 @@ import {
 } from "@/app/components/ui/card";
 import HirePilotPaywall from "@/app/components/hirepilot/HirePilotPaywall";
 import { Textarea } from "@/app/components/ui/textarea";
+import {
+  extractInterviewQuestion,
+  extractInterviewQuestionCandidate,
+} from "@/app/lib/hirepilot/extractInterviewQuestion";
 import { cn } from "@/app/lib/utils";
 
 type RewriteMode = "default" | "shorten" | "expand" | "professional";
 type PracticeMode = "live" | "practice";
+type DetectionStatus = "idle" | "found" | "none";
 
 type HirePilotResponse = {
   ok: boolean;
@@ -38,16 +44,24 @@ type HirePilotResponse = {
 };
 
 type HirePilotStatusResponse = {
+  hasHirePilotAccess?: boolean;
   hirePilotUnlimited: boolean;
   hirePilotCredits: number;
+  productKey?: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
 };
 
 type StartInterviewResponse = {
   ok?: boolean;
   started?: boolean;
   message?: string;
+  hasHirePilotAccess?: boolean;
   hirePilotUnlimited?: boolean;
   hirePilotCredits?: number;
+  productKey?: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
 };
 
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
@@ -109,29 +123,25 @@ const practiceQuestions = [
   "Why should we hire you?",
 ];
 
-const questionStarters = [
-  "tell me",
-  "walk me",
-  "what",
-  "why",
-  "how",
-  "when",
-  "where",
-  "can you",
-  "could you",
-  "would you",
-  "describe",
-  "give me",
-  "have you",
-  "do you",
-];
-
 function normalizeSpace(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
 function normalizeQuestionKey(value: string) {
   return normalizeSpace(value).toLowerCase().replace(/[?!.,]+$/g, "");
+}
+
+function debugHirePilot(message: string, data?: Record<string, unknown>) {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+
+  if (data) {
+    console.log(`[hirepilot] ${message}`, data);
+    return;
+  }
+
+  console.log(`[hirepilot] ${message}`);
 }
 
 function formatRecognitionError(error: string) {
@@ -147,39 +157,6 @@ function formatRecognitionError(error: string) {
   return "Speech recognition stopped unexpectedly.";
 }
 
-function ensureQuestionPunctuation(value: string) {
-  const trimmed = normalizeSpace(value).replace(/^["']|["']$/g, "");
-  if (!trimmed) return "";
-  if (/[?!.]$/.test(trimmed)) return trimmed;
-  return `${trimmed}?`;
-}
-
-function extractDetectedQuestion(transcript: string) {
-  const normalized = normalizeSpace(transcript);
-  if (!normalized) return "";
-
-  const segments = normalized
-    .split(/(?<=[.?!])\s+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const segment = segments[index];
-    const lowered = segment.toLowerCase();
-    if (segment.length < 10) continue;
-    if (segment.endsWith("?") || questionStarters.some((starter) => lowered.startsWith(starter))) {
-      return ensureQuestionPunctuation(segment);
-    }
-  }
-
-  const lowered = normalized.toLowerCase();
-  if (questionStarters.some((starter) => lowered.startsWith(starter))) {
-    return ensureQuestionPunctuation(normalized);
-  }
-
-  return "";
-}
-
 async function readJsonSafely<T>(res: Response, fallback: T) {
   try {
     return (await res.json()) as T;
@@ -188,10 +165,30 @@ async function readJsonSafely<T>(res: Response, fallback: T) {
   }
 }
 
+function toBillingStatus(data?: HirePilotStatusResponse | StartInterviewResponse | null) {
+  const hirePilotUnlimited = Boolean(data?.hirePilotUnlimited);
+  const hirePilotCredits = Number(data?.hirePilotCredits ?? 0);
+
+  return {
+    hasHirePilotAccess:
+      Boolean(data?.hasHirePilotAccess) || hirePilotUnlimited || hirePilotCredits > 0,
+    hirePilotUnlimited,
+    hirePilotCredits,
+    productKey: data?.productKey ?? null,
+    status: data?.status ?? null,
+    currentPeriodEnd: data?.currentPeriodEnd ?? null,
+  };
+}
+
 export default function HirePilotClient() {
+  const searchParams = useSearchParams();
+  const checkoutState = searchParams.get("checkout");
+  const checkoutSessionId = searchParams.get("session_id");
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const keepListeningRef = useRef(false);
   const transcriptRef = useRef("");
+  const combinedTranscriptRef = useRef("");
+  const stopHandledRef = useRef(false);
   const lastQuestionKeyRef = useRef("");
 
   const [activeMode, setActiveMode] = useState<PracticeMode>("live");
@@ -201,6 +198,7 @@ export default function HirePilotClient() {
   const [micError, setMicError] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [detectedQuestion, setDetectedQuestion] = useState("");
+  const [detectionStatus, setDetectionStatus] = useState<DetectionStatus>("idle");
   const [answer, setAnswer] = useState("");
   const [tips, setTips] = useState<string[]>(defaultTips);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -211,8 +209,12 @@ export default function HirePilotClient() {
   const [practiceIndex, setPracticeIndex] = useState(0);
   const [autoGeneratePractice, setAutoGeneratePractice] = useState(true);
   const [billingStatus, setBillingStatus] = useState<HirePilotStatusResponse>({
+    hasHirePilotAccess: false,
     hirePilotUnlimited: false,
     hirePilotCredits: 0,
+    productKey: null,
+    status: null,
+    currentPeriodEnd: null,
   });
   const [billingLoading, setBillingLoading] = useState(true);
   const [startingInterview, setStartingInterview] = useState(false);
@@ -222,11 +224,15 @@ export default function HirePilotClient() {
   const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
 
   const answerActionsDisabled = !answer.trim() || isGenerating;
-  const detectedQuestionText = detectedQuestion || "Waiting for a question.";
+  const detectedQuestionText =
+    detectionStatus === "idle"
+      ? "Waiting for a question."
+      : detectionStatus === "none"
+        ? "No question detected."
+        : detectedQuestion;
   const hasPaidHirePilotAccess =
     interviewSessionStarted ||
-    billingStatus.hirePilotUnlimited ||
-    billingStatus.hirePilotCredits > 0;
+    Boolean(billingStatus.hasHirePilotAccess);
   const accessBadgeLabel = billingLoading
     ? "Checking access..."
     : billingStatus.hirePilotUnlimited
@@ -254,6 +260,14 @@ export default function HirePilotClient() {
   useEffect(() => {
     void loadHirePilotStatus();
   }, []);
+
+  useEffect(() => {
+    if (checkoutState !== "success" || !checkoutSessionId) {
+      return;
+    }
+
+    void refreshHirePilotAccess(checkoutSessionId);
+  }, [checkoutSessionId, checkoutState]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -298,15 +312,12 @@ export default function HirePilotClient() {
 
       transcriptRef.current = updatedTranscript;
       const combinedTranscript = normalizeSpace(`${updatedTranscript} ${interimTranscript}`);
+      combinedTranscriptRef.current = combinedTranscript;
       setLiveTranscript(combinedTranscript);
-
-      const question = extractDetectedQuestion(combinedTranscript);
-      const questionKey = normalizeQuestionKey(question);
-      if (question && questionKey && questionKey !== lastQuestionKeyRef.current) {
-        lastQuestionKeyRef.current = questionKey;
-        setDetectedQuestion(question);
-        void generateAnswer(question, "default");
-      }
+      debugHirePilot("transcript updated", {
+        length: combinedTranscript.length,
+        preview: combinedTranscript.slice(0, 120),
+      });
     };
 
     recognition.onerror = (event) => {
@@ -327,7 +338,6 @@ export default function HirePilotClient() {
           keepListeningRef.current = false;
         }
       }
-
       setStatusMessage("Microphone idle");
     };
 
@@ -350,6 +360,63 @@ export default function HirePilotClient() {
     return () => window.clearTimeout(timeout);
   }, [copied]);
 
+  function applyDetectedQuestion(transcript: string) {
+    const rawCandidate = extractInterviewQuestionCandidate(transcript);
+    const cleanedQuestion = rawCandidate ? extractInterviewQuestion(rawCandidate) : null;
+    const questionKey = normalizeQuestionKey(cleanedQuestion ?? "");
+
+    return cleanedQuestion && questionKey
+      ? { rawCandidate, cleanedQuestion, questionKey }
+      : { rawCandidate, cleanedQuestion: null, questionKey: "" };
+  }
+
+  function finalizeTranscriptDetection() {
+    if (stopHandledRef.current) {
+      return;
+    }
+
+    stopHandledRef.current = true;
+    const finalTranscript = combinedTranscriptRef.current;
+
+    debugHirePilot("stop listening clicked");
+    debugHirePilot("final transcript captured", {
+      length: finalTranscript.length,
+      preview: finalTranscript.slice(0, 160),
+    });
+
+    const detected = applyDetectedQuestion(finalTranscript);
+    debugHirePilot("extracted raw question candidate", {
+      found: Boolean(detected.rawCandidate),
+      question: detected.rawCandidate,
+    });
+    debugHirePilot("cleaned detected question", {
+      found: Boolean(detected.cleanedQuestion),
+      question: detected.cleanedQuestion,
+    });
+
+    if (!detected.cleanedQuestion || !detected.questionKey) {
+      setDetectedQuestion("");
+      setDetectionStatus("none");
+      setAnswer("");
+      setResponseSource(null);
+      setRequestError(null);
+      debugHirePilot("detected question state updated", {
+        status: "none",
+        question: null,
+      });
+      return;
+    }
+
+    lastQuestionKeyRef.current = detected.questionKey;
+    setDetectedQuestion(detected.cleanedQuestion);
+    setDetectionStatus("found");
+    debugHirePilot("detected question state updated", {
+      status: "found",
+      question: detected.cleanedQuestion,
+    });
+    void generateAnswer(detected.cleanedQuestion, "default");
+  }
+
   async function generateAnswer(
     question: string,
     mode: RewriteMode,
@@ -357,6 +424,11 @@ export default function HirePilotClient() {
   ) {
     const normalizedQuestion = normalizeSpace(question);
     if (!normalizedQuestion) return;
+
+    debugHirePilot("answer generation started", {
+      mode,
+      question: normalizedQuestion,
+    });
 
     const accessAllowed = await ensureInterviewSession();
     if (!accessAllowed) return;
@@ -385,10 +457,7 @@ export default function HirePilotClient() {
       });
       if (!res.ok || !data.ok) {
         if (res.status === 403) {
-          setBillingStatus({
-            hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
-            hirePilotCredits: Number(data.hirePilotCredits ?? 0),
-          });
+          setBillingStatus(toBillingStatus(data));
           setShowPaywall(true);
         }
         throw new Error(data.error || "Failed to generate an interview answer.");
@@ -397,10 +466,18 @@ export default function HirePilotClient() {
       setAnswer(data.answer ?? "");
       setTips(Array.isArray(data.tips) && data.tips.length > 0 ? data.tips : defaultTips);
       setResponseSource(data.source ?? null);
+      debugHirePilot("answer generation completed", {
+        success: true,
+        source: data.source ?? null,
+      });
     } catch (error) {
       setRequestError(
         error instanceof Error ? error.message : "Failed to generate an interview answer."
       );
+      debugHirePilot("answer generation completed", {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
     } finally {
       setIsGenerating(false);
       setActiveRewrite(null);
@@ -423,15 +500,43 @@ export default function HirePilotClient() {
         hirePilotUnlimited: false,
         hirePilotCredits: 0,
       });
-      setBillingStatus({
-        hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
-        hirePilotCredits: Number(data.hirePilotCredits ?? 0),
-      });
+      setBillingStatus(toBillingStatus(data));
     } catch {
-      setBillingStatus({
+      setBillingStatus(toBillingStatus(null));
+    } finally {
+      setBillingLoading(false);
+    }
+  }
+
+  async function refreshHirePilotAccess(sessionId: string) {
+    try {
+      setBillingLoading(true);
+
+      const res = await fetch("/api/hirepilot/refresh-access", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sessionId }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Unable to refresh HirePilot access.");
+      }
+
+      const data = await readJsonSafely<HirePilotStatusResponse>(res, {
+        hasHirePilotAccess: false,
         hirePilotUnlimited: false,
         hirePilotCredits: 0,
+        productKey: null,
+        status: null,
+        currentPeriodEnd: null,
       });
+
+      setBillingStatus(toBillingStatus(data));
+      setShowPaywall(false);
+    } catch {
+      await loadHirePilotStatus();
     } finally {
       setBillingLoading(false);
     }
@@ -459,10 +564,7 @@ export default function HirePilotClient() {
         message: "Invalid server response.",
       });
 
-      setBillingStatus({
-        hirePilotUnlimited: Boolean(data.hirePilotUnlimited),
-        hirePilotCredits: Number(data.hirePilotCredits ?? 0),
-      });
+      setBillingStatus(toBillingStatus(data));
 
       if (!res.ok || !data.started) {
         if (res.status === 403) {
@@ -492,12 +594,17 @@ export default function HirePilotClient() {
     if (!accessAllowed) return;
 
     transcriptRef.current = "";
+    combinedTranscriptRef.current = "";
+    stopHandledRef.current = false;
     lastQuestionKeyRef.current = "";
     setLiveTranscript("");
     setDetectedQuestion("");
+    setDetectionStatus("idle");
+    setRequestError(null);
     setMicError(null);
     setStatusMessage("Listening...");
     keepListeningRef.current = true;
+    debugHirePilot("start listening");
 
     try {
       recognition.start();
@@ -510,6 +617,7 @@ export default function HirePilotClient() {
 
   function stopListening() {
     keepListeningRef.current = false;
+    finalizeTranscriptDetection();
     recognitionRef.current?.stop();
     setStatusMessage("Microphone idle");
   }
@@ -528,11 +636,14 @@ export default function HirePilotClient() {
   async function handlePracticeQuestion(nextIndex?: number) {
     const safeIndex = typeof nextIndex === "number" ? nextIndex : practiceIndex;
     const question = practiceQuestions[safeIndex] ?? practiceQuestions[0];
-    const normalizedQuestion = ensureQuestionPunctuation(question);
+    const normalizedQuestion =
+      extractInterviewQuestion(question) ?? `${normalizeSpace(question).replace(/[?!.]+$/, "")}?`;
     lastQuestionKeyRef.current = normalizeQuestionKey(normalizedQuestion);
     setDetectedQuestion(normalizedQuestion);
+    setDetectionStatus("found");
     setLiveTranscript("");
     transcriptRef.current = "";
+    combinedTranscriptRef.current = "";
     setRequestError(null);
 
     if (!hasPaidHirePilotAccess) {

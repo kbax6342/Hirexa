@@ -93,6 +93,10 @@ type ProfileApiResponse = {
     city?: string | null;
     postalCode?: string | null;
     state?: string | null;
+    displayAddress?: string | null;
+    displayCity?: string | null;
+    displayPostalCode?: string | null;
+    displayState?: string | null;
     linkedinUrl?: string | null;
     portfolioUrl?: string | null;
     authorizedUS?: string | null;
@@ -216,6 +220,17 @@ export default function ProfilePage() {
         throw new Error(message);
       }
 
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[profile page] received payload", {
+          profileId: data?.profile?.id ?? null,
+          address: data?.profile?.displayAddress ?? data?.profile?.address ?? null,
+          city: data?.profile?.displayCity ?? data?.profile?.city ?? null,
+          state: data?.profile?.displayState ?? data?.profile?.state ?? null,
+          postalCode:
+            data?.profile?.displayPostalCode ?? data?.profile?.postalCode ?? null,
+        });
+      }
+
       setProfile(data?.profile ?? null);
 
       const hirePilotRes = await fetch("/api/user/hirepilot-status", {
@@ -256,14 +271,46 @@ export default function ProfilePage() {
       lastName: profile?.lastName ?? "",
       email: profile?.email ?? "",
       phone: profile?.phone ?? "",
-      address: profile?.address ?? "",
-      city: profile?.city ?? "",
-      state: profile?.state ?? "",
-      postalCode: profile?.postalCode ?? "",
+      address: profile?.displayAddress ?? profile?.address ?? "",
+      city: profile?.displayCity ?? profile?.city ?? "",
+      state: profile?.displayState ?? profile?.state ?? "",
+      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
       linkedinUrl: profile?.linkedinUrl ?? "",
       portfolioUrl: profile?.portfolioUrl ?? "",
     });
   }, [profile, isEditingPersonal]);
+
+  const displayPersonalDetails = useMemo(
+    () => ({
+      address: profile?.displayAddress ?? profile?.address ?? "Not provided in database",
+      city: profile?.displayCity ?? profile?.city ?? "Not provided in database",
+      state: profile?.displayState ?? profile?.state ?? "Not provided in database",
+      postalCode:
+        profile?.displayPostalCode ?? profile?.postalCode ?? "Not provided in database",
+    }),
+    [
+      profile?.address,
+      profile?.city,
+      profile?.displayAddress,
+      profile?.displayCity,
+      profile?.displayPostalCode,
+      profile?.displayState,
+      profile?.postalCode,
+      profile?.state,
+    ]
+  );
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production" && profile) {
+      console.log("[profile page] render values", {
+        profileId: profile.id,
+        address: displayPersonalDetails.address,
+        city: displayPersonalDetails.city,
+        state: displayPersonalDetails.state,
+        postalCode: displayPersonalDetails.postalCode,
+      });
+    }
+  }, [displayPersonalDetails, profile]);
 
   const name =
     [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
@@ -627,10 +674,10 @@ export default function ProfilePage() {
       lastName: profile?.lastName ?? "",
       email: profile?.email ?? "",
       phone: profile?.phone ?? "",
-      address: profile?.address ?? "",
-      city: profile?.city ?? "",
-      state: profile?.state ?? "",
-      postalCode: profile?.postalCode ?? "",
+      address: profile?.displayAddress ?? profile?.address ?? "",
+      city: profile?.displayCity ?? profile?.city ?? "",
+      state: profile?.displayState ?? profile?.state ?? "",
+      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
       linkedinUrl: profile?.linkedinUrl ?? "",
       portfolioUrl: profile?.portfolioUrl ?? "",
     });
@@ -697,10 +744,10 @@ function ToggleField({
       lastName: profile?.lastName ?? "",
       email: profile?.email ?? "",
       phone: profile?.phone ?? "",
-      address: profile?.address ?? "",
-      city: profile?.city ?? "",
-      state: profile?.state ?? "",
-      postalCode: profile?.postalCode ?? "",
+      address: profile?.displayAddress ?? profile?.address ?? "",
+      city: profile?.displayCity ?? profile?.city ?? "",
+      state: profile?.displayState ?? profile?.state ?? "",
+      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
       linkedinUrl: profile?.linkedinUrl ?? "",
       portfolioUrl: profile?.portfolioUrl ?? "",
     });
@@ -783,10 +830,10 @@ function ToggleField({
                   <div className="grid gap-3">
                     <FieldRow label="Email" value={profile?.email ?? "Not provided in database"} />
                     <FieldRow label="Phone number" value={profile?.phone ?? "Not provided in database"} />
-                    <FieldRow label="Address" value={profile?.address ?? "Not provided in database"} />
-                    <FieldRow label="City" value={profile?.city ?? "Not provided in database"} />
-                    <FieldRow label="State" value={profile?.state ?? "Not provided in database"} />
-                    <FieldRow label="Postal code" value={profile?.postalCode ?? "Not provided in database"} />
+                    <FieldRow label="Address" value={displayPersonalDetails.address} />
+                    <FieldRow label="City" value={displayPersonalDetails.city} />
+                    <FieldRow label="State" value={displayPersonalDetails.state} />
+                    <FieldRow label="Postal code" value={displayPersonalDetails.postalCode} />
                     <FieldRow label="LinkedIn" value={profile?.linkedinUrl ?? "Not provided in database"} />
                     <FieldRow label="Portfolio" value={profile?.portfolioUrl ?? "Not provided in database"} />
                   </div>

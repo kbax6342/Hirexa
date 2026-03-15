@@ -3,9 +3,11 @@ import "server-only";
 import { prisma } from "@/app/lib/prisma";
 import {
   BILLING_PRODUCT_KEYS,
-  isActiveBillingStatus,
-  readUserBillingRecords,
 } from "@/app/lib/billing/userBilling";
+import {
+  getHirePilotBillingStatus as getCanonicalHirePilotBillingStatus,
+  summarizeHirePilotBillingRows,
+} from "@/app/lib/billing/hirepilotBilling";
 
 export const HIREPILOT_SESSION_COOKIE = "hirepilot_session_id";
 
@@ -21,53 +23,15 @@ type BillingRows = Array<{
   status: string | null;
   hirePilotUnlimited: boolean;
   hirePilotCredits: number;
+  currentPeriodEnd: Date | null;
+  stripeSubscriptionId: string | null;
+  stripeCheckoutSessionId: string | null;
 }>;
-
-function summarizeHirePilotRows(rows: BillingRows) {
-  const relevantRows = rows.filter(
-    (row) =>
-      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY ||
-      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT
-  );
-
-  const unlimited = relevantRows.some(
-    (row) =>
-      row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY &&
-      (row.hirePilotUnlimited || isActiveBillingStatus(row.status))
-  );
-  const credits = relevantRows.reduce(
-    (total, row) => total + Math.max(0, row.hirePilotCredits ?? 0),
-    0
-  );
-  const creditRow =
-    relevantRows.find(
-      (row) =>
-        row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT &&
-        row.hirePilotCredits > 0
-    ) ??
-    relevantRows.find((row) => row.hirePilotCredits > 0) ??
-    null;
-
-  return {
-    unlimited,
-    credits,
-    creditRowId: creditRow?.id ?? null,
-  };
-}
 
 export async function getHirePilotBillingStatus(
   userId: string
-): Promise<{ hirePilotUnlimited: boolean; hirePilotCredits: number }> {
-  const rows = await readUserBillingRecords(userId, [
-    BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-    BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-  ]);
-  const summary = summarizeHirePilotRows(rows);
-
-  return {
-    hirePilotUnlimited: summary.unlimited,
-    hirePilotCredits: summary.credits,
-  };
+){
+  return getCanonicalHirePilotBillingStatus(userId);
 }
 
 export async function checkHirePilotAccess(
@@ -94,20 +58,23 @@ export async function checkHirePilotAccess(
         status: true,
         hirePilotUnlimited: true,
         hirePilotCredits: true,
+        currentPeriodEnd: true,
+        stripeSubscriptionId: true,
+        stripeCheckoutSessionId: true,
       },
     });
 
-    const summary = summarizeHirePilotRows(rows);
+    const summary = summarizeHirePilotBillingRows(rows);
 
-    if (summary.unlimited) {
+    if (summary.hirePilotUnlimited) {
       return {
         allowed: true,
         unlimited: true,
-        credits: summary.credits,
+        credits: summary.hirePilotCredits,
       };
     }
 
-    if (summary.credits <= 0 || !summary.creditRowId) {
+    if (summary.hirePilotCredits <= 0 || !summary.creditRowId) {
       return {
         allowed: false,
         unlimited: false,
@@ -119,7 +86,7 @@ export async function checkHirePilotAccess(
       return {
         allowed: true,
         unlimited: false,
-        credits: summary.credits,
+        credits: summary.hirePilotCredits,
       };
     }
 
@@ -158,14 +125,17 @@ export async function checkHirePilotAccess(
         status: true,
         hirePilotUnlimited: true,
         hirePilotCredits: true,
+        currentPeriodEnd: true,
+        stripeSubscriptionId: true,
+        stripeCheckoutSessionId: true,
       },
     });
-    const refreshedSummary = summarizeHirePilotRows(refreshedRows);
+    const refreshedSummary = summarizeHirePilotBillingRows(refreshedRows);
 
     return {
       allowed: true,
-      unlimited: refreshedSummary.unlimited,
-      credits: refreshedSummary.credits,
+      unlimited: refreshedSummary.hirePilotUnlimited,
+      credits: refreshedSummary.hirePilotCredits,
     };
   });
 }

@@ -4,6 +4,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import {
   extractCompanyLocationFromDescription,
@@ -15,7 +16,19 @@ import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
 type SmartMatchesResponse = {
   jobs: Job[];
   nextCursor: string;
+  meta?: {
+    query?: string;
+    preferredLocation?: string | null;
+    includeRemote?: boolean;
+    requestedState?: string | null;
+    resolvedState?: string | null;
+    fallbackUsed?: boolean;
+    attemptedStates?: string[];
+    resolvedLocationMessage?: string | null;
+  };
 };
+
+type SmartMatchesResolutionMeta = NonNullable<SmartMatchesResponse["meta"]>;
 
 type JobDetailsResponse = {
   job: JobDetail;
@@ -93,8 +106,28 @@ export default function JobMatchesLayout() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [includeRemote, setIncludeRemote] = useState(true);
+  const [filters, setFilters] = useState({
+    query: searchParams.get("q")?.trim() || "",
+    location: searchParams.get("location")?.trim() || "",
+    includeRemote: searchParams.get("includeRemote")
+      ? searchParams.get("includeRemote") !== "0" &&
+        searchParams.get("includeRemote") !== "false"
+      : true,
+  });
+  const [appliedFilters, setAppliedFilters] = useState(() => ({
+    query: searchParams.get("q")?.trim() || "",
+    location: searchParams.get("location")?.trim() || "",
+    includeRemote: searchParams.get("includeRemote")
+      ? searchParams.get("includeRemote") !== "0" &&
+        searchParams.get("includeRemote") !== "false"
+      : true,
+  }));
   const [selectedId, setSelectedId] = useState<string>("");
+  const [savingFilters, setSavingFilters] = useState(false);
+  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(false);
+  const [resolutionMeta, setResolutionMeta] = useState<SmartMatchesResolutionMeta | null>(
+    null
+  );
 
   type ActionState = {
     loading?: boolean;
@@ -121,6 +154,7 @@ export default function JobMatchesLayout() {
   const seen = useRef<Set<string>>(new Set());
   const hadJobParam = useRef(false);
   const detailCache = useRef<Map<string, JobDetailsResponse>>(new Map());
+  const initializedFiltersRef = useRef(false);
   const selectedJobParam = searchParams.get("job")?.trim() || "";
 
   const selectedSummary = useMemo(
@@ -163,6 +197,61 @@ export default function JobMatchesLayout() {
     window.history.replaceState(window.history.state, "", nextUrl);
   }
 
+  function replaceFilterParams(nextFilters: typeof appliedFilters) {
+    const nextParams = new URLSearchParams(searchParams.toString());
+
+    if (nextFilters.query) {
+      nextParams.set("q", nextFilters.query);
+    } else {
+      nextParams.delete("q");
+    }
+
+    if (nextFilters.location) {
+      nextParams.set("location", nextFilters.location);
+    } else {
+      nextParams.delete("location");
+    }
+
+    nextParams.set("includeRemote", nextFilters.includeRemote ? "1" : "0");
+
+    const nextQuery = nextParams.toString();
+    const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
+
+  async function persistFilters(nextFilters: typeof appliedFilters) {
+    try {
+      setSavingFilters(true);
+      await fetch("/api/profile/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roleFocus: nextFilters.query,
+          includeRemote: nextFilters.includeRemote,
+          workplaceLocations: nextFilters.location
+            ? [{ label: nextFilters.location }]
+            : null,
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to sync Smart Matches filters:", error);
+    } finally {
+      setSavingFilters(false);
+    }
+  }
+
+  function applyFilters() {
+    const nextFilters = {
+      query: filters.query.trim(),
+      location: filters.location.trim(),
+      includeRemote: filters.includeRemote,
+    };
+
+    setAppliedFilters(nextFilters);
+    replaceFilterParams(nextFilters);
+    void persistFilters(nextFilters);
+  }
+
   function handleSelectJob(jobId: string) {
     setSelectedId(jobId);
     replaceSelectedJobParam(jobId);
@@ -182,7 +271,16 @@ export default function JobMatchesLayout() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const url = new URL("/api/jobs/smart-matches", window.location.origin);
         url.searchParams.set("limit", String(LIMIT));
-        url.searchParams.set("includeRemote", includeRemote ? "1" : "0");
+        url.searchParams.set(
+          "includeRemote",
+          appliedFilters.includeRemote ? "1" : "0"
+        );
+        if (appliedFilters.query) {
+          url.searchParams.set("q", appliedFilters.query);
+        }
+        if (appliedFilters.location) {
+          url.searchParams.set("location", appliedFilters.location);
+        }
         if (requestCursor) {
           url.searchParams.set("cursor", requestCursor);
         }
@@ -194,6 +292,25 @@ export default function JobMatchesLayout() {
 
         const data = (await res.json()) as SmartMatchesResponse;
         const incoming = Array.isArray(data?.jobs) ? data.jobs : [];
+
+        if (data?.meta) {
+          setResolutionMeta(data.meta);
+        }
+
+        if (!initializedFiltersRef.current && data?.meta) {
+          const resolvedFilters = {
+            query: appliedFilters.query || data.meta.query || "",
+            location: appliedFilters.location || data.meta.preferredLocation || "",
+            includeRemote:
+              typeof data.meta.includeRemote === "boolean"
+                ? data.meta.includeRemote
+                : appliedFilters.includeRemote,
+          };
+          initializedFiltersRef.current = true;
+          setFilters(resolvedFilters);
+          setAppliedFilters(resolvedFilters);
+          replaceFilterParams(resolvedFilters);
+        }
 
         filtered = incoming.filter((job) => {
           if (!job?.id) return false;
@@ -246,9 +363,10 @@ export default function JobMatchesLayout() {
     setPretty({ sections: [], highlights: [] });
     setFormatted(null);
     setNextCursor(null);
+    setResolutionMeta(null);
     void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeRemote]);
+  }, [appliedFilters]);
 
   useEffect(() => {
     console.log("[SMART_MATCHES] selected job changed", {
@@ -293,7 +411,11 @@ export default function JobMatchesLayout() {
                 selectedSummaryJob.descriptionPlain ??
                 selectedSummaryJob.description ??
                 ""
-            )
+            ),
+            {
+              source: selectedSummaryJob.source,
+              detail: selectedSummaryJob,
+            }
           )
         );
       }
@@ -398,7 +520,11 @@ export default function JobMatchesLayout() {
                     selectedSummaryJob.descriptionPlain ??
                     selectedSummaryJob.description ??
                     ""
-                )
+                ),
+                {
+                  source: selectedSummaryJob.source,
+                  detail: selectedSummaryJob,
+                }
               )
             );
           } else {
@@ -539,6 +665,10 @@ export default function JobMatchesLayout() {
     }
   };
 
+  const handleCareerCoachFromDetails = () => {
+    router.push("/agents/career-coach");
+  };
+
   const detailBodyHtml = useMemo(() => buildJobDetailBodyHtml(right), [right]);
   const showMinimalFallback =
     !detailsLoading &&
@@ -560,32 +690,134 @@ export default function JobMatchesLayout() {
                 searching. Simply select your favorites — we’ll help fill out the
                 applications.
               </p>
-              <div className="mt-3 flex items-center gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  Remote jobs
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIncludeRemote((prev) => !prev)}
-                  aria-pressed={includeRemote}
-                  className={[
-                    "relative inline-flex h-7 w-14 items-center rounded-full border transition",
-                    includeRemote
-                      ? "border-blue-600 bg-blue-600"
-                      : "border-gray-300 bg-gray-200",
-                  ].join(" ")}
-                >
-                  <span
-                    className={[
-                      "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition",
-                      includeRemote ? "translate-x-8" : "translate-x-1",
-                    ].join(" ")}
-                  />
-                </button>
-                <span className="text-xs text-gray-600">
-                  {includeRemote ? "On" : "Off"}
-                </span>
+              <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">Filters</div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Applying filters also updates your saved Smart Matches preferences.
+                    </p>
+                  </div>
+                  {isFiltersCollapsed ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsFiltersCollapsed(false)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                      aria-expanded={false}
+                      aria-controls="smart-match-filters"
+                    >
+                      Show filters
+                      <ChevronDownIcon className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+
+                {!isFiltersCollapsed ? (
+                  <form
+                    id="smart-match-filters"
+                    className="mt-4 space-y-3"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      applyFilters();
+                    }}
+                  >
+                
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold text-gray-600">
+                      Target role
+                    </span>
+                    <input
+                      value={filters.query}
+                      onChange={(event) =>
+                        setFilters((current) => ({
+                          ...current,
+                          query: event.target.value,
+                        }))
+                      }
+                      placeholder="Software Engineer"
+                      className="rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold text-gray-600">
+                      Preferred location
+                    </span>
+                    <input
+                      value={filters.location}
+                      onChange={(event) =>
+                        setFilters((current) => ({
+                          ...current,
+                          location: event.target.value,
+                        }))
+                      }
+                      placeholder="Detroit, MI"
+                      className="rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsFiltersCollapsed(true)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                      aria-expanded={true}
+                      aria-controls="smart-match-filters"
+                    >
+                      Hide filters
+                      <ChevronUpIcon className="h-4 w-4" />
+                    </button>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      Remote jobs
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFilters((current) => ({
+                          ...current,
+                          includeRemote: !current.includeRemote,
+                        }))
+                      }
+                      aria-pressed={filters.includeRemote}
+                      className={[
+                        "relative inline-flex h-7 w-14 items-center rounded-full border transition",
+                        filters.includeRemote
+                          ? "border-blue-600 bg-blue-600"
+                          : "border-gray-300 bg-gray-200",
+                      ].join(" ")}
+                    >
+                      <span
+                        className={[
+                          "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition",
+                          filters.includeRemote ? "translate-x-8" : "translate-x-1",
+                        ].join(" ")}
+                      />
+                    </button>
+                    <span className="text-xs text-gray-600">
+                      {filters.includeRemote ? "On" : "Off"}
+                    </span>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={savingFilters}
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {savingFilters ? "Saving..." : "Apply filters"}
+                  </button>
+                </div>
+              </form>
+                ) : null}
               </div>
+
+              {resolutionMeta?.fallbackUsed && resolutionMeta.resolvedLocationMessage ? (
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  {resolutionMeta.resolvedLocationMessage}
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -642,10 +874,10 @@ export default function JobMatchesLayout() {
                           {job.description}
                         </p>
                       ) : (
-                        <div className="mt-2 h-4" />
+                        <div className="mt-3 h-4" />
                       )}
 
-                      <div className="mt-auto flex items-center justify-between text-[11px] text-gray-500">
+                      <div className="mt-4 flex items-center justify-between text-[11px] text-gray-500">
                         <div>
                           <span>Job Posted {job.posted}</span>
                         </div>
@@ -792,6 +1024,13 @@ export default function JobMatchesLayout() {
                 </button>
                 <button
                   type="button"
+                  onClick={handleCareerCoachFromDetails}
+                  className="rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50"
+                >
+                  Career Coach
+                </button>
+                <button
+                  type="button"
                   onClick={handleOutreachFromDetails}
                   disabled={right?.id ? outreachActions[right.id]?.loading : true}
                   className="rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50"
@@ -799,13 +1038,6 @@ export default function JobMatchesLayout() {
                   {right?.id && outreachActions[right.id]?.loading
                     ? "Adding..."
                     : "Outreach Copilot"}
-                </button>
-                <button
-                  type="button"
-                  disabled
-                  className="rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 disabled:opacity-60"
-                >
-                  Career Coach
                 </button>
               </div>
             </div>

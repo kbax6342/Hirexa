@@ -5,14 +5,17 @@ import {
   fetchGreenhouseJobs,
   fetchIcimsJobs,
   fetchJazzHrJobs,
+  fetchLeverJobs,
   fetchWorkdayJobs,
   getGreenhouseBoards,
+  getLeverCompanySlugs,
   getWorkdayBoards,
 } from "../../lib/providers/ats-aggregator";
 
 type Cursor = {
   adzunaPage: number;
   greenhousePage: number;
+  leverPage: number;
   jazzhrPage: number;
   icimsPage: number;
   workdayOffset: number;
@@ -23,6 +26,7 @@ function decodeCursor(raw: string | null): Cursor {
     return {
       adzunaPage: 1,
       greenhousePage: 1,
+      leverPage: 1,
       jazzhrPage: 1,
       icimsPage: 1,
       workdayOffset: 0,
@@ -36,6 +40,7 @@ function decodeCursor(raw: string | null): Cursor {
       adzunaPage: typeof parsed.adzunaPage === "number" ? parsed.adzunaPage : 1,
       greenhousePage:
         typeof parsed.greenhousePage === "number" ? parsed.greenhousePage : 1,
+      leverPage: typeof parsed.leverPage === "number" ? parsed.leverPage : 1,
       jazzhrPage: typeof parsed.jazzhrPage === "number" ? parsed.jazzhrPage : 1,
       icimsPage: typeof parsed.icimsPage === "number" ? parsed.icimsPage : 1,
       workdayOffset:
@@ -45,6 +50,7 @@ function decodeCursor(raw: string | null): Cursor {
     return {
       adzunaPage: 1,
       greenhousePage: 1,
+      leverPage: 1,
       jazzhrPage: 1,
       icimsPage: 1,
       workdayOffset: 0,
@@ -80,9 +86,15 @@ function dedupeJobs(jobs: Job[]) {
   const seen = new Set<string>();
 
   return jobs.filter((job) => {
+    const fallbackTextKey = [job.title, job.company, job.location]
+      .map((value) => String(value ?? "").trim().toLowerCase())
+      .filter(Boolean)
+      .join("|");
+    const sourceIdKey = String(job.id ?? "").trim().toLowerCase();
     const dedupeKey =
       normalizeJobUrl(job.jobUrl) ||
-      `${job.source}:${String(job.id ?? "").trim().toLowerCase()}`;
+      (sourceIdKey ? `${job.source}:${sourceIdKey}` : "") ||
+      (fallbackTextKey ? `${job.source}:${fallbackTextKey}` : "");
 
     if (!dedupeKey || seen.has(dedupeKey)) {
       return false;
@@ -102,6 +114,7 @@ export async function GET(req: Request) {
   const cursor = decodeCursor(searchParams.get("cursor"));
 
   const greenhouseBoards = getGreenhouseBoards();
+  const leverCompanySlugs = getLeverCompanySlugs();
   const workdayBoards = getWorkdayBoards();
 
   const providerResults = await Promise.allSettled([
@@ -111,6 +124,14 @@ export async function GET(req: Request) {
           boardTokens: greenhouseBoards,
           query: q,
           page: cursor.greenhousePage,
+          limit,
+        })
+      : Promise.resolve([]),
+    leverCompanySlugs.length > 0
+      ? fetchLeverJobs({
+          companySlugs: leverCompanySlugs,
+          query: q,
+          page: cursor.leverPage,
           limit,
         })
       : Promise.resolve([]),
@@ -129,6 +150,7 @@ export async function GET(req: Request) {
   const [
     adzunaResult,
     greenhouseResult,
+    leverResult,
     jazzhrResult,
     icimsResult,
     workdayResult,
@@ -137,6 +159,7 @@ export async function GET(req: Request) {
   const adzunaJobs = adzunaResult.status === "fulfilled" ? adzunaResult.value : [];
   const greenhouseJobs =
     greenhouseResult.status === "fulfilled" ? greenhouseResult.value : [];
+  const leverJobs = leverResult.status === "fulfilled" ? leverResult.value : [];
   const jazzhrJobs = jazzhrResult.status === "fulfilled" ? jazzhrResult.value : [];
   const icimsJobs = icimsResult.status === "fulfilled" ? icimsResult.value : [];
   const workdayJobs =
@@ -144,6 +167,7 @@ export async function GET(req: Request) {
 
   const merged = dedupeJobs([
     ...greenhouseJobs,
+    ...leverJobs,
     ...adzunaJobs,
     ...jazzhrJobs,
     ...icimsJobs,
@@ -154,6 +178,7 @@ export async function GET(req: Request) {
     ...cursor,
     adzunaPage: cursor.adzunaPage + 1,
     greenhousePage: cursor.greenhousePage + 1,
+    leverPage: cursor.leverPage + 1,
     jazzhrPage: cursor.jazzhrPage + 1,
     icimsPage: cursor.icimsPage + 1,
     workdayOffset: cursor.workdayOffset + limit,
@@ -161,7 +186,7 @@ export async function GET(req: Request) {
 
   const providerErrors = providerResults
     .map((result, index) => ({
-      source: ["adzuna", "greenhouse", "jazzhr", "icims", "workday"][index],
+      source: ["adzuna", "greenhouse", "lever", "jazzhr", "icims", "workday"][index],
       reason:
         result.status === "rejected"
           ? result.reason instanceof Error
@@ -179,6 +204,7 @@ export async function GET(req: Request) {
     bySource: {
       adzuna: adzunaJobs,
       greenhouse: greenhouseJobs,
+      lever: leverJobs,
       jazzhr: jazzhrJobs,
       icims: icimsJobs,
       workday: workdayJobs,

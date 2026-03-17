@@ -10,7 +10,19 @@ export const GREENHOUSE_COMPANIES = [
 ] as const;
 
 export const LEVER_COMPANIES = [
+  "plaid",
+  "minted",
+  "USMobile",
+  "nium",
+  "jobgether",
+  "daniels-sharpsmart",
+  "trellis",
+  "doola",
   "netflix",
+  "netomi",
+  "eventbrite",
+  "robinhood",
+  "ginkgobioworks",
   "palantir",
 ] as const;
 

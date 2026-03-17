@@ -8,9 +8,15 @@ import { auth } from "@/app/lib/auth";
 import OpenAI from "openai";
 import crypto from "crypto";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
+import { deriveLocationLabel } from "@/app/lib/locationOptions";
+import {
+  getSafePrivateProfileFields,
+  readRawPrivateProfileFieldsByIds,
+} from "@/app/lib/profile/privateProfileFields";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,6 +128,55 @@ const ExperiencesSchema = z.object({
 
 function normalizeResumeText(value: string) {
   return value.replace(/\r/g, "").trim();
+}
+
+function trimOrNull(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function readKeyQuestions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readFirstWorkplaceLocation(value: unknown) {
+  if (!Array.isArray(value)) return null;
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const label = trimOrNull(String((item as { label?: unknown }).label ?? ""));
+    if (label) return label;
+  }
+
+  return null;
+}
+
+function normalizeRoleTitle(value?: string | null) {
+  return trimOrNull(value?.replace(/\s+/g, " "));
+}
+
+function deriveTargetRole(experiences: Experience[]) {
+  const primaryTitle = normalizeRoleTitle(experiences[0]?.title);
+  if (primaryTitle) return primaryTitle;
+
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const experience of experiences) {
+    const title = normalizeRoleTitle(experience.title);
+    if (!title) continue;
+
+    const key = title.toLowerCase();
+    const current = counts.get(key);
+    counts.set(key, {
+      label: current?.label ?? title,
+      count: (current?.count ?? 0) + 1,
+    });
+  }
+
+  return [...counts.values()].sort((left, right) => right.count - left.count)[0]?.label ?? null;
 }
 
 async function openaiExtractExperiences(fullText: string): Promise<Experience[]> {
@@ -267,7 +322,7 @@ export async function POST(req: Request) {
       where: userId ? { userId } : { guestId: guestId! },
       create: userId ? { userId } : { guestId: guestId! },
       update: {},
-      select: { id: true, guestId: true },
+      select: { id: true, guestId: true, keyQuestions: true, workplaceLocations: true },
     });
 
     const formData = await req.formData();
@@ -348,6 +403,43 @@ export async function POST(req: Request) {
         create: { resumeId: resume.id, experiences: parsedExperiences },
       });
     });
+
+    const existingKeyQuestions = readKeyQuestions(profile.keyQuestions);
+    const existingRoleFocus = trimOrNull(
+      typeof existingKeyQuestions.roleFocus === "string"
+        ? existingKeyQuestions.roleFocus
+        : null
+    );
+    const existingWorkplaceLocation = readFirstWorkplaceLocation(profile.workplaceLocations);
+    const derivedRoleFocus = deriveTargetRole(parsedExperiences);
+
+    const privateFieldsById = await readRawPrivateProfileFieldsByIds(prisma, [profile.id]);
+    const safePrivateFields = getSafePrivateProfileFields(privateFieldsById.get(profile.id) ?? {});
+    const derivedWorkplaceLocation = !existingWorkplaceLocation
+      ? deriveLocationLabel(safePrivateFields.city, safePrivateFields.state)
+      : null;
+
+    const profileUpdate: Prisma.UserProfileUpdateInput = {};
+
+    if (!existingRoleFocus && derivedRoleFocus) {
+      profileUpdate.keyQuestions = {
+        ...existingKeyQuestions,
+        roleFocus: derivedRoleFocus,
+      } as Prisma.InputJsonValue;
+    }
+
+    if (!existingWorkplaceLocation && derivedWorkplaceLocation) {
+      profileUpdate.workplaceLocations = [
+        { label: derivedWorkplaceLocation },
+      ] as Prisma.InputJsonValue;
+    }
+
+    if (Object.keys(profileUpdate).length > 0) {
+      await prisma.userProfile.update({
+        where: { id: profile.id },
+        data: profileUpdate,
+      });
+    }
 
     invalidateCachedProfile({ userId, guestId: originalGuestId ?? guestId });
 

@@ -99,6 +99,128 @@ type UpdateExperienceBody = {
   bullets?: string[];
 };
 
+type CreateExperienceBody = {
+  title?: string;
+  company?: string;
+  location?: string | null;
+  dateRange?: string | null;
+  bullets?: string[];
+};
+
+async function resolveActiveProfile() {
+  const session = await auth();
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+  const c = await cookies();
+  const guestId = c.get("guest_user_id")?.value ?? null;
+
+  if (!userId && !guestId) {
+    return { profile: null, status: 401 as const, error: "Unauthorized" };
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: userId ? { userId } : { guestId: guestId! },
+    select: { id: true },
+  });
+
+  if (!profile) {
+    return { profile: null, status: 404 as const, error: "Profile not found" };
+  }
+
+  return { profile, status: 200 as const, error: null };
+}
+
+export async function POST(req: Request) {
+  try {
+    const resolvedProfile = await resolveActiveProfile();
+    if (!resolvedProfile.profile) {
+      return NextResponse.json({ error: resolvedProfile.error }, { status: resolvedProfile.status });
+    }
+
+    const body = (await req.json()) as CreateExperienceBody;
+    const title = String(body.title ?? "").trim();
+    const company = String(body.company ?? "").trim();
+    const location = String(body.location ?? "").trim();
+    const dateRange = String(body.dateRange ?? "").trim();
+    const bullets = Array.isArray(body.bullets)
+      ? body.bullets.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : [];
+
+    if (!title || !company) {
+      return NextResponse.json(
+        { error: "Title and company are required to add experience." },
+        { status: 400 }
+      );
+    }
+
+    const resume = await prisma.resume.findUnique({
+      where: { userProfileId: resolvedProfile.profile.id },
+      select: { id: true },
+    });
+
+    if (!resume) {
+      return NextResponse.json(
+        { error: "Please upload your resume before adding experience." },
+        { status: 400 }
+      );
+    }
+
+    const latestExperience = await prisma.experience.findFirst({
+      where: { resumeId: resume.id },
+      orderBy: { order: "desc" },
+      select: { order: true },
+    });
+
+    const createdExperience = await prisma.$transaction(async (tx) => {
+      const created = await tx.experience.create({
+        data: {
+          resumeId: resume.id,
+          order: (latestExperience?.order ?? -1) + 1,
+          title,
+          company,
+          location: location || null,
+          dateRange: dateRange || null,
+        },
+      });
+
+      if (bullets.length > 0) {
+        await tx.bullet.createMany({
+          data: bullets.map((text, index) => ({
+            experienceId: created.id,
+            order: index,
+            text,
+          })),
+        });
+      }
+
+      return tx.experience.findUnique({
+        where: { id: created.id },
+        include: {
+          bullets: { orderBy: { order: "asc" }, select: { id: true, text: true } },
+        },
+      });
+    });
+
+    return NextResponse.json({
+      ok: true,
+      experience: {
+        id: createdExperience?.id,
+        title: createdExperience?.title ?? title,
+        company: createdExperience?.company ?? company,
+        location: createdExperience?.location ?? null,
+        dateRange: createdExperience?.dateRange ?? null,
+        bullets:
+          createdExperience?.bullets.map((bullet) => ({
+            id: bullet.id,
+            text: bullet.text,
+          })) ?? [],
+      },
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 export async function PUT(req: Request) {
   try {
     const body = (await req.json()) as UpdateExperienceBody;
@@ -115,28 +237,15 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Bullets must be an array of strings" }, { status: 400 });
     }
 
-    const session = await auth();
-    const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
-    const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
-
-    if (!userId && !guestId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const profile = await prisma.userProfile.findUnique({
-      where: userId ? { userId } : { guestId: guestId! },
-      select: { id: true },
-    });
-
-    if (!profile) {
-      return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+    const resolvedProfile = await resolveActiveProfile();
+    if (!resolvedProfile.profile) {
+      return NextResponse.json({ error: resolvedProfile.error }, { status: resolvedProfile.status });
     }
 
     const experience = await prisma.experience.findFirst({
       where: {
         id: experienceId,
-        resume: { userProfileId: profile.id },
+        resume: { userProfileId: resolvedProfile.profile.id },
       },
       select: { id: true },
     });
@@ -165,5 +274,4 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-
 

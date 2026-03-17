@@ -439,12 +439,51 @@ function finalizeDetail(
     fullDetailsUnavailable?: boolean;
   }
 ): ResolvedJobDetail {
+  const detailSectionsPretty =
+    detail.sections?.map((section) => {
+      if (section.kind === "bullets") {
+        return {
+          title: section.title,
+          kind: "bullets" as const,
+          bullets: section.bullets ?? [],
+        };
+      }
+
+      if (section.kind === "callout" && section.callout) {
+        return {
+          title: section.title,
+          kind: "callout" as const,
+          callout: section.callout,
+        };
+      }
+
+      if (section.kind === "smallprint") {
+        return {
+          title: section.title,
+          kind: "smallprint" as const,
+          paragraphs: section.paragraphs ?? [],
+        };
+      }
+
+      return {
+        title: section.title,
+        kind: "paragraphs" as const,
+        paragraphs: section.paragraphs ?? [],
+      };
+    }) ?? [];
   const descriptionForPretty =
     detail.descriptionHtml ||
     detail.descriptionPlain ||
     detail.description ||
     "";
-  const pretty = prettyFromDescription(descriptionForPretty);
+  const parsedPretty = prettyFromDescription(descriptionForPretty, {
+    source: detail.source,
+    detail,
+  });
+  const pretty: JobPretty = {
+    highlights: parsedPretty.highlights,
+    sections: detailSectionsPretty.length > 0 ? detailSectionsPretty : parsedPretty.sections,
+  };
 
   return {
     job: {

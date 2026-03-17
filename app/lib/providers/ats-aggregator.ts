@@ -1,4 +1,11 @@
 import type { Job } from "../jobs/types";
+import { LEVER_COMPANIES } from "../jobs/sources/boards";
+import { buildJobId, formatPostedLabel } from "../jobs/sources/common";
+import {
+  fetchGreenhouseListings,
+  filterGreenhouseJobs,
+  type GreenhouseBoardConfig,
+} from "../jobs/fetchGreenhouseJobs";
 
 export type WorkdayBoardConfig = {
   company: string;
@@ -9,6 +16,32 @@ export type WorkdayBoardConfig = {
 };
 
 type JsonObject = Record<string, unknown>;
+type LeverJobPayload = {
+  id?: string | number;
+  text?: string;
+  createdAt?: string | number;
+  hostedUrl?: string;
+  applyUrl?: string;
+  descriptionPlain?: string;
+  description?: string;
+  categories?: {
+    location?: string;
+    team?: string;
+    commitment?: string;
+    allLocations?: string[] | string;
+  };
+};
+
+const LEVER_SOURCE_TIMEOUT_MS = 3000;
+const LEVER_LABEL_OVERRIDES: Record<string, string> = {
+  usmobile: "US Mobile",
+  nium: "Nium",
+  jobgether: "Jobgether",
+  "daniels-sharpsmart": "Daniels Sharpsmart",
+  doola: "Doola",
+  netomi: "Netomi",
+  ginkgobioworks: "Ginkgo Bioworks",
+};
 
 function parseCsvEnv(name: string) {
   return (process.env[name] ?? "")
@@ -19,6 +52,13 @@ function parseCsvEnv(name: string) {
 
 function asText(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
+}
+
+function cleanText(value: unknown, fallback = "") {
+  if (typeof value !== "string") return fallback;
+
+  const normalized = value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return normalized || fallback;
 }
 
 function asObject(value: unknown): JsonObject {
@@ -47,9 +87,16 @@ function normalizeWorkdayBoard(board: WorkdayBoardConfig): WorkdayBoardConfig {
   };
 }
 
-function toPostedLabel(iso?: string) {
-  if (!iso) return "Recently";
-  const d = new Date(iso);
+function toPostedLabel(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") return "Recently";
+
+  const d =
+    typeof value === "number"
+      ? new Date(value)
+      : /^\d+$/.test(String(value))
+        ? new Date(Number(value))
+        : new Date(String(value));
+
   if (Number.isNaN(d.getTime())) return "Recently";
 
   const days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
@@ -63,21 +110,43 @@ function encodeId(parts: string[]) {
   return Buffer.from(parts.join("::"), "utf8").toString("base64url");
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
-  });
+async function fetchJson(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = 8000
+): Promise<unknown> {
+  const controller = init?.signal ? null : new AbortController();
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
 
-  if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}`);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
+      cache: "no-store",
+      signal: init?.signal ?? controller?.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`${res.status} ${res.statusText}`);
+    }
+
+    return res.json();
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out for ${url}`);
+    }
+
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
-
-  return res.json();
 }
 
 export async function fetchGreenhouseJobs(args: {
@@ -86,37 +155,133 @@ export async function fetchGreenhouseJobs(args: {
   limit: number;
   page: number;
 }): Promise<Job[]> {
-  const { boardTokens, query, limit, page } = args;
+  const boards: GreenhouseBoardConfig[] = args.boardTokens.map((board) => ({ board }));
+  const greenhouse = await fetchGreenhouseListings(boards);
+  const filtered = filterGreenhouseJobs(greenhouse.jobs, {
+    query: args.query,
+  });
+  const start = Math.max(0, (args.page - 1) * args.limit);
 
-  const all = await Promise.all(
-    boardTokens.map(async (token) => {
-      const url = new URL(`https://boards-api.greenhouse.io/v1/boards/${token}/jobs`);
-      url.searchParams.set("content", "false");
-      const json = asObject(await fetchJson(url.toString()));
-      const jobs = Array.isArray(json.jobs) ? json.jobs : [];
+  return filtered.slice(start, start + args.limit).map((job) => {
+    const rawJobId = job.sourceId.startsWith(`${job.board}:`)
+      ? job.sourceId.slice(job.board.length + 1)
+      : job.sourceId;
 
-      return jobs.map((raw): Job => {
-        const job = asObject(raw);
-        const location = asObject(job.location);
+    return {
+      id: buildJobId("greenhouse", job.board, rawJobId),
+      source: "greenhouse" as const,
+      title: job.title,
+      company: job.board,
+      location: job.location ?? "Remote",
+      posted: formatPostedLabel(job.updatedAt),
+      description: job.absoluteUrl,
+      jobUrl: job.absoluteUrl,
+    };
+  });
+}
 
-        return {
-          id: `greenhouse:${encodeId([token, String(job.id ?? "")])}`,
-          source: "greenhouse",
-          title: asText(job.title, "Untitled role"),
-          company: token,
-          location: asText(location.name, "Remote"),
-          posted: toPostedLabel(asText(job.updated_at)),
-          description: asText(job.absolute_url),
-          jobUrl: asText(job.absolute_url),
-        };
-      });
-    })
+function humanizeCompanySlug(slug: string) {
+  const normalizedKey = slug.trim().toLowerCase();
+  const override = LEVER_LABEL_OVERRIDES[normalizedKey];
+  if (override) return override;
+
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeLeverCompanySlugs(values: readonly string[]) {
+  const seen = new Set<string>();
+
+  return values.filter((value) => {
+    const slug = value.trim();
+    if (!slug) return false;
+
+    const key = slug.toLowerCase();
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+}
+
+async function fetchLeverCompanyJobs(companySlug: string) {
+  const slug = companySlug.trim();
+  if (!slug) return [] as Job[];
+
+  const url = `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`;
+  const payload = await fetchJson(url, undefined, LEVER_SOURCE_TIMEOUT_MS);
+
+  if (!Array.isArray(payload)) {
+    throw new Error(`Unexpected Lever payload for ${slug}`);
+  }
+
+  const companyLabel = humanizeCompanySlug(slug);
+
+  return payload.map((raw, index): Job => {
+    const job = asObject(raw) as LeverJobPayload;
+    const categories = job.categories ?? {};
+    const allLocations = Array.isArray(categories.allLocations)
+      ? categories.allLocations.filter((value): value is string => typeof value === "string")
+      : typeof categories.allLocations === "string"
+        ? [categories.allLocations]
+        : [];
+    const location =
+      cleanText(categories.location) ||
+      cleanText(allLocations.join(", ")) ||
+      "Remote";
+
+    return {
+      id: `lever:${encodeId([slug, String(job.id ?? index)])}`,
+      source: "lever",
+      title: cleanText(job.text, "Untitled role"),
+      company: companyLabel,
+      location,
+      posted: toPostedLabel(job.createdAt ?? null),
+      description:
+        cleanText(job.descriptionPlain || job.description).slice(0, 240) || undefined,
+      jobUrl: cleanText(job.hostedUrl || job.applyUrl) || undefined,
+    };
+  });
+}
+
+export async function fetchLeverJobs(args: {
+  companySlugs: string[];
+  query: string;
+  page: number;
+  limit: number;
+}): Promise<Job[]> {
+  const { companySlugs, query, page, limit } = args;
+  const normalizedSlugs = normalizeLeverCompanySlugs(companySlugs);
+
+  if (normalizedSlugs.length === 0) return [];
+
+  const settled = await Promise.allSettled(
+    normalizedSlugs.map((slug) => fetchLeverCompanyJobs(slug))
   );
 
-  const merged = all.flat();
+  const merged: Job[] = [];
+
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      merged.push(...result.value);
+      return;
+    }
+
+    const reason =
+      result.reason instanceof Error ? result.reason.message : String(result.reason);
+    console.warn(`[jobs:lever] board=${normalizedSlugs[index]} ${reason}`);
+  });
+
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? merged.filter((j) => `${j.title} ${j.company} ${j.location}`.toLowerCase().includes(q))
+    ? merged.filter((job) =>
+        `${job.title} ${job.company} ${job.location} ${job.description ?? ""}`
+          .toLowerCase()
+          .includes(q)
+      )
     : merged;
 
   const start = Math.max(0, (page - 1) * limit);
@@ -278,6 +443,13 @@ export function getGreenhouseBoards() {
     "shopify",
     "stripe",
   ];
+}
+
+export function getLeverCompanySlugs() {
+  const configured = parseCsvEnv("LEVER_COMPANY_SLUGS");
+  return normalizeLeverCompanySlugs(
+    configured.length > 0 ? [...configured, ...LEVER_COMPANIES] : [...LEVER_COMPANIES]
+  );
 }
 
 export function getWorkdayBoards() {

@@ -50,6 +50,8 @@ export async function POST(req: Request) {
         hasHirePilotAccess: status.hasHirePilotAccess,
         hirePilotUnlimited: status.hirePilotUnlimited,
         hirePilotCredits: status.hirePilotCredits,
+        monthlyCredits: status.monthlyCredits + status.rolloverCredits,
+        purchasedCredits: status.purchasedCredits,
         productKey: status.productKey,
         status: status.status,
         currentPeriodEnd: status.currentPeriodEnd,
@@ -68,6 +70,8 @@ export async function POST(req: Request) {
         hasHirePilotAccess: false,
         hirePilotUnlimited: false,
         hirePilotCredits: 0,
+        monthlyCredits: 0,
+        purchasedCredits: 0,
         productKey: null,
         status: null,
         currentPeriodEnd: null,
@@ -91,7 +95,15 @@ export async function POST(req: Request) {
     hasHirePilotAccess: access.allowed,
     hirePilotUnlimited: access.unlimited,
     hirePilotCredits: access.credits,
-    productKey: access.unlimited ? "hirepilot_monthly" : access.credits > 0 ? "hirepilot_credit" : null,
+    monthlyCredits: access.monthlyCredits ?? 0,
+    purchasedCredits: access.purchasedCredits ?? 0,
+    productKey: access.unlimited
+      ? "hirepilot_monthly"
+      : (access.monthlyCredits ?? 0) > 0
+        ? "hirepilot_monthly"
+        : (access.purchasedCredits ?? 0) > 0
+          ? "hirepilot_credit"
+          : null,
     status: access.allowed ? "active" : null,
     currentPeriodEnd: null,
     usageId: usage.id,

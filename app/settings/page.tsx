@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { auth } from "../../auth";
 import { prisma } from "../lib/prisma";
 import LoginFooter from "../components/loginFooter/LoginFooter";
+import DeleteAccountModal from "../components/settings/DeleteAccountModal";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -34,7 +35,7 @@ export default async function SettingsPage() {
         <div className="mt-8 grid grid-cols-1 gap-10 lg:grid-cols-12">
           <aside className="lg:col-span-3">
             <div className="space-y-2">
-              <TabLink href="/dashboard/settings" active>
+              <TabLink href="/settings" active>
                 Account
               </TabLink>
               <TabLink href="/settings/notifications">Notifications</TabLink>
@@ -51,16 +52,26 @@ export default async function SettingsPage() {
               <SettingsRow
                 label="Email Address"
                 value={email}
-                actionLabel="Change"
-                actionHref="/dashboard/settings/account/email"
               />
               <Divider />
               <SettingsRow
                 label="Password"
                 value="******"
                 actionLabel="Change"
-                actionHref="/dashboard/settings/account/password"
+                actionHref="/settings/account/password"
               />
+            </div>
+
+            <div className="mt-8 rounded-lg border border-red-200 bg-red-50/60 p-6">
+              <p className="max-w-2xl text-sm leading-6 text-red-800">
+                Deleting your account permanently removes your profile, resumes, job
+                applications, and related Hirexa data. If you have active Hirexa AI or
+                HirePilot subscriptions, they will be cancelled before deletion completes.
+              </p>
+
+              <div className="mt-4">
+                <DeleteAccountModal />
+              </div>
             </div>
           </section>
         </div>

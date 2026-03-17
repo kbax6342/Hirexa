@@ -3,6 +3,10 @@
 
 import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  ALL_BENEFIT_OPTIONS,
+  BENEFIT_CATEGORIES,
+} from "@/app/lib/benefits/catalog";
 
 /**
  * NOTE:
@@ -10,65 +14,6 @@ import { useRouter } from "next/navigation";
  * - You can keep Font Awesome via <link>/<script> in your root layout (recommended),
  *   or leave it as-is and swap icons later.
  */
-
-type BenefitCategory = {
-  id: string;
-  title: string;
-  iconClass: string; // font-awesome icon class
-  iconColorClass: string; // tailwind color class
-  items: string[];
-};
-
-const CATEGORIES: BenefitCategory[] = [
-  {
-    id: "environment",
-    title: "Work Environment",
-    iconClass: "fa-solid fa-laptop-house",
-    iconColorClass: "text-blue-500",
-    items: ["Remote Work", "Hybrid Schedule", "Flexible Hours", "Dog Friendly Office", "Casual Dress"],
-  },
-  {
-    id: "health",
-    title: "Health & Wellness",
-    iconClass: "fa-solid fa-heart-pulse",
-    iconColorClass: "text-red-500",
-    items: [
-      "Health Insurance",
-      "Dental Insurance",
-      "Vision Insurance",
-      "Gym Membership",
-      "Mental Health Support",
-      "Life Insurance",
-    ],
-  },
-  {
-    id: "financial",
-    title: "Financial & Retirement",
-    iconClass: "fa-solid fa-sack-dollar",
-    iconColorClass: "text-green-500",
-    items: ["401(k)", "401(k) Matching", "Performance Bonus", "Stock Options / Equity", "Signing Bonus"],
-  },
-  {
-    id: "timeoff",
-    title: "Vacation & Time Off",
-    iconClass: "fa-solid fa-umbrella-beach",
-    iconColorClass: "text-orange-400",
-    items: ["Unlimited PTO", "Paid Sick Days", "Paid Holidays", "Parental Leave", "Sabbatical"],
-  },
-  {
-    id: "perks",
-    title: "Additional Perks",
-    iconClass: "fa-solid fa-gift",
-    iconColorClass: "text-purple-500",
-    items: [
-      "Professional Development",
-      "Tuition Reimbursement",
-      "Free Lunch/Snacks",
-      "Company Retreats",
-      "Home Office Stipend",
-    ],
-  },
-];
 
 export default function JobBenefitsSelectionPage() {
   const router = useRouter();
@@ -79,10 +24,7 @@ export default function JobBenefitsSelectionPage() {
 
   const selectedCount = selected.size;
 
-  const allBenefits = useMemo(() => {
-    const flat = CATEGORIES.flatMap((c) => c.items);
-    return Array.from(new Set(flat));
-  }, []);
+  const allBenefits = useMemo(() => ALL_BENEFIT_OPTIONS, []);
 
   const filteredBenefits = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -221,7 +163,7 @@ export default function JobBenefitsSelectionPage() {
 
           {/* Categories */}
           <div className="space-y-8">
-            {CATEGORIES.map((cat) => {
+            {BENEFIT_CATEGORIES.map((cat) => {
               const showOnlyMatches = query.trim().length > 0;
               const items = showOnlyMatches
                 ? cat.items.filter((b) => filteredBenefits.has(b))

@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ComponentType, type SVGProps } from "react";
+import { useEffect, useState, type ComponentType, type SVGProps } from "react";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "../components/ui/button";
@@ -31,9 +31,16 @@ type NavItem = {
   children?: NavChild[];
 };
 
+type HirePilotNavStatus = {
+  hirePilotUnlimited?: boolean;
+  hirePilotCredits?: number;
+  monthlyCredits?: number;
+  purchasedCredits?: number;
+};
+
 const guestNav: NavItem[] = [
   { label: "Features", href: "/#features" },
-  { label: "How It Works", href: "/#how-it-works" },
+  { label: "How It Works", href: "/how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
   // { label: "Job Resources", href: "/resources", dropdown: true },
@@ -57,6 +64,11 @@ const authedNav: NavItem[] = [
       //   href: "/agents/auto-apply",
       // },
       {
+        label: "Career Coach",
+        description: "Practical AI guidance for your next role, positioning, and search strategy",
+        href: "/agents/career-coach",
+      },
+      {
         label: "Outreach Copilot",
         description: "AI-assisted recruiter outreach for your best-fit job matches",
         href: "/job-tools/agents/linkedin-outreach",
@@ -66,11 +78,6 @@ const authedNav: NavItem[] = [
       //   description: "Improves resumes",
       //   href: "/agents/resume-optimizer",
       // },
-      {
-        label: "Career Coach Agent",
-        description: "AI job coach",
-        href: "/job-tools/career-coach",
-      },
       {
         label: "HirePilot",
         description: "Real-time interview answers powered by your Hirexa profile",
@@ -180,6 +187,8 @@ export function Navbar() {
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [hirePilotStatus, setHirePilotStatus] = useState<HirePilotNavStatus | null>(null);
+  const [hirePilotLoading, setHirePilotLoading] = useState(false);
 
   // ✅ NEW: control collapse/expand for mobile "Agents"
   const [mobileAgentsOpen, setMobileAgentsOpen] = useState(false);
@@ -189,6 +198,67 @@ export function Navbar() {
   )}`;
 
   const navLinks = isAuthed ? authedNav : guestNav;
+
+  useEffect(() => {
+    if (!isAuthed) {
+      setHirePilotStatus(null);
+      setHirePilotLoading(false);
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+
+    async function loadHirePilotStatus() {
+      try {
+        setHirePilotLoading(true);
+        const response = await fetch("/api/user/hirepilot-status", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          if (response.status === 401 && active) {
+            setHirePilotStatus(null);
+          }
+          return;
+        }
+
+        const data = (await response.json().catch(() => null)) as HirePilotNavStatus | null;
+        if (active) {
+          setHirePilotStatus(data);
+        }
+      } catch {
+        if (active) {
+          setHirePilotStatus(null);
+        }
+      } finally {
+        if (active) {
+          setHirePilotLoading(false);
+        }
+      }
+    }
+
+    void loadHirePilotStatus();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [isAuthed]);
+
+  const hirePilotDesktopLabel = hirePilotLoading
+    ? "HirePilot: --"
+    : hirePilotStatus?.hirePilotUnlimited
+      ? "HirePilot: Unlimited"
+      : `HirePilot: ${Number(hirePilotStatus?.hirePilotCredits ?? 0)}`;
+  const hirePilotTooltip = hirePilotStatus
+    ? hirePilotStatus.hirePilotUnlimited
+      ? "Legacy unlimited HirePilot access is active."
+      : `Monthly credits: ${Number(hirePilotStatus.monthlyCredits ?? 0)} • Purchased credits: ${Number(
+          hirePilotStatus.purchasedCredits ?? 0
+        )}`
+    : "HirePilot credit status";
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background backdrop-blur-xl">
@@ -215,46 +285,56 @@ export function Navbar() {
               <Link href={signInHref}>Sign In</Link>
             </Button>
           ) : (
-            <div className="relative group">
-              {/* Trigger */}
-              <div className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
-                <UserCircleIcon className="h-5 w-5 text-muted-foreground" />
-                <span className="max-w-[180px] truncate">
-                  {session.user?.name || session.user?.email}
-                </span>
-                <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
-              </div>
-
-              {/* Hover buffer (prevents flicker) */}
-              <div className="absolute right-0 top-full h-3 w-44" />
-
-              {/* Dropdown */}
-              <div
-                className="
-                  absolute right-0 top-full mt-2 w-44 rounded-xl border border-border/60 bg-background shadow-lg
-                  opacity-0 scale-95 pointer-events-none
-                  group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto
-                  transition-all duration-200
-                  z-50
-                "
+            <>
+              <Link
+                href="/settings/subscription"
+                title={hirePilotTooltip}
+                className="inline-flex items-center rounded-full border border-sky-200/80 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
               >
-                <div className="py-1 text-sm">
-                  <Link
-                    href="/settings"
-                    className="block px-4 py-2 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  >
-                    Settings
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => signOut({ callbackUrl: "/" })}
-                    className="w-full text-left px-4 py-2 text-red-600 hover:bg-secondary"
-                  >
-                    Log out
-                  </button>
+                {hirePilotDesktopLabel}
+              </Link>
+
+              <div className="relative group">
+                {/* Trigger */}
+                <div className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
+                  <UserCircleIcon className="h-5 w-5 text-muted-foreground" />
+                  <span className="max-w-[180px] truncate">
+                    {session.user?.name || session.user?.email}
+                  </span>
+                  <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
+                </div>
+
+                {/* Hover buffer (prevents flicker) */}
+                <div className="absolute right-0 top-full h-3 w-44" />
+
+                {/* Dropdown */}
+                <div
+                  className="
+                    absolute right-0 top-full mt-2 w-44 rounded-xl border border-border/60 bg-background shadow-lg
+                    opacity-0 scale-95 pointer-events-none
+                    group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto
+                    transition-all duration-200
+                    z-50
+                  "
+                >
+                  <div className="py-1 text-sm">
+                    <Link
+                      href="/settings"
+                      className="block px-4 py-2 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    >
+                      Settings
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => signOut({ callbackUrl: "/" })}
+                      className="w-full text-left px-4 py-2 text-red-600 hover:bg-secondary"
+                    >
+                      Log out
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
         </div>
 
@@ -399,6 +479,17 @@ export function Navbar() {
                 </>
               ) : (
                 <>
+                  <Link
+                    href="/settings/subscription"
+                    className="inline-flex items-center justify-center rounded-full border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800"
+                    onClick={() => {
+                      setMobileOpen(false);
+                      setMobileAgentsOpen(false);
+                    }}
+                  >
+                    {hirePilotDesktopLabel}
+                  </Link>
+
                   <Button
                     asChild
                     variant="ghost"

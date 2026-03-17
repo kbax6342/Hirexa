@@ -23,6 +23,7 @@ export function Footer() {
           <div className="flex flex-wrap items-center gap-6">
             {[
               { label: "Features", href: "#features" },
+              { label: "How It Works", href: "/how-it-works" },
               { label: "Find Jobs", href: "/jobs" },
               { label: "Job Locations", href: "/locations" },
               { label: "Privacy", href: "/privacy/" },

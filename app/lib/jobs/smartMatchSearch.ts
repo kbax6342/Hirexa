@@ -15,6 +15,7 @@ type ProfileSnapshot = {
   country?: string | null;
   includeRemote?: boolean | null;
   workplaceLocations?: unknown;
+  keyQuestions?: unknown;
   jobInterests?: Array<{ title?: string | null }>;
   skills?: string[];
   resumeSkills?: string[];
@@ -69,11 +70,20 @@ function readWorkplaceLocation(value: unknown) {
   return null;
 }
 
+function readRoleFocus(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return trimOrNull((value as { roleFocus?: string | null }).roleFocus ?? null);
+}
+
 function buildPreferredLocation(profile: ProfileSnapshot | null) {
   return buildLocationOptions(profile)[0] ?? null;
 }
 
 function buildSearchTitles(profile: ProfileSnapshot | null) {
+  const roleFocus = readRoleFocus(profile?.keyQuestions);
   const selectedTitles = dedupeValues(
     (profile?.jobInterests ?? [])
       .map((item) => trimOrNull(item?.title ?? null))
@@ -86,7 +96,7 @@ function buildSearchTitles(profile: ProfileSnapshot | null) {
       .filter((value): value is string => Boolean(value))
   );
 
-  return dedupeValues([...selectedTitles, ...experienceTitles]).slice(0, 5);
+  return dedupeValues([roleFocus ?? "", ...selectedTitles, ...experienceTitles]).slice(0, 5);
 }
 
 function buildSkillTerms(profile: ProfileSnapshot | null) {
@@ -147,6 +157,7 @@ export async function getSmartMatchSearchConfigForUser(
         country: true,
         includeRemote: true,
         workplaceLocations: true,
+        keyQuestions: true,
         skills: true,
         resumeSkills: true,
         jobInterests: {

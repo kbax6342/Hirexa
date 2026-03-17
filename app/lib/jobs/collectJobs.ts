@@ -32,6 +32,7 @@ import {
 
 const SHARED_PROVIDER_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_CACHED_PROVIDER_LIMIT = 60;
+const QUERY_PROVIDER_REFRESH_TIMEOUT_MS = 6500;
 
 type SharedProviderCacheMeta = {
   key: string;
@@ -170,6 +171,25 @@ function preserveLastKnownGoodProviderJobs(
     ageMs,
   });
   return previousJobs;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
 }
 
 async function refreshSharedProviderSnapshot(
@@ -340,13 +360,17 @@ async function refreshQueryProviderJobs(
       includeRemote: request.includeRemote,
     });
 
-    const jobs = await fetcher({
-      query: request.query,
-      location: request.location,
-      page: request.page,
-      limit: request.limit,
-      includeRemote: request.includeRemote,
-    });
+    const jobs = await withTimeout(
+      fetcher({
+        query: request.query,
+        location: request.location,
+        page: request.page,
+        limit: request.limit,
+        includeRemote: request.includeRemote,
+      }),
+      QUERY_PROVIDER_REFRESH_TIMEOUT_MS,
+      `query provider ${request.provider}`
+    );
 
     const stableJobs = preserveLastKnownGoodProviderJobs(
       request.provider,

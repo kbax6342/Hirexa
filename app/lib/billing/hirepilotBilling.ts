@@ -3,10 +3,16 @@ import "server-only";
 import { prisma } from "@/app/lib/prisma";
 import {
   BILLING_PRODUCT_KEYS,
-  getUserBillingWhere,
   isActiveBillingStatus,
   upsertUserBillingRecord,
 } from "@/app/lib/billing/userBilling";
+import {
+  EMPTY_HIREPILOT_CREDIT_SUMMARY,
+  ensureHirePilotCreditsForUser,
+  getHirePilotCreditSummary,
+  grantHirePilotMonthlyCredits,
+  grantPurchasedHirePilotCredits,
+} from "@/app/lib/hirepilot/credits";
 
 export const HIREPILOT_PURCHASE_TYPES = {
   SUBSCRIPTION: "subscription",
@@ -35,9 +41,22 @@ export type HirePilotBillingStatus = {
   hasHirePilotAccess: boolean;
   hirePilotUnlimited: boolean;
   hirePilotCredits: number;
+  monthlyCredits: number;
+  rolloverCredits: number;
+  purchasedCredits: number;
   productKey: string | null;
   status: string | null;
   currentPeriodEnd: Date | null;
+  nextMonthlyResetAt: Date | null;
+  earliestPurchasedExpiryAt: Date | null;
+  lowBalance: boolean;
+  hasExpiringCredits: boolean;
+  recentUsage: Array<{
+    id: string;
+    amount: number;
+    sourceType: string | null;
+    createdAt: Date;
+  }>;
   monthly: {
     productKey: string;
     status: string | null;
@@ -69,9 +88,7 @@ export function summarizeHirePilotBillingRows(rows: HirePilotBillingRow[]) {
   const creditRow =
     relevantRows.find((row) => row.productKey === BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT) ??
     null;
-  const hirePilotUnlimited = Boolean(
-    monthlyRow && (monthlyRow.hirePilotUnlimited || isActiveBillingStatus(monthlyRow.status))
-  );
+  const hirePilotUnlimited = Boolean(monthlyRow?.hirePilotUnlimited);
   const hirePilotCredits = relevantRows.reduce(
     (total, row) => total + Math.max(0, row.hirePilotCredits ?? 0),
     0
@@ -106,40 +123,69 @@ export function summarizeHirePilotBillingRows(rows: HirePilotBillingRow[]) {
 export async function getHirePilotBillingStatus(
   userId: string
 ): Promise<HirePilotBillingStatus> {
-  const rows = await prisma.userBilling.findMany({
-    where: {
-      userId,
-      productKey: {
-        in: [
-          BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-          BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-        ],
+  const [rows, creditSummary] = await Promise.all([
+    prisma.userBilling.findMany({
+      where: {
+        userId,
+        productKey: {
+          in: [
+            BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
+            BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+          ],
+        },
       },
-    },
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    select: {
-      id: true,
-      productKey: true,
-      status: true,
-      hirePilotUnlimited: true,
-      hirePilotCredits: true,
-      currentPeriodEnd: true,
-      stripeSubscriptionId: true,
-      stripeCheckoutSessionId: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        productKey: true,
+        status: true,
+        hirePilotUnlimited: true,
+        hirePilotCredits: true,
+        currentPeriodEnd: true,
+        stripeSubscriptionId: true,
+        stripeCheckoutSessionId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    getHirePilotCreditSummary(userId).catch((error) => {
+      console.error("[hirepilot billing] failed to read HirePilot credit summary", {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return EMPTY_HIREPILOT_CREDIT_SUMMARY;
+    }),
+  ]);
 
   const summary = summarizeHirePilotBillingRows(rows);
+  const totalCredits = creditSummary.totalAvailable;
+  const hasHirePilotAccess = summary.hirePilotUnlimited || totalCredits > 0;
+  const resolvedProductKey = summary.hirePilotUnlimited
+    ? BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY
+    : totalCredits > 0
+      ? BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT
+      : summary.productKey;
+  const resolvedStatus = summary.hirePilotUnlimited
+    ? summary.status ?? "active"
+    : totalCredits > 0
+      ? summary.status ?? "active"
+      : summary.status;
 
   return {
-    hasHirePilotAccess: summary.hasHirePilotAccess,
+    hasHirePilotAccess,
     hirePilotUnlimited: summary.hirePilotUnlimited,
-    hirePilotCredits: summary.hirePilotCredits,
-    productKey: summary.productKey,
-    status: summary.status,
+    hirePilotCredits: totalCredits,
+    monthlyCredits: creditSummary.monthlyCredits,
+    rolloverCredits: creditSummary.rolloverCredits,
+    purchasedCredits: creditSummary.purchasedCredits,
+    productKey: resolvedProductKey,
+    status: resolvedStatus,
     currentPeriodEnd: summary.currentPeriodEnd,
+    nextMonthlyResetAt: creditSummary.nextMonthlyResetAt,
+    earliestPurchasedExpiryAt: creditSummary.earliestPurchasedExpiryAt,
+    lowBalance: creditSummary.lowBalance,
+    hasExpiringCredits: creditSummary.hasExpiringCredits,
+    recentUsage: creditSummary.recentUsage,
     monthly: summary.monthlyRow
       ? {
           productKey: summary.monthlyRow.productKey,
@@ -224,10 +270,22 @@ export async function upsertHirePilotMonthlyBilling(params: {
     canceledAt: params.canceledAt ?? null,
     trialStart: params.trialStart ?? null,
     trialEnd: params.trialEnd ?? null,
-    hirePilotUnlimited: hasAccess,
+    // HirePilot monthly now grants a monthly credit bucket instead of unlimited usage.
+    hirePilotUnlimited: false,
     subscriptionPurchasedAt: params.paidAt ?? undefined,
     ...(hasAccess ? { lastPaymentReceivedAt: params.paidAt ?? new Date() } : {}),
   });
+
+  if (hasAccess && params.currentPeriodStart && params.currentPeriodEnd) {
+    await grantHirePilotMonthlyCredits({
+      userId: params.userId,
+      cycleStart: params.currentPeriodStart,
+      cycleEnd: params.currentPeriodEnd,
+      stripeSubscriptionId: params.stripeSubscriptionId ?? null,
+    });
+  } else {
+    await ensureHirePilotCreditsForUser(params.userId);
+  }
 }
 
 export async function incrementHirePilotCredits(params: {
@@ -240,33 +298,24 @@ export async function incrementHirePilotCredits(params: {
   paidAt?: Date | null;
 }) {
   const paidAt = params.paidAt ?? new Date();
+  await upsertUserBillingRecord({
+    userId: params.userId,
+    productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
+    planType: HIREPILOT_PLAN_TYPES.CREDITS,
+    status: "active",
+    stripeCustomerId: params.stripeCustomerId ?? null,
+    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+    stripePriceId: params.stripePriceId ?? null,
+    stripeProductId: params.stripeProductId ?? null,
+    lastPaymentReceivedAt: paidAt,
+    subscriptionPurchasedAt: paidAt,
+  });
 
-  await prisma.userBilling.upsert({
-    where: getUserBillingWhere(params.userId, BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT),
-    create: {
-      userId: params.userId,
-      productKey: BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-      planType: HIREPILOT_PLAN_TYPES.CREDITS,
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      stripePriceId: params.stripePriceId ?? null,
-      stripeProductId: params.stripeProductId ?? null,
-      hirePilotCredits: params.credits,
-      lastPaymentReceivedAt: paidAt,
-      subscriptionPurchasedAt: paidAt,
-    },
-    update: {
-      status: "active",
-      stripeCustomerId: params.stripeCustomerId ?? null,
-      stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
-      stripePriceId: params.stripePriceId ?? null,
-      stripeProductId: params.stripeProductId ?? null,
-      hirePilotCredits: {
-        increment: params.credits,
-      },
-      lastPaymentReceivedAt: paidAt,
-    },
+  await grantPurchasedHirePilotCredits({
+    userId: params.userId,
+    credits: params.credits,
+    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+    paidAt,
   });
 }
 

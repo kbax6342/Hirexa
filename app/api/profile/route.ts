@@ -1,9 +1,11 @@
 // /Hirexa/my-app/app/api/profile/route.ts
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 import { getStripeClient } from "@/app/lib/stripeClient";
+import { deriveLocationLabel } from "@/app/lib/locationOptions";
 import {
   getCachedProfile,
   invalidateCachedProfile,
@@ -52,6 +54,18 @@ function previewProfileValue(value: unknown) {
   if (!trimmed) return null;
 
   return trimmed.length > 48 ? `${trimmed.slice(0, 48)}...` : trimmed;
+}
+
+function readFirstWorkplaceLocation(value: unknown) {
+  if (!Array.isArray(value)) return null;
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const label = String((item as { label?: unknown }).label ?? "").trim();
+    if (label) return label;
+  }
+
+  return null;
 }
 
 function planTypeFromSubscription(
@@ -244,6 +258,21 @@ export async function POST(req: Request) {
       postalCode: body.postalCode,
       state: body.state,
     });
+    const existingProfile = await prisma.userProfile.findUnique({
+      where: { userId },
+      select: {
+        workplaceLocations: true,
+      },
+    });
+    const hasExplicitWorkplaceLocation = Boolean(
+      readFirstWorkplaceLocation(existingProfile?.workplaceLocations)
+    );
+    const derivedWorkplaceLocation = !hasExplicitWorkplaceLocation
+      ? deriveLocationLabel(privateFields.city, privateFields.state)
+      : null;
+    const derivedWorkplaceLocationsJson = derivedWorkplaceLocation
+      ? ([{ label: derivedWorkplaceLocation }] as Prisma.InputJsonValue)
+      : null;
 
     const profile = await prisma.userProfile.upsert({
       where: { userId },
@@ -268,6 +297,9 @@ export async function POST(req: Request) {
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
+        ...(derivedWorkplaceLocationsJson
+          ? { workplaceLocations: derivedWorkplaceLocationsJson }
+          : {}),
       },
       update: {
         firstName,
@@ -289,6 +321,9 @@ export async function POST(req: Request) {
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
+        ...(!hasExplicitWorkplaceLocation && derivedWorkplaceLocationsJson
+          ? { workplaceLocations: derivedWorkplaceLocationsJson }
+          : {}),
       },
       select: {
         id: true,

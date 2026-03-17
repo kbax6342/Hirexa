@@ -12,7 +12,6 @@ import {
   EnvelopeIcon,
   PaperAirplaneIcon,
   SparklesIcon,
-  UserCircleIcon,
   UsersIcon,
   XMarkIcon,
 } from "@heroicons/react/24/solid";
@@ -168,7 +167,6 @@ function useNoticeTimer() {
 }
 
 export default function LinkedInOutreachClient() {
-  const [connected, setConnected] = useState(false);
   const [account, setAccount] = useState<LinkedInAccount | null>(null);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [jobTargets, setJobTargets] = useState<JobTarget[]>([]);
@@ -206,10 +204,6 @@ export default function LinkedInOutreachClient() {
   const [sendingLeadId, setSendingLeadId] = useState<string | null>(null);
   const [jobTargetLoading, setJobTargetLoading] = useState<Record<string, boolean>>({});
   const [leadFilterJobTargetId, setLeadFilterJobTargetId] = useState<string | null>(null);
-  const [connectLoading, setConnectLoading] = useState(false);
-  const [refreshLoading, setRefreshLoading] = useState(false);
-  const [skillsDraft, setSkillsDraft] = useState("");
-  const [skillsSaving, setSkillsSaving] = useState(false);
   const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
 
   const ensurePaid = useCallback(async () => {
@@ -311,38 +305,6 @@ export default function LinkedInOutreachClient() {
     setLeads(leadData.leads ?? []);
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const linkedInError = params.get("linkedin_error");
-    const linkedInOk = params.get("linkedin");
-
-    if (linkedInError) {
-      showNotice({
-        type: "error",
-        text: linkedInError === "missing_credentials"
-          ? "LinkedIn OAuth is not configured."
-          : "LinkedIn connection failed. Please try again.",
-      });
-      params.delete("linkedin_error");
-      const nextQuery = params.toString();
-      window.history.replaceState(
-        {},
-        "",
-        `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`
-      );
-    } else if (linkedInOk) {
-      showNotice({ type: "success", text: "LinkedIn connected successfully." });
-      params.delete("linkedin");
-      const nextQuery = params.toString();
-      window.history.replaceState(
-        {},
-        "",
-        `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`
-      );
-    }
-  }, [showNotice]);
-
   const refreshAll = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -362,7 +324,6 @@ export default function LinkedInOutreachClient() {
     const analyticsResult = results[4];
 
     if (connectResult.status === "fulfilled") {
-      setConnected(Boolean(connectResult.value?.connected));
       setAccount(connectResult.value?.account ?? null);
     }
 
@@ -465,76 +426,6 @@ export default function LinkedInOutreachClient() {
       isDefault: selectedTemplate.isDefault,
     });
   }, [selectedTemplate]);
-
-  useEffect(() => {
-    setSkillsDraft((account?.importedSkills ?? []).join(", "));
-  }, [account]);
-
-  const handleConnectToggle = async () => {
-    if (connectLoading) return;
-    if (!(await ensurePaid())) return;
-    try {
-      setConnectLoading(true);
-      if (connected) {
-        await fetchJson("/api/agents/linkedin/connect", { method: "DELETE" });
-        showNotice({ type: "success", text: "Disconnected Outreach Copilot profile." });
-      } else {
-        window.location.href = "/api/agents/linkedin/oauth/start";
-        return;
-      }
-
-      await refreshAll();
-    } catch (err) {
-      showNotice({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to update connection.",
-      });
-    } finally {
-      setConnectLoading(false);
-    }
-  };
-
-  const handleSaveSkills = async () => {
-    if (skillsSaving || !connected) return;
-    if (!(await ensurePaid())) return;
-    try {
-      setSkillsSaving(true);
-      const importedSkills = parseCommaList(skillsDraft);
-      const result = await fetchJson("/api/agents/linkedin/connect", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ importedSkills }),
-      });
-      setAccount(result.account ?? account);
-      showNotice({ type: "success", text: "Skills updated." });
-    } catch (err) {
-      showNotice({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to update skills.",
-      });
-    } finally {
-      setSkillsSaving(false);
-    }
-  };
-
-  const handleRefreshProfile = async () => {
-    if (!connected || refreshLoading) return;
-    if (!(await ensurePaid())) return;
-
-    try {
-      setRefreshLoading(true);
-      await fetchJson("/api/agents/linkedin/oauth/refresh", { method: "POST" });
-      await refreshAll();
-      showNotice({ type: "success", text: "LinkedIn profile refreshed." });
-    } catch (err) {
-      showNotice({
-        type: "error",
-        text: err instanceof Error ? err.message : "Failed to refresh profile.",
-      });
-    } finally {
-      setRefreshLoading(false);
-    }
-  };
 
   const handleDiscoverLeads = async () => {
     if (!(await ensurePaid())) return;
@@ -856,7 +747,7 @@ export default function LinkedInOutreachClient() {
     <div className="min-h-screen bg-slate-50">
       <div className="mx-auto w-full max-w-6xl space-y-6 p-6">
         {error ? (
-          <div className="rounded-xl border border-red-200 bg-white p-4 text-sm text-red-700 shadow-sm">
+          <div className="rounded-xl border border-red-200 bg-white p-4 text-sm text-red-700 shadow-sm ">
             {error}
           </div>
         ) : null}
@@ -871,25 +762,12 @@ export default function LinkedInOutreachClient() {
             </div>
             <h1 className="mt-2 text-2xl font-semibold text-slate-900">Outreach Copilot</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-600">
-              Turn your top Smart Matches into personalized recruiter outreach campaigns. Connect
-              LinkedIn to power outreach sequences and pipeline tracking in one premium workflow.
+              Turn your top Smart Matches into personalized recruiter outreach campaigns. Build
+              premium sequences, manage your pipeline, and move faster with one focused workflow.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={handleConnectToggle}
-              variant={connected ? "outline" : "default"}
-              disabled={connectLoading}
-            >
-              {connectLoading
-                ? connected
-                  ? "Disconnecting..."
-                  : "Connecting..."
-                : connected
-                  ? "Disconnect"
-                  : "Connect Profile"}
-            </Button>
             <Button variant="outline" onClick={handleDiscoverLeads}>
               Discover Leads
             </Button>
@@ -897,101 +775,7 @@ export default function LinkedInOutreachClient() {
         </Card>
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-1">
-            <SectionTitle
-              icon={<UserCircleIcon className="h-5 w-5 text-slate-700" />}
-              title="Connection & Profile"
-              subtitle="LinkedIn OAuth connection used for personalization."
-            />
-
-            <div className="mt-4 flex items-center gap-2">
-              <StatusPill
-                tone={connected ? "success" : "neutral"}
-                label={connected ? "Connected (LinkedIn)" : "Not connected"}
-              />
-            </div>
-
-            <div className="mt-4 space-y-3 text-sm text-slate-700">
-              <InfoRow label="Name" value={account?.importedName ?? "—"} />
-              <InfoRow label="Location" value={account?.importedLocation ?? "—"} />
-              {account?.email ? <InfoRow label="Email" value={account.email} /> : null}
-            </div>
-
-            <div className="mt-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Skills
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {(account?.importedSkills ?? []).length > 0 ? (
-                  account?.importedSkills.map((skill) => (
-                    <span
-                      key={skill}
-                      className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
-                    >
-                      {skill}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-xs text-slate-400">
-                    No skills imported yet. Add your skills below to personalize outreach.
-                  </span>
-                )}
-              </div>
-              {connected ? (
-                <div className="mt-3 space-y-2">
-                  <Field
-                    label="Add skills (comma-separated)"
-                    value={skillsDraft}
-                    onChange={setSkillsDraft}
-                    placeholder="Product Management, SQL, User Research"
-                    multiline
-                    rows={2}
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleSaveSkills}
-                      disabled={skillsSaving}
-                    >
-                      {skillsSaving ? "Saving..." : "Save Skills"}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-2 text-xs text-slate-400">
-                  Connect LinkedIn to load and edit skills.
-                </div>
-              )}
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                onClick={handleConnectToggle}
-                variant={connected ? "outline" : "default"}
-                disabled={connectLoading}
-              >
-                {connectLoading
-                  ? connected
-                    ? "Disconnecting..."
-                    : "Connecting..."
-                  : connected
-                    ? "Disconnect"
-                    : "Connect LinkedIn"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleRefreshProfile}
-                disabled={!connected || refreshLoading}
-              >
-                {refreshLoading ? "Refreshing..." : "Refresh Profile"}
-              </Button>
-            </div>
-          </Card>
-
-          <Card className="lg:col-span-2">
+          <Card className="lg:col-span-3">
             <SectionTitle
               icon={<BoltIcon className="h-5 w-5 text-slate-700" />}
               title="Campaign Builder"
@@ -1470,8 +1254,8 @@ export default function LinkedInOutreachClient() {
             />
             <div className="mt-4 space-y-3 text-sm text-slate-600">
               <Step
-                title="Connect your LinkedIn profile"
-                text="We import your LinkedIn identity to personalize every message."
+                title="Review your outreach profile"
+                text="Outreach Copilot uses your saved profile context to personalize every message."
               />
               <Step
                 title="Build a campaign"
@@ -1595,15 +1379,6 @@ function Field({
         />
       )}
     </label>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-right text-slate-700">{value}</span>
-    </div>
   );
 }
 

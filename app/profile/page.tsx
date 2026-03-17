@@ -11,6 +11,12 @@ import {
   TrashIcon,
 } from "@heroicons/react/24/outline";
 import { formatSalary, type CompensationType } from "@/app/lib/salary";
+import { ALL_BENEFIT_OPTIONS } from "@/app/lib/benefits/catalog";
+import {
+  getLocationSuggestions,
+  normalizeLocationLabel,
+  type LocationSuggestion,
+} from "@/app/lib/locationOptions";
 
 type ExperienceItem = {
   id: string;
@@ -37,12 +43,21 @@ type PersonalDetailsForm = {
 type PreferenceForm = {
   roleFocus: string;
   availability: string;
+  employmentType: string;
+  seniorityLevel: string;
   compensationType: "yearly" | "hourly";
   minCompensation: number;
   includeRemote: boolean;
   workplaceLocations: string[];
-  selectedPlan: "trial" | "annual";
   benefits: string[];
+};
+
+type NewExperienceForm = {
+  title: string;
+  company: string;
+  location: string;
+  dateRange: string;
+  bullets: string[];
 };
 
 type HirePilotStatus = {
@@ -137,6 +152,10 @@ type ProfileApiResponse = {
   } | null;
 };
 
+type ResumeExperienceRecord = NonNullable<
+  NonNullable<ProfileApiResponse["profile"]>["resume"]
+>["experiences"][number];
+
 // ✅ Change your accent text color to sky-500
 const NON_DB_TEXT_CLASS = "text-sky-500";
 
@@ -149,6 +168,21 @@ const SKY_BTN_SOFT_SM =
   "inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100";
 const SKY_BTN_MUTED =
   "inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50";
+const AVAILABILITY_OPTIONS = ["asap", "2-weeks", "30-days", "not-looking"];
+const EMPLOYMENT_TYPE_OPTIONS = [
+  "Full-time",
+  "Contract",
+  "Part-time",
+  "Internship",
+  "Freelance",
+];
+const SENIORITY_LEVEL_OPTIONS = [
+  "Entry level",
+  "Mid level",
+  "Senior",
+  "Lead",
+  "Manager",
+];
 
 export default function ProfilePage() {
   const [expandedExp, setExpandedExp] = useState<Record<string, boolean>>({});
@@ -187,11 +221,12 @@ export default function ProfilePage() {
   const [preferencesForm, setPreferencesForm] = useState<PreferenceForm>({
     roleFocus: "",
     availability: "asap",
+    employmentType: "Full-time",
+    seniorityLevel: "Mid level",
     compensationType: "yearly",
     minCompensation: 50000,
     includeRemote: true,
     workplaceLocations: [],
-    selectedPlan: "trial",
     benefits: [],
   });
 
@@ -203,6 +238,15 @@ export default function ProfilePage() {
   const [editingExperienceId, setEditingExperienceId] = useState<string | null>(null);
   const [editingBullets, setEditingBullets] = useState<string[]>([]);
   const [savingExperience, setSavingExperience] = useState(false);
+  const [isAddingExperience, setIsAddingExperience] = useState(false);
+  const [addingExperience, setAddingExperience] = useState(false);
+  const [newExperienceForm, setNewExperienceForm] = useState<NewExperienceForm>({
+    title: "",
+    company: "",
+    location: "",
+    dateRange: "",
+    bullets: [""],
+  });
 
   const loadProfile = useCallback(async () => {
     try {
@@ -315,11 +359,6 @@ export default function ProfilePage() {
   const name =
     [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
 
-  const databaseSnapshot = useMemo(() => {
-    if (!profile) return "No profile row found in database.";
-    return JSON.stringify(profile, null, 2);
-  }, [profile]);
-
   const subscriptionSummary = useMemo(
     () => ({
       email: profile?.subscriptionEmail ?? profile?.email ?? "Not found",
@@ -377,10 +416,12 @@ export default function ProfilePage() {
         : {};
     const roleFocus = String(keyQuestions.roleFocus ?? "").trim();
     const availability = String(keyQuestions.availability ?? "asap").trim() || "asap";
+    const employmentType = String(keyQuestions.employmentType ?? "Full-time").trim() || "Full-time";
+    const seniorityLevel = String(keyQuestions.seniorityLevel ?? "Mid level").trim() || "Mid level";
 
     const existingBenefits =
       Array.isArray(profile?.benefitSelections) && profile?.benefitSelections.length
-        ? (profile.benefitSelections[0] as { selectedPlan?: unknown; benefits?: unknown[] })
+        ? (profile.benefitSelections[0] as { benefits?: unknown[] })
         : null;
 
     const rawLocations = Array.isArray(profile?.workplaceLocations) ? profile.workplaceLocations : [];
@@ -388,18 +429,19 @@ export default function ProfilePage() {
     const workplaceLocations = rawLocations
       .map((item) => {
         if (!item || typeof item !== "object") return null;
-        return String((item as { label?: unknown }).label ?? "").trim();
+        return normalizeLocationLabel(String((item as { label?: unknown }).label ?? ""));
       })
       .filter((item): item is string => Boolean(item));
 
     setPreferencesForm({
       roleFocus,
       availability,
+      employmentType,
+      seniorityLevel,
       compensationType: profile?.compensationType === "hourly" ? "hourly" : "yearly",
       minCompensation: Math.max(0, profile?.minCompensation ?? 50000),
       includeRemote: profile?.includeRemote ?? true,
       workplaceLocations,
-      selectedPlan: existingBenefits?.selectedPlan === "annual" ? "annual" : "trial",
       benefits: Array.isArray(existingBenefits?.benefits)
         ? existingBenefits.benefits.map((item) => String(item)).filter(Boolean)
         : [],
@@ -450,21 +492,41 @@ export default function ProfilePage() {
         body: JSON.stringify({
           roleFocus: preferencesForm.roleFocus,
           availability: preferencesForm.availability,
+          employmentType: preferencesForm.employmentType,
+          seniorityLevel: preferencesForm.seniorityLevel,
           compensationType: preferencesForm.compensationType,
           minCompensation: preferencesForm.minCompensation,
           includeRemote: preferencesForm.includeRemote,
           workplaceLocations: preferencesForm.workplaceLocations.length
             ? preferencesForm.workplaceLocations.map((label) => ({ label }))
             : null,
-          selectedPlan: preferencesForm.selectedPlan,
           benefits: preferencesForm.benefits,
         }),
       });
 
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        ok?: boolean;
+        error?: string;
+        preferences?: {
+          workplaceLocations?: Array<{ label: string }> | null;
+          includeRemote?: boolean;
+          roleFocus?: string;
+          availability?: string;
+          employmentType?: string;
+          seniorityLevel?: string;
+          benefits?: string[];
+        };
+      }>(res);
       if (!res.ok) {
         throw new Error(data?.error ?? "Failed to save preferences.");
       }
+
+      const normalizedWorkplaceLocations =
+        data?.preferences?.workplaceLocations?.map((item) => item.label).filter(Boolean) ??
+        preferencesForm.workplaceLocations
+          .map((label) => normalizeLocationLabel(label))
+          .filter(Boolean);
+      const normalizedBenefits = data?.preferences?.benefits ?? preferencesForm.benefits;
 
       setProfile((prev) => {
         if (!prev) return prev;
@@ -473,20 +535,48 @@ export default function ProfilePage() {
           ...prev,
           minCompensation: preferencesForm.minCompensation,
           compensationType: preferencesForm.compensationType,
-          includeRemote: preferencesForm.includeRemote,
-          workplaceLocations: preferencesForm.workplaceLocations.map((label) => ({ label })),
+          includeRemote: data?.preferences?.includeRemote ?? preferencesForm.includeRemote,
+          workplaceLocations: normalizedWorkplaceLocations.map((label) => ({ label })),
           keyQuestions: {
-            roleFocus: preferencesForm.roleFocus,
-            availability: preferencesForm.availability,
+            ...(prev.keyQuestions &&
+            typeof prev.keyQuestions === "object" &&
+            !Array.isArray(prev.keyQuestions)
+              ? (prev.keyQuestions as Record<string, unknown>)
+              : {}),
+            roleFocus: data?.preferences?.roleFocus ?? preferencesForm.roleFocus,
+            availability: data?.preferences?.availability ?? preferencesForm.availability,
+            employmentType:
+              data?.preferences?.employmentType ?? preferencesForm.employmentType,
+            seniorityLevel:
+              data?.preferences?.seniorityLevel ?? preferencesForm.seniorityLevel,
           },
-          benefitSelections: [
-            {
-              selectedPlan: preferencesForm.selectedPlan,
-              benefits: preferencesForm.benefits,
-            },
-          ],
+          benefitSelections: prev.benefitSelections?.length
+            ? prev.benefitSelections.map((selection, index) =>
+                index === 0 && selection && typeof selection === "object"
+                  ? {
+                      ...(selection as Record<string, unknown>),
+                      benefits: normalizedBenefits,
+                    }
+                  : selection
+              )
+            : [
+                {
+                  benefits: normalizedBenefits,
+                },
+              ],
         };
       });
+
+      setPreferencesForm((prev) => ({
+        ...prev,
+        includeRemote: data?.preferences?.includeRemote ?? prev.includeRemote,
+        workplaceLocations: normalizedWorkplaceLocations,
+        benefits: normalizedBenefits,
+        roleFocus: data?.preferences?.roleFocus ?? prev.roleFocus,
+        availability: data?.preferences?.availability ?? prev.availability,
+        employmentType: data?.preferences?.employmentType ?? prev.employmentType,
+        seniorityLevel: data?.preferences?.seniorityLevel ?? prev.seniorityLevel,
+      }));
     } catch (e) {
       setPreferencesError(e instanceof Error ? e.message : "Failed to save preferences.");
     } finally {
@@ -665,6 +755,118 @@ export default function ProfilePage() {
       setError(e instanceof Error ? e.message : "Failed to save experience bullets.");
     } finally {
       setSavingExperience(false);
+    }
+  }
+
+  function resetNewExperienceForm() {
+    setNewExperienceForm({
+      title: "",
+      company: "",
+      location: "",
+      dateRange: "",
+      bullets: [""],
+    });
+  }
+
+  function startAddExperience() {
+    if (!profile?.resume) {
+      setResumeUploadError("Please upload your resume before adding experience.");
+      resumeInputRef.current?.click();
+      return;
+    }
+
+    setResumeUploadError(null);
+    setIsAddingExperience(true);
+    resetNewExperienceForm();
+  }
+
+  function updateNewExperienceField<K extends keyof Omit<NewExperienceForm, "bullets">>(
+    key: K,
+    value: NewExperienceForm[K]
+  ) {
+    setNewExperienceForm((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  }
+
+  function updateNewExperienceBullet(index: number, value: string) {
+    setNewExperienceForm((prev) => ({
+      ...prev,
+      bullets: prev.bullets.map((bullet, bulletIndex) =>
+        bulletIndex === index ? value : bullet
+      ),
+    }));
+  }
+
+  function addNewExperienceBullet() {
+    setNewExperienceForm((prev) => ({
+      ...prev,
+      bullets: [...prev.bullets, ""],
+    }));
+  }
+
+  function removeNewExperienceBullet(index: number) {
+    setNewExperienceForm((prev) => ({
+      ...prev,
+      bullets:
+        prev.bullets.length === 1
+          ? [""]
+          : prev.bullets.filter((_, bulletIndex) => bulletIndex !== index),
+    }));
+  }
+
+  async function saveNewExperience() {
+    if (!profile?.resume) {
+      setResumeUploadError("Please upload your resume before adding experience.");
+      return;
+    }
+
+    try {
+      setAddingExperience(true);
+      setError(null);
+
+      const res = await fetch("/api/resume/experience", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newExperienceForm.title,
+          company: newExperienceForm.company,
+          location: newExperienceForm.location,
+          dateRange: newExperienceForm.dateRange,
+          bullets: newExperienceForm.bullets,
+        }),
+      });
+
+      const data = await readJsonResponse<{
+        ok?: boolean;
+        error?: string;
+        experience?: ResumeExperienceRecord;
+      }>(res);
+
+      if (!res.ok || !data?.experience) {
+        throw new Error(data?.error ?? "Failed to add experience.");
+      }
+      const createdExperience = data.experience;
+
+      setProfile((prev) => {
+        if (!prev?.resume) return prev;
+
+        return {
+          ...prev,
+          resume: {
+            ...prev.resume,
+            experiences: [...prev.resume.experiences, createdExperience],
+          },
+        };
+      });
+      setShowAllExperiences(true);
+      setIsAddingExperience(false);
+      resetNewExperienceForm();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add experience.");
+    } finally {
+      setAddingExperience(false);
     }
   }
 
@@ -941,18 +1143,35 @@ function ToggleField({
               {showPreferenceEditor ? (
                 <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <SelectField
-                      label="Role focus"
+                    <TextField
+                      label="Target role"
                       value={preferencesForm.roleFocus}
                       onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
-                      options={["Software Engineer", "Product Manager", "Data Analyst", "Project Coordinator"]}
                     />
 
                     <SelectField
                       label="Availability"
                       value={preferencesForm.availability}
                       onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
-                      options={["asap", "2-weeks", "30-days", "not-looking"]}
+                      options={AVAILABILITY_OPTIONS}
+                    />
+
+                    <SelectField
+                      label="Employment type"
+                      value={preferencesForm.employmentType}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({ ...prev, employmentType: value }))
+                      }
+                      options={EMPLOYMENT_TYPE_OPTIONS}
+                    />
+
+                    <SelectField
+                      label="Seniority level"
+                      value={preferencesForm.seniorityLevel}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({ ...prev, seniorityLevel: value }))
+                      }
+                      options={SENIORITY_LEVEL_OPTIONS}
                     />
 
                     <SelectField
@@ -979,30 +1198,29 @@ function ToggleField({
                       }
                     />
 
-                    <SelectField
-                      label="Workplace location"
-                      value={preferencesForm.workplaceLocations[0] ?? "none"}
+                    <LocationAutocompleteField
+                      label="Preferred location"
+                      value={preferencesForm.workplaceLocations[0] ?? ""}
                       onChange={(value) =>
                         setPreferencesForm((prev) => ({
                           ...prev,
-                          workplaceLocations: value === "none" ? [] : [value],
+                          workplaceLocations: value.trim() ? [value] : [],
                         }))
                       }
-                      options={["none", "New York, NY", "Austin, TX", "San Francisco, CA", "Chicago, IL"]}
                     />
 
-              <ToggleField
-                label="Remote preference"
-                checked={preferencesForm.includeRemote}
-                checkedLabel="Remote"
-                uncheckedLabel="Remote"
-                onChange={(checked) =>
-                  setPreferencesForm((prev) => ({
-                    ...prev,
-                    includeRemote: checked,
-                  }))
-                }
-              />
+                    <ToggleField
+                      label="Remote"
+                      checked={preferencesForm.includeRemote}
+                      checkedLabel="On"
+                      uncheckedLabel="Off"
+                      onChange={(checked) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          includeRemote: checked,
+                        }))
+                      }
+                    />
 
                     {/* <SelectField
                       label="Benefits plan"
@@ -1020,7 +1238,7 @@ function ToggleField({
                   <div>
                     <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
                     <div className="flex flex-wrap gap-2">
-                      {["Health", "Dental", "Vision", "401k", "PTO"].map((benefit) => (
+                      {ALL_BENEFIT_OPTIONS.map((benefit) => (
                         <button
                           key={benefit}
                           type="button"
@@ -1056,6 +1274,9 @@ function ToggleField({
                ======================= */}
             <Card className="p-6 mt-2">
               <div className="text-sm font-semibold text-slate-900">Subscription Status</div>
+              <p className="mt-2 text-sm text-slate-600">
+                Manage billing, cancellations, and subscription details from Settings.
+              </p>
 
               <div className="mt-4">
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
@@ -1069,6 +1290,21 @@ function ToggleField({
                     {subscriptionSummary.planStatus === "active" ? "Active" : "Inactive"}
                   </div>
                 </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <a
+                  href="/settings/subscription"
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Manage Billing
+                </a>
+                <a
+                  href="/settings/subscription"
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                >
+                  Open Subscription Settings
+                </a>
               </div>
             </Card>
 
@@ -1087,13 +1323,31 @@ function ToggleField({
                     : "No HirePilot access"}
                 </div>
 
-                <a
-                  href="/hirepilot"
-                  className="mt-4 inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
-                >
-                  Unlock HirePilot
-                </a>
+                {!hirePilotStatus?.hirePilotUnlimited ? (
+                  <a
+                    href="/hirepilot"
+                    className="mt-4 inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
+                  >
+                    Unlock HirePilot
+                  </a>
+                ) : null}
               </div>
+            </Card>
+
+            <Card className="p-6 mt-2">
+              <div className="text-sm font-semibold text-slate-900">Profile Actions</div>
+              <p className="mt-2 text-sm text-slate-600">
+                Account deletion now lives in Settings with stronger confirmation and service
+                cancellation handling.
+              </p>
+
+              <a
+                href="/settings"
+                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+              >
+                <TrashIcon className="h-4 w-4" />
+                Open Danger Zone
+              </a>
             </Card>
 
             {/* =======================
@@ -1157,12 +1411,98 @@ function ToggleField({
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-md font-semibold text-slate-700">Experience: </div>
 
-                      <button type="button" className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}>
+                      <button
+                        type="button"
+                        onClick={startAddExperience}
+                        className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
+                      >
                         + Add experience
                       </button>
                     </div>
 
                     <div className="mt-3 space-y-3">
+                      {isAddingExperience ? (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <TextField
+                              label="Job title"
+                              value={newExperienceForm.title}
+                              onChange={(value) => updateNewExperienceField("title", value)}
+                            />
+                            <TextField
+                              label="Company"
+                              value={newExperienceForm.company}
+                              onChange={(value) => updateNewExperienceField("company", value)}
+                            />
+                            <TextField
+                              label="Location"
+                              value={newExperienceForm.location}
+                              onChange={(value) => updateNewExperienceField("location", value)}
+                            />
+                            <TextField
+                              label="Date range"
+                              value={newExperienceForm.dateRange}
+                              onChange={(value) => updateNewExperienceField("dateRange", value)}
+                            />
+                          </div>
+
+                          <div className="mt-4 space-y-2">
+                            <div className="text-xs font-semibold text-slate-700">Highlights</div>
+                            {newExperienceForm.bullets.map((bullet, index) => (
+                              <div key={`new-bullet-${index}`} className="space-y-1">
+                                <textarea
+                                  value={bullet}
+                                  onChange={(event) =>
+                                    updateNewExperienceBullet(index, event.target.value)
+                                  }
+                                  rows={2}
+                                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
+                                  placeholder="Add a responsibility or accomplishment"
+                                />
+                                {newExperienceForm.bullets.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                    onClick={() => removeNewExperienceBullet(index)}
+                                  >
+                                    Remove bullet
+                                  </button>
+                                ) : null}
+                              </div>
+                            ))}
+
+                            <button
+                              type="button"
+                              onClick={addNewExperienceBullet}
+                              className="text-xs font-semibold text-sky-600 hover:text-sky-700"
+                            >
+                              + Add bullet
+                            </button>
+                          </div>
+
+                          <div className="mt-4 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void saveNewExperience()}
+                              disabled={addingExperience}
+                              className={SKY_BTN_SOFT_SM}
+                            >
+                              {addingExperience ? "Saving..." : "Save experience"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsAddingExperience(false);
+                                resetNewExperienceForm();
+                              }}
+                              className={SKY_BTN_MUTED}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {experience.length > 4 && !showAllExperiences ? (
                         <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
                       ) : null}
@@ -1355,6 +1695,73 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
         onChange={(event) => onChange(event.target.value)}
         className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       />
+    </label>
+  );
+}
+
+function LocationAutocompleteField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const suggestions = useMemo(
+    () =>
+      value.trim()
+        ? getLocationSuggestions(value).filter(
+            (suggestion) => suggestion.label.toLowerCase() !== value.trim().toLowerCase()
+          )
+        : [],
+    [value]
+  );
+
+  const handleSelect = (suggestion: LocationSuggestion) => {
+    onChange(suggestion.label);
+    setOpen(false);
+  };
+
+  return (
+    <label className="relative flex flex-col gap-1">
+      <span className="text-xs font-semibold text-slate-700">{label}</span>
+      <input
+        value={value}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(false), 120);
+        }}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+        }}
+        placeholder="Detroit, MI or Michigan"
+        autoComplete="off"
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
+      />
+
+      {open && suggestions.length > 0 ? (
+        <div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-lg">
+          {suggestions.map((suggestion) => (
+            <button
+              key={suggestion.label}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                handleSelect(suggestion);
+              }}
+              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+            >
+              <span>{suggestion.label}</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                {suggestion.kind}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </label>
   );
 }

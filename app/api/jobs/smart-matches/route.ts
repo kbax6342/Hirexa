@@ -16,6 +16,10 @@ import {
   getSmartMatchSearchConfigForUser,
   type SmartMatchSearchConfig,
 } from "@/app/lib/jobs/smartMatchSearch";
+import {
+  formatResolvedStateMessage,
+  resolveLocationFallback,
+} from "@/app/lib/jobs/locationFallback";
 import type { Job } from "@/app/lib/jobs/types";
 import {
   applyJobMatchStages,
@@ -102,6 +106,7 @@ const ROLE_FAMILY_EXPANSIONS: Array<{
 type Cursor = {
   variantIndex: number;
   page: number;
+  resolvedLocation?: string | null;
 };
 
 type SearchVariant = {
@@ -159,6 +164,11 @@ type SmartMatchesApiResponse = {
     query: string;
     preferredLocation: string | null;
     includeRemote: boolean;
+    requestedState: string | null;
+    resolvedState: string | null;
+    fallbackUsed: boolean;
+    attemptedStates: string[];
+    resolvedLocationMessage?: string | null;
     expanded: boolean;
     usedVariants: Array<{
       query: string;
@@ -172,7 +182,7 @@ type SmartMatchesApiResponse = {
 };
 
 function decodeCursor(raw: string | null): Cursor {
-  if (!raw) return { variantIndex: 0, page: 1 };
+  if (!raw) return { variantIndex: 0, page: 1, resolvedLocation: null };
 
   try {
     const decoded = Buffer.from(raw, "base64url").toString("utf8");
@@ -184,9 +194,13 @@ function decodeCursor(raw: string | null): Cursor {
           ? parsed.variantIndex
           : 0,
       page: typeof parsed.page === "number" && parsed.page > 0 ? parsed.page : 1,
+      resolvedLocation:
+        typeof parsed.resolvedLocation === "string"
+          ? parsed.resolvedLocation
+          : null,
     };
   } catch {
-    return { variantIndex: 0, page: 1 };
+    return { variantIndex: 0, page: 1, resolvedLocation: null };
   }
 }
 
@@ -235,17 +249,20 @@ function simplifyTitle(title: string) {
   );
 }
 
-function buildSearchVariants(config: SmartMatchSearchConfig): SearchVariant[] {
+function buildSearchVariants(
+  config: SmartMatchSearchConfig,
+  activeLocation?: string | null
+): SearchVariant[] {
   const exactTitles = dedupeStrings(config.jobTitles).slice(0, 4);
   const titleKeywords = dedupeStrings(
     exactTitles.map((title) => simplifyTitle(title))
   ).slice(0, 3);
   const skillQueries = dedupeStrings(config.skillTerms).slice(0, 4);
 
-  const primaryLocations = dedupeStrings([
-    config.preferredLocation,
-    ...config.locationOptions,
-  ]).slice(0, 2);
+  const primaryLocations =
+    typeof activeLocation !== "undefined"
+      ? dedupeStrings([activeLocation])
+      : dedupeStrings([config.preferredLocation, ...config.locationOptions]).slice(0, 2);
 
   const focusedLocations = primaryLocations.length > 0 ? primaryLocations : [""];
   const remoteAwareLocations = dedupeStrings([
@@ -917,6 +934,93 @@ async function fetchVariantJobs(
   };
 }
 
+async function executeVariantSequence(params: {
+  variants: SearchVariant[];
+  startVariantIndex: number;
+  startPage: number;
+  limit: number;
+  includeRemote: boolean;
+  searchConfig: SmartMatchSearchConfig;
+  expandedMode: boolean;
+  cache: RequestScopedProviderCache;
+  requestKey: string;
+}) {
+  let variantIndex = Math.min(params.startVariantIndex, params.variants.length - 1);
+  let page = Math.max(params.startPage, 1);
+  let jobs: Job[] = [];
+  const seen = new Set<string>();
+  const usedVariants: SmartMatchesApiResponse["meta"]["usedVariants"] = [];
+  const maxAttempts = Math.max(params.variants.length, 4);
+
+  for (let attempt = 0; attempt < maxAttempts && jobs.length < params.limit; attempt += 1) {
+    const currentVariant =
+      params.variants[Math.min(variantIndex, params.variants.length - 1)];
+    const batch = await fetchVariantJobs(
+      currentVariant,
+      page,
+      params.limit,
+      params.includeRemote,
+      params.searchConfig,
+      params.expandedMode,
+      params.cache,
+      params.requestKey
+    );
+    const uniqueBatch = batch.jobs.filter((job) => {
+      if (!job?.id || seen.has(job.id)) return false;
+      seen.add(job.id);
+      return true;
+    });
+
+    jobs = [...jobs, ...uniqueBatch].slice(0, params.limit);
+    usedVariants.push({
+      query: currentVariant.query,
+      location: currentVariant.location || null,
+      page,
+      strategy: currentVariant.strategy,
+      results: batch.jobs.length,
+      uniqueResults: uniqueBatch.length,
+    });
+
+    const isLastVariant = variantIndex >= params.variants.length - 1;
+
+    if (jobs.length >= params.limit) {
+      page += 1;
+      break;
+    }
+
+    if (isLastVariant) {
+      page += 1;
+      break;
+    }
+
+    console.log("[SMART_MATCHES] fallback below limit", {
+      query: currentVariant.query,
+      location: currentVariant.location || null,
+      page,
+      includeRemote: params.includeRemote,
+      requestedLimit: params.limit,
+      accumulatedResults: jobs.length,
+      batchResults: batch.jobs.length,
+    });
+
+    console.log("[SMART_MATCHES] advancing variant", {
+      fromVariantIndex: variantIndex,
+      toVariantIndex: variantIndex + 1,
+      fromPage: page,
+      reason: "below-limit",
+    });
+    variantIndex += 1;
+    page = 1;
+  }
+
+  return {
+    jobs,
+    usedVariants,
+    variantIndex,
+    page,
+  };
+}
+
 export async function GET(request: Request) {
   const session = await auth();
   const userId = session?.user?.id ?? null;
@@ -979,7 +1083,6 @@ export async function GET(request: Request) {
     includeRemote: searchConfig.includeRemote,
   });
 
-  const variants = buildSearchVariants(searchConfig);
   const rawCursor = url.searchParams.get("cursor")?.trim() || "";
   const expandedMode = Boolean(rawCursor) || requestedPage > 1;
   const initialCursor = decodeCursor(rawCursor);
@@ -1018,104 +1121,86 @@ export async function GET(request: Request) {
     shared: new Map(),
     queryProviders: new Map(),
   };
-
-  let variantIndex = Math.min(initialCursor.variantIndex, variants.length - 1);
-  let page = url.searchParams.get("cursor")
-    ? Math.max(initialCursor.page, 1)
-    : requestedPage;
-  let jobs: Job[] = [];
-  const seen = new Set<string>();
-  const usedVariants: SmartMatchesApiResponse["meta"]["usedVariants"] = [];
-  const maxAttempts = Math.max(variants.length, 4);
+  const startVariantIndex = Math.max(initialCursor.variantIndex, 0);
+  const startPage = rawCursor ? Math.max(initialCursor.page, 1) : requestedPage;
 
   console.log("[SMART_MATCHES] request mode", {
-    page: rawCursor ? initialCursor.page : requestedPage,
+    page: startPage,
     expandedMode,
   });
 
-  for (let attempt = 0; attempt < maxAttempts && jobs.length < limit; attempt += 1) {
-    const currentVariant = variants[Math.min(variantIndex, variants.length - 1)];
-    const batch = await fetchVariantJobs(
-      currentVariant,
-      page,
+  async function loadJobsForLocation(activeLocation: string) {
+    const locationScopedConfig: SmartMatchSearchConfig = {
+      ...searchConfig,
+      preferredLocation: activeLocation || null,
+      locationOptions: activeLocation ? [activeLocation] : [],
+    };
+    const variants = buildSearchVariants(locationScopedConfig, activeLocation);
+    const result = await executeVariantSequence({
+      variants,
+      startVariantIndex,
+      startPage,
       limit,
-      searchConfig.includeRemote,
-      searchConfig,
-      expandedMode,
-      providerCache,
-      requestKey
-    );
-    const uniqueBatch = batch.jobs.filter((job) => {
-      if (!job?.id || seen.has(job.id)) return false;
-      seen.add(job.id);
-      return true;
-    });
-
-    jobs = [...jobs, ...uniqueBatch].slice(0, limit);
-    usedVariants.push({
-      query: currentVariant.query,
-      location: currentVariant.location || null,
-      page,
-      strategy: currentVariant.strategy,
-      results: batch.jobs.length,
-      uniqueResults: uniqueBatch.length,
-    });
-
-    const isLastVariant = variantIndex >= variants.length - 1;
-
-    if (jobs.length >= limit) {
-      page += 1;
-      break;
-    }
-
-    if (isLastVariant) {
-      page += 1;
-      break;
-    }
-
-    console.log("[SMART_MATCHES] fallback below limit", {
-      query: currentVariant.query,
-      location: currentVariant.location || null,
-      page,
       includeRemote: searchConfig.includeRemote,
-      requestedLimit: limit,
-      accumulatedResults: jobs.length,
-      batchResults: batch.jobs.length,
-    });
-
-    console.log("[SMART_MATCHES] advancing variant", {
-      fromVariantIndex: variantIndex,
-      toVariantIndex: variantIndex + 1,
-      fromPage: page,
-      reason: "below-limit",
-    });
-    variantIndex += 1;
-    page = 1;
-  }
-
-  if (jobs.length === 0) {
-    const fallback = await fetchProviderBatch(
-      { query: "jobs", location: "", strategy: "fallback-broad" },
-      1,
-      limit,
-      searchConfig.includeRemote,
-      searchConfig,
+      searchConfig: locationScopedConfig,
       expandedMode,
-      providerCache,
-      requestKey
-    );
-    jobs = fallback.jobs;
-    variantIndex = variants.length - 1;
-    page = 2;
+      cache: providerCache,
+      requestKey,
+    });
+
+    return {
+      ...result,
+      resolvedLocation: activeLocation,
+    };
   }
+
+  const requestedLocationPreference = requestedLocation || searchConfig.preferredLocation || null;
+  const preferredResolvedLocation =
+    initialCursor.resolvedLocation &&
+    initialCursor.resolvedLocation.trim() &&
+    initialCursor.resolvedLocation.trim().toLowerCase() !==
+      (requestedLocationPreference ?? "").trim().toLowerCase()
+      ? initialCursor.resolvedLocation
+      : null;
+
+  const locationResolution = await resolveLocationFallback({
+    preferredLocation: requestedLocationPreference,
+    additionalLocations: searchConfig.locationOptions,
+    leadingLocations: preferredResolvedLocation ? [preferredResolvedLocation] : [],
+    includeRemote: searchConfig.includeRemote,
+    maxAttempts: 10,
+    timeoutMs: 10000,
+    fetchForLocation: loadJobsForLocation,
+    isUsableResult: (result) => Array.isArray(result.jobs) && result.jobs.length > 0,
+  });
+
+  const jobs = locationResolution.result?.jobs ?? [];
+  const usedVariants = locationResolution.result?.usedVariants ?? [];
+  const nextCursor = locationResolution.result
+    ? encodeCursor({
+        variantIndex: locationResolution.result.variantIndex,
+        page: locationResolution.result.page,
+        resolvedLocation: locationResolution.result.resolvedLocation || null,
+      })
+    : "";
+  const resolutionMetadata = {
+    requestedState: locationResolution.requestedState,
+    resolvedState: locationResolution.resolvedState,
+    fallbackUsed: locationResolution.fallbackUsed,
+    attemptedStates: locationResolution.attemptedStates,
+  };
+
+  console.log("[SMART_MATCHES] location resolution", resolutionMetadata);
 
   const payload = {
     jobs,
-    nextCursor: encodeCursor({ variantIndex, page }),
+    nextCursor,
     meta: {
       query: searchConfig.searchQuery,
       preferredLocation: searchConfig.preferredLocation,
       includeRemote: searchConfig.includeRemote,
+      ...resolutionMetadata,
+      resolvedLocationMessage: formatResolvedStateMessage(resolutionMetadata),
       expanded: usedVariants.length > 1,
       usedVariants,
     },

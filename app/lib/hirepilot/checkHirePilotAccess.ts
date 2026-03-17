@@ -1,13 +1,9 @@
 import "server-only";
 
-import { prisma } from "@/app/lib/prisma";
-import {
-  BILLING_PRODUCT_KEYS,
-} from "@/app/lib/billing/userBilling";
 import {
   getHirePilotBillingStatus as getCanonicalHirePilotBillingStatus,
-  summarizeHirePilotBillingRows,
 } from "@/app/lib/billing/hirepilotBilling";
+import { consumeHirePilotCredits } from "@/app/lib/hirepilot/credits";
 
 export const HIREPILOT_SESSION_COOKIE = "hirepilot_session_id";
 
@@ -15,18 +11,9 @@ export type HirePilotAccessResult = {
   allowed: boolean;
   unlimited: boolean;
   credits: number;
+  monthlyCredits?: number;
+  purchasedCredits?: number;
 };
-
-type BillingRows = Array<{
-  id: string;
-  productKey: string;
-  status: string | null;
-  hirePilotUnlimited: boolean;
-  hirePilotCredits: number;
-  currentPeriodEnd: Date | null;
-  stripeSubscriptionId: string | null;
-  stripeCheckoutSessionId: string | null;
-}>;
 
 export async function getHirePilotBillingStatus(
   userId: string
@@ -39,103 +26,50 @@ export async function checkHirePilotAccess(
   options?: { consumeCredit?: boolean }
 ): Promise<HirePilotAccessResult> {
   const consumeCredit = Boolean(options?.consumeCredit);
+  const status = await getCanonicalHirePilotBillingStatus(userId);
 
-  return prisma.$transaction(async (tx) => {
-    const rows = await tx.userBilling.findMany({
-      where: {
-        userId,
-        productKey: {
-          in: [
-            BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-            BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-          ],
-        },
-      },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        productKey: true,
-        status: true,
-        hirePilotUnlimited: true,
-        hirePilotCredits: true,
-        currentPeriodEnd: true,
-        stripeSubscriptionId: true,
-        stripeCheckoutSessionId: true,
-      },
-    });
-
-    const summary = summarizeHirePilotBillingRows(rows);
-
-    if (summary.hirePilotUnlimited) {
-      return {
-        allowed: true,
-        unlimited: true,
-        credits: summary.hirePilotCredits,
-      };
-    }
-
-    if (summary.hirePilotCredits <= 0 || !summary.creditRowId) {
-      return {
-        allowed: false,
-        unlimited: false,
-        credits: 0,
-      };
-    }
-
+  if (status.hirePilotCredits > 0) {
     if (!consumeCredit) {
       return {
         allowed: true,
-        unlimited: false,
-        credits: summary.hirePilotCredits,
+        unlimited: status.hirePilotUnlimited,
+        credits: status.hirePilotCredits,
+        monthlyCredits: status.monthlyCredits + status.rolloverCredits,
+        purchasedCredits: status.purchasedCredits,
       };
     }
 
-    const updated = await tx.userBilling.updateMany({
-      where: {
-        id: summary.creditRowId,
-        hirePilotCredits: { gt: 0 },
-      },
-      data: {
-        hirePilotCredits: { decrement: 1 },
-      },
+    const consumption = await consumeHirePilotCredits({
+      userId,
+      amount: 1,
+      sourceType: "interview_session",
     });
-
-    if (!updated.count) {
-      return {
-        allowed: false,
-        unlimited: false,
-        credits: 0,
-      };
-    }
-
-    const refreshedRows = await tx.userBilling.findMany({
-      where: {
-        userId,
-        productKey: {
-          in: [
-            BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY,
-            BILLING_PRODUCT_KEYS.HIREPILOT_CREDIT,
-          ],
-        },
-      },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        productKey: true,
-        status: true,
-        hirePilotUnlimited: true,
-        hirePilotCredits: true,
-        currentPeriodEnd: true,
-        stripeSubscriptionId: true,
-        stripeCheckoutSessionId: true,
-      },
-    });
-    const refreshedSummary = summarizeHirePilotBillingRows(refreshedRows);
 
     return {
-      allowed: true,
-      unlimited: refreshedSummary.hirePilotUnlimited,
-      credits: refreshedSummary.hirePilotCredits,
+      allowed: consumption.ok,
+      unlimited: status.hirePilotUnlimited,
+      credits: consumption.summary.totalAvailable,
+      monthlyCredits:
+        consumption.summary.monthlyCredits + consumption.summary.rolloverCredits,
+      purchasedCredits: consumption.summary.purchasedCredits,
     };
-  });
+  }
+
+  if (status.hirePilotUnlimited) {
+    return {
+      allowed: true,
+      unlimited: true,
+      credits: 0,
+      monthlyCredits: 0,
+      purchasedCredits: 0,
+    };
+  }
+
+  return {
+    allowed: false,
+    unlimited: false,
+    credits: 0,
+    monthlyCredits: 0,
+    purchasedCredits: 0,
+  };
 }

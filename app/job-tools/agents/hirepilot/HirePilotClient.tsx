@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowPathIcon,
+  ChevronDownIcon,
   ClipboardDocumentIcon,
   LightBulbIcon,
   MicrophoneIcon,
@@ -47,9 +48,16 @@ type HirePilotStatusResponse = {
   hasHirePilotAccess?: boolean;
   hirePilotUnlimited: boolean;
   hirePilotCredits: number;
+  monthlyCredits?: number;
+  rolloverCredits?: number;
+  purchasedCredits?: number;
   productKey?: string | null;
   status?: string | null;
   currentPeriodEnd?: string | null;
+  nextMonthlyResetAt?: string | null;
+  earliestPurchasedExpiryAt?: string | null;
+  lowBalance?: boolean;
+  hasExpiringCredits?: boolean;
 };
 
 type StartInterviewResponse = {
@@ -59,9 +67,16 @@ type StartInterviewResponse = {
   hasHirePilotAccess?: boolean;
   hirePilotUnlimited?: boolean;
   hirePilotCredits?: number;
+  monthlyCredits?: number;
+  rolloverCredits?: number;
+  purchasedCredits?: number;
   productKey?: string | null;
   status?: string | null;
   currentPeriodEnd?: string | null;
+  nextMonthlyResetAt?: string | null;
+  earliestPurchasedExpiryAt?: string | null;
+  lowBalance?: boolean;
+  hasExpiringCredits?: boolean;
 };
 
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
@@ -174,9 +189,16 @@ function toBillingStatus(data?: HirePilotStatusResponse | StartInterviewResponse
       Boolean(data?.hasHirePilotAccess) || hirePilotUnlimited || hirePilotCredits > 0,
     hirePilotUnlimited,
     hirePilotCredits,
+    monthlyCredits: Number(data?.monthlyCredits ?? 0),
+    rolloverCredits: Number(data?.rolloverCredits ?? 0),
+    purchasedCredits: Number(data?.purchasedCredits ?? 0),
     productKey: data?.productKey ?? null,
     status: data?.status ?? null,
     currentPeriodEnd: data?.currentPeriodEnd ?? null,
+    nextMonthlyResetAt: data?.nextMonthlyResetAt ?? null,
+    earliestPurchasedExpiryAt: data?.earliestPurchasedExpiryAt ?? null,
+    lowBalance: Boolean(data?.lowBalance),
+    hasExpiringCredits: Boolean(data?.hasExpiringCredits),
   };
 }
 
@@ -212,14 +234,22 @@ export default function HirePilotClient() {
     hasHirePilotAccess: false,
     hirePilotUnlimited: false,
     hirePilotCredits: 0,
+    monthlyCredits: 0,
+    rolloverCredits: 0,
+    purchasedCredits: 0,
     productKey: null,
     status: null,
     currentPeriodEnd: null,
+    nextMonthlyResetAt: null,
+    earliestPurchasedExpiryAt: null,
+    lowBalance: false,
+    hasExpiringCredits: false,
   });
   const [billingLoading, setBillingLoading] = useState(true);
   const [startingInterview, setStartingInterview] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [interviewSessionStarted, setInterviewSessionStarted] = useState(false);
+  const [isInfoPanelCollapsed, setIsInfoPanelCollapsed] = useState(false);
 
   const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
 
@@ -239,11 +269,18 @@ export default function HirePilotClient() {
     ? "Unlimited Access"
     : billingStatus.hirePilotCredits > 0
     ? `Credits Remaining: ${billingStatus.hirePilotCredits}`
+    : billingStatus.productKey === "hirepilot_monthly" && billingStatus.status === "active"
+    ? "0 Credits Available"
     : "Practice Questions Free";
+  const monthlyCreditBucket =
+    Number(billingStatus.monthlyCredits ?? 0) + Number(billingStatus.rolloverCredits ?? 0);
 
   const answerStatus = useMemo(() => {
     if (isGenerating) {
       return activeRewrite ? "Refining answer..." : "Generating answer...";
+    }
+    if (activeMode === "practice" && !answer.trim()) {
+      return "Practice mode uses your uploaded resume to generate interview answers.";
     }
     if (!hasPaidHirePilotAccess) {
       return "Practice questions are free. Upgrade to unlock live AI answer suggestions and interview coaching.";
@@ -255,19 +292,7 @@ export default function HirePilotClient() {
       return "Answer generated from your Hirexa profile context.";
     }
     return "HirePilot uses your profile, resume, experience, and skills.";
-  }, [activeRewrite, hasPaidHirePilotAccess, isGenerating, responseSource]);
-
-  useEffect(() => {
-    void loadHirePilotStatus();
-  }, []);
-
-  useEffect(() => {
-    if (checkoutState !== "success" || !checkoutSessionId) {
-      return;
-    }
-
-    void refreshHirePilotAccess(checkoutSessionId);
-  }, [checkoutSessionId, checkoutState]);
+  }, [activeMode, activeRewrite, answer, hasPaidHirePilotAccess, isGenerating, responseSource]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -420,18 +445,23 @@ export default function HirePilotClient() {
   async function generateAnswer(
     question: string,
     mode: RewriteMode,
-    answerOverride?: string
+    answerOverride?: string,
+    options?: { practiceMode?: boolean }
   ) {
     const normalizedQuestion = normalizeSpace(question);
     if (!normalizedQuestion) return;
+    const practiceMode = options?.practiceMode ?? activeMode === "practice";
 
     debugHirePilot("answer generation started", {
       mode,
       question: normalizedQuestion,
+      practiceMode,
     });
 
-    const accessAllowed = await ensureInterviewSession();
-    if (!accessAllowed) return;
+    if (!practiceMode) {
+      const accessAllowed = await ensureInterviewSession();
+      if (!accessAllowed) return;
+    }
 
     setDetectedQuestion(normalizedQuestion);
     setRequestError(null);
@@ -448,6 +478,7 @@ export default function HirePilotClient() {
           question: normalizedQuestion,
           mode,
           currentAnswer: answerOverride ?? answer,
+          practiceMode,
         }),
       });
 
@@ -484,7 +515,7 @@ export default function HirePilotClient() {
     }
   }
 
-  async function loadHirePilotStatus() {
+  const loadHirePilotStatus = useCallback(async () => {
     try {
       setBillingLoading(true);
       const res = await fetch("/api/user/hirepilot-status", {
@@ -506,9 +537,9 @@ export default function HirePilotClient() {
     } finally {
       setBillingLoading(false);
     }
-  }
+  }, []);
 
-  async function refreshHirePilotAccess(sessionId: string) {
+  const refreshHirePilotAccess = useCallback(async (sessionId: string) => {
     try {
       setBillingLoading(true);
 
@@ -540,7 +571,19 @@ export default function HirePilotClient() {
     } finally {
       setBillingLoading(false);
     }
-  }
+  }, [loadHirePilotStatus]);
+
+  useEffect(() => {
+    void loadHirePilotStatus();
+  }, [loadHirePilotStatus]);
+
+  useEffect(() => {
+    if (checkoutState !== "success" || !checkoutSessionId) {
+      return;
+    }
+
+    void refreshHirePilotAccess(checkoutSessionId);
+  }, [checkoutSessionId, checkoutState, refreshHirePilotAccess]);
 
   async function ensureInterviewSession() {
     if (interviewSessionStarted) {
@@ -608,6 +651,7 @@ export default function HirePilotClient() {
 
     try {
       recognition.start();
+      setIsInfoPanelCollapsed(true);
     } catch {
       keepListeningRef.current = false;
       setStatusMessage("Unable to start microphone listening.");
@@ -633,7 +677,10 @@ export default function HirePilotClient() {
     }
   }
 
-  async function handlePracticeQuestion(nextIndex?: number) {
+  async function handlePracticeQuestion(
+    nextIndex?: number,
+    options?: { forceGenerate?: boolean }
+  ) {
     const safeIndex = typeof nextIndex === "number" ? nextIndex : practiceIndex;
     const question = practiceQuestions[safeIndex] ?? practiceQuestions[0];
     const normalizedQuestion =
@@ -645,16 +692,14 @@ export default function HirePilotClient() {
     transcriptRef.current = "";
     combinedTranscriptRef.current = "";
     setRequestError(null);
+    setAnswer("");
+    setResponseSource(null);
+    setTips(defaultTips);
 
-    if (!hasPaidHirePilotAccess) {
-      setAnswer("");
-      setResponseSource(null);
-      setTips(defaultTips);
-      return;
-    }
-
-    if (autoGeneratePractice) {
-      void generateAnswer(normalizedQuestion, "default");
+    if (options?.forceGenerate || autoGeneratePractice) {
+      void generateAnswer(normalizedQuestion, "default", undefined, {
+        practiceMode: true,
+      });
     }
   }
 
@@ -675,100 +720,129 @@ export default function HirePilotClient() {
       <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <Card className="overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl">
-              <CardHeader className="gap-6 border-b border-white/10 px-6 py-7 sm:px-8">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge className="border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
-                      HirePilot AI
-                    </Badge>
-                    <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
-                      Interview Assistant
-                    </Badge>
-                    <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
-                      {accessBadgeLabel}
-                    </Badge>
-                  </div>
-                  <div className="space-y-3">
-                    <CardTitle className="space-y-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                      <span className="flex items-center gap-3">
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500">
-                          <PaperAirplaneIcon className="h-5 w-5 text-white" />
-                        </span>
-                        <span>HirePilot</span>
+            {isInfoPanelCollapsed ? (
+              <Card className="rounded-[24px] border border-white/12 bg-white/[0.06] shadow-[0_16px_40px_rgba(5,8,22,0.35)] backdrop-blur-xl transition-all duration-200">
+                <CardContent className="flex items-center justify-between gap-4 px-5 py-4 sm:px-6">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-500">
+                        <PaperAirplaneIcon className="h-4 w-4 text-white" />
                       </span>
-                      <span className="block">AI Interview Assistant</span>
-                    </CardTitle>
-                    <CardDescription className="max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">
-                      HirePilot listens to interview questions in real time and suggests
-                      strong, personalized answers based on your resume, skills, and
-                      experience.
-                    </CardDescription>
-                  </div>
-                </div>
-
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-end">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {[
-                      "Real-time interview listening",
-                      "AI generated answer suggestions",
-                      "Resume-aware responses",
-                      "Behavioral question guidance",
-                      "Confidence coaching",
-                    ].map((feature) => (
-                      <div
-                        key={feature}
-                        className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
-                      >
-                        {feature}
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-white">HirePilot</div>
+                        <div className="truncate text-xs text-slate-300">
+                          {isListening ? "Listening..." : accessBadgeLabel}
+                        </div>
                       </div>
-                    ))}
+                    </div>
                   </div>
 
+                  <button
+                    type="button"
+                    onClick={() => setIsInfoPanelCollapsed(false)}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 hover:text-white"
+                    aria-label="Expand HirePilot panel"
+                  >
+                    <ChevronDownIcon className="h-5 w-5" />
+                  </button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl transition-all duration-200">
+                <CardHeader className="gap-6 border-b border-white/10 px-6 py-7 sm:px-8">
                   <div className="space-y-3">
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        setActiveMode("live");
-                        void startListening();
-                      }}
-                      disabled={startingInterview}
-                      className="w-full rounded-xl bg-sky-600 text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] hover:bg-sky-500"
-                    >
-                      <MicrophoneIcon className="h-5 w-5" />
-                      {startingInterview ? "Starting..." : "Start HirePilot"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setActiveMode("practice");
-                        void handlePracticeQuestion(0);
-                      }}
-                      disabled={startingInterview}
-                      className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                    >
-                      <SparklesIcon className="h-5 w-5" />
-                      View Demo
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {["Uses profile", "Uses resume", "Uses experience", "Uses skills"].map(
-                    (item) => (
-                      <Badge
-                        key={item}
-                        variant="outline"
-                        className="border-sky-300/20 bg-sky-500/10 text-sky-100"
-                      >
-                        {item}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge className="border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
+                        HirePilot AI
                       </Badge>
-                    )
-                  )}
-                </div>
-              </CardHeader>
-            </Card>
+                      <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
+                        Interview Assistant
+                      </Badge>
+                      <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
+                        {accessBadgeLabel}
+                      </Badge>
+                    </div>
+                    <div className="space-y-3">
+                      <CardTitle className="space-y-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                        <span className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500">
+                            <PaperAirplaneIcon className="h-5 w-5 text-white" />
+                          </span>
+                          <span>HirePilot</span>
+                        </span>
+                        <span className="block">AI Interview Assistant</span>
+                      </CardTitle>
+                      <CardDescription className="max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">
+                        HirePilot listens to interview questions in real time and suggests
+                        strong, personalized answers based on your resume, skills, and
+                        experience.
+                      </CardDescription>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-end">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        "Real-time interview listening",
+                        "AI generated answer suggestions",
+                        "Resume-aware responses",
+                        "Behavioral question guidance",
+                        "Confidence coaching",
+                      ].map((feature) => (
+                        <div
+                          key={feature}
+                          className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                        >
+                          {feature}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="space-y-3">
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          setActiveMode("live");
+                          void startListening();
+                        }}
+                        disabled={startingInterview}
+                        className="w-full rounded-xl bg-sky-600 text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] hover:bg-sky-500"
+                      >
+                        <MicrophoneIcon className="h-5 w-5" />
+                        {startingInterview ? "Starting..." : "Start HirePilot"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setActiveMode("practice");
+                          void handlePracticeQuestion(0);
+                        }}
+                        disabled={startingInterview}
+                        className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                      >
+                        <SparklesIcon className="h-5 w-5" />
+                        View Demo
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {["Uses profile", "Uses resume", "Uses experience", "Uses skills"].map(
+                      (item) => (
+                        <Badge
+                          key={item}
+                          variant="outline"
+                          className="border-sky-300/20 bg-sky-500/10 text-sky-100"
+                        >
+                          {item}
+                        </Badge>
+                      )
+                    )}
+                  </div>
+                </CardHeader>
+              </Card>
+            )}
 
             <div className="space-y-6">
               <div className="inline-flex rounded-2xl border border-white/10 bg-white/[0.05] p-1 shadow-sm backdrop-blur">
@@ -855,6 +929,27 @@ export default function HirePilotClient() {
                       </div>
                     ) : null}
 
+                    {hasPaidHirePilotAccess && !billingStatus.hirePilotUnlimited ? (
+                      <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+                        Each live interview session uses 1 HirePilot credit. Monthly credits are
+                        used first, then purchased credits.
+                      </div>
+                    ) : null}
+
+                    {billingStatus.lowBalance ? (
+                      <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                        Low balance: you have {billingStatus.hirePilotCredits} HirePilot credit
+                        {billingStatus.hirePilotCredits === 1 ? "" : "s"} remaining.
+                      </div>
+                    ) : null}
+
+                    {billingStatus.hasExpiringCredits ? (
+                      <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                        Some purchased HirePilot credits are expiring soon. Review your balance in
+                        Settings before they roll off.
+                      </div>
+                    ) : null}
+
                     {micError ? (
                       <div className="rounded-2xl border border-red-300/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                         {micError}
@@ -912,6 +1007,12 @@ export default function HirePilotClient() {
                       </div>
                     )}
 
+                    {requestError?.toLowerCase().includes("upload your resume") ? (
+                      <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                        Please upload your resume to use practice questions.
+                      </div>
+                    ) : null}
+
                     <div className="rounded-2xl border border-sky-300/20 bg-sky-500/10 p-5">
                       <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
                         HirePilot asks
@@ -924,7 +1025,7 @@ export default function HirePilotClient() {
                     <div className="flex flex-wrap gap-3">
                       <Button
                         type="button"
-                        onClick={() => void handlePracticeQuestion()}
+                        onClick={() => void handlePracticeQuestion(undefined, { forceGenerate: true })}
                         disabled={startingInterview}
                         className="rounded-xl bg-sky-600 px-5 py-3 text-white hover:bg-sky-500"
                       >
@@ -956,7 +1057,7 @@ export default function HirePilotClient() {
               </CardHeader>
               <CardContent>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 text-lg font-medium text-white">
-                  "{detectedQuestionText}"
+                  {detectedQuestionText}
                 </div>
               </CardContent>
             </Card>
@@ -985,7 +1086,11 @@ export default function HirePilotClient() {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => generateAnswer(detectedQuestion, "shorten")}
+                      onClick={() =>
+                        generateAnswer(detectedQuestion, "shorten", undefined, {
+                          practiceMode: activeMode === "practice",
+                        })
+                      }
                       disabled={!detectedQuestion || answerActionsDisabled}
                       className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                     >
@@ -994,7 +1099,11 @@ export default function HirePilotClient() {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => generateAnswer(detectedQuestion, "expand")}
+                      onClick={() =>
+                        generateAnswer(detectedQuestion, "expand", undefined, {
+                          practiceMode: activeMode === "practice",
+                        })
+                      }
                       disabled={!detectedQuestion || answerActionsDisabled}
                       className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                     >
@@ -1002,7 +1111,11 @@ export default function HirePilotClient() {
                     </Button>
                     <Button
                       type="button"
-                      onClick={() => generateAnswer(detectedQuestion, "professional")}
+                      onClick={() =>
+                        generateAnswer(detectedQuestion, "professional", undefined, {
+                          practiceMode: activeMode === "practice",
+                        })
+                      }
                       disabled={!detectedQuestion || answerActionsDisabled}
                       className="rounded-xl bg-sky-600 text-white hover:bg-sky-500"
                     >
@@ -1108,7 +1221,36 @@ export default function HirePilotClient() {
                     ? "Unlimited plan active."
                     : billingStatus.hirePilotCredits > 0
                     ? `${billingStatus.hirePilotCredits} credits remaining.`
-                    : "Practice questions are free. Live HirePilot access is not active."}
+                    : billingStatus.productKey === "hirepilot_monthly" &&
+                        billingStatus.status === "active"
+                      ? "HirePilot subscription is active, but no credits are available right now."
+                      : "Practice questions are free. Live HirePilot access is not active."}
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                  <div>Monthly credits: {monthlyCreditBucket}</div>
+                  <div className="mt-1">Purchased credits: {billingStatus.purchasedCredits ?? 0}</div>
+                  {billingStatus.nextMonthlyResetAt ? (
+                    <div className="mt-1 text-xs text-slate-400">
+                      Next monthly reset:{" "}
+                      {new Date(billingStatus.nextMonthlyResetAt).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </div>
+                  ) : null}
+                  {billingStatus.earliestPurchasedExpiryAt ? (
+                    <div className="mt-1 text-xs text-slate-400">
+                      Earliest purchased expiry:{" "}
+                      {new Date(
+                        billingStatus.earliestPurchasedExpiryAt
+                      ).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
                   Start a live session for real-time listening, or use practice mode for demo

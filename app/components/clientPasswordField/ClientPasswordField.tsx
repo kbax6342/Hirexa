@@ -2,7 +2,6 @@
 "use client";
 
 import { useState } from "react";
-import ClientPasswordField1 from "@/components/clientPasswordField/ClientPasswordField";
 
 export default function ClientPasswordField() {
   const [show, setShow] = useState(false);

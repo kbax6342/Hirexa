@@ -1,27 +1,21 @@
 import { NextResponse } from "next/server";
+import {
+  fetchGreenhouseListings,
+  filterGreenhouseJobs,
+  type GreenhouseBoardConfig,
+  type GreenhouseNormalizedJob,
+  type GreenhouseWarning,
+} from "../../../lib/jobs/fetchGreenhouseJobs";
 
 export const runtime = "nodejs";
 export const revalidate = 0;
 
 type JobCategory = "tech" | "healthcare" | "finance" | "trades";
 
-type Job = {
-  source: "greenhouse";
-  sourceId: string;
-  board: string;
-  companyLabel: string;
-  title: string;
-  location: string | null;
-  department: string | null;
-  absoluteUrl: string;
-  updatedAt: string | null;
+type Job = Omit<GreenhouseNormalizedJob<JobCategory>, "category"> & {
   category: JobCategory;
 };
-
-type Warning = {
-  board: string;
-  error: string;
-};
+type Warning = GreenhouseWarning;
 
 type JobsResponse = {
   jobs: Job[];
@@ -34,15 +28,11 @@ type JobsResponse = {
   };
 };
 
-type BoardConfig = {
-  board: string;
+type BoardConfig = GreenhouseBoardConfig<JobCategory> & {
   label: string;
   category: JobCategory;
 };
 
-/** --------------------------
- * Your curated lists
- * -------------------------- */
 const techCompanies = [
   "stripe",
   "airbnb",
@@ -109,15 +99,6 @@ const tradesCompanies = [
   "aurorainnovation",
 ] as const;
 
-/** --------------------------
- * Helpers to build BOARDS
- * -------------------------- */
-function toTitleCaseSlug(slug: string) {
-  // "himsandhers" -> "Himsandhers" (simple)
-  // If you want prettier labels for specific companies, add overrides below.
-  return slug.charAt(0).toUpperCase() + slug.slice(1);
-}
-
 const LABEL_OVERRIDES: Record<string, string> = {
   himsandhers: "Hims & Hers",
   openai: "OpenAI",
@@ -133,13 +114,20 @@ const LABEL_OVERRIDES: Record<string, string> = {
   commonenergy: "Common Energy",
 };
 
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+const responseCache = new Map<string, { expiresAt: number; value: JobsResponse }>();
+
+function toTitleCaseSlug(slug: string) {
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
 function makeBoards(): BoardConfig[] {
   const map = new Map<string, BoardConfig>();
 
   const addList = (category: JobCategory, slugs: readonly string[]) => {
     for (const slug of slugs) {
-      if (!slug) continue;
-      if (map.has(slug)) continue; // dedupe if it appears in multiple lists
+      if (!slug || map.has(slug)) continue;
       map.set(slug, {
         board: slug,
         label: LABEL_OVERRIDES[slug] ?? toTitleCaseSlug(slug),
@@ -158,23 +146,6 @@ function makeBoards(): BoardConfig[] {
 
 const BOARDS = makeBoards() as readonly BoardConfig[];
 
-/** --------------------------
- * Caching & concurrency
- * -------------------------- */
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const MAX_CONCURRENCY = 5;
-
-const responseCache = new Map<string, { expiresAt: number; value: JobsResponse }>();
-
-type GreenhouseJobPayload = {
-  id: number | string;
-  title?: string;
-  location?: { name?: string };
-  departments?: Array<{ name?: string }>;
-  absolute_url?: string;
-  updated_at?: string;
-};
-
 function parseCategory(value: string | null): JobCategory | null {
   if (!value) return null;
   if (value === "tech" || value === "healthcare" || value === "finance" || value === "trades") {
@@ -183,108 +154,14 @@ function parseCategory(value: string | null): JobCategory | null {
   return null;
 }
 
-function normalizeBoardJob(board: BoardConfig, job: GreenhouseJobPayload): Job | null {
-  if (!job.absolute_url || !job.title || job.id === undefined || job.id === null) {
-    return null;
-  }
-
-  return {
-    source: "greenhouse",
-    sourceId: `${board.board}:${String(job.id)}`,
-    board: board.board,
-    companyLabel: board.label,
-    title: job.title,
-    location: job.location?.name ?? null,
-    department: job.departments?.[0]?.name ?? null,
-    absoluteUrl: job.absolute_url,
-    updatedAt: job.updated_at ?? null,
-    category: board.category,
-  };
-}
-
-function makeLimiter(maxConcurrent: number) {
-  let activeCount = 0;
-  const queue: Array<() => void> = [];
-
-  const next = () => {
-    activeCount -= 1;
-    const run = queue.shift();
-    if (run) run();
-  };
-
-  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
-    if (activeCount >= maxConcurrent) {
-      await new Promise<void>((resolve) => queue.push(resolve));
-    }
-
-    activeCount += 1;
-    try {
-      return await task();
-    } finally {
-      next();
-    }
-  };
-}
-
-async function fetchBoardJobs(board: BoardConfig): Promise<Job[]> {
-  const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board.board)}/jobs`;
-
-  const response = await fetch(url, {
-    headers: { accept: "application/json" },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Greenhouse API ${response.status}`);
-  }
-
-  const payload = (await response.json()) as { jobs?: GreenhouseJobPayload[] };
-  const rawJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-
-  return rawJobs
-    .map((job) => normalizeBoardJob(board, job))
-    .filter((job): job is Job => job !== null);
-}
-
-function matchesSearch(job: Job, query: string): boolean {
-  if (!query) return true;
-  const haystack = `${job.title} ${job.companyLabel} ${job.location ?? ""} ${job.department ?? ""}`.toLowerCase();
-  return haystack.includes(query);
-}
-
-function normalizeSearchText(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function matchesLocation(job: Job, location: string) {
-  if (!location) return true;
-
-  const normalizedLocation = normalizeSearchText(location);
-  const normalizedJobLocation = normalizeSearchText(job.location ?? "");
-
-  if (!normalizedLocation || !normalizedJobLocation) return !normalizedLocation;
-  if (normalizedJobLocation.includes(normalizedLocation)) return true;
-
-  const significantTokens = normalizedLocation
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length > 2);
-
-  if (significantTokens.length === 0) {
-    return normalizedJobLocation.includes(normalizedLocation);
-  }
-
-  return significantTokens.every((token) => normalizedJobLocation.includes(token));
-}
-
 function getCacheKey(params: {
   q: string;
   location: string;
   category: JobCategory | null;
   limit: number;
   offset: number;
-}): string {
-  const boardKey = BOARDS.map((b) => `${b.board}:${b.category}`).join(",");
+}) {
+  const boardKey = BOARDS.map((board) => `${board.board}:${board.category}`).join(",");
   return JSON.stringify({ boardKey, ...params });
 }
 
@@ -300,36 +177,16 @@ export async function GET(request: Request) {
   const cacheKey = getCacheKey({ q, location, category, limit, offset });
   const cached = responseCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[jobs:greenhouse] routeCache=hit");
+    }
     return NextResponse.json(cached.value);
   }
 
-  const limitRun = makeLimiter(MAX_CONCURRENCY);
+  const greenhouse = await fetchGreenhouseListings(BOARDS);
+  const mergedJobs = greenhouse.jobs.filter((job): job is Job => job.category !== null);
 
-  const boardResults = await Promise.allSettled(
-    BOARDS.map((board) =>
-      limitRun(async () => ({
-        board: board.board,
-        jobs: await fetchBoardJobs(board),
-      })),
-    ),
-  );
-
-  const warnings: Warning[] = [];
-  const mergedJobs: Job[] = [];
-
-  boardResults.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      mergedJobs.push(...result.value.jobs);
-      return;
-    }
-
-    warnings.push({
-      board: BOARDS[index]?.board ?? "unknown",
-      error: result.reason instanceof Error ? result.reason.message : "Unknown fetch error",
-    });
-  });
-
-  if (mergedJobs.length === 0 && warnings.length === BOARDS.length) {
+  if (mergedJobs.length === 0 && greenhouse.warnings.length === BOARDS.length) {
     return NextResponse.json(
       {
         jobs: [],
@@ -338,27 +195,26 @@ export async function GET(request: Request) {
           offset,
           limit,
           fetchedAt: new Date().toISOString(),
-          warnings,
+          warnings: greenhouse.warnings,
         },
       } satisfies JobsResponse,
-      { status: 502 },
+      { status: 502 }
     );
   }
 
-  const filtered = mergedJobs.filter((job) => {
-    if (category && job.category !== category) return false;
-    if (!matchesSearch(job, q)) return false;
-    return matchesLocation(job, location);
-  });
+  const filtered = filterGreenhouseJobs(mergedJobs, {
+    query: q,
+    location,
+    category,
+  }) as Job[];
 
-  // Optional: sort by updatedAt desc if present (fallback stable)
   filtered.sort((a, b) => {
     const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
     const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
     return bt - at;
   });
 
-  const paginated = filtered.slice(offset, offset + limit);
+  const paginated = filtered.slice(offset, offset + limit) as Job[];
 
   const body: JobsResponse = {
     jobs: paginated,
@@ -367,11 +223,14 @@ export async function GET(request: Request) {
       offset,
       limit,
       fetchedAt: new Date().toISOString(),
-      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(greenhouse.warnings.length > 0 ? { warnings: greenhouse.warnings } : {}),
     },
   };
 
-  responseCache.set(cacheKey, { value: body, expiresAt: Date.now() + CACHE_TTL_MS });
+  responseCache.set(cacheKey, {
+    value: body,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
 
   return NextResponse.json(body);
 }

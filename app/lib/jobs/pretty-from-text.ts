@@ -1,105 +1,358 @@
-import type { JobPretty } from "@/app/lib/jobs/types";
+import type { JobDetail, JobPretty, JobPrettySection, JobSource } from "@/app/lib/jobs/types";
+import { normalizeJobDescriptionText } from "@/app/lib/jobs/normalize-job-description";
 
-function splitLines(s: string) {
-  return s
-    .split(/\r?\n/)
-    .map((l) => l.trim())
+type PrettyFromDescriptionOptions = {
+  source?: JobSource | null;
+  detail?: Partial<JobDetail> | null;
+};
+
+type PrettySection = JobPretty["sections"][number];
+
+type HeadingMatch = {
+  title: string;
+  kindHint?: JobPrettySection["kind"];
+};
+
+const BULLET_SECTION_TITLES = new Set([
+  "Responsibilities",
+  "Qualifications",
+  "Preferred Qualifications",
+  "Benefits",
+  "Required Documents",
+  "How You Will Be Evaluated",
+  "Example Projects",
+]);
+
+const SMALLPRINT_SECTION_TITLES = new Set([
+  "Additional Information",
+  "Equal Opportunity Employer",
+  "Security and Clearance",
+  "Legal Notices",
+]);
+
+const HEADING_RULES: Array<{
+  pattern: RegExp;
+  title: string;
+  kindHint?: JobPrettySection["kind"];
+}> = [
+  { pattern: /^(about us|about the company|company overview|what we believe)$/i, title: "About the Company" },
+  { pattern: /^(about the role|role overview|job description|description)$/i, title: "About the Role" },
+  { pattern: /^(role snapshot|summary|overview)$/i, title: "Overview" },
+  { pattern: /^(what you'll do|what you ll do|responsibilities|position responsibilities|duties|the work)$/i, title: "Responsibilities", kindHint: "bullets" },
+  { pattern: /^(example projects include)$/i, title: "Example Projects", kindHint: "bullets" },
+  { pattern: /^(what you bring|what you'll bring|what you ll bring|you may be a fit if|qualifications|basic qualifications|required qualifications|minimum qualifications)$/i, title: "Qualifications", kindHint: "bullets" },
+  { pattern: /^(desired skills|preferred qualifications|nice to have|bonus points)$/i, title: "Preferred Qualifications", kindHint: "bullets" },
+  { pattern: /^(benefits|benefits \+ perks|benefits and perks|benefits offered|total rewards|perks)$/i, title: "Benefits", kindHint: "bullets" },
+  { pattern: /^(pay transparency notice|pay range|compensation|salary)$/i, title: "Compensation", kindHint: "callout" },
+  { pattern: /^(how to apply|applying|application process)$/i, title: "How to Apply" },
+  { pattern: /^(required documents)$/i, title: "Required Documents", kindHint: "bullets" },
+  { pattern: /^(how you will be evaluated)$/i, title: "How You Will Be Evaluated", kindHint: "bullets" },
+  { pattern: /^(additional information|other important information you should know)$/i, title: "Additional Information", kindHint: "smallprint" },
+  { pattern: /^(equal opportunity employer|equal employment opportunity|eeo statement)$/i, title: "Equal Opportunity Employer", kindHint: "smallprint" },
+  { pattern: /^(security clearance|security clearance statement|clearance statement)$/i, title: "Security and Clearance", kindHint: "smallprint" },
+  { pattern: /^(duties)$/i, title: "Responsibilities", kindHint: "bullets" },
+  { pattern: /^(summary)$/i, title: "Overview" },
+];
+
+function normalizeHeadingKey(line: string) {
+  return line
+    .replace(/[*:_-]+$/g, "")
+    .replace(/^#+\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toTitleCase(value: string) {
+  return value
+    .toLowerCase()
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function matchCanonicalHeading(line: string): HeadingMatch | null {
+  const normalized = normalizeHeadingKey(line);
+  if (!normalized) return null;
+
+  for (const rule of HEADING_RULES) {
+    if (rule.pattern.test(normalized)) {
+      return { title: rule.title, kindHint: rule.kindHint };
+    }
+  }
+
+  const wordCount = normalized.split(/\s+/).length;
+  const uppercaseHeading =
+    normalized.length <= 72 &&
+    wordCount <= 8 &&
+    normalized === normalized.toUpperCase() &&
+    /[A-Z]/.test(normalized);
+
+  if (uppercaseHeading) {
+    return { title: toTitleCase(normalized) };
+  }
+
+  return null;
+}
+
+function looksLikeBulletLine(line: string) {
+  return /^[-*]\s+/.test(line) || /^\d+[\.\)]\s+/.test(line);
+}
+
+function cleanBulletLine(line: string) {
+  return line.replace(/^[-*]\s+/, "").replace(/^\d+[\.\)]\s+/, "").trim();
+}
+
+function splitBlocks(value: string) {
+  return value
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
     .filter(Boolean);
 }
 
-function isHeading(line: string) {
-    const h = line
-      .toLowerCase()
-      .replace(/[:\-–—]+$/g, "")
-      .trim();
-  
-    const headings = [
-      "job description",
-      "position responsibilities",
-      "required qualifications",
-      "preferred qualifications",
-      "security clearance",
-      "visa sponsorship",
-      "travel",
-      "drug free workplace",
-      "total rewards",
-      "pay range",
-      "equal opportunity employer",
-      "conflict of interest",
-      "education",
-      "relocation",
-      "shift",
-      "important dates",
-    ];
-  
-    if (headings.includes(h)) return true;
-  
-    return h.startsWith("applications for this position will be accepted until");
+function toParagraphs(blocks: string[]) {
+  return blocks
+    .map((block) => block.replace(/\n+/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function toBullets(blocks: string[]) {
+  return blocks
+    .flatMap((block) =>
+      block
+        .split(/\n+/)
+        .map((line) => cleanBulletLine(line))
+        .filter(Boolean)
+    )
+    .filter(Boolean);
+}
+
+function isMostlyBullets(blocks: string[]) {
+  const lines = blocks.flatMap((block) =>
+    block
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  );
+
+  if (lines.length < 2) return false;
+
+  const bulletCount = lines.filter(looksLikeBulletLine).length;
+  if (bulletCount >= Math.max(2, Math.ceil(lines.length * 0.5))) {
+    return true;
   }
 
-function toBullets(lines: string[]) {
-  return lines.map((l) => l.replace(/^[-•\u2022]\s*/, "").trim()).filter(Boolean);
+  return lines.length >= 3 && lines.every((line) => line.length <= 160 && !/[.!?]$/.test(line));
 }
 
-function htmlToPrettyText(html: string) {
-  return (
-    html
-      // normalize newlines
-      .replace(/\r\n?/g, "\n")
+function buildSection(
+  title: string,
+  blocks: string[],
+  kindHint?: JobPrettySection["kind"]
+): PrettySection | null {
+  if (!blocks.length) return null;
 
-      // turn paragraphs into blank-line separated blocks
-      .replace(/<\/p>\s*/gi, "\n\n")
-      .replace(/<p[^>]*>\s*/gi, "")
+  if (kindHint === "callout") {
+    const paragraphs = toParagraphs(blocks);
+    if (paragraphs[0]) {
+      return {
+        title,
+        kind: "callout",
+        callout: { value: paragraphs.join(" ") },
+      };
+    }
+  }
 
-      // line breaks
-      .replace(/<br\s*\/?>/gi, "\n")
+  if (kindHint === "smallprint" || SMALLPRINT_SECTION_TITLES.has(title)) {
+    const paragraphs = toParagraphs(blocks);
+    if (!paragraphs.length) return null;
+    return {
+      title,
+      kind: "smallprint",
+      paragraphs,
+    };
+  }
 
-      // list items -> "- "
-      .replace(/<li[^>]*>\s*/gi, "- ")
-      .replace(/<\/li>\s*/gi, "\n")
-      .replace(/<\/?(ul|ol)[^>]*>\s*/gi, "\n")
+  if (kindHint === "bullets" || BULLET_SECTION_TITLES.has(title) || isMostlyBullets(blocks)) {
+    const bullets = toBullets(blocks);
+    if (bullets.length) {
+      return {
+        title,
+        kind: "bullets",
+        bullets,
+      };
+    }
+  }
 
-      // headings / bold -> keep text, remove tags
-      .replace(/<\/?(b|strong|em|i)[^>]*>/gi, "")
+  const paragraphs = toParagraphs(blocks);
+  if (!paragraphs.length) return null;
 
-      // remove any other tags
-      .replace(/<[^>]+>/g, "")
+  return {
+    title,
+    kind: "paragraphs",
+    paragraphs,
+  };
+}
 
-      // basic entity decoding (add more if needed)
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
+function extractSections(
+  text: string,
+  source?: JobSource | null
+): PrettySection[] {
+  const blocks = splitBlocks(text);
+  if (!blocks.length) return [];
 
-      // trim lines + collapse too many blank lines
-      .split("\n")
-      .map((l) => l.trim())
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
+  const sections: PrettySection[] = [];
+  let currentTitle =
+    source === "ashby" || source === "remoteok" ? "About the Role" : "Overview";
+  let currentKindHint: JobPrettySection["kind"] | undefined;
+  let currentBlocks: string[] = [];
+
+  const flush = () => {
+    const section = buildSection(currentTitle, currentBlocks, currentKindHint);
+    if (section) sections.push(section);
+    currentBlocks = [];
+    currentKindHint = undefined;
+  };
+
+  for (const block of blocks) {
+    const lines = block
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (!lines.length) continue;
+
+    const standaloneHeading = lines.length === 1 ? matchCanonicalHeading(lines[0]) : null;
+    if (standaloneHeading) {
+      flush();
+      currentTitle = standaloneHeading.title;
+      currentKindHint = standaloneHeading.kindHint;
+      continue;
+    }
+
+    const firstLineHeading = matchCanonicalHeading(lines[0]);
+    if (firstLineHeading && lines.length > 1) {
+      flush();
+      currentTitle = firstLineHeading.title;
+      currentKindHint = firstLineHeading.kindHint;
+      currentBlocks.push(lines.slice(1).join("\n"));
+      continue;
+    }
+
+    const inlineLabel = lines[0].match(/^([A-Za-z][A-Za-z0-9/&(),'\- ]{2,45}):\s+(.+)$/);
+    if (inlineLabel) {
+      const inlineHeading = matchCanonicalHeading(inlineLabel[1]);
+      if (inlineHeading) {
+        flush();
+        currentTitle = inlineHeading.title;
+        currentKindHint = inlineHeading.kindHint;
+        currentBlocks.push(inlineLabel[2]);
+        continue;
+      }
+    }
+
+    currentBlocks.push(block);
+  }
+
+  flush();
+  return sections;
+}
+
+function addHighlight(
+  highlights: JobPretty["highlights"],
+  label: string,
+  value: string | null | undefined
+) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return;
+  if (highlights.some((item) => item.label === label && item.value === normalized)) {
+    return;
+  }
+  highlights.push({ label, value: normalized });
+}
+
+function extractHighlights(
+  text: string,
+  options?: PrettyFromDescriptionOptions
+) {
+  const highlights: JobPretty["highlights"] = [];
+  const detail = options?.detail;
+
+  addHighlight(highlights, "Compensation", detail?.salaryText ?? detail?.salary);
+  addHighlight(highlights, "Employment", detail?.employmentType);
+
+  const metadata = detail?.metadata ?? {};
+  addHighlight(highlights, "Telework", metadata.telework ? String(metadata.telework) : null);
+  addHighlight(highlights, "Travel", metadata.travel ? String(metadata.travel) : null);
+  addHighlight(
+    highlights,
+    "Clearance",
+    metadata.securityClearance ? String(metadata.securityClearance) : null
   );
+  addHighlight(highlights, "Deadline", metadata.closingDate ? String(metadata.closingDate) : null);
+
+  if (detail?.remote) {
+    addHighlight(highlights, "Workplace", "Remote eligible");
+  }
+
+  if (!highlights.some((item) => item.label === "Compensation")) {
+    const payMatch = text.match(
+      /\$[\d,]+(?:\.\d+)?\s*(?:-|to)\s*\$[\d,]+(?:\.\d+)?(?:\s*(?:per hour|per year|annually|hourly))?/i
+    );
+    if (payMatch?.[0]) {
+      addHighlight(highlights, "Compensation", payMatch[0]);
+    }
+  }
+
+  if (!highlights.some((item) => item.label === "Deadline")) {
+    const deadlineMatch = text.match(
+      /(?:accepted until|application close date|closing date)[:\s]+([A-Za-z]{3,}\s+\d{1,2},\s+\d{4})/i
+    );
+    if (deadlineMatch?.[1]) {
+      addHighlight(highlights, "Deadline", deadlineMatch[1]);
+    }
+  }
+
+  if (!highlights.some((item) => item.label === "Clearance")) {
+    const clearanceMatch = text.match(
+      /\b(top secret|secret|confidential|public trust|security clearance)\b/i
+    );
+    if (clearanceMatch?.[1]) {
+      addHighlight(highlights, "Clearance", clearanceMatch[1]);
+    }
+  }
+
+  if (
+    !highlights.some((item) => item.label === "Workplace") &&
+    /\b(remote|telework|hybrid|onsite)\b/i.test(text)
+  ) {
+    const workplaceMatch = text.match(/\b(remote|telework eligible|hybrid|onsite)\b/i);
+    if (workplaceMatch?.[1]) {
+      addHighlight(highlights, "Workplace", workplaceMatch[1]);
+    }
+  }
+
+  return highlights;
 }
 
-function toPlainDescription(description: string) {
-  return description.includes("<") ? htmlToPrettyText(description) : description;
-}
+function normalizeSections(sections: PrettySection[]) {
+  const seen = new Set<string>();
 
-function trimAfterApplyCta(lines: string[]) {
-  const stopIndex = lines.findIndex((line) => /\bapply for this job\b/i.test(line));
-  return stopIndex >= 0 ? lines.slice(0, stopIndex) : lines;
-}
-
-function looksLikeLocationLine(line: string) {
-  if (/^location\s*:/i.test(line)) return true;
-  if (/\bremote\b/i.test(line)) return true;
-  return /,\s*[A-Z]{2}\b/.test(line);
+  return sections.filter((section) => {
+    const key = `${section.title}:${JSON.stringify(section)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function extractCompanyLocationFromDescription(description: string) {
-  const normalized = toPlainDescription(description);
-  const lines = trimAfterApplyCta(splitLines(normalized)).slice(0, 24);
+  const normalized = normalizeJobDescriptionText(description);
+  const lines = normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 24);
 
   let company: string | undefined;
   let location: string | undefined;
@@ -117,7 +370,7 @@ export function extractCompanyLocationFromDescription(description: string) {
         continue;
       }
 
-      if (looksLikeLocationLine(line) && !isHeading(line)) {
+      if (/\bremote\b/i.test(line) || /,\s*[A-Z]{2}\b/.test(line)) {
         location = line.replace(/^location\s*:\s*/i, "").trim();
       }
     }
@@ -128,59 +381,25 @@ export function extractCompanyLocationFromDescription(description: string) {
   return { company, location };
 }
 
-export function prettyFromDescription(description: string): JobPretty {
-  const normalized = toPlainDescription(description);
+export function prettyFromDescription(
+  description: string,
+  options: PrettyFromDescriptionOptions = {}
+): JobPretty {
+  const normalized = normalizeJobDescriptionText(description, {
+    source: options.source ?? options.detail?.source ?? null,
+  });
 
-  const lines = trimAfterApplyCta(splitLines(normalized));
-  if (!lines.length) return { sections: [], highlights: [] };
- 
-
-  // Build sections by headings
-  const sections: JobPretty["sections"] = [];
-  let currentTitle: string | null = null;
-  let buf: string[] = [];
-
-  const flush = () => {
-    if (!currentTitle) return;
-    const content = buf.slice();
-    buf = [];
-
-    // Decide bullets vs paragraphs
-    const looksBullety =
-      content.length >= 3 &&
-      content.every((l) => l.length < 220); // heuristic
-
-    if (looksBullety && /responsibilities|qualifications/i.test(currentTitle)) {
-      sections.push({ title: currentTitle, kind: "bullets", bullets: toBullets(content) });
-    } else {
-      sections.push({ title: currentTitle, kind: "paragraphs", paragraphs: content });
-    }
-  };
-
-  for (const line of lines) {
-    if (isHeading(line)) {
-      flush();
-      currentTitle = line
-        .replace(/^applications for this position will be accepted until/i, "Important Dates")
-        .trim();
-      continue;
-    }
-    // If no heading yet, default into Job Description
-    if (!currentTitle) currentTitle = "Job Description";
-    buf.push(line);
+  if (!normalized) {
+    return { sections: [], highlights: [] };
   }
-  flush();
 
-  // Highlights (optional)
-  const highlights: JobPretty["highlights"] = [];
-  const pay = description.match(/\$[\d,]{2,}\s*[–-]\s*\$[\d,]{2,}/);
-  if (pay) highlights.push({ label: "Pay Range", value: pay[0] });
+  const sections = normalizeSections(
+    extractSections(normalized, options.source ?? options.detail?.source ?? null)
+  );
+  const highlights = extractHighlights(normalized, options);
 
-  const deadline = description.match(/accepted until\s+([A-Za-z]{3,}\.?\s+\d{1,2},\s+\d{4})/i);
-  if (deadline) highlights.push({ label: "Deadline", value: deadline[1] });
-
-  const clearance = description.match(/Top Secret|Secret|Security Clearance/i);
-  if (clearance) highlights.push({ label: "Clearance", value: "Security clearance required" });
-
-  return { sections, highlights };
+  return {
+    sections,
+    highlights,
+  };
 }

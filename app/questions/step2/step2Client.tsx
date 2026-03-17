@@ -10,7 +10,9 @@ declare global {
   interface Window {
     Dropbox?: {
       choose: (options: {
-        success: (files: any[]) => void;
+        success: (
+          files: Array<{ link: string; name: string }>
+        ) => void;
         cancel?: () => void;
         linkType?: "direct" | "preview";
         multiselect?: boolean;
@@ -372,7 +374,7 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
     }
 
     window.Dropbox.choose({
-      success: async (files: any[]) => {
+      success: async (files: Array<{ link: string; name: string }>) => {
         const selectedFile = files[0];
         const response = await fetch(selectedFile.link);
         const blob = await response.blob();

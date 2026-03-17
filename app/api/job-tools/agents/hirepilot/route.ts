@@ -18,6 +18,7 @@ type HirePilotRequest = {
   question?: string;
   mode?: RewriteMode;
   currentAnswer?: string | null;
+  practiceMode?: boolean;
 };
 
 const hirePilotProfileSelect = {
@@ -318,42 +319,46 @@ export async function POST(req: Request) {
 
     const cookieStore = await cookies();
     const sessionCookie = cookieStore.get(HIREPILOT_SESSION_COOKIE)?.value ?? null;
-
-    if (!sessionCookie) {
-      const status = await getHirePilotBillingStatus(userId);
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "HirePilot access required",
-          hirePilotUnlimited: status.hirePilotUnlimited,
-          hirePilotCredits: status.hirePilotCredits,
-        },
-        { status: 403 }
-      );
-    }
-
-    const activeUsage = await prisma.hirePilotUsage.findFirst({
-      where: {
-        id: sessionCookie,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!activeUsage) {
-      const status = await getHirePilotBillingStatus(userId);
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "HirePilot access required",
-          hirePilotUnlimited: status.hirePilotUnlimited,
-          hirePilotCredits: status.hirePilotCredits,
-        },
-        { status: 403 }
-      );
-    }
-
     const body = (await req.json()) as HirePilotRequest;
+    const practiceMode = Boolean(body.practiceMode);
+
+    if (!practiceMode && !sessionCookie) {
+      const status = await getHirePilotBillingStatus(userId);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "HirePilot access required",
+          hirePilotUnlimited: status.hirePilotUnlimited,
+          hirePilotCredits: status.hirePilotCredits,
+        },
+        { status: 403 }
+      );
+    }
+
+    const activeUsage =
+      !practiceMode && sessionCookie
+        ? await prisma.hirePilotUsage.findFirst({
+            where: {
+              id: sessionCookie,
+              userId,
+            },
+            select: { id: true },
+          })
+        : null;
+
+    if (!practiceMode && !activeUsage) {
+      const status = await getHirePilotBillingStatus(userId);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "HirePilot access required",
+          hirePilotUnlimited: status.hirePilotUnlimited,
+          hirePilotCredits: status.hirePilotCredits,
+        },
+        { status: 403 }
+      );
+    }
+
     const question = normalizeQuestion(trimText(body.question).slice(0, 500));
     const mode: RewriteMode =
       body.mode === "shorten" ||
@@ -374,6 +379,16 @@ export async function POST(req: Request) {
       where: { userId },
       select: hirePilotProfileSelect,
     });
+
+    if (practiceMode && !profile?.resume) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Please upload your resume to use practice questions.",
+        },
+        { status: 400 }
+      );
+    }
 
     const context = buildContextSummary(profile);
     const fallbackTips = buildTips(question);

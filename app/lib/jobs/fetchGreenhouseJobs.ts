@@ -1,6 +1,14 @@
-export type JobCategory = "tech" | "healthcare" | "finance" | "trades";
+import "server-only";
 
-export type Job = {
+import { cleanText, humanizeSlug } from "./sources/common";
+
+export type GreenhouseBoardConfig<TCategory extends string = string> = {
+  board: string;
+  label?: string | null;
+  category?: TCategory | null;
+};
+
+export type GreenhouseNormalizedJob<TCategory extends string = string> = {
   source: "greenhouse";
   sourceId: string;
   board: string;
@@ -10,50 +18,294 @@ export type Job = {
   department: string | null;
   absoluteUrl: string;
   updatedAt: string | null;
-  category: JobCategory;
+  category: TCategory | null;
 };
 
-export type FetchGreenhouseJobsParams = {
-  q?: string;
-  category?: JobCategory;
-  limit?: number;
-  offset?: number;
+export type GreenhouseWarning = {
+  board: string;
+  error: string;
 };
 
-export type FetchGreenhouseJobsResponse = {
-  jobs: Job[];
-  meta: {
-    total: number;
-    offset: number;
-    limit: number;
-    fetchedAt: string;
-    warnings?: Array<{ board: string; error: string }>;
+type GreenhouseJobPayload = {
+  id?: string | number;
+  title?: string | null;
+  location?: { name?: string | null } | null;
+  departments?: Array<{ name?: string | null }> | null;
+  absolute_url?: string | null;
+  updated_at?: string | null;
+};
+
+type GreenhousePayload = {
+  jobs?: GreenhouseJobPayload[];
+};
+
+type CachedGreenhouseBoardJob = {
+  jobId: string;
+  title: string;
+  location: string | null;
+  department: string | null;
+  absoluteUrl: string;
+  updatedAt: string | null;
+};
+
+const GREENHOUSE_CACHE_TTL_MS = 10 * 60 * 1000;
+const GREENHOUSE_BOARD_TIMEOUT_MS = 3500;
+const GREENHOUSE_MAX_CONCURRENCY = 5;
+
+const boardCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    jobs: CachedGreenhouseBoardJob[];
+  }
+>();
+
+function normalizeBoardKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function makeLimiter(maxConcurrent: number) {
+  let activeCount = 0;
+  const queue: Array<() => void> = [];
+
+  const next = () => {
+    activeCount -= 1;
+    const run = queue.shift();
+    if (run) run();
   };
-};
 
-// Client helper for calling the Greenhouse aggregate route.
-export async function fetchGreenhouseJobs(
-  params: FetchGreenhouseJobsParams = {},
-): Promise<FetchGreenhouseJobsResponse> {
-  const search = new URLSearchParams();
+  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
+    if (activeCount >= maxConcurrent) {
+      await new Promise<void>((resolve) => queue.push(resolve));
+    }
 
-  if (params.q) search.set("q", params.q);
-  if (params.category) search.set("category", params.category);
-  if (typeof params.limit === "number") search.set("limit", String(params.limit));
-  if (typeof params.offset === "number") search.set("offset", String(params.offset));
+    activeCount += 1;
+    try {
+      return await task();
+    } finally {
+      next();
+    }
+  };
+}
 
-  const query = search.toString();
-  const endpoint = `/api/jobs/greenhouse${query ? `?${query}` : ""}`;
+function dedupeBoards<TCategory extends string>(
+  boards: readonly GreenhouseBoardConfig<TCategory>[]
+) {
+  const seen = new Set<string>();
 
-  const response = await fetch(endpoint, {
-    method: "GET",
-    headers: { accept: "application/json" },
-    cache: "no-store",
+  return boards.filter((board) => {
+    const key = normalizeBoardKey(board.board);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
+}
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch Greenhouse jobs (${response.status})`);
+function normalizeBoardJobs(payload: GreenhousePayload) {
+  const rawJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+
+  return rawJobs
+    .map((job) => {
+      if (!job.absolute_url || !job.title || job.id === undefined || job.id === null) {
+        return null;
+      }
+
+      const departmentNames = Array.isArray(job.departments)
+        ? job.departments.map((department) => department?.name).filter(Boolean)
+        : [];
+
+      return {
+        jobId: String(job.id),
+        title: cleanText(job.title, "Untitled role"),
+        location: cleanText(job.location?.name) || null,
+        department: cleanText(departmentNames.join(" ")) || null,
+        absoluteUrl: cleanText(job.absolute_url),
+        updatedAt: cleanText(job.updated_at) || null,
+      } satisfies CachedGreenhouseBoardJob;
+    })
+    .filter((job): job is CachedGreenhouseBoardJob => job !== null);
+}
+
+async function fetchGreenhouseBoard(board: string): Promise<CachedGreenhouseBoardJob[]> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GREENHOUSE_BOARD_TIMEOUT_MS);
+
+  try {
+    const url = new URL(
+      `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs`
+    );
+    url.searchParams.set("content", "false");
+
+    const response = await fetch(url.toString(), {
+      headers: {
+        accept: "application/json",
+        "user-agent": "Hirexa/1.0",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Greenhouse API ${response.status}`);
+    }
+
+    const payload = (await response.json()) as GreenhousePayload;
+    return normalizeBoardJobs(payload);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Greenhouse board timed out after ${GREENHOUSE_BOARD_TIMEOUT_MS}ms`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function getCachedBoardJobs(board: string) {
+  const key = normalizeBoardKey(board);
+  const cached = boardCache.get(key);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return { jobs: cached.jobs, cacheHit: true };
   }
 
-  return (await response.json()) as FetchGreenhouseJobsResponse;
+  const jobs = await fetchGreenhouseBoard(board);
+  boardCache.set(key, {
+    jobs,
+    expiresAt: Date.now() + GREENHOUSE_CACHE_TTL_MS,
+  });
+
+  return { jobs, cacheHit: false };
+}
+
+function buildCompanyLabel<TCategory extends string>(board: GreenhouseBoardConfig<TCategory>) {
+  return cleanText(board.label) || humanizeSlug(board.board);
+}
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+export function matchesGreenhouseLocation(
+  job: Pick<GreenhouseNormalizedJob, "location">,
+  location: string
+) {
+  if (!location) return true;
+
+  const normalizedLocation = normalizeSearchText(location);
+  const normalizedJobLocation = normalizeSearchText(job.location ?? "");
+
+  if (!normalizedLocation || !normalizedJobLocation) return !normalizedLocation;
+  if (normalizedJobLocation.includes(normalizedLocation)) return true;
+
+  const significantTokens = normalizedLocation
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2);
+
+  if (significantTokens.length === 0) {
+    return normalizedJobLocation.includes(normalizedLocation);
+  }
+
+  return significantTokens.every((token) => normalizedJobLocation.includes(token));
+}
+
+export function filterGreenhouseJobs<TCategory extends string>(
+  jobs: readonly GreenhouseNormalizedJob<TCategory>[],
+  options: {
+    query?: string;
+    location?: string;
+    category?: TCategory | null;
+  }
+) {
+  const query = (options.query ?? "").trim().toLowerCase();
+  const location = (options.location ?? "").trim().toLowerCase();
+
+  return jobs.filter((job) => {
+    if (options.category && job.category !== options.category) return false;
+
+    if (query) {
+      const haystack =
+        `${job.title} ${job.companyLabel} ${job.location ?? ""} ${job.department ?? ""}`.toLowerCase();
+      if (!haystack.includes(query)) {
+        return false;
+      }
+    }
+
+    return matchesGreenhouseLocation(job, location);
+  });
+}
+
+export async function fetchGreenhouseListings<TCategory extends string = string>(
+  boards: readonly GreenhouseBoardConfig<TCategory>[]
+) {
+  const normalizedBoards = dedupeBoards(boards);
+  const runLimited = makeLimiter(GREENHOUSE_MAX_CONCURRENCY);
+
+  const settled = await Promise.allSettled(
+    normalizedBoards.map((board) =>
+      runLimited(async () => {
+        const { jobs, cacheHit } = await getCachedBoardJobs(board.board);
+        return { board, jobs, cacheHit };
+      })
+    )
+  );
+
+  const warnings: GreenhouseWarning[] = [];
+  const jobs: GreenhouseNormalizedJob<TCategory>[] = [];
+  let cacheHits = 0;
+  let cacheMisses = 0;
+
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      if (result.value.cacheHit) {
+        cacheHits += 1;
+      } else {
+        cacheMisses += 1;
+      }
+
+      const companyLabel = buildCompanyLabel(result.value.board);
+      jobs.push(
+        ...result.value.jobs.map((job) => ({
+          source: "greenhouse" as const,
+          sourceId: `${result.value.board.board}:${job.jobId}`,
+          board: result.value.board.board,
+          companyLabel,
+          title: job.title,
+          location: job.location,
+          department: job.department,
+          absoluteUrl: job.absoluteUrl,
+          updatedAt: job.updatedAt,
+          category: result.value.board.category ?? null,
+        }))
+      );
+      return;
+    }
+
+    warnings.push({
+      board: normalizedBoards[index]?.board ?? "unknown",
+      error: result.reason instanceof Error ? result.reason.message : "Unknown fetch error",
+    });
+  });
+
+  if (process.env.NODE_ENV !== "production") {
+    console.info(
+      `[jobs:greenhouse] boards=${normalizedBoards.length} cacheHits=${cacheHits} cacheMisses=${cacheMisses} warnings=${warnings.length}`
+    );
+  }
+
+  warnings.forEach((warning) => {
+    console.warn(`[jobs:greenhouse] board=${warning.board} ${warning.error}`);
+  });
+
+  return {
+    jobs,
+    warnings,
+    meta: {
+      boardCount: normalizedBoards.length,
+      cacheHits,
+      cacheMisses,
+      fetchedAt: new Date().toISOString(),
+    },
+  };
 }

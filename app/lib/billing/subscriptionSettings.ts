@@ -129,6 +129,25 @@ export type SubscriptionSettingsViewModel = {
   };
 };
 
+const EMPTY_HIREPILOT_BILLING_STATUS = {
+  hasHirePilotAccess: false,
+  hirePilotUnlimited: false,
+  hirePilotCredits: 0,
+  monthlyCredits: 0,
+  rolloverCredits: 0,
+  purchasedCredits: 0,
+  productKey: null,
+  status: null,
+  currentPeriodEnd: null,
+  nextMonthlyResetAt: null,
+  earliestPurchasedExpiryAt: null,
+  lowBalance: false,
+  hasExpiringCredits: false,
+  recentUsage: [],
+  monthly: null,
+  credits: null,
+} as const;
+
 function normalizeText(value: string | null | undefined) {
   const text = value?.trim();
   return text ? text : null;
@@ -840,7 +859,13 @@ export async function getSubscriptionSettingsViewModel(args: {
     }),
     readLegacyProfile(args.userId),
     readUserBillingRecords(args.userId),
-    getHirePilotBillingStatus(args.userId),
+    getHirePilotBillingStatus(args.userId).catch((error) => {
+      console.error("[subscription settings] failed to read HirePilot billing status", {
+        userId: args.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return EMPTY_HIREPILOT_BILLING_STATUS;
+    }),
   ]);
 
   if (!user) {

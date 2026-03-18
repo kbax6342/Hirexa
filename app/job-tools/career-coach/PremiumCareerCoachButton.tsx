@@ -24,7 +24,7 @@ export default function PremiumCareerCoachButton({
 
   const handleClick = () => {
     if (!hasPaidAccess) {
-      router.push("/checkout");
+      router.push("/plans/payment");
       return;
     }
 

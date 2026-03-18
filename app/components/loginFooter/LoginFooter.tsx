@@ -9,6 +9,8 @@ const columns: Array<{
     title: "Product",
     links: [
       { label: "How it works", href: "/how-it-works" },
+      { label: "Help Center", href: "/help-center" },
+      { label: "Billing & Credits", href: "/billing-and-credits" },
       { label: "Fraud Awareness", href: "/fraud-awareness" },
     ],
   },
@@ -99,7 +101,7 @@ export default function LoginFooter() {
                 </a>
 
                 <Link
-                  href="/contact"
+                  href="/contact-us"
                   className="inline-flex items-center font-medium text-primary transition-colors hover:text-primary/90"
                 >
                   Contact us →

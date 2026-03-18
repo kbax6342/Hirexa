@@ -77,7 +77,7 @@ export default function HowItWorksPage() {
                 View Smart Matches
               </Link>
               <Link
-                href="/settings/subscription"
+                href="/billing-and-credits"
                 className="inline-flex items-center rounded-full border border-white/25 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/15"
               >
                 Billing & Credits

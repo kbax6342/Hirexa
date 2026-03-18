@@ -7,22 +7,22 @@ export const metadata = {
   
   export default function AIDisclosurePage() {
     return (
-      <div className="min-h-screen ">
+      <div className="min-h-screen bg-slate-950 text-white">
         <main className="mx-auto max-w-4xl px-6 py-20">
   
           {/* Header */}
           <div className="mb-12">
-            <h1 className="text-4xl font-bold tracking-tight text-gray-900">
+            <h1 className="text-4xl font-bold tracking-tight text-white">
               AI Use Disclosure
             </h1>
   
-            <p className="mt-3 text-sm text-gray-500">
+            <p className="mt-3 text-sm text-white/70">
               Last Updated: March 5, 2026
             </p>
           </div>
   
           {/* Content */}
-          <div className="space-y-10 text-gray-700 leading-relaxed">
+          <div className="space-y-10 leading-relaxed text-white/85">
   
             <section>
               <p>
@@ -35,7 +35,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 How Hirexa Uses AI
               </h2>
   
@@ -54,7 +54,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 Human Review
               </h2>
   
@@ -67,7 +67,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 Automated Application Assistance
               </h2>
   
@@ -80,7 +80,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 Limitations of AI
               </h2>
   
@@ -99,7 +99,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 Responsible AI Use
               </h2>
   
@@ -112,7 +112,7 @@ export const metadata = {
             </section>
   
             <section>
-              <h2 className="text-xl font-semibold text-gray-900 mb-3">
+              <h2 className="mb-3 text-xl font-semibold text-white">
                 Questions
               </h2>
   
@@ -121,7 +121,7 @@ export const metadata = {
                 please contact us:
               </p>
   
-              <p className="mt-3 font-medium">
+              <p className="mt-3 font-medium text-white">
                 support@hirexa.ai
               </p>
             </section>

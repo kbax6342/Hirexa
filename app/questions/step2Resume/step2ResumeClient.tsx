@@ -240,8 +240,8 @@ export default function Step2ResumeClient() {
             Back
           </Link>
 
-          <Link href="/onboarding/job-interest" className="rounded-full bg-blue-600 px-6 py-3 text-sm font-semibold text-white">
-            Next
+          <Link href="/profile" className="rounded-full bg-blue-600 px-6 py-3 text-sm font-semibold text-white">
+            Go to Profile
           </Link>
         </div>
       </main>

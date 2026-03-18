@@ -403,6 +403,17 @@ export default function ProfilePage() {
   }, [profile]);
 
   const recentExperience = useMemo(() => experience.slice(0, 4), [experience]);
+  const hirexaBillingActive = useMemo(
+    () => isActiveBillingStatus(subscriptionSummary.planStatus),
+    [subscriptionSummary.planStatus]
+  );
+  const hirepilotBillingActive = useMemo(
+    () =>
+      Boolean(
+        hirePilotStatus?.hirePilotUnlimited || (hirePilotStatus?.hirePilotCredits ?? 0) > 0
+      ),
+    [hirePilotStatus?.hirePilotCredits, hirePilotStatus?.hirePilotUnlimited]
+  );
 
   // ✅ decide what to render in the list
   const visibleExperience = useMemo(() => {
@@ -1273,64 +1284,83 @@ function ToggleField({
                 SUBSCRIPTION
                ======================= */}
             <Card className="p-6 mt-2">
-              <div className="text-sm font-semibold text-slate-900">Subscription Status</div>
+              <div className="text-sm font-semibold text-slate-900">Billing & Access</div>
               <p className="mt-2 text-sm text-slate-600">
-                Manage billing, cancellations, and subscription details from Settings.
+                Manage product status, billing, and interview access from the current
+                profile view or open full controls in Settings.
               </p>
 
-              <div className="mt-4">
-                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
-                  <div className="text-xs font-semibold text-slate-500">Current Status</div>
-
-                  <div
-                    className={`mt-2 text-lg font-bold ${
-                      subscriptionSummary.planStatus === "active" ? "text-sky-500" : "text-red-500"
-                    }`}
-                  >
-                    {subscriptionSummary.planStatus === "active" ? "Active" : "Inactive"}
+              <div className="mt-4 space-y-4">
+                <BillingStatusCard
+                  title="Hirexa AI"
+                  subtitle="Core Hirexa AI subscription and billing status"
+                  status={hirexaBillingActive ? "Active" : "Inactive"}
+                  compact={!hirexaBillingActive}
+                  actions={
+                    <>
+                      <a
+                        href="/settings/subscription"
+                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        {hirexaBillingActive ? "Manage Billing" : "View Plans & Billing"}
+                      </a>
+                      <a
+                        href="/settings/subscription"
+                        className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                      >
+                        Open Subscription Settings
+                      </a>
+                    </>
+                  }
+                >
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <FieldRow label="Plan status" value={subscriptionSummary.planStatus || "Active"} />
+                    <FieldRow label="Billing email" value={subscriptionSummary.email} />
+                    <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
+                    <FieldRow label="Last checked" value={subscriptionSummary.checkedAt} />
                   </div>
-                </div>
-              </div>
+                </BillingStatusCard>
 
-              <div className="mt-4 flex flex-wrap gap-3">
-                <a
-                  href="/settings/subscription"
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                <BillingStatusCard
+                  title="HirePilot"
+                  subtitle="Interview billing, recurring plan state, and available credits"
+                  status={hirepilotBillingActive ? "Active" : "Inactive"}
+                  compact={!hirepilotBillingActive}
+                  actions={
+                    <a
+                      href="/hirepilot"
+                      className={[
+                        "rounded-xl px-4 py-2 text-sm font-semibold",
+                        hirepilotBillingActive
+                          ? "bg-sky-500 text-white hover:bg-sky-600"
+                          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
+                      ].join(" ")}
+                    >
+                      {hirepilotBillingActive ? "Open HirePilot" : "Unlock HirePilot"}
+                    </a>
+                  }
                 >
-                  Manage Billing
-                </a>
-                <a
-                  href="/settings/subscription"
-                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  Open Subscription Settings
-                </a>
-              </div>
-            </Card>
-
-            <Card className="p-6 mt-2">
-              <div className="text-sm font-semibold text-slate-900">
-                HirePilot AI Interview Assistant
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-5">
-                <div className="text-xs font-semibold text-slate-500">Access Status</div>
-                <div className="mt-2 text-sm font-semibold text-slate-900">
-                  {hirePilotStatus?.hirePilotUnlimited
-                    ? "Status: Unlimited Access"
-                    : (hirePilotStatus?.hirePilotCredits ?? 0) > 0
-                    ? `Credits Remaining: ${hirePilotStatus?.hirePilotCredits ?? 0}`
-                    : "No HirePilot access"}
-                </div>
-
-                {!hirePilotStatus?.hirePilotUnlimited ? (
-                  <a
-                    href="/hirepilot"
-                    className="mt-4 inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
-                  >
-                    Unlock HirePilot
-                  </a>
-                ) : null}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <FieldRow
+                      label="Access"
+                      value={
+                        hirePilotStatus?.hirePilotUnlimited
+                          ? "Unlimited access"
+                          : `Credits remaining: ${hirePilotStatus?.hirePilotCredits ?? 0}`
+                      }
+                    />
+                    <FieldRow
+                      label="Recurring status"
+                      value={
+                        hirePilotStatus?.hirePilotUnlimited
+                          ? "Active"
+                          : (hirePilotStatus?.hirePilotCredits ?? 0) > 0
+                            ? "Credits available"
+                            : "Inactive"
+                      }
+                    />
+                  </div>
+                </BillingStatusCard>
               </div>
             </Card>
 
@@ -1346,7 +1376,7 @@ function ToggleField({
                 className="mt-4 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
               >
                 <TrashIcon className="h-4 w-4" />
-                Open Danger Zone
+                Delete Profile
               </a>
             </Card>
 
@@ -1661,10 +1691,55 @@ async function readJsonResponse<T>(res: Response): Promise<T | null> {
   }
 }
 
+function isActiveBillingStatus(value?: string | null) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["active", "trialing", "past_due", "unpaid"].includes(normalized);
+}
+
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={["rounded-3xl border border-slate-200 bg-white shadow-sm", className].join(" ")}>
       {children}
+    </div>
+  );
+}
+
+function BillingStatusCard({
+  title,
+  subtitle,
+  status,
+  compact,
+  actions,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  status: "Active" | "Inactive";
+  compact?: boolean;
+  actions?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const active = status === "Active";
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">{title}</div>
+          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
+        </div>
+        <span
+          className={[
+            "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
+            active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600",
+          ].join(" ")}
+        >
+          {status}
+        </span>
+      </div>
+
+      {!compact && children ? <div className="mt-4">{children}</div> : null}
+      {actions ? <div className="mt-4 flex flex-wrap gap-3">{actions}</div> : null}
     </div>
   );
 }

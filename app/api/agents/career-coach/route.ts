@@ -297,7 +297,7 @@ export async function POST(req: Request) {
       sessionEmail: session?.user?.email ?? null,
     });
 
-    if (!access.active) {
+    if (!access.active && !access.pending) {
       return NextResponse.json(
         { ok: false, error: "Career Coach access requires an active Hirexa plan." },
         { status: 403 }

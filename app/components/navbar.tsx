@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState, type ComponentType, type SVGProps } from "react";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
+import { clearAppliedJobsSession } from "@/app/lib/appliedJobsSession";
 import { Button } from "../components/ui/button";
 import {
   Bars3Icon,
@@ -199,6 +200,11 @@ export function Navbar() {
 
   const navLinks = isAuthed ? authedNav : guestNav;
 
+  function handleSignOut() {
+    clearAppliedJobsSession();
+    void signOut({ callbackUrl: "/" });
+  }
+
   useEffect(() => {
     if (!isAuthed) {
       setHirePilotStatus(null);
@@ -326,7 +332,7 @@ export function Navbar() {
                     </Link>
                     <button
                       type="button"
-                      onClick={() => signOut({ callbackUrl: "/" })}
+                      onClick={handleSignOut}
                       className="w-full text-left px-4 py-2 text-red-600 hover:bg-secondary"
                     >
                       Log out
@@ -512,7 +518,7 @@ export function Navbar() {
                     onClick={() => {
                       setMobileOpen(false);
                       setMobileAgentsOpen(false);
-                      signOut({ callbackUrl: "/" });
+                      handleSignOut();
                     }}
                   >
                     Log out

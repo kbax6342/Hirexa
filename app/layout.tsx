@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import Providers from "./providers";
 import SiteNav from "./components/nav/SiteNav";
@@ -60,6 +61,7 @@ export default function RootLayout({
         {children}</Providers> 
         </RecaptchaProvider>    
         <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );

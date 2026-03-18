@@ -86,14 +86,14 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-[116vh] bg-white">
+    <div className="relative min-h-screen bg-white">
       <div className="absolute inset-0 -z-10">
         <div className="absolute inset-0 bg-gradient-to-b from-slate-50 via-white to-slate-50" />
         <div className="absolute left-1/2 top-[-120px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-sky-200/30 blur-3xl" />
         <div className="absolute right-[-120px] bottom-[-140px] h-[420px] w-[420px] rounded-full bg-indigo-200/25 blur-3xl" />
       </div>
 
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 pt-14">
+      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 py-14">
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <Link href="/" className="inline-flex items-center justify-center">
@@ -194,7 +194,7 @@ export default function LoginPage() {
                 Privacy
               </Link>
               <span className="text-slate-300">•</span>
-              <Link href="/help" className="hover:text-slate-700">
+              <Link href="/help-center" className="hover:text-slate-700">
                 Help Center
               </Link>
             </div>

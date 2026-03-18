@@ -5,6 +5,10 @@ import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
+import {
+  loadAppliedJobsSession,
+  saveAppliedJobsSession,
+} from "@/app/lib/appliedJobsSession";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import {
   extractCompanyLocationFromDescription,
@@ -82,6 +86,32 @@ function getSourceLabel(source: Job["source"]) {
   }
 }
 
+function isRemoteJob(job: Job) {
+  const searchableText = [
+    job.location,
+    job.description,
+    job.searchText,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return /\bremote\b/i.test(searchableText);
+}
+
+function dedupeJobs(jobList: Job[]) {
+  const unique = new Set<string>();
+
+  return jobList.filter((job) => {
+    if (!job?.id || !job?.source) return false;
+
+    const identity = getJobIdentity(job);
+    if (unique.has(identity)) return false;
+
+    unique.add(identity);
+    return true;
+  });
+}
+
 function toJobDetailSummary(job: Job | null): JobDetail | null {
   if (!job) return null;
 
@@ -124,7 +154,7 @@ export default function JobMatchesLayout() {
   }));
   const [selectedId, setSelectedId] = useState<string>("");
   const [savingFilters, setSavingFilters] = useState(false);
-  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(false);
+  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
   const [resolutionMeta, setResolutionMeta] = useState<SmartMatchesResolutionMeta | null>(
     null
   );
@@ -141,6 +171,7 @@ export default function JobMatchesLayout() {
   const [appliedJobs, setAppliedJobs] = useState<Job[]>([]);
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
+  const [appliedJobsSessionReady, setAppliedJobsSessionReady] = useState(false);
 
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -156,10 +187,17 @@ export default function JobMatchesLayout() {
   const detailCache = useRef<Map<string, JobDetailsResponse>>(new Map());
   const initializedFiltersRef = useRef(false);
   const selectedJobParam = searchParams.get("job")?.trim() || "";
+  const visibleJobs = useMemo(
+    () =>
+      appliedFilters.includeRemote
+        ? jobs
+        : jobs.filter((job) => !isRemoteJob(job)),
+    [jobs, appliedFilters.includeRemote]
+  );
 
   const selectedSummary = useMemo(
-    () => jobs.find((j) => j.id === selectedId) ?? null,
-    [jobs, selectedId]
+    () => visibleJobs.find((j) => j.id === selectedId) ?? null,
+    [visibleJobs, selectedId]
   );
   const selectedSummaryDetail = useMemo(
     () => toJobDetailSummary(selectedSummary),
@@ -257,6 +295,16 @@ export default function JobMatchesLayout() {
     replaceSelectedJobParam(jobId);
   }
 
+  useEffect(() => {
+    setAppliedJobs(dedupeJobs(loadAppliedJobsSession<Job>()));
+    setAppliedJobsSessionReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!appliedJobsSessionReady) return;
+    saveAppliedJobsSession(appliedJobs);
+  }, [appliedJobs, appliedJobsSessionReady]);
+
   async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
     if (loadingMore) return;
 
@@ -314,6 +362,9 @@ export default function JobMatchesLayout() {
 
         filtered = incoming.filter((job) => {
           if (!job?.id) return false;
+          if (!appliedFilters.includeRemote && isRemoteJob(job)) {
+            return false;
+          }
           const jobIdentity = getJobIdentity(job);
           if (seen.current.has(jobIdentity)) return false;
           seen.current.add(jobIdentity);
@@ -367,6 +418,29 @@ export default function JobMatchesLayout() {
     void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedFilters]);
+
+  useEffect(() => {
+    if (visibleJobs.length === 0) {
+      if (selectedId) {
+        setSelectedId("");
+        replaceSelectedJobParam(null);
+      }
+      return;
+    }
+
+    const hasVisibleSelection = visibleJobs.some((job) => job.id === selectedId);
+    if (hasVisibleSelection) return;
+
+    const nextSelectedId =
+      (selectedJobParam && visibleJobs.find((job) => job.id === selectedJobParam)?.id) ||
+      visibleJobs[0]?.id ||
+      "";
+
+    if (!nextSelectedId) return;
+
+    setSelectedId(nextSelectedId);
+    replaceSelectedJobParam(nextSelectedId);
+  }, [selectedId, selectedJobParam, visibleJobs]);
 
   useEffect(() => {
     console.log("[SMART_MATCHES] selected job changed", {
@@ -632,7 +706,7 @@ export default function JobMatchesLayout() {
         ) {
           return prev;
         }
-        return [job, ...prev];
+        return dedupeJobs([job, ...prev]);
       });
 
       setShowAppliedPanel(true);
@@ -647,12 +721,8 @@ export default function JobMatchesLayout() {
     }
   };
 
-  const handleOutreachFromDetails = async () => {
-    if (!right?.id) return;
-    const ok = await addOutreachJob(right, setOutreachActions, "Outreach added");
-    if (ok) {
-      router.push("/job-tools/agents/linkedin-outreach");
-    }
+  const handleOutreachFromDetails = () => {
+    router.push("/job-tools/agents/linkedin-outreach");
   };
 
   const handleAiApplyFromDetails = async () => {
@@ -679,137 +749,135 @@ export default function JobMatchesLayout() {
 
   return (
     <div className="mt-[59]">
-      <div className="mt-6 grid h-[calc(100vh-140px)] grid-cols-1 gap-6 lg:grid-cols-12">
+      <div className="mt-4 grid min-h-0 grid-cols-1 gap-4 lg:mt-6 lg:grid-cols-12 lg:gap-6 xl:h-[calc(100vh-140px)]">
         {/* LEFT LIST */}
         <aside className="flex min-h-0 flex-col lg:col-span-5">
-          <div className="mt-8 shrink-0">
+          <div className="mt-4 shrink-0 sm:mt-8">
             <div className="text-black">
               <h2 className="text-lg font-semibold">Smart Matches</h2>
               <p className="mt-1 text-sm text-gray-700">
                 We’ve scanned jobs to find your best matches, saving you hours of
-                searching. Simply select your favorites — we’ll help fill out the
-                applications.
+                searching. Select your favorites and use Hirexa to prepare stronger,
+                faster applications.
               </p>
               <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-gray-900">Filters</div>
                     <p className="mt-1 text-xs text-gray-500">
                       Applying filters also updates your saved Smart Matches preferences.
                     </p>
                   </div>
-                  {isFiltersCollapsed ? (
-                    <button
-                      type="button"
-                      onClick={() => setIsFiltersCollapsed(false)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-                      aria-expanded={false}
-                      aria-controls="smart-match-filters"
-                    >
-                      Show filters
-                      <ChevronDownIcon className="h-4 w-4" />
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setIsFiltersCollapsed((current) => !current)}
+                    className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                    aria-expanded={!isFiltersCollapsed}
+                    aria-controls="smart-match-filters"
+                  >
+                    <span className="whitespace-nowrap">
+                      {isFiltersCollapsed ? "Show filters" : "Hide filters"}
+                    </span>
+                    {isFiltersCollapsed ? (
+                      <ChevronDownIcon className="h-4 w-4 shrink-0" />
+                    ) : (
+                      <ChevronUpIcon className="h-4 w-4 shrink-0" />
+                    )}
+                  </button>
                 </div>
-
                 {!isFiltersCollapsed ? (
                   <form
                     id="smart-match-filters"
-                    className="mt-4 space-y-3"
+                    className="mt-3 rounded-2xl border border-gray-200 bg-white p-4"
                     onSubmit={(event) => {
                       event.preventDefault();
                       applyFilters();
                     }}
                   >
-                
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold text-gray-600">
-                      Target role
-                    </span>
-                    <input
-                      value={filters.query}
-                      onChange={(event) =>
-                        setFilters((current) => ({
-                          ...current,
-                          query: event.target.value,
-                        }))
-                      }
-                      placeholder="Software Engineer"
-                      className="rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                    />
-                  </label>
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center">
+                        <div className="ml-auto flex shrink-0 items-center gap-3 rounded-xl px-3 py-2">
+                          <span className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-gray-600">
+                            Remote jobs
+                          </span>
 
-                  <label className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold text-gray-600">
-                      Preferred location
-                    </span>
-                    <input
-                      value={filters.location}
-                      onChange={(event) =>
-                        setFilters((current) => ({
-                          ...current,
-                          location: event.target.value,
-                        }))
-                      }
-                      placeholder="Detroit, MI"
-                      className="rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                    />
-                  </label>
-                </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFilters((current) => ({
+                                ...current,
+                                includeRemote: !current.includeRemote,
+                              }))
+                            }
+                            aria-pressed={filters.includeRemote}
+                            className={[
+                              "relative inline-flex h-7 w-14 shrink-0 items-center rounded-full border transition",
+                              filters.includeRemote
+                                ? "border-blue-600 bg-blue-600"
+                                : "border-gray-300 bg-gray-200",
+                            ].join(" ")}
+                          >
+                            <span
+                              className={[
+                                "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition",
+                                filters.includeRemote ? "translate-x-8" : "translate-x-1",
+                              ].join(" ")}
+                            />
+                          </button>
 
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsFiltersCollapsed(true)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-                      aria-expanded={true}
-                      aria-controls="smart-match-filters"
-                    >
-                      Hide filters
-                      <ChevronUpIcon className="h-4 w-4" />
-                    </button>
-                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
-                      Remote jobs
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFilters((current) => ({
-                          ...current,
-                          includeRemote: !current.includeRemote,
-                        }))
-                      }
-                      aria-pressed={filters.includeRemote}
-                      className={[
-                        "relative inline-flex h-7 w-14 items-center rounded-full border transition",
-                        filters.includeRemote
-                          ? "border-blue-600 bg-blue-600"
-                          : "border-gray-300 bg-gray-200",
-                      ].join(" ")}
-                    >
-                      <span
-                        className={[
-                          "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition",
-                          filters.includeRemote ? "translate-x-8" : "translate-x-1",
-                        ].join(" ")}
-                      />
-                    </button>
-                    <span className="text-xs text-gray-600">
-                      {filters.includeRemote ? "On" : "Off"}
-                    </span>
-                  </div>
+                          <span className="whitespace-nowrap text-xs text-gray-600">
+                            {filters.includeRemote ? "On" : "Off"}
+                          </span>
+                        </div>
+                      </div>
 
-                  <button
-                    type="submit"
-                    disabled={savingFilters}
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {savingFilters ? "Saving..." : "Apply filters"}
-                  </button>
-                </div>
-              </form>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label className="flex min-w-0 flex-col gap-1">
+                          <span className="text-xs font-semibold text-gray-600">
+                            Target role
+                          </span>
+                          <input
+                            value={filters.query}
+                            onChange={(event) =>
+                              setFilters((current) => ({
+                                ...current,
+                                query: event.target.value,
+                              }))
+                            }
+                            placeholder="Software Engineer"
+                            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                          />
+                        </label>
+
+                        <label className="flex min-w-0 flex-col gap-1">
+                          <span className="text-xs font-semibold text-gray-600">
+                            Preferred location
+                          </span>
+                          <input
+                            value={filters.location}
+                            onChange={(event) =>
+                              setFilters((current) => ({
+                                ...current,
+                                location: event.target.value,
+                              }))
+                            }
+                            placeholder="Detroit, MI"
+                            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="flex">
+                        <button
+                          type="submit"
+                          disabled={savingFilters}
+                          className="ml-auto shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {savingFilters ? "Saving..." : "Apply filters"}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
                 ) : null}
               </div>
 
@@ -822,7 +890,7 @@ export default function JobMatchesLayout() {
           </div>
 
           <div className="mt-5 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-            {jobs.map((job) => {
+            {visibleJobs.map((job) => {
               const active = job.id === selectedId;
 
               return (
@@ -877,30 +945,22 @@ export default function JobMatchesLayout() {
                         <div className="mt-3 h-4" />
                       )}
 
-                      <div className="mt-4 flex items-center justify-between text-[11px] text-gray-500">
-                        <div>
+                      <div className="mt-5 flex flex-col gap-3 text-[11px] text-gray-500 sm:mt-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="w-full sm:w-auto">
                           <span>Job Posted {job.posted}</span>
                         </div>
 
-                        <div className="ml-auto flex items-center gap-3">
+                        <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
                           {job.jobUrl ? (
                             <a
                               href={job.jobUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="min-w-[110px] rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50"
+                              className="min-w-[110px] rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50"
                             >
                               View Posting
                             </a>
                           ) : null}
-
-                          <button
-                            type="button"
-                            onClick={() => addAppliedJob(job)}
-                            className="min-w-[110px] rounded-md border border-transparent bg-[#3b5bff] px-2 py-1 text-[11px] font-medium text-white hover:bg-[#2f49cc] disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            Apply Tool
-                          </button>
                         </div>
                       </div>
 
@@ -981,7 +1041,7 @@ export default function JobMatchesLayout() {
               );
             })}
 
-            {jobs.length === 0 && !loadingMore ? (
+            {visibleJobs.length === 0 && !loadingMore ? (
               <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600">
                 Finding more matches for you...
               </div>
@@ -1018,26 +1078,23 @@ export default function JobMatchesLayout() {
                   type="button"
                   onClick={handleAiApplyFromDetails}
                   disabled={!right?.id || aiApplyLoading}
-                  className="rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(146,64,14,0.22)] bg-[linear-gradient(135deg,#C2410C_0%,#B45309_100%)] hover:shadow-[0_10px_22px_rgba(146,64,14,0.28)] hover:bg-[linear-gradient(135deg,#B45309_0%,#92400E_100%)] active:bg-[#7C2D12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(194,65,12,0.24)]"
+                  className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(146,64,14,0.22)] bg-[linear-gradient(135deg,#C2410C_0%,#B45309_100%)] hover:shadow-[0_10px_22px_rgba(146,64,14,0.28)] hover:bg-[linear-gradient(135deg,#B45309_0%,#92400E_100%)] active:bg-[#7C2D12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(194,65,12,0.24)] sm:w-auto"
                 >
                   {aiApplyLoading ? "Opening..." : "AI Assistant Apply"}
                 </button>
                 <button
                   type="button"
                   onClick={handleCareerCoachFromDetails}
-                  className="rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50"
+                  className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
                 >
                   Career Coach
                 </button>
                 <button
                   type="button"
                   onClick={handleOutreachFromDetails}
-                  disabled={right?.id ? outreachActions[right.id]?.loading : true}
-                  className="rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50"
+                  className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
                 >
-                  {right?.id && outreachActions[right.id]?.loading
-                    ? "Adding..."
-                    : "Outreach Copilot"}
+                  Outreach Copilot
                 </button>
               </div>
             </div>
@@ -1214,7 +1271,7 @@ export default function JobMatchesLayout() {
       {appliedJobs.length > 0 ? (
         <>
           {showAppliedPanel ? (
-            <div className="fixed bottom-24 right-4 z-40 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl">
+            <div className="fixed inset-x-4 bottom-24 z-40 rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl sm:inset-x-auto sm:right-4 sm:w-[min(420px,calc(100vw-2rem))]">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-gray-900">Applied jobs</h3>
                 <button
@@ -1226,7 +1283,7 @@ export default function JobMatchesLayout() {
                 </button>
               </div>
 
-              <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1 sm:max-h-56">
                 {appliedJobs.map((job) => (
                   <div
                     key={getJobIdentity(job)}
@@ -1245,7 +1302,7 @@ export default function JobMatchesLayout() {
           <button
             type="button"
             onClick={() => setShowAppliedPanel((prev) => !prev)}
-            className="fixed bottom-5 right-4 z-50 inline-flex min-w-[110px] flex-col items-center rounded-full bg-blue-600 px-5 py-3 text-white shadow-lg transition hover:bg-blue-700"
+            className="fixed bottom-4 right-4 z-50 inline-flex min-w-[110px] flex-col items-center rounded-full bg-blue-600 px-4 py-3 text-white shadow-lg transition hover:bg-blue-700 sm:bottom-5 sm:px-5"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wide">
               Applied Jobs

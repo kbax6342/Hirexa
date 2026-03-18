@@ -69,8 +69,31 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing resumeId" }, { status: 400 });
     }
 
+    const resolvedProfile = await resolveActiveProfile();
+    if (!resolvedProfile.profile) {
+      return NextResponse.json(
+        { error: resolvedProfile.error },
+        { status: resolvedProfile.status }
+      );
+    }
+
+    const resume = await prisma.resume.findFirst({
+      where: {
+        id: resumeId,
+        userProfileId: resolvedProfile.profile.id,
+      },
+      select: { id: true },
+    });
+
+    if (!resume) {
+      return NextResponse.json(
+        { error: "Resume not found for this profile." },
+        { status: 404 }
+      );
+    }
+
     const experiences = await prisma.experience.findMany({
-      where: { resumeId },
+      where: { resumeId: resume.id },
       orderBy: { order: "asc" },
       include: {
         bullets: { orderBy: { order: "asc" }, select: { text: true } },
@@ -274,4 +297,3 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

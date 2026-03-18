@@ -1,6 +1,7 @@
 // /Hirexa/my-app/app/(no-nav)/job-tools/generate/page.tsx
 "use client";
 
+import Link from "next/link";
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -533,7 +534,7 @@ function JobToolsGeneratePageContent() {
             Generate Your Perfect Application
           </h1>
           <p className="mt-2 text-sm text-white">
-            Paste a job URL, and Hirexa will create your cover letter, resume updates, and follow-up emails.
+            Paste a job URL, and Hirexa will draft tailored cover letters, resume updates, and follow-up emails for you to review and personalize.
           </p>
         </div>
 
@@ -772,17 +773,22 @@ function JobToolsGeneratePageContent() {
             </div>
 
             {/* Bottom bar */}
-            <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 text-xs text-slate-500">
+            <div className="mt-5 flex flex-col gap-4 border-t border-slate-200 pt-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-2 text-xs text-slate-500">
                 <ShieldCheckIcon className="h-4 w-4 text-sky-600" />
-                Your data is processed securely and never shared.
+                <div className="space-y-1">
+                  <p>Your data is processed securely and never shared.</p>
+                  <p className="text-slate-400">
+                    Hirexa creates AI-assisted drafts to help you move faster. Review and personalize each document before you use it.
+                  </p>
+                </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
                 <button
                   type="button"
                   onClick={resetAll}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 sm:w-auto"
                 >
                   Reset
                 </button>
@@ -791,7 +797,7 @@ function JobToolsGeneratePageContent() {
                   type="button"
                   onClick={downloadAll}
                   disabled={!result}
-                  className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 sm:w-auto"
                 >
                   <ArrowDownTrayIcon className="h-5 w-5" />
                   Download All Documents
@@ -804,10 +810,16 @@ function JobToolsGeneratePageContent() {
         {/* Footer */}
         <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-slate-200 py-6 text-xs text-slate-500 sm:flex-row">
           <div>© {new Date().getFullYear()} Hirexa AI. All rights reserved.</div>
-          <div className="flex items-center gap-4">
-            <button className="hover:text-slate-700" type="button">Privacy Policy</button>
-            <button className="hover:text-slate-700" type="button">Terms of Service</button>
-            <button className="hover:text-slate-700" type="button">Contact</button>
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            <Link href="/privacy" className="hover:text-slate-700">
+              Privacy Policy
+            </Link>
+            <Link href="/terms" className="hover:text-slate-700">
+              Terms of Service
+            </Link>
+            <Link href="/contact-us" className="hover:text-slate-700">
+              Contact
+            </Link>
           </div>
         </div>
       </div>

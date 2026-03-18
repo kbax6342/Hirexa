@@ -188,9 +188,9 @@ export default async function CareerCoachPage() {
   return (
     <CareerCoachClient
       isAuthenticated={Boolean(userId)}
-      hasPaidAccess={Boolean(access?.active)}
+      hasPaidAccess={Boolean(access?.active || access?.pending)}
       loginHref={`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`}
-      checkoutHref="/checkout"
+      checkoutHref="/plans/payment"
       uploadHref="/resume"
       jobMatchesHref={userId ? "/dashboard" : "/jobs"}
       aiApplyHref="/job-tools/generate"

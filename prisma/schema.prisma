@@ -205,12 +205,30 @@ model UserProfile {
   resume                  Resume?
   resumeFiles             ResumeFile[]
   stripePayments          StripePayment[]
+  emailLifecycleEvents    EmailLifecycleEvent[]
   user                    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([email])
   @@index([citySearch])
   @@index([stateSearch])
   @@index([postalCodeSearch])
+}
+
+model EmailLifecycleEvent {
+  id            String       @id @default(cuid())
+  userProfileId String?
+  email         String
+  eventKey      String
+  eventGroup    String
+  dedupeKey     String       @unique
+  sentAt        DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  meta          Json?
+  userProfile   UserProfile? @relation(fields: [userProfileId], references: [id], onDelete: SetNull)
+
+  @@index([userProfileId, eventGroup])
+  @@index([email, eventGroup])
+  @@index([sentAt])
 }
 
 model StripePayment {

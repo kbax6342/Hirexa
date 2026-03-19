@@ -14,6 +14,7 @@ import {
   prepareApplyPayload,
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
+import { sendApplicationActivityEmailForStatusChange } from "@/app/lib/email/lifecycle";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,7 @@ async function runHumanApply(args: {
   values: AnswersMap;
   answers: AnswersMap;
   userProfileId: string;
+  previousStatus: string;
 }) {
   const tempResume = await writeResumeToTemp(args.userProfileId);
 
@@ -61,7 +63,7 @@ async function runHumanApply(args: {
     };
 
     if (result.ok) {
-      await prisma.jobApplication.update({
+      const updatedApplication = await prisma.jobApplication.update({
         where: { id: args.applicationId },
         data: {
           status: "SENT",
@@ -69,6 +71,20 @@ async function runHumanApply(args: {
           answersJson: args.answers,
           auditJson: playwrightAudit,
         },
+        select: {
+          id: true,
+          status: true,
+        },
+      });
+      await sendApplicationActivityEmailForStatusChange({
+        applicationId: updatedApplication.id,
+        previousStatus: args.previousStatus,
+        nextStatus: updatedApplication.status,
+      }).catch((error) => {
+        console.warn("[applications/apply-human] status email failed", {
+          applicationId: args.applicationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
       updateSession(args.sessionId, {
         status: "DONE",
@@ -79,13 +95,27 @@ async function runHumanApply(args: {
     }
 
     if (result.needsHuman) {
-      await prisma.jobApplication.update({
+      const updatedApplication = await prisma.jobApplication.update({
         where: { id: args.applicationId },
         data: {
           status: "READY_TO_SEND",
           answersJson: args.answers,
           auditJson: playwrightAudit,
         },
+        select: {
+          id: true,
+          status: true,
+        },
+      });
+      await sendApplicationActivityEmailForStatusChange({
+        applicationId: updatedApplication.id,
+        previousStatus: args.previousStatus,
+        nextStatus: updatedApplication.status,
+      }).catch((error) => {
+        console.warn("[applications/apply-human] status email failed", {
+          applicationId: args.applicationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
       updateSession(args.sessionId, {
         status: "WAITING_HUMAN",
@@ -94,13 +124,27 @@ async function runHumanApply(args: {
       return;
     }
 
-    await prisma.jobApplication.update({
+    const updatedApplication = await prisma.jobApplication.update({
       where: { id: args.applicationId },
       data: {
         status: "READY_TO_SEND",
         answersJson: args.answers,
         auditJson: playwrightAudit,
       },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+    await sendApplicationActivityEmailForStatusChange({
+      applicationId: updatedApplication.id,
+      previousStatus: args.previousStatus,
+      nextStatus: updatedApplication.status,
+    }).catch((error) => {
+      console.warn("[applications/apply-human] status email failed", {
+        applicationId: args.applicationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
     updateSession(args.sessionId, {
       status: "FAILED",
@@ -186,6 +230,7 @@ export async function POST(
       values: finalValuesToSubmit,
       answers,
       userProfileId: application.userProfileId,
+      previousStatus: application.status,
     });
 
     return NextResponse.json({

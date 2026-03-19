@@ -19,6 +19,7 @@ import {
   sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
 import type Stripe from "stripe";
+import { syncLoopsContact } from "@/app/lib/email/loops";
 
 export const runtime = "nodejs";
 
@@ -334,8 +335,24 @@ export async function POST(req: Request) {
         phone: true,
         linkedinUrl: true,
         portfolioUrl: true,
+        newsletterOptIn: true,
+        newsletterSource: true,
+        unsubscribedAt: true,
       },
     });
+
+    if (profile.email) {
+      await syncLoopsContact({
+        email: profile.email,
+        userId,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        source: profile.newsletterSource ?? "profile/update",
+        subscribed:
+          profile.newsletterOptIn && !profile.unsubscribedAt ? true : undefined,
+        userGroup: "hirexa_users",
+      });
+    }
 
     invalidateCachedProfile({ userId, guestId });
 

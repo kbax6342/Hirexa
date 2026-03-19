@@ -24,6 +24,7 @@ export function Footer() {
             {[
               { label: "Features", href: "#features" },
               { label: "How It Works", href: "/how-it-works" },
+              { label: "Newsletter", href: "/newsletter" },
               { label: "Find Jobs", href: "/jobs" },
               { label: "Job Locations", href: "/locations" },
               { label: "Privacy", href: "/privacy/" },

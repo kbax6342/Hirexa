@@ -3,7 +3,8 @@ import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
 import { hashOtp } from "@/app/lib/security/otp";
-import { sendWelcomeEmail } from "@/app/lib/email/sendgrid";
+import { sendRegistrationConfirmedEmailIfNeeded } from "@/app/lib/email/lifecycle";
+import { syncLoopsContact } from "@/app/lib/email/loops";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 
@@ -99,19 +100,18 @@ export async function POST(req: Request) {
       select: { id: true, firstName: true, welcomeEmailSentAt: true, userId: true },
     });
 
-    if (profile && !profile.welcomeEmailSentAt) {
-      const claimed = await prisma.userProfile.updateMany({
-        where: { id: profile.id, welcomeEmailSentAt: null },
-        data: { welcomeEmailSentAt: new Date() },
+    if (profile?.id) {
+      await syncLoopsContact({
+        email,
+        userId: profile.userId,
+        firstName: profile.firstName,
+        source: "auth/register/verify",
+        userGroup: "hirexa_users",
       });
 
-      if (claimed.count === 1) {
-        try {
-          await sendWelcomeEmail(email, profile.firstName ?? undefined);
-        } catch (emailError) {
-          console.warn("Welcome email failed after verification:", emailError);
-        }
-      }
+      await sendRegistrationConfirmedEmailIfNeeded(profile.id).catch((emailError) => {
+        console.warn("Welcome email failed after verification:", emailError);
+      });
     }
 
     invalidateCachedProfile({

@@ -1,6 +1,6 @@
 import sgMail from "@sendgrid/mail";
 
-import { getSiteUrl } from "@/app/lib/site-url";
+import { getEmailConfig } from "./config";
 
 type EmailCategory = "transactional" | "marketing";
 
@@ -11,11 +11,6 @@ type SendEmailParams = {
   text?: string;
   category?: EmailCategory;
 };
-
-// Sender examples (verified in SendGrid):
-// - Hirexa AI <no-reply@mail.hirexa.ai>
-// - Hirexa AI <welcome@mail.hirexa.ai>
-// - Hirexa AI <hello@updates.hirexa.ai>
 
 let sendGridConfigured = false;
 
@@ -33,24 +28,6 @@ function getSendGridClient() {
   return sgMail;
 }
 
-function isFullFrom(value: string) {
-  return value.includes("<") && value.includes(">") && value.includes("@");
-}
-
-function buildFromAddress() {
-  const raw = (process.env.EMAIL_FROM ?? process.env.SENDGRID_FROM ?? "").trim();
-  if (!raw) {
-    throw new Error("Missing EMAIL_FROM (or SENDGRID_FROM fallback)");
-  }
-
-  return isFullFrom(raw) ? raw : `Hirexa AI <${raw}>`;
-}
-
-function buildReplyTo() {
-  const replyTo = (process.env.EMAIL_REPLY_TO ?? process.env.EMAIL_SUPPORT ?? "").trim();
-  return replyTo || undefined;
-}
-
 function stripHtml(html: string) {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -58,15 +35,7 @@ function stripHtml(html: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
-
-export function getEmailConfig() {
-  return {
-    from: buildFromAddress(),
-    replyTo: buildReplyTo(),
-    supportEmail: (process.env.EMAIL_SUPPORT ?? "").trim() || undefined,
-    appUrl: getSiteUrl(),
-  };
-}
+export { getEmailConfig } from "./config";
 
 export async function sendEmail({
   to,

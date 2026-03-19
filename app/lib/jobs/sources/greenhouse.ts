@@ -9,6 +9,7 @@ import {
   humanizeSlug,
   logSourceSuccess,
   logSourceFailure,
+  summarizeHtmlText,
   type SourceFetchArgs,
 } from "./common";
 
@@ -18,6 +19,7 @@ type GreenhouseResponse = {
     title?: string;
     updated_at?: string;
     absolute_url?: string;
+    content?: string | null;
     location?: { name?: string | null } | null;
     departments?: Array<{ name?: string | null }> | null;
   }>;
@@ -34,28 +36,30 @@ export async function fetchGreenhouse(
 
   try {
     const url = new URL(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`);
-    url.searchParams.set("content", "false");
+    url.searchParams.set("content", "true");
 
     const data = await fetchJson<GreenhouseResponse>(
       url.toString(),
       undefined,
       ATS_SOURCE_TIMEOUT_MS
     );
-    const jobs = (data.jobs ?? []).map((job, index): Job => ({
-      id: buildJobId("greenhouse", slug, job.id ?? index),
-      source: "greenhouse",
-      title: cleanText(job.title, "Untitled role"),
-      company: humanizeSlug(slug),
-      location: cleanText(job.location?.name, "Remote"),
-      posted: formatPostedLabel(job.updated_at),
-      description:
-        cleanText(job.departments?.map((department) => department.name).join(" ")) ||
-        undefined,
-      jobUrl: cleanText(job.absolute_url) || undefined,
-      searchText: cleanText(
-        job.departments?.map((department) => department.name).join(" ")
-      ),
-    }));
+    const jobs = (data.jobs ?? []).map((job, index): Job => {
+      const department =
+        cleanText(job.departments?.map((department) => department.name).join(" ")) || undefined;
+      const description = summarizeHtmlText(job.content) || department;
+
+      return {
+        id: buildJobId("greenhouse", slug, job.id ?? index),
+        source: "greenhouse",
+        title: cleanText(job.title, "Untitled role"),
+        company: humanizeSlug(slug),
+        location: cleanText(job.location?.name, "Remote"),
+        posted: formatPostedLabel(job.updated_at),
+        description,
+        jobUrl: cleanText(job.absolute_url) || undefined,
+        searchText: cleanText([description, department].filter(Boolean).join(" ")),
+      };
+    });
     rawCount = jobs.length;
     const stages = applyJobMatchStages(jobs, args);
 

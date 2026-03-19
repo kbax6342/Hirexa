@@ -11,6 +11,7 @@ import {
   prepareApplyPayload,
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
+import { sendApplicationActivityEmailForStatusChange } from "@/app/lib/email/lifecycle";
 
 export const runtime = "nodejs";
 
@@ -102,7 +103,7 @@ export async function POST(
     };
 
     if (result.ok) {
-      await prisma.jobApplication.update({
+      const updatedApplication = await prisma.jobApplication.update({
         where: { id: application.id },
         data: {
           status: "SENT",
@@ -110,6 +111,20 @@ export async function POST(
           answersJson: answers,
           auditJson: playwrightAudit,
         },
+        select: {
+          id: true,
+          status: true,
+        },
+      });
+      await sendApplicationActivityEmailForStatusChange({
+        applicationId: updatedApplication.id,
+        previousStatus: application.status,
+        nextStatus: updatedApplication.status,
+      }).catch((error) => {
+        console.warn("[applications/apply] status email failed", {
+          applicationId: application.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
 
       return NextResponse.json({
@@ -120,13 +135,27 @@ export async function POST(
     }
 
     if (result.needsHuman) {
-      await prisma.jobApplication.update({
+      const updatedApplication = await prisma.jobApplication.update({
         where: { id: application.id },
         data: {
           status: "READY_TO_SEND",
           answersJson: answers,
           auditJson: playwrightAudit,
         },
+        select: {
+          id: true,
+          status: true,
+        },
+      });
+      await sendApplicationActivityEmailForStatusChange({
+        applicationId: updatedApplication.id,
+        previousStatus: application.status,
+        nextStatus: updatedApplication.status,
+      }).catch((error) => {
+        console.warn("[applications/apply] status email failed", {
+          applicationId: application.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
 
       return NextResponse.json(
@@ -147,13 +176,27 @@ export async function POST(
       );
     }
 
-    await prisma.jobApplication.update({
+    const updatedApplication = await prisma.jobApplication.update({
       where: { id: application.id },
       data: {
         status: "READY_TO_SEND",
         answersJson: answers,
         auditJson: playwrightAudit,
       },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+    await sendApplicationActivityEmailForStatusChange({
+      applicationId: updatedApplication.id,
+      previousStatus: application.status,
+      nextStatus: updatedApplication.status,
+    }).catch((error) => {
+      console.warn("[applications/apply] status email failed", {
+        applicationId: application.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     return NextResponse.json(

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { cleanText, humanizeSlug } from "./sources/common";
+import { cleanText, humanizeSlug, summarizeHtmlText } from "./sources/common";
 
 export type GreenhouseBoardConfig<TCategory extends string = string> = {
   board: string;
@@ -16,6 +16,7 @@ export type GreenhouseNormalizedJob<TCategory extends string = string> = {
   title: string;
   location: string | null;
   department: string | null;
+  description: string | null;
   absoluteUrl: string;
   updatedAt: string | null;
   category: TCategory | null;
@@ -31,6 +32,7 @@ type GreenhouseJobPayload = {
   title?: string | null;
   location?: { name?: string | null } | null;
   departments?: Array<{ name?: string | null }> | null;
+  content?: string | null;
   absolute_url?: string | null;
   updated_at?: string | null;
 };
@@ -44,6 +46,7 @@ type CachedGreenhouseBoardJob = {
   title: string;
   location: string | null;
   department: string | null;
+  description: string | null;
   absoluteUrl: string;
   updatedAt: string | null;
 };
@@ -113,12 +116,15 @@ function normalizeBoardJobs(payload: GreenhousePayload) {
       const departmentNames = Array.isArray(job.departments)
         ? job.departments.map((department) => department?.name).filter(Boolean)
         : [];
+      const department = cleanText(departmentNames.join(" ")) || null;
+      const description = summarizeHtmlText(job.content) || department;
 
       return {
         jobId: String(job.id),
         title: cleanText(job.title, "Untitled role"),
         location: cleanText(job.location?.name) || null,
-        department: cleanText(departmentNames.join(" ")) || null,
+        department,
+        description,
         absoluteUrl: cleanText(job.absolute_url),
         updatedAt: cleanText(job.updated_at) || null,
       } satisfies CachedGreenhouseBoardJob;
@@ -134,7 +140,7 @@ async function fetchGreenhouseBoard(board: string): Promise<CachedGreenhouseBoar
     const url = new URL(
       `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs`
     );
-    url.searchParams.set("content", "false");
+    url.searchParams.set("content", "true");
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -226,7 +232,9 @@ export function filterGreenhouseJobs<TCategory extends string>(
 
     if (query) {
       const haystack =
-        `${job.title} ${job.companyLabel} ${job.location ?? ""} ${job.department ?? ""}`.toLowerCase();
+        `${job.title} ${job.companyLabel} ${job.location ?? ""} ${job.department ?? ""} ${
+          job.description ?? ""
+        }`.toLowerCase();
       if (!haystack.includes(query)) {
         return false;
       }
@@ -274,6 +282,7 @@ export async function fetchGreenhouseListings<TCategory extends string = string>
           title: job.title,
           location: job.location,
           department: job.department,
+          description: job.description,
           absoluteUrl: job.absoluteUrl,
           updatedAt: job.updatedAt,
           category: result.value.board.category ?? null,

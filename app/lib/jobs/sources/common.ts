@@ -44,6 +44,37 @@ export function cleanText(value: unknown, fallback = "") {
   return normalized || fallback;
 }
 
+const HTML_ENTITY_MAP: Record<string, string> = {
+  "&nbsp;": " ",
+  "&amp;": "&",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&lt;": "<",
+  "&gt;": ">",
+};
+
+export function decodeBasicHtmlEntities(value: string) {
+  return value.replace(
+    /&nbsp;|&amp;|&quot;|&#39;|&apos;|&lt;|&gt;/g,
+    (entity) => HTML_ENTITY_MAP[entity] ?? entity
+  );
+}
+
+export function summarizeHtmlText(value: unknown, maxLength = 220) {
+  if (typeof value !== "string") return "";
+
+  const plainText = decodeBasicHtmlEntities(value)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!plainText) return "";
+  if (plainText.length <= maxLength) return plainText;
+
+  return `${plainText.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 export function buildJobId(source: JobSource, ...parts: Array<string | number | null | undefined>) {
   const body = parts.map((part) => String(part ?? "")).join("::");
   return `${source}:${Buffer.from(body, "utf8").toString("base64url")}`;

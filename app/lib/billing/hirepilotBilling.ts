@@ -13,6 +13,7 @@ import {
   grantHirePilotMonthlyCredits,
   grantPurchasedHirePilotCredits,
 } from "@/app/lib/hirepilot/credits";
+import { sendHirePilotCreditsRenewedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 
 export const HIREPILOT_PURCHASE_TYPES = {
   SUBSCRIPTION: "subscription",
@@ -71,6 +72,11 @@ export type HirePilotBillingStatus = {
     stripeCheckoutSessionId: string | null;
   } | null;
 };
+
+function getMonthlyIncludedCreditsForEmail() {
+  const parsed = Number(process.env.HIREPILOT_MONTHLY_INCLUDED_CREDITS ?? "30");
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 30;
+}
 
 function getRelevantHirePilotRows(rows: HirePilotBillingRow[]) {
   return rows.filter(
@@ -283,6 +289,17 @@ export async function upsertHirePilotMonthlyBilling(params: {
       cycleEnd: params.currentPeriodEnd,
       stripeSubscriptionId: params.stripeSubscriptionId ?? null,
     });
+    await sendHirePilotCreditsRenewedEmailIfNeeded({
+      userId: params.userId,
+      dedupeKey: `credits-renewed:${params.userId}:${params.currentPeriodStart.toISOString()}`,
+      creditsAdded: getMonthlyIncludedCreditsForEmail(),
+      sourceLabel: "monthly",
+    }).catch((error) => {
+      console.warn("[hirepilot billing] monthly credits email failed", {
+        userId: params.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   } else {
     await ensureHirePilotCreditsForUser(params.userId);
   }
@@ -316,6 +333,19 @@ export async function incrementHirePilotCredits(params: {
     credits: params.credits,
     stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
     paidAt,
+  });
+  await sendHirePilotCreditsRenewedEmailIfNeeded({
+    userId: params.userId,
+    dedupeKey: `credits-added:${params.userId}:${
+      params.stripeCheckoutSessionId?.trim() || paidAt.toISOString()
+    }`,
+    creditsAdded: params.credits,
+    sourceLabel: "purchase",
+  }).catch((error) => {
+    console.warn("[hirepilot billing] purchased credits email failed", {
+      userId: params.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
 }
 

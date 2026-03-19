@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
-import { sendWelcomeEmail } from "@/app/lib/email/sendgrid";
+import { sendRegistrationConfirmedEmailIfNeeded } from "@/app/lib/email/lifecycle";
+import { syncLoopsContact } from "@/app/lib/email/loops";
 
 function normalizeEmail(v: unknown) {
   return String(v ?? "").trim().toLowerCase();
@@ -42,8 +43,18 @@ export async function POST(req: Request) {
         guestId: true,
         email: true,
         firstName: true,
+        lastName: true,
         welcomeEmailSentAt: true,
       },
+    });
+
+    await syncLoopsContact({
+      email,
+      userId: userId ?? guestId,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      source: "onboarding/confirm-email",
+      userGroup: userId ? "hirexa_users" : "hirexa_guests",
     });
 
     /* -----------------------------------------------------
@@ -81,18 +92,10 @@ export async function POST(req: Request) {
     /* -----------------------------------------------------
        3) SEND WELCOME EMAIL (ONCE ONLY)
     ----------------------------------------------------- */
-    if (!profile.welcomeEmailSentAt) {
-      try {
-        await sendWelcomeEmail(email, profile.firstName ?? undefined);
-
-        await prisma.userProfile.update({
-          where: { id: profile.id },
-          data: { welcomeEmailSentAt: new Date() },
-        });
-      } catch (emailErr) {
-        // Never block onboarding because email failed
+    if (profile.id) {
+      await sendRegistrationConfirmedEmailIfNeeded(profile.id).catch((emailErr) => {
         console.warn("Welcome email failed:", emailErr);
-      }
+      });
     }
 
     /* -----------------------------------------------------

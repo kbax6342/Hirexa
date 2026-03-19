@@ -13,6 +13,7 @@ import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 import { deriveLocationLabel } from "@/app/lib/locationOptions";
+import { sendResumeUploadedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 import {
   getSafePrivateProfileFields,
   readRawPrivateProfileFieldsByIds,
@@ -442,6 +443,18 @@ export async function POST(req: Request) {
     }
 
     invalidateCachedProfile({ userId, guestId: originalGuestId ?? guestId });
+    await sendResumeUploadedEmailIfNeeded({
+      profileId: profile.id,
+      resumeId: resume.id,
+      filename: resume.filename,
+      mimeType: resume.mimeType,
+      experienceTitles: parsedExperiences.map((experience) => experience.title),
+    }).catch((emailError) => {
+      console.warn("[resume upload] success email failed", {
+        profileId: profile.id,
+        error: emailError instanceof Error ? emailError.message : String(emailError),
+      });
+    });
 
     const response = NextResponse.json({
       ok: true,

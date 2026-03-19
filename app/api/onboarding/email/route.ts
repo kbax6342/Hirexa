@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
+import { syncLoopsContact } from "@/app/lib/email/loops";
 
 // Canonical source of truth: UserProfile.email (subscriptionEmail mirrors email for billing use).
 function normalizeEmail(value: unknown) {
@@ -70,18 +71,34 @@ export async function POST(req: Request) {
         subscriptionEmail: email,
         newsletterOptIn,
         newsletterSource,
+        unsubscribedAt: null,
         // emailVerifiedAt: null, // keep null unless you add verification
-        // unsubscribedAt: null,  // only set when they unsubscribe
       },
       create: userId
-        ? { userId, email, subscriptionEmail: email, newsletterOptIn, newsletterSource }
-        : { guestId: guestId!, email, subscriptionEmail: email, newsletterOptIn, newsletterSource },
+        ? {
+            userId,
+            email,
+            subscriptionEmail: email,
+            newsletterOptIn,
+            newsletterSource,
+            unsubscribedAt: null,
+          }
+        : {
+            guestId: guestId!,
+            email,
+            subscriptionEmail: email,
+            newsletterOptIn,
+            newsletterSource,
+            unsubscribedAt: null,
+          },
       select: {
         id: true,
         userId: true,
         guestId: true,
         email: true,
         subscriptionEmail: true,
+        firstName: true,
+        lastName: true,
         newsletterOptIn: true,
         newsletterSource: true,
         emailVerifiedAt: true,
@@ -93,6 +110,16 @@ export async function POST(req: Request) {
       userId,
       guestId,
       email,
+    });
+
+    await syncLoopsContact({
+      email,
+      userId: userId ?? guestId,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      source: newsletterSource,
+      subscribed: true,
+      userGroup: userId ? "hirexa_users" : "hirexa_guests",
     });
 
     const res = NextResponse.json({

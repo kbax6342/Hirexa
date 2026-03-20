@@ -257,6 +257,58 @@ export async function sendPasswordChangedEmail(to: string, name?: string | null)
   });
 }
 
+export async function sendPasswordResetEmail(params: {
+  to: string;
+  name?: string | null;
+  resetUrl: string;
+  expiresInMinutes?: number;
+}) {
+  const { appUrl, supportEmail } = getEmailConfig();
+  const greeting = formatGreeting(params.name);
+  const subject = "Reset your Hirexa password";
+  const expiresInMinutes = params.expiresInMinutes ?? 60;
+
+  const text = buildTextBody([
+    greeting,
+    "",
+    "We received a request to reset your Hirexa password.",
+    `Use this secure link to set a new password: ${params.resetUrl}`,
+    `This link expires in ${expiresInMinutes} minutes and can only be used once.`,
+    "",
+    "If you did not request a password reset, you can ignore this email.",
+    supportEmail ? `Support: ${supportEmail}` : null,
+    "",
+    "Hirexa AI Security Team",
+    appUrl,
+  ]);
+
+  const html = buildHirexaEmail({
+    greeting,
+    title: "Reset your password",
+    paragraphs: [
+      "We received a request to reset your Hirexa password.",
+      `This link expires in ${expiresInMinutes} minutes and can only be used once.`,
+      "If you did not request a password reset, you can ignore this email.",
+    ],
+    primaryAction: {
+      href: params.resetUrl,
+      label: "Reset your password",
+    },
+    footerLines: [
+      "Hirexa AI Security Team",
+      supportEmail ? `Support: ${supportEmail}` : null,
+    ],
+  });
+
+  await sendEmail({
+    to: params.to,
+    subject,
+    html,
+    text,
+    category: "transactional",
+  });
+}
+
 export async function sendResumeUploadedEmail(params: {
   to: string;
   name?: string | null;

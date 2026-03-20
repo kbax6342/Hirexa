@@ -38,9 +38,23 @@ function cleanText(value: unknown, maxLength?: number) {
 }
 
 function moneyRange(min?: number, max?: number) {
-  if (!min && !max) return undefined;
-  if (min && max) return `$${Math.round(min).toLocaleString()} - $${Math.round(max).toLocaleString()} / year`;
-  if (min) return `From $${Math.round(min).toLocaleString()} / year`;
+  const hasMin = typeof min === "number" && Number.isFinite(min);
+  const hasMax = typeof max === "number" && Number.isFinite(max);
+
+  if (!hasMin && !hasMax) return undefined;
+
+  if (hasMin && hasMax) {
+    const roundedMin = Math.round(min);
+    const roundedMax = Math.round(max);
+
+    if (roundedMin === roundedMax) {
+      return `$${roundedMin.toLocaleString()} / year`;
+    }
+
+    return `$${roundedMin.toLocaleString()} - $${roundedMax.toLocaleString()} / year`;
+  }
+
+  if (hasMin) return `From $${Math.round(min).toLocaleString()} / year`;
   return `Up to $${Math.round(max!).toLocaleString()} / year`;
 }
 
@@ -60,9 +74,11 @@ export async function fetchAdzunaJobs(args: {
   query: string;
   page: number;
   limit: number;
+  location?: string;
 }): Promise<Job[]> {
-  const { query, page, limit } = args;
-  const cacheKey = `${query.trim().toLowerCase()}|${page}|${limit}`;
+  const { query, page, limit, location } = args;
+  const normalizedLocation = location?.trim() ?? "";
+  const cacheKey = `${query.trim().toLowerCase()}|${normalizedLocation.toLowerCase()}|${page}|${limit}`;
   const cachedJobs = getCachedJobs(cacheKey);
   if (cachedJobs) {
     return cachedJobs;
@@ -84,6 +100,9 @@ export async function fetchAdzunaJobs(args: {
       what: query,
       "content-type": "application/json",
     });
+    if (normalizedLocation) {
+      params.set("where", normalizedLocation);
+    }
 
     const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?${params.toString()}`;
     const res = await fetch(url, {
@@ -106,7 +125,7 @@ export async function fetchAdzunaJobs(args: {
       location: cleanText(result.location?.display_name) || "Unknown",
       posted: formatPosted(result.created),
       salary: moneyRange(result.salary_min, result.salary_max),
-      description: cleanText(result.description, 240) || undefined,
+      description: cleanText(result.description) || undefined,
       jobUrl: cleanText(result.redirect_url) || undefined,
     }));
 

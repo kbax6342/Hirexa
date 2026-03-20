@@ -3,7 +3,7 @@
 import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type JobCard = {
   id: string;
@@ -24,15 +24,31 @@ type LocationSection = {
 };
 
 export default function LocationSections({
+  preferredState,
   states,
   n,
 }: {
+  preferredState?: string | null;
   states: string[];
   n: number;
 }) {
   const router = useRouter();
   const [sections, setSections] = useState<LocationSection[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const effectiveStates = useMemo(() => {
+    const seen = new Set<string>();
+
+    return [preferredState, ...states]
+      .map((value) => value?.trim() ?? "")
+      .filter(Boolean)
+      .filter((value) => {
+        const key = value.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [preferredState, states]);
 
   function handleAiAssistantApply(jobUrl: string) {
     const encodedUrl = encodeURIComponent(jobUrl);
@@ -45,7 +61,7 @@ export default function LocationSections({
     async function load() {
       try {
         const qs = new URLSearchParams({
-          states: states.join(","),
+          states: effectiveStates.join(","),
           n: String(n),
         });
 
@@ -82,7 +98,7 @@ export default function LocationSections({
     return () => {
       alive = false;
     };
-  }, [states, n]);
+  }, [effectiveStates, n]);
 
   if (loading) {
     return <div className="mt-10 text-sm text-gray-500">Loading jobs...</div>;

@@ -75,7 +75,7 @@ export function Hero({ href }: { href: string }) {
               {[
                 { value: "10x", label: "More applications" },
                 { value: "85%", label: "Match accuracy" },
-                { value: "3 min", label: "Setup time" },
+                { value: "3 min", label: "Onboarding time" },
               ].map((stat) => (
                 <div key={stat.label}>
                   <p className="font-heading text-2xl font-bold text-foreground">

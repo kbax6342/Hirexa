@@ -1,26 +1,20 @@
-import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import { Analytics } from "@vercel/analytics/next";
-import { SpeedInsights } from "@vercel/speed-insights/next";
-import "./globals.css";
-import Providers from "./providers";
-import SiteNav from "./components/nav/SiteNav";
-import SiteHeaderClient from "./components/nav/SiteNav";
-//import { GoogleReCaptchaProvider } from "react-google-recaptcha-v3";
-import RecaptchaProvider from "./components/providers/RecaptchaProvider";
-import { Navbar } from "./components/navbar";
-import { Inter, Space_Grotesk } from "next/font/google"; // ✅ IMPORT IT
+import type { Viewport } from "next";
+import { Inter, Space_Grotesk } from "next/font/google";
 
+import "./globals.css";
+import { Navbar } from "./components/navbar";
+import RecaptchaProvider from "./components/providers/RecaptchaProvider";
+import Providers from "./providers";
 
 const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
+  subsets: ["latin"],
+  variable: "--font-inter",
+});
 
 const spaceGrotesk = Space_Grotesk({
-  subsets: ['latin'],
-  variable: '--font-space-grotesk',
-})
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+});
 
 export const dynamic = "force-dynamic";
 
@@ -39,10 +33,9 @@ export const metadata = {
   },
 };
 
-
 export const viewport: Viewport = {
-  themeColor: '#0b1024',
-}
+  themeColor: "#0b1024",
+};
 
 export default function RootLayout({
   children,
@@ -51,17 +44,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
-      <body
-        className="font-sans antialiased"
-      >
-        <RecaptchaProvider
-        >
-         <Providers>
-        <Navbar/>
-        {children}</Providers> 
-        </RecaptchaProvider>    
-        <Analytics />
-        <SpeedInsights />
+      <body className="font-sans antialiased">
+        <RecaptchaProvider>
+          <Providers>
+            <Navbar />
+            {children}
+          </Providers>
+        </RecaptchaProvider>
       </body>
     </html>
   );

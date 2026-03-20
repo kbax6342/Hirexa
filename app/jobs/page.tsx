@@ -7,8 +7,10 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "../components/navbar";
+import LocationSections from "../components/location-hub/LocationSections";
 import LoginFooter from "../components/loginFooter/LoginFooter";
-import Spinner from "../components/spinner/Spinner"
+import Spinner from "../components/spinner/Spinner";
+import { usePublicJobLocation } from "../hooks/usePublicJobLocation";
 
 type JobCard = {
   id?: string;
@@ -76,6 +78,8 @@ const topPills = [
   "UX Design",
   "Healthcare",
 ] as const;
+
+const DEFAULT_LOCATION_STATES = ["California", "Texas", "Florida"] as const;
 
 const fallbackSections: CategorySection[] = [
   {
@@ -525,6 +529,28 @@ export default function JobsPage() {
 
   const [sectionsState, setSectionsState] = useState<CategorySection[]>([]);
   const [loadingSections, setLoadingSections] = useState(true);
+  const publicLocation = usePublicJobLocation();
+
+  const localizedStates = useMemo(() => {
+    const seen = new Set<string>();
+
+    return [publicLocation.stateName, ...DEFAULT_LOCATION_STATES]
+      .map((value) => value?.trim() ?? "")
+      .filter(Boolean)
+      .filter((value) => {
+        const key = value.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 3);
+  }, [publicLocation.stateName]);
+
+  const locationCue = publicLocation.locationLabel
+    ? `Showing jobs near ${publicLocation.locationLabel}`
+    : publicLocation.stateName
+    ? `Personalized for ${publicLocation.stateName}`
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -626,6 +652,11 @@ export default function JobsPage() {
               <p className="mt-3 max-w-2xl text-sm text-muted-foreground md:text-base">
                 Explore categories, view fresh roles, and jump straight into the jobs you want.
               </p>
+              {locationCue ? (
+                <p className="mt-3 text-xs font-medium tracking-wide text-sky-600">
+                  {locationCue}
+                </p>
+              ) : null}
             </div>
 
             {/* Hero pill card (glass) */}
@@ -680,6 +711,30 @@ export default function JobsPage() {
         </div>
 
         <div className="mx-auto max-w-7xl px-6 py-12">
+          <section>
+            <div className="mb-6">
+              <div className="text-[11px] font-semibold tracking-wider text-accent">
+                {publicLocation.locationLabel ? "NEAR YOU" : "BY LOCATION"}
+              </div>
+              <h2 className="mt-2 font-heading text-2xl font-bold tracking-tight text-foreground">
+                {publicLocation.locationLabel
+                  ? `Jobs near ${publicLocation.locationLabel}`
+                  : "Popular states hiring right now"}
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {publicLocation.locationLabel
+                  ? "We use your browser location to surface nearby public job feeds when available."
+                  : "Explore fresh public roles by location, with a localized view when browser location is available."}
+              </p>
+            </div>
+
+            <LocationSections
+              preferredState={publicLocation.stateName}
+              states={localizedStates}
+              n={3}
+            />
+          </section>
+
           {/* Adzuna sections */}
           <section className="mt-10">
             {adzunaLoading ? (

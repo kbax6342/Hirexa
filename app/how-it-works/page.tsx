@@ -89,27 +89,27 @@ export default function HowItWorksPage() {
             {overviewCards.map((card) => (
               <div
                 key={card.title}
-                className="rounded-3xl border border-slate-200 bg-slate-50 p-5"
+                className="rounded-3xl border border-white/10 bg-slate-950 p-5"
               >
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 text-sky-200">
                   <card.icon className="h-5 w-5" />
                 </div>
-                <h2 className="mt-4 text-lg font-semibold text-slate-900">{card.title}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{card.description}</p>
+                <h2 className="mt-4 text-lg font-semibold text-white">{card.title}</h2>
+                <p className="mt-2 text-sm leading-6 text-white/80">{card.description}</p>
               </div>
             ))}
           </div>
         </section>
 
         <section className="mt-10 grid gap-6 lg:grid-cols-2">
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3 text-slate-900">
-                <SparklesIcon className="h-5 w-5 text-sky-600" />
+              <CardTitle className="flex items-center gap-3 text-white">
+                <SparklesIcon className="h-5 w-5 text-sky-200" />
                 What Hirexa AI does
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
+            <CardContent className="space-y-4 text-sm leading-6 text-white/80">
               <p>
                 Hirexa AI combines your profile, resume, experience, skills, and preferences to
                 improve job discovery and the quality of AI-generated outputs.
@@ -122,14 +122,14 @@ export default function HowItWorksPage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3 text-slate-900">
-                <DocumentTextIcon className="h-5 w-5 text-sky-600" />
+              <CardTitle className="flex items-center gap-3 text-white">
+                <DocumentTextIcon className="h-5 w-5 text-sky-200" />
                 Why profile and resume data matter
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
+            <CardContent className="space-y-4 text-sm leading-6 text-white/80">
               <p>
                 The more complete your profile is, the better Hirexa AI can interpret your target
                 role, location preferences, salary expectations, and experience history.
@@ -144,14 +144,14 @@ export default function HowItWorksPage() {
         </section>
 
         <section className="mt-10 grid gap-6 lg:grid-cols-2">
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3 text-slate-900">
-                <ChatBubbleLeftRightIcon className="h-5 w-5 text-sky-600" />
+              <CardTitle className="flex items-center gap-3 text-white">
+                <ChatBubbleLeftRightIcon className="h-5 w-5 text-sky-200" />
                 What HirePilot does
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
+            <CardContent className="space-y-4 text-sm leading-6 text-white/80">
               <p>
                 HirePilot helps with interview preparation and live interview support using your
                 Hirexa profile context. Practice mode is separate from paid live interview usage.
@@ -164,14 +164,14 @@ export default function HowItWorksPage() {
             </CardContent>
           </Card>
 
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3 text-slate-900">
-                <CreditCardIcon className="h-5 w-5 text-sky-600" />
+              <CardTitle className="flex items-center gap-3 text-white">
+                <CreditCardIcon className="h-5 w-5 text-sky-200" />
                 How credits and billing work
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
+            <CardContent className="space-y-4 text-sm leading-6 text-white/80">
               <ul className="list-disc space-y-2 pl-5">
                 <li>Monthly included HirePilot credits reset on the billing cycle.</li>
                 <li>Purchased top-up credits stay available until their expiration date.</li>
@@ -180,7 +180,10 @@ export default function HowItWorksPage() {
               </ul>
               <p>
                 Manage billing, cancellations, and product-specific details from the{" "}
-                <Link href="/settings/subscription" className="font-semibold text-sky-700 hover:underline">
+                <Link
+                  href="/settings/subscription"
+                  className="font-semibold text-white underline decoration-white/60 underline-offset-2 hover:text-white/80"
+                >
                   Subscription settings
                 </Link>{" "}
                 page.
@@ -190,14 +193,14 @@ export default function HowItWorksPage() {
         </section>
 
         <section className="mt-10 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3 text-slate-900">
-                <ShieldCheckIcon className="h-5 w-5 text-sky-600" />
+              <CardTitle className="flex items-center gap-3 text-white">
+                <ShieldCheckIcon className="h-5 w-5 text-sky-200" />
                 Privacy, review, and support
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
+            <CardContent className="space-y-4 text-sm leading-6 text-white/80">
               <p>
                 Hirexa AI is designed to help you move faster, not to replace your judgment.
                 Review AI-generated answers, resumes, and outreach before you use them.
@@ -208,39 +211,48 @@ export default function HowItWorksPage() {
                 ))}
               </ul>
               <div className="flex flex-wrap gap-4 text-sm">
-                <Link href="/privacy/" className="font-semibold text-sky-700 hover:underline">
+                <Link
+                  href="/privacy/"
+                  className="font-semibold text-white underline decoration-white/60 underline-offset-2 hover:text-white/80"
+                >
                   Privacy Policy
                 </Link>
-                <Link href="/terms/" className="font-semibold text-sky-700 hover:underline">
+                <Link
+                  href="/terms/"
+                  className="font-semibold text-white underline decoration-white/60 underline-offset-2 hover:text-white/80"
+                >
                   Terms of Service
                 </Link>
-                <Link href="/fraud-awareness" className="font-semibold text-sky-700 hover:underline">
+                <Link
+                  href="/fraud-awareness"
+                  className="font-semibold text-white underline decoration-white/60 underline-offset-2 hover:text-white/80"
+                >
                   Fraud Awareness
                 </Link>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="rounded-[28px] border-slate-200 shadow-sm">
+          <Card className="rounded-[28px] border-white/10 bg-slate-950 text-white shadow-sm">
             <CardHeader>
-              <CardTitle className="text-slate-900">Explore the platform</CardTitle>
+              <CardTitle className="text-white">Explore the platform</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {supportLinks.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-sky-200 hover:bg-sky-50 hover:text-sky-800"
+                  className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/10 hover:text-white/90"
                 >
                   <span>{link.label}</span>
                   <span aria-hidden="true">→</span>
                 </Link>
               ))}
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm leading-6 text-slate-600">
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm leading-6 text-white/80">
                 Need help? Contact{" "}
                 <a
                   href="mailto:support@hirexa-ai.com"
-                  className="font-semibold text-sky-700 hover:underline"
+                  className="font-semibold text-white underline decoration-white/60 underline-offset-2 hover:text-white/80"
                 >
                   support@hirexa-ai.com
                 </a>

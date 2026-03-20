@@ -1,6 +1,13 @@
 // /app/lib/security/password.ts
 import bcrypt from "bcryptjs";
 
+export const ACCOUNT_PASSWORD_RULES = [
+  "At least 10 characters",
+  "At least 1 uppercase letter",
+  "At least 1 lowercase letter",
+  "At least 1 number",
+] as const;
+
 /**
  * Validates password strength.
  * Rules:
@@ -24,6 +31,28 @@ export function validatePassword(password: string) {
   return {
     ok: passed >= 4, // allow 4/5 rules to pass
     rules,
+  };
+}
+
+export function validateAccountPassword(password: string) {
+  const errors: string[] = [];
+
+  if (password.length < 10) {
+    errors.push("Password must be at least 10 characters long.");
+  }
+  if (!/[A-Z]/.test(password)) {
+    errors.push("Password must include at least one uppercase letter.");
+  }
+  if (!/[a-z]/.test(password)) {
+    errors.push("Password must include at least one lowercase letter.");
+  }
+  if (!/\d/.test(password)) {
+    errors.push("Password must include at least one number.");
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
   };
 }
 

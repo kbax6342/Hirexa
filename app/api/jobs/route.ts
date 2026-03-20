@@ -111,6 +111,8 @@ export async function GET(req: Request) {
   const limit = Math.min(Number(searchParams.get("limit") ?? 20), 50);
   const rawCategory = (searchParams.get("category") ?? "").trim().toLowerCase();
   const q = (searchParams.get("q") ?? mapCategoryToQuery(rawCategory)).trim();
+  const location = (searchParams.get("location") ?? "").trim();
+  const state = (searchParams.get("state") ?? "").trim();
   const cursor = decodeCursor(searchParams.get("cursor"));
 
   const greenhouseBoards = getGreenhouseBoards();
@@ -118,7 +120,12 @@ export async function GET(req: Request) {
   const workdayBoards = getWorkdayBoards();
 
   const providerResults = await Promise.allSettled([
-    fetchAdzunaJobs({ query: q, page: cursor.adzunaPage, limit }),
+    fetchAdzunaJobs({
+      query: q,
+      page: cursor.adzunaPage,
+      limit,
+      location: location || state || undefined,
+    }),
     greenhouseBoards.length > 0
       ? fetchGreenhouseJobs({
           boardTokens: greenhouseBoards,

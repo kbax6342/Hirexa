@@ -116,6 +116,15 @@ export default function LoginPage() {
             <form className="mt-6" onSubmit={onSubmit}>
               <LoginForm isSigningIn={isSigningIn} signInError={signInError} />
 
+              <div className="mt-3 text-right">
+                <Link
+                  href="/forgot-password"
+                  className="text-sm font-medium text-sky-600 hover:text-sky-700 hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+
               <Button
                 type="button"
                 size="lg"

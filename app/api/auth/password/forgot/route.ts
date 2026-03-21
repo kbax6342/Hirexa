@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/app/lib/prisma";
-import { sendPasswordResetEmail } from "@/app/lib/email/sendgrid";
+import {
+  getPasswordResetSendMode,
+  sendPasswordResetEmail,
+} from "@/app/lib/email/sendgrid";
 import { getSiteUrl } from "@/app/lib/site-url";
 import {
   generatePasswordResetToken,
@@ -18,6 +21,10 @@ const GENERIC_RESPONSE = {
   ok: true,
   message: "If an account exists for this email, we sent a password reset link.",
 };
+
+function getEmailDomain(email: string) {
+  return email.split("@")[1] ?? null;
+}
 
 export async function POST(req: Request) {
   try {
@@ -37,6 +44,9 @@ export async function POST(req: Request) {
     });
 
     if (!user?.email) {
+      console.info("[forgot-password] no matching user; returning generic success", {
+        emailDomain: getEmailDomain(email),
+      });
       return NextResponse.json(GENERIC_RESPONSE);
     }
 
@@ -59,14 +69,31 @@ export async function POST(req: Request) {
     });
 
     try {
-      await sendPasswordResetEmail({
+      const mode = await sendPasswordResetEmail({
         to: user.email,
         name: user.name,
         resetUrl,
         expiresInMinutes: Math.round(PASSWORD_RESET_TOKEN_TTL_MS / (60 * 1000)),
       });
+
+      console.info(`[forgot-password] password reset email send succeeded (${mode})`, {
+        userId: user.id,
+        emailDomain: getEmailDomain(user.email),
+      });
     } catch (error) {
-      console.error("Password reset email failed:", error);
+      const mode = getPasswordResetSendMode();
+      console.error(`[forgot-password] password reset email send failed (${mode})`, {
+        userId: user.id,
+        emailDomain: getEmailDomain(user.email),
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message : "Unknown error",
+      });
+      await prisma.passwordResetToken.deleteMany({
+        where: {
+          userId: user.id,
+          tokenHash,
+        },
+      });
     }
 
     return NextResponse.json(GENERIC_RESPONSE);

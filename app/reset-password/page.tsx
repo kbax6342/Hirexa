@@ -6,7 +6,6 @@ import { useMemo, useState, type FormEvent } from "react";
 
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
-import { ACCOUNT_PASSWORD_RULES } from "@/app/lib/security/password";
 
 export default function ResetPasswordPage() {
   const searchParams = useSearchParams();
@@ -45,7 +44,7 @@ export default function ResetPasswordPage() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/auth/password/reset", {
+      const response = await fetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -187,11 +186,10 @@ export default function ResetPasswordPage() {
 
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
                   <p className="font-semibold text-gray-900">Password requirements</p>
-                  <ul className="mt-2 list-disc space-y-1 pl-5">
-                    {ACCOUNT_PASSWORD_RULES.map((rule) => (
-                      <li key={rule}>{rule}</li>
-                    ))}
-                  </ul>
+                  <p className="mt-2">
+                    Use at least 8 characters and include a mix of uppercase,
+                    lowercase, numbers, or symbols.
+                  </p>
                 </div>
 
                 {error ? (

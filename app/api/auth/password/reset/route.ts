@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import {
   hashPassword,
-  validateAccountPassword,
+  validatePassword,
   verifyPassword,
 } from "@/app/lib/security/password";
 import { hashPasswordResetToken } from "@/app/lib/security/reset-token";
@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 
 type ResetBody = {
   token?: string;
+  password?: string;
   newPassword?: string;
   confirmPassword?: string;
 };
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json().catch(() => null)) as ResetBody | null;
     const token = normalizeToken(body?.token);
-    const newPassword = String(body?.newPassword ?? "");
+    const newPassword = String(body?.newPassword ?? body?.password ?? "");
     const confirmPassword = String(body?.confirmPassword ?? "");
 
     if (!token) {
@@ -49,10 +50,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const passwordValidation = validateAccountPassword(newPassword);
+    const passwordValidation = validatePassword(newPassword);
     if (!passwordValidation.ok) {
       return NextResponse.json(
-        { ok: false, error: passwordValidation.errors[0] },
+        {
+          ok: false,
+          error:
+            "Password not strong enough. Use at least 8 characters and include a mix of uppercase, lowercase, numbers, or symbols.",
+        },
         { status: 400 }
       );
     }

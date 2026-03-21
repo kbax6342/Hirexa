@@ -1,3 +1,5 @@
+import sgMail from "@sendgrid/mail";
+
 import { getEmailConfig, sendEmail } from "./mailer";
 
 type LifecycleJobSummary = {
@@ -6,6 +8,63 @@ type LifecycleJobSummary = {
   location?: string | null;
   jobUrl?: string | null;
 };
+
+type EmailCategory = "transactional" | "marketing";
+export type PasswordResetSendMode = "template" | "plain-test";
+
+const TEMPLATE_IDS = {
+  welcome: "d-3f0e511e3e634a8586e1342c5dba663c",
+  verificationCode: "d-9fa43cf22c54494687c32cc4f02640f7",
+  passwordReset: "d-06369f660377424e89dd66ed6e277f5f",
+  profileCompleted: "d-6edb6e089f0e4fbf8d8a620bd94ed48f",
+  resumeUploadSuccess: "d-5aaf27029e2445a294d28fe051ae26b5",
+  accountDeletedConfirmation: "d-0aa5c7e5b3234eddac4315fb57e1a8b2",
+  creditsRunningLow: "d-704b8547d9dd4114bc6a2d3bf25a82ed",
+  completeProfileReminder: "d-d623933880d6413e95ec7708d42f3b80",
+  uploadResumeReminder: "d-0889b398d7e74793b21040b16bd6839e",
+  firstSmartMatchesReady: "d-454f7fe45fc24191a276885ac4b174bb",
+  inactiveUserComeback: "d-c9f3ec663e334501bbf167e151e8ff0b",
+} as const;
+
+type TemplateKey = keyof typeof TEMPLATE_IDS;
+
+type TemplateDataValue = string | number | boolean | null | undefined;
+
+type TemplateData = {
+  email_subject: string;
+  email_preheader?: string;
+  headline?: string;
+  body_text?: string;
+  cta_label?: string;
+  cta_url?: string;
+  first_name?: string;
+  verification_code?: string;
+  reset_url?: string;
+  credits_remaining?: number;
+  jobs_count?: number;
+  support_email?: string;
+} & Record<string, TemplateDataValue>;
+
+const WELCOME_EMAIL_CATEGORY =
+  process.env.WELCOME_EMAIL_CATEGORY === "transactional"
+    ? "transactional"
+    : "marketing";
+
+let sendGridConfigured = false;
+
+function getSendGridClient() {
+  const apiKey = process.env.SENDGRID_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Missing SENDGRID_API_KEY");
+  }
+
+  if (!sendGridConfigured) {
+    sgMail.setApiKey(apiKey);
+    sendGridConfigured = true;
+  }
+
+  return sgMail;
+}
 
 function escapeHtml(value: string) {
   return value
@@ -18,6 +77,11 @@ function escapeHtml(value: string) {
 
 function normalizeName(name?: string | null) {
   return (name ?? "").trim();
+}
+
+function getTemplateFirstName(name?: string | null) {
+  const safeName = normalizeName(name);
+  return safeName ? safeName.split(/\s+/)[0] ?? safeName : undefined;
 }
 
 function formatGreeting(name?: string | null) {
@@ -68,16 +132,17 @@ function renderJobs(jobs: LifecycleJobSummary[]) {
 
   return jobs
     .map((job) => {
-      const label = [job.company, job.location].filter(Boolean).join(" • ");
-      const title = escapeHtml(job.title);
-      const meta = label ? `<div style="color:#6b7280;font-size:13px">${escapeHtml(label)}</div>` : "";
+      const label = [job.company, job.location].filter(Boolean).join(" - ");
+      const meta = label
+        ? `<div style="color:#6b7280;font-size:13px">${escapeHtml(label)}</div>`
+        : "";
       const cta = job.jobUrl
         ? `<div style="margin-top:6px"><a href="${escapeHtml(job.jobUrl)}" style="color:#145efc">View role</a></div>`
         : "";
 
       return `
         <div style="border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin:0 0 12px">
-          <div style="font-weight:700;color:#111827">${title}</div>
+          <div style="font-weight:700;color:#111827">${escapeHtml(job.title)}</div>
           ${meta}
           ${cta}
         </div>
@@ -126,44 +191,233 @@ function buildHirexaEmail(params: {
   `;
 }
 
-const WELCOME_EMAIL_CATEGORY =
-  process.env.WELCOME_EMAIL_CATEGORY === "transactional"
-    ? "transactional"
-    : "marketing";
+function resolveAppUrl(path = "") {
+  const base =
+    process.env.NEXT_PUBLIC_APP_URL_LIVE?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    process.env.APP_URL?.trim() ||
+    "http://localhost:3000";
+
+  const normalizedBase = base.replace(/\/+$/, "");
+  if (!path) {
+    return normalizedBase;
+  }
+
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+function cleanTemplateData(data: TemplateData) {
+  return Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined)
+  ) as TemplateData;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function toSerializable(value: unknown, depth = 0): unknown {
+  if (depth > 6) {
+    return "[MaxDepthExceeded]";
+  }
+
+  if (
+    value == null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toSerializable(item, depth + 1));
+  }
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+    };
+  }
+
+  if (typeof Headers !== "undefined" && value instanceof Headers) {
+    return Object.fromEntries(value.entries());
+  }
+
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        toSerializable(nestedValue, depth + 1),
+      ])
+    );
+  }
+
+  return String(value);
+}
+
+function summarizeSendGridError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return { message: "Unknown SendGrid error" };
+  }
+
+  const candidate = error as Error & {
+    code?: string | number;
+    response?: {
+      statusCode?: number;
+      body?: unknown;
+      headers?: unknown;
+    };
+  };
+
+  const responseBody = toSerializable(candidate.response?.body);
+  const responseHeaders = toSerializable(candidate.response?.headers);
+  const providerErrors =
+    isRecord(candidate.response?.body) && Array.isArray(candidate.response.body.errors)
+      ? toSerializable(candidate.response.body.errors)
+      : undefined;
+
+  const details: Record<string, unknown> = {
+    name: error.name,
+    message: error.message,
+    code: candidate.code ?? null,
+    statusCode: candidate.response?.statusCode ?? null,
+    responseBody,
+    responseHeaders,
+    providerErrors: providerErrors ?? null,
+  };
+
+  return details;
+}
+
+function logSendGridFailure(params: {
+  mode: "template" | "plain-test";
+  template?: TemplateKey | null;
+  subject: string;
+  to: string;
+  from: string;
+  replyTo?: string;
+  plainTestMode: boolean;
+  error: unknown;
+}) {
+  const diagnostic = {
+    mode: params.mode,
+    template: params.template ?? null,
+    subject: params.subject,
+    toDomain: params.to.split("@")[1] ?? null,
+    from: params.from,
+    replyTo: params.replyTo ?? null,
+    plainTestMode: params.plainTestMode,
+    error: summarizeSendGridError(params.error),
+  };
+
+  console.error(`[sendgrid] email send failed\n${JSON.stringify(diagnostic, null, 2)}`);
+}
+
+export function getPasswordResetSendMode(): PasswordResetSendMode {
+  return process.env.SENDGRID_PASSWORD_RESET_PLAIN_TEST === "true"
+    ? "plain-test"
+    : "template";
+}
+
+async function sendTemplateEmail(params: {
+  to: string;
+  template: TemplateKey;
+  subject: string;
+  category?: EmailCategory;
+  dynamicTemplateData: TemplateData;
+}) {
+  const { from, replyTo, supportEmail } = getEmailConfig();
+  const category = params.category ?? "transactional";
+  const appUrl = resolveAppUrl();
+  const headers: Record<string, string> = {};
+
+  if (category === "marketing" && supportEmail) {
+    headers["List-Unsubscribe"] = `<mailto:${supportEmail}?subject=unsubscribe>, <${appUrl}/unsubscribe>`;
+    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  }
+
+  try {
+    await getSendGridClient().send({
+      to: params.to,
+      from,
+      replyTo,
+      subject: params.subject,
+      templateId: TEMPLATE_IDS[params.template],
+      dynamicTemplateData: cleanTemplateData(params.dynamicTemplateData),
+      headers: Object.keys(headers).length ? headers : undefined,
+    });
+  } catch (error) {
+    logSendGridFailure({
+      mode: "template",
+      template: params.template,
+      subject: params.subject,
+      to: params.to,
+      from,
+      replyTo,
+      plainTestMode: false,
+      error,
+    });
+    throw error;
+  }
+}
+
+function buildTemplateData(params: {
+  subject: string;
+  preheader?: string;
+  headline?: string;
+  bodyText?: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  firstName?: string;
+  supportEmail?: string;
+  verificationCode?: string;
+  resetUrl?: string;
+  creditsRemaining?: number;
+  jobsCount?: number;
+}) {
+  return cleanTemplateData({
+    email_subject: params.subject,
+    email_preheader: params.preheader,
+    headline: params.headline,
+    body_text: params.bodyText,
+    cta_label: params.ctaLabel,
+    cta_url: params.ctaUrl,
+    first_name: params.firstName,
+    support_email: params.supportEmail,
+    verification_code: params.verificationCode,
+    reset_url: params.resetUrl,
+    credits_remaining: params.creditsRemaining,
+    jobs_count: params.jobsCount,
+  });
+}
 
 export async function sendRegistrationConfirmedEmail(to: string, name?: string | null) {
-  const { appUrl } = getEmailConfig();
-  const greeting = formatGreeting(name);
-  const subject = "Welcome to Hirexa — your account is ready";
+  const subject = "Welcome to Hirexa - your account is ready";
+  const { supportEmail } = getEmailConfig();
 
-  const text = buildTextBody([
-    greeting,
-    "",
-    "Welcome to Hirexa. Your account is ready, and you can continue onboarding anytime.",
-    "",
-    `Get started: ${appUrl}`,
-    "",
-    "If you did not request this email, you can ignore it.",
-    "",
-    "Hirexa",
-    appUrl,
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    paragraphs: [
-      "Welcome to Hirexa. Your account is ready, and you can continue onboarding anytime.",
-    ],
-    primaryAction: { href: appUrl, label: "Get started" },
-    footerLines: ["If you did not request this email, you can ignore it.", `Hirexa • ${appUrl}`],
-  });
-
-  await sendEmail({
+  await sendTemplateEmail({
     to,
     subject,
-    html,
-    text,
+    template: "welcome",
     category: WELCOME_EMAIL_CATEGORY,
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your Hirexa account is ready.",
+      headline: "Welcome to Hirexa",
+      bodyText:
+        "Your account is ready, and you can continue onboarding, explore your dashboard, and start using Hirexa anytime.",
+      ctaLabel: "Get started",
+      ctaUrl: resolveAppUrl("/dashboard"),
+      firstName: getTemplateFirstName(name),
+      supportEmail,
+    }),
   });
 }
 
@@ -172,47 +426,28 @@ export async function sendWelcomeEmail(to: string, name?: string | null) {
 }
 
 export async function sendVerificationCodeEmail(to: string, code: string) {
-  const { appUrl } = getEmailConfig();
   const subject = "Your Hirexa AI verification code";
+  const { supportEmail } = getEmailConfig();
 
-  const text = buildTextBody([
-    "Your Hirexa AI verification code is:",
-    code,
-    "",
-    "This code expires in 10 minutes.",
-    "",
-    "If you did not request this code, you can ignore this email.",
-    "",
-    "Hirexa AI",
-    appUrl,
-  ]);
-
-  const html = `
-    <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#111">
-      <h2 style="margin:0 0 12px">Verify your email</h2>
-      <p>Your Hirexa AI verification code is:</p>
-      <div style="font-size:28px;font-weight:700;letter-spacing:6px;margin:16px 0">${escapeHtml(
-        code
-      )}</div>
-      <p>This code expires in <strong>10 minutes</strong>.</p>
-      <p style="margin-top:24px;color:#6b7280;font-size:12px">
-        If you did not request this code, you can ignore this email.<br />
-        <strong>Hirexa AI</strong> &middot; ${escapeHtml(appUrl)}
-      </p>
-    </div>
-  `;
-
-  await sendEmail({
+  await sendTemplateEmail({
     to,
     subject,
-    html,
-    text,
-    category: "transactional",
+    template: "verificationCode",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Use this code to verify your Hirexa email address.",
+      headline: "Verify your email",
+      bodyText:
+        "Use the verification code below to continue setting up your Hirexa account. This code expires in 10 minutes.",
+      verificationCode: code,
+      supportEmail,
+    }),
   });
 }
 
 export async function sendPasswordChangedEmail(to: string, name?: string | null) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { replyTo, supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/settings/account/password");
   const greeting = formatGreeting(name);
   const subject = "Your Hirexa Password Was Changed";
 
@@ -225,7 +460,7 @@ export async function sendPasswordChangedEmail(to: string, name?: string | null)
     "If you did not change your password, reset it immediately and contact support.",
     "",
     supportEmail ? `Support: ${supportEmail}` : null,
-    `Account settings: ${appUrl}/settings/account/password`,
+    `Account settings: ${appUrl}`,
     "",
     "Hirexa AI Security Team",
   ]);
@@ -239,11 +474,12 @@ export async function sendPasswordChangedEmail(to: string, name?: string | null)
       "If you did not change your password, reset it immediately and contact support.",
     ],
     primaryAction: {
-      href: `${appUrl}/settings/account/password`,
+      href: appUrl,
       label: "Review your account settings",
     },
     footerLines: [
       "Hirexa AI Security Team",
+      replyTo ? `Reply to: ${replyTo}` : null,
       supportEmail ? `Support: ${supportEmail}` : null,
     ],
   });
@@ -262,50 +498,134 @@ export async function sendPasswordResetEmail(params: {
   name?: string | null;
   resetUrl: string;
   expiresInMinutes?: number;
-}) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
+}): Promise<PasswordResetSendMode> {
   const subject = "Reset your Hirexa password";
-  const expiresInMinutes = params.expiresInMinutes ?? 60;
+  const { from, replyTo, supportEmail } = getEmailConfig();
+  const expiresInMinutes = params.expiresInMinutes ?? 30;
+  const mode = getPasswordResetSendMode();
 
-  const text = buildTextBody([
-    greeting,
-    "",
-    "We received a request to reset your Hirexa password.",
-    `Use this secure link to set a new password: ${params.resetUrl}`,
-    `This link expires in ${expiresInMinutes} minutes and can only be used once.`,
-    "",
-    "If you did not request a password reset, you can ignore this email.",
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa AI Security Team",
-    appUrl,
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Reset your password",
-    paragraphs: [
-      "We received a request to reset your Hirexa password.",
-      `This link expires in ${expiresInMinutes} minutes and can only be used once.`,
-      "If you did not request a password reset, you can ignore this email.",
-    ],
-    primaryAction: {
-      href: params.resetUrl,
-      label: "Reset your password",
-    },
-    footerLines: [
-      "Hirexa AI Security Team",
+  if (mode === "plain-test") {
+    const greeting = formatGreeting(params.name);
+    const text = buildTextBody([
+      greeting,
+      "",
+      `We received a request to reset your Hirexa password. This link expires in ${expiresInMinutes} minutes and can only be used once.`,
+      `Reset your password: ${params.resetUrl}`,
+      "",
+      "If you did not request this, you can ignore this email.",
       supportEmail ? `Support: ${supportEmail}` : null,
-    ],
-  });
+      "",
+      "Hirexa AI Security Team",
+    ]);
+    const html = buildHirexaEmail({
+      greeting,
+      title: "Reset your password",
+      paragraphs: [
+        `We received a request to reset your Hirexa password. This link expires in ${expiresInMinutes} minutes and can only be used once.`,
+        "If you did not request this, you can ignore this email.",
+      ],
+      primaryAction: {
+        href: params.resetUrl,
+        label: "Reset your password",
+      },
+      footerLines: [
+        "Hirexa AI Security Team",
+        replyTo ? `Reply to: ${replyTo}` : null,
+        supportEmail ? `Support: ${supportEmail}` : null,
+      ],
+    });
 
-  await sendEmail({
+    try {
+      await sendEmail({
+        to: params.to,
+        subject,
+        html,
+        text,
+        category: "transactional",
+      });
+      return mode;
+    } catch (error) {
+      logSendGridFailure({
+        mode,
+        template: null,
+        subject,
+        to: params.to,
+        from,
+        replyTo,
+        plainTestMode: true,
+        error,
+      });
+      throw error;
+    }
+  }
+
+  await sendTemplateEmail({
     to: params.to,
     subject,
-    html,
-    text,
-    category: "transactional",
+    template: "passwordReset",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Use your secure link to choose a new password.",
+      headline: "Reset your password",
+      bodyText: `We received a request to reset your Hirexa password. This link expires in ${expiresInMinutes} minutes and can only be used once. If you did not request this, you can ignore this email.`,
+      ctaLabel: "Reset your password",
+      ctaUrl: params.resetUrl,
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+      resetUrl: params.resetUrl,
+    }),
+  });
+
+  return mode;
+}
+
+export async function sendProfileCompletedEmail(params: {
+  to: string;
+  name?: string | null;
+}) {
+  const subject = "Your Hirexa profile is complete";
+  const { supportEmail } = getEmailConfig();
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "profileCompleted",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your profile is ready to power stronger matches and tools.",
+      headline: "Profile completed",
+      bodyText:
+        "Your Hirexa profile is complete. You are ready to explore stronger matches, resume-aware tools, and your dashboard.",
+      ctaLabel: "Open your dashboard",
+      ctaUrl: resolveAppUrl("/dashboard"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
+  });
+}
+
+export async function sendResumeUploadSuccessEmail(params: {
+  to: string;
+  name?: string | null;
+}) {
+  const subject = "Your resume has been uploaded to Hirexa";
+  const { supportEmail } = getEmailConfig();
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "resumeUploadSuccess",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your resume upload was successful.",
+      headline: "Resume uploaded successfully",
+      bodyText:
+        "Your resume upload was successful. Hirexa can now use your resume to improve Smart Matches, application support, and coaching recommendations.",
+      ctaLabel: "Review your profile",
+      ctaUrl: resolveAppUrl("/profile"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
   });
 }
 
@@ -313,100 +633,92 @@ export async function sendResumeUploadedEmail(params: {
   to: string;
   name?: string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
-  const subject = "Your resume has been uploaded to Hirexa";
-
-  const text = buildTextBody([
-    greeting,
-    "",
-    "Your resume upload was successful.",
-    "Hirexa can now use your resume to improve Smart Matches, application support, and coaching recommendations.",
-    "",
-    `Review your profile: ${appUrl}/profile`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Resume uploaded successfully",
-    paragraphs: [
-      "Your resume upload was successful.",
-      "Hirexa can now use your resume to improve Smart Matches, application support, and coaching recommendations.",
-    ],
-    primaryAction: { href: `${appUrl}/profile`, label: "Review your profile" },
-    footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
-  });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
+  return sendResumeUploadSuccessEmail(params);
 }
 
 export async function sendCompleteProfileReminderEmail(params: {
   to: string;
   name?: string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
   const subject = "Complete your Hirexa profile for stronger matches";
+  const { supportEmail } = getEmailConfig();
 
-  const text = buildTextBody([
-    greeting,
-    "",
-    "Your Hirexa profile is still missing a few basics.",
-    "Adding your core details helps improve Smart Matches, AI-assisted applications, and personalized guidance.",
-    "",
-    `Complete your profile: ${appUrl}/profile`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Complete your profile",
-    paragraphs: [
-      "Your Hirexa profile is still missing a few basics.",
-      "Adding your core details helps improve Smart Matches, AI-assisted applications, and personalized guidance.",
-    ],
-    primaryAction: { href: `${appUrl}/profile`, label: "Complete your profile" },
-    footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "completeProfileReminder",
+    category: "marketing",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "A few missing details can improve your matches and guidance.",
+      headline: "Complete your profile",
+      bodyText:
+        "Your Hirexa profile is still missing a few basics. Adding your core details helps improve Smart Matches, AI-assisted applications, and personalized guidance.",
+      ctaLabel: "Complete your profile",
+      ctaUrl: resolveAppUrl("/profile"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
   });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "marketing" });
 }
 
 export async function sendUploadResumeReminderEmail(params: {
   to: string;
   name?: string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
   const subject = "Upload your resume to get more from Hirexa";
+  const { supportEmail } = getEmailConfig();
 
-  const text = buildTextBody([
-    greeting,
-    "",
-    "You can get stronger Smart Matches and faster AI-assisted job tools once your resume is uploaded.",
-    "",
-    `Upload your resume: ${appUrl}/resume`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Upload your resume",
-    paragraphs: [
-      "You can get stronger Smart Matches and faster AI-assisted job tools once your resume is uploaded.",
-    ],
-    primaryAction: { href: `${appUrl}/resume`, label: "Upload your resume" },
-    footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "uploadResumeReminder",
+    category: "marketing",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Upload your resume to unlock stronger matches and job tools.",
+      headline: "Upload your resume",
+      bodyText:
+        "You can get stronger Smart Matches and faster AI-assisted job tools once your resume is uploaded.",
+      ctaLabel: "Upload your resume",
+      ctaUrl: resolveAppUrl("/resume"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
   });
+}
 
-  await sendEmail({ to: params.to, subject, html, text, category: "marketing" });
+export async function sendFirstSmartMatchesReadyEmail(params: {
+  to: string;
+  name?: string | null;
+  jobs?: LifecycleJobSummary[];
+  jobsCount?: number;
+}) {
+  const subject = "Your first Smart Matches are ready";
+  const { supportEmail } = getEmailConfig();
+  const jobsCount = params.jobsCount ?? params.jobs?.length ?? 0;
+  const bodyText =
+    jobsCount > 0
+      ? `Your first ${jobsCount} Smart Match${jobsCount === 1 ? "" : "es"} ${jobsCount === 1 ? "is" : "are"} ready in Hirexa.`
+      : "Your first Smart Matches are ready in Hirexa.";
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "firstSmartMatchesReady",
+    category: "marketing",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your first Smart Matches are now available in Hirexa.",
+      headline: "Your first Smart Matches are ready",
+      bodyText,
+      ctaLabel: "View Smart Matches",
+      ctaUrl: resolveAppUrl("/dashboard"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+      jobsCount,
+    }),
+  });
 }
 
 export async function sendFirstMatchesReadyEmail(params: {
@@ -414,36 +726,11 @@ export async function sendFirstMatchesReadyEmail(params: {
   name?: string | null;
   jobs: LifecycleJobSummary[];
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
-  const subject = "Your first Smart Matches are ready";
-
-  const text = buildTextBody([
-    greeting,
-    "",
-    "Your first Smart Matches are ready in Hirexa.",
-    ...params.jobs.slice(0, 5).map((job) =>
-      `- ${job.title} — ${job.company}${job.location ? ` (${job.location})` : ""}${
-        job.jobUrl ? `: ${job.jobUrl}` : ""
-      }`
-    ),
-    "",
-    `View Smart Matches: ${appUrl}/dashboard`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Your first Smart Matches are ready",
-    paragraphs: ["We found your first personalized roles in Hirexa."],
-    jobs: params.jobs.slice(0, 5),
-    primaryAction: { href: `${appUrl}/dashboard`, label: "View Smart Matches" },
-    footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
+  return sendFirstSmartMatchesReadyEmail({
+    to: params.to,
+    name: params.name,
+    jobs: params.jobs,
   });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "marketing" });
 }
 
 export async function sendJobDigestEmail(params: {
@@ -452,9 +739,10 @@ export async function sendJobDigestEmail(params: {
   jobs: LifecycleJobSummary[];
   frequencyLabel?: string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/dashboard");
   const greeting = formatGreeting(params.name);
-  const frequencyLabel = (params.frequencyLabel ?? "Today’s").trim() || "Today’s";
+  const frequencyLabel = (params.frequencyLabel ?? "Today's").trim() || "Today's";
   const subject = `${frequencyLabel} Hirexa job matches`;
 
   const text = buildTextBody([
@@ -462,12 +750,12 @@ export async function sendJobDigestEmail(params: {
     "",
     `${frequencyLabel} matching roles from Hirexa:`,
     ...params.jobs.slice(0, 8).map((job) =>
-      `- ${job.title} — ${job.company}${job.location ? ` (${job.location})` : ""}${
+      `- ${job.title} - ${job.company}${job.location ? ` (${job.location})` : ""}${
         job.jobUrl ? `: ${job.jobUrl}` : ""
       }`
     ),
     "",
-    `Review your matches: ${appUrl}/dashboard`,
+    `Review your matches: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa",
@@ -478,7 +766,7 @@ export async function sendJobDigestEmail(params: {
     title: `${frequencyLabel} matching roles`,
     paragraphs: ["Here are the latest roles that align with your Hirexa profile."],
     jobs: params.jobs.slice(0, 8),
-    primaryAction: { href: `${appUrl}/dashboard`, label: "Review your matches" },
+    primaryAction: { href: appUrl, label: "Review your matches" },
     footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
   });
 
@@ -494,10 +782,10 @@ export async function sendApplicationActivityEmail(params: {
   details: string;
   actionUrl?: string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = params.actionUrl ?? resolveAppUrl("/applications");
   const greeting = formatGreeting(params.name);
   const subject = `Application update: ${params.title}`;
-  const actionUrl = params.actionUrl ?? `${appUrl}/applications`;
   const companyLine = params.company ? `${params.company}` : "your application";
 
   const text = buildTextBody([
@@ -506,7 +794,7 @@ export async function sendApplicationActivityEmail(params: {
     `${params.title} at ${companyLine}: ${params.statusLabel}.`,
     params.details,
     "",
-    `Review application: ${actionUrl}`,
+    `Review application: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa",
@@ -516,7 +804,7 @@ export async function sendApplicationActivityEmail(params: {
     greeting,
     title: `Application update: ${params.title}`,
     paragraphs: [`${params.title} at ${companyLine}: ${params.statusLabel}.`, params.details],
-    primaryAction: { href: actionUrl, label: "Review application" },
+    primaryAction: { href: appUrl, label: "Review application" },
     footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
   });
 
@@ -531,7 +819,8 @@ export async function sendInterviewPrepReminderEmail(params: {
   interviewAt?: Date | string | null;
   focusAreas?: string[];
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/job-tools/agents/hirepilot");
   const greeting = formatGreeting(params.name);
   const subject = `Interview prep reminder: ${params.jobTitle}`;
   const companyLine = params.company ? ` with ${params.company}` : "";
@@ -546,7 +835,7 @@ export async function sendInterviewPrepReminderEmail(params: {
       ? ["", "Suggested focus areas:", ...params.focusAreas.map((item) => `- ${item}`)]
       : []),
     "",
-    `Open HirePilot: ${appUrl}/job-tools/agents/hirepilot`,
+    `Open HirePilot: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa",
@@ -561,7 +850,7 @@ export async function sendInterviewPrepReminderEmail(params: {
     ],
     bullets: params.focusAreas ?? [],
     primaryAction: {
-      href: `${appUrl}/job-tools/agents/hirepilot`,
+      href: appUrl,
       label: "Open HirePilot",
     },
     footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
@@ -579,7 +868,8 @@ export async function sendCreditsRenewedEmail(params: {
   nextResetAt?: Date | string | null;
   expiresAt?: Date | string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/settings/subscription");
   const greeting = formatGreeting(params.name);
   const subject = "Your HirePilot credits were updated";
   const extraLine =
@@ -596,7 +886,7 @@ export async function sendCreditsRenewedEmail(params: {
     `You now have ${params.totalAvailable} total credits available.`,
     extraLine,
     "",
-    `Review your balance: ${appUrl}/settings/subscription`,
+    `Review your balance: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa",
@@ -611,7 +901,7 @@ export async function sendCreditsRenewedEmail(params: {
       ...(extraLine ? [extraLine] : []),
     ],
     primaryAction: {
-      href: `${appUrl}/settings/subscription`,
+      href: appUrl,
       label: "Review your balance",
     },
     footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
@@ -620,42 +910,41 @@ export async function sendCreditsRenewedEmail(params: {
   await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
 }
 
+export async function sendInactiveUserComebackEmail(params: {
+  to: string;
+  name?: string | null;
+  daysInactive: number;
+}) {
+  const subject =
+    params.daysInactive >= 14
+      ? "Come back to Hirexa when you're ready"
+      : "Your Hirexa tools are ready when you are";
+  const { supportEmail } = getEmailConfig();
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "inactiveUserComeback",
+    category: "marketing",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your profile, Smart Matches, and tools are ready when you return.",
+      headline: "Come back when you're ready",
+      bodyText: `You have not been active in Hirexa for about ${params.daysInactive} days. If you are still job searching, your profile, Smart Matches, and job tools are ready when you come back.`,
+      ctaLabel: "Return to Hirexa",
+      ctaUrl: resolveAppUrl("/dashboard"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
+  });
+}
+
 export async function sendInactiveComebackEmail(params: {
   to: string;
   name?: string | null;
   daysInactive: number;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
-  const subject =
-    params.daysInactive >= 14
-      ? "Come back to Hirexa when you’re ready"
-      : "Your Hirexa tools are ready when you are";
-
-  const text = buildTextBody([
-    greeting,
-    "",
-    `You haven’t been active in Hirexa for about ${params.daysInactive} days.`,
-    "If you are still job searching, your profile, Smart Matches, and job tools are ready when you come back.",
-    "",
-    `Return to Hirexa: ${appUrl}/dashboard`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    title: "Come back when you’re ready",
-    paragraphs: [
-      `You haven’t been active in Hirexa for about ${params.daysInactive} days.`,
-      "If you are still job searching, your profile, Smart Matches, and job tools are ready when you come back.",
-    ],
-    primaryAction: { href: `${appUrl}/dashboard`, label: "Return to Hirexa" },
-    footerLines: ["Hirexa", supportEmail ? `Support: ${supportEmail}` : null],
-  });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "marketing" });
+  return sendInactiveUserComebackEmail(params);
 }
 
 export async function sendHirexaCancellationConfirmationEmail(params: {
@@ -663,7 +952,8 @@ export async function sendHirexaCancellationConfirmationEmail(params: {
   name?: string | null;
   endsAt?: Date | string | null;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/settings/subscription");
   const greeting = formatGreeting(params.name);
   const endDate = formatDate(params.endsAt);
   const subject = "Your Hirexa AI cancellation is confirmed";
@@ -674,7 +964,7 @@ export async function sendHirexaCancellationConfirmationEmail(params: {
     `Your Hirexa AI plan is set to end on ${endDate}.`,
     "You can keep using your current access until then unless you change your billing settings first.",
     "",
-    `Manage billing: ${appUrl}/settings/subscription`,
+    `Manage billing: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa AI Billing",
@@ -686,7 +976,7 @@ export async function sendHirexaCancellationConfirmationEmail(params: {
       `Your Hirexa AI plan is set to end on ${endDate}.`,
       "You can keep using your current access until then unless you change your billing settings first.",
     ],
-    primaryAction: { href: `${appUrl}/settings/subscription`, label: "Manage billing" },
+    primaryAction: { href: appUrl, label: "Manage billing" },
     footerLines: ["Hirexa AI Billing", supportEmail ? `Support: ${supportEmail}` : null],
   });
 
@@ -699,7 +989,8 @@ export async function sendHirePilotCancellationConfirmationEmail(params: {
   endsAt?: Date | string | null;
   purchasedCreditsRemaining?: number;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/settings/subscription");
   const greeting = formatGreeting(params.name);
   const endDate = formatDate(params.endsAt);
   const subject = "Your HirePilot cancellation is confirmed";
@@ -715,7 +1006,7 @@ export async function sendHirePilotCancellationConfirmationEmail(params: {
     "You can keep using your current HirePilot access until then unless you change your billing settings first.",
     remainingCreditsText,
     "",
-    `Manage HirePilot billing: ${appUrl}/settings/subscription`,
+    `Manage HirePilot billing: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa AI Billing",
@@ -729,7 +1020,7 @@ export async function sendHirePilotCancellationConfirmationEmail(params: {
       ...(remainingCreditsText ? [remainingCreditsText] : []),
     ],
     primaryAction: {
-      href: `${appUrl}/settings/subscription`,
+      href: appUrl,
       label: "Manage HirePilot billing",
     },
     footerLines: ["Hirexa AI Billing", supportEmail ? `Support: ${supportEmail}` : null],
@@ -738,46 +1029,42 @@ export async function sendHirePilotCancellationConfirmationEmail(params: {
   await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
 }
 
+export async function sendAccountDeletedConfirmationEmail(params: {
+  to: string;
+  name?: string | null;
+  canceledProducts?: string[];
+}) {
+  const subject = "Your Hirexa AI account deletion is complete";
+  const { supportEmail } = getEmailConfig();
+  const canceledProducts = Array.isArray(params.canceledProducts)
+    ? params.canceledProducts.filter(Boolean)
+    : [];
+  const bodyText =
+    canceledProducts.length > 0
+      ? `Your Hirexa AI account and profile data have been deleted. The following services were cancelled as part of deletion: ${canceledProducts.join(", ")}. If you did not request this change, contact support immediately.`
+      : "Your Hirexa AI account and profile data have been deleted. If you did not request this change, contact support immediately.";
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "accountDeletedConfirmation",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your Hirexa AI account deletion is complete.",
+      headline: "Account deletion complete",
+      bodyText,
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+    }),
+  });
+}
+
 export async function sendAccountDeletionConfirmationEmail(params: {
   to: string;
   name?: string | null;
   canceledProducts?: string[];
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
-  const canceledProducts = Array.isArray(params.canceledProducts)
-    ? params.canceledProducts.filter(Boolean)
-    : [];
-  const subject = "Your Hirexa AI account deletion is complete";
-
-  const text = buildTextBody([
-    greeting,
-    "",
-    "Your Hirexa AI account and profile data have been deleted.",
-    canceledProducts.length > 0
-      ? `The following services were cancelled as part of deletion: ${canceledProducts.join(", ")}.`
-      : null,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "If you did not request this change, contact support immediately.",
-    "",
-    "Hirexa AI",
-    appUrl,
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    paragraphs: [
-      "Your Hirexa AI account and profile data have been deleted.",
-      ...(canceledProducts.length > 0
-        ? [`The following services were cancelled as part of deletion: ${canceledProducts.join(", ")}.`]
-        : []),
-      "If you did not request this change, contact support immediately.",
-    ],
-    footerLines: ["Hirexa AI", supportEmail ? `Support: ${supportEmail}` : null],
-  });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
+  return sendAccountDeletedConfirmationEmail(params);
 }
 
 export async function sendHirePilotCreditsExpiringSoonEmail(params: {
@@ -786,7 +1073,8 @@ export async function sendHirePilotCreditsExpiringSoonEmail(params: {
   creditsExpiring: number;
   expiresAt: Date | string;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
+  const { supportEmail } = getEmailConfig();
+  const appUrl = resolveAppUrl("/settings/subscription");
   const greeting = formatGreeting(params.name);
   const expirationDate = formatDate(params.expiresAt);
   const subject = "Your HirePilot credits are expiring soon";
@@ -795,7 +1083,7 @@ export async function sendHirePilotCreditsExpiringSoonEmail(params: {
     greeting,
     "",
     `${params.creditsExpiring} HirePilot credits are set to expire on ${expirationDate}.`,
-    `Review your balance: ${appUrl}/settings/subscription`,
+    `Review your balance: ${appUrl}`,
     supportEmail ? `Support: ${supportEmail}` : null,
     "",
     "Hirexa AI Billing",
@@ -807,7 +1095,7 @@ export async function sendHirePilotCreditsExpiringSoonEmail(params: {
       `${params.creditsExpiring} HirePilot credits are set to expire on ${expirationDate}.`,
     ],
     primaryAction: {
-      href: `${appUrl}/settings/subscription`,
+      href: appUrl,
       label: "Review your HirePilot balance",
     },
     footerLines: ["Hirexa AI Billing", supportEmail ? `Support: ${supportEmail}` : null],
@@ -816,34 +1104,36 @@ export async function sendHirePilotCreditsExpiringSoonEmail(params: {
   await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
 }
 
+export async function sendCreditsRunningLowEmail(params: {
+  to: string;
+  name?: string | null;
+  creditsRemaining: number;
+}) {
+  const subject = "Your HirePilot credit balance is running low";
+  const { supportEmail } = getEmailConfig();
+
+  await sendTemplateEmail({
+    to: params.to,
+    subject,
+    template: "creditsRunningLow",
+    dynamicTemplateData: buildTemplateData({
+      subject,
+      preheader: "Your HirePilot credit balance is getting low.",
+      headline: "Credits running low",
+      bodyText: `You have ${params.creditsRemaining} HirePilot credit${params.creditsRemaining === 1 ? "" : "s"} remaining.`,
+      ctaLabel: "Review your balance",
+      ctaUrl: resolveAppUrl("/settings/subscription"),
+      firstName: getTemplateFirstName(params.name),
+      supportEmail,
+      creditsRemaining: params.creditsRemaining,
+    }),
+  });
+}
+
 export async function sendHirePilotLowCreditWarningEmail(params: {
   to: string;
   name?: string | null;
   creditsRemaining: number;
 }) {
-  const { appUrl, supportEmail } = getEmailConfig();
-  const greeting = formatGreeting(params.name);
-  const subject = "Your HirePilot credit balance is running low";
-
-  const text = buildTextBody([
-    greeting,
-    "",
-    `You have ${params.creditsRemaining} HirePilot credits remaining.`,
-    `Review your balance: ${appUrl}/settings/subscription`,
-    supportEmail ? `Support: ${supportEmail}` : null,
-    "",
-    "Hirexa AI Billing",
-  ]);
-
-  const html = buildHirexaEmail({
-    greeting,
-    paragraphs: [`You have ${params.creditsRemaining} HirePilot credits remaining.`],
-    primaryAction: {
-      href: `${appUrl}/settings/subscription`,
-      label: "Review your HirePilot balance",
-    },
-    footerLines: ["Hirexa AI Billing", supportEmail ? `Support: ${supportEmail}` : null],
-  });
-
-  await sendEmail({ to: params.to, subject, html, text, category: "transactional" });
+  return sendCreditsRunningLowEmail(params);
 }

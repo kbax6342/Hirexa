@@ -22,8 +22,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/app/components/ui/card";
+import ComputerAudioCaptureCard from "@/app/components/hirepilot/ComputerAudioCaptureCard";
 import HirePilotPaywall from "@/app/components/hirepilot/HirePilotPaywall";
 import { Textarea } from "@/app/components/ui/textarea";
+import {
+  getSupportedDisplayAudioMimeType,
+  type DisplayAudioCaptureSession,
+} from "@/app/lib/hirepilot/displayAudioCapture";
 import {
   extractInterviewQuestion,
   extractInterviewQuestionCandidate,
@@ -33,6 +38,7 @@ import { cn } from "@/app/lib/utils";
 type RewriteMode = "default" | "shorten" | "expand" | "professional";
 type PracticeMode = "live" | "practice";
 type DetectionStatus = "idle" | "found" | "none";
+type ListeningSource = "microphone" | "computer";
 
 type HirePilotResponse = {
   ok: boolean;
@@ -64,6 +70,25 @@ type StartInterviewResponse = {
   ok?: boolean;
   started?: boolean;
   message?: string;
+  hasHirePilotAccess?: boolean;
+  hirePilotUnlimited?: boolean;
+  hirePilotCredits?: number;
+  monthlyCredits?: number;
+  rolloverCredits?: number;
+  purchasedCredits?: number;
+  productKey?: string | null;
+  status?: string | null;
+  currentPeriodEnd?: string | null;
+  nextMonthlyResetAt?: string | null;
+  earliestPurchasedExpiryAt?: string | null;
+  lowBalance?: boolean;
+  hasExpiringCredits?: boolean;
+};
+
+type HirePilotTranscriptionResponse = {
+  ok?: boolean;
+  transcript?: string;
+  error?: string;
   hasHirePilotAccess?: boolean;
   hirePilotUnlimited?: boolean;
   hirePilotCredits?: number;
@@ -212,10 +237,17 @@ export default function HirePilotClient() {
   const combinedTranscriptRef = useRef("");
   const stopHandledRef = useRef(false);
   const lastQuestionKeyRef = useRef("");
+  const displayRecorderRef = useRef<MediaRecorder | null>(null);
+  const displayRecorderStoppedPromiseRef = useRef<Promise<void> | null>(null);
+  const displayRecorderStoppedResolveRef = useRef<(() => void) | null>(null);
+  const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const [activeMode, setActiveMode] = useState<PracticeMode>("live");
   const [isSupported, setIsSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [activeListeningSource, setActiveListeningSource] = useState<ListeningSource | null>(
+    null
+  );
   const [statusMessage, setStatusMessage] = useState("Microphone idle");
   const [micError, setMicError] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
@@ -252,6 +284,8 @@ export default function HirePilotClient() {
   const [isInfoPanelCollapsed, setIsInfoPanelCollapsed] = useState(false);
 
   const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
+  const isComputerAudioListening = activeListeningSource === "computer";
+  const isAnyListening = isListening || isComputerAudioListening;
 
   const answerActionsDisabled = !answer.trim() || isGenerating;
   const detectedQuestionText =
@@ -272,6 +306,11 @@ export default function HirePilotClient() {
     : billingStatus.productKey === "hirepilot_monthly" && billingStatus.status === "active"
     ? "0 Credits Available"
     : "Practice Questions Free";
+  const liveListeningLabel = isComputerAudioListening
+    ? "Listening to shared tab/app audio"
+    : isListening
+      ? "Listening to microphone"
+      : accessBadgeLabel;
   const monthlyCreditBucket =
     Number(billingStatus.monthlyCredits ?? 0) + Number(billingStatus.rolloverCredits ?? 0);
 
@@ -315,7 +354,8 @@ export default function HirePilotClient() {
 
     recognition.onstart = () => {
       setIsListening(true);
-      setStatusMessage("Listening...");
+      setActiveListeningSource("microphone");
+      setStatusMessage("Listening to microphone");
       setMicError(null);
     };
 
@@ -348,6 +388,9 @@ export default function HirePilotClient() {
     recognition.onerror = (event) => {
       const message = formatRecognitionError(event.error);
       keepListeningRef.current = false;
+      setActiveListeningSource((current) =>
+        current === "microphone" ? null : current
+      );
       setMicError(message);
       setStatusMessage(message);
     };
@@ -363,6 +406,9 @@ export default function HirePilotClient() {
           keepListeningRef.current = false;
         }
       }
+      setActiveListeningSource((current) =>
+        current === "microphone" ? null : current
+      );
       setStatusMessage("Microphone idle");
     };
 
@@ -384,6 +430,135 @@ export default function HirePilotClient() {
 
     return () => window.clearTimeout(timeout);
   }, [copied]);
+
+  useEffect(() => {
+    return () => {
+      keepListeningRef.current = false;
+      recognitionRef.current?.abort();
+
+      const recorder = displayRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    };
+  }, []);
+
+  function resetLiveListeningState(nextStatusMessage: string) {
+    transcriptRef.current = "";
+    combinedTranscriptRef.current = "";
+    stopHandledRef.current = false;
+    lastQuestionKeyRef.current = "";
+    setLiveTranscript("");
+    setDetectedQuestion("");
+    setDetectionStatus("idle");
+    setRequestError(null);
+    setMicError(null);
+    setStatusMessage(nextStatusMessage);
+  }
+
+  function appendTranscribedText(text: string) {
+    const chunk = normalizeSpace(text);
+    if (!chunk) return;
+
+    transcriptRef.current = normalizeSpace(`${transcriptRef.current} ${chunk}`);
+    combinedTranscriptRef.current = transcriptRef.current;
+    setLiveTranscript(transcriptRef.current);
+    debugHirePilot("display audio transcript updated", {
+      length: transcriptRef.current.length,
+      preview: transcriptRef.current.slice(0, 120),
+    });
+  }
+
+  async function transcribeDisplayAudioChunk(blob: Blob) {
+    if (!blob.size) return;
+
+    const audioFile = new File([blob], `hirepilot-display-audio-${Date.now()}.webm`, {
+      type: blob.type || "audio/webm",
+    });
+    const formData = new FormData();
+    formData.set("audio", audioFile);
+
+    const res = await fetch("/api/hirepilot/transcribe", {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = await readJsonSafely<HirePilotTranscriptionResponse>(res, {
+      ok: false,
+      error: "Unable to transcribe shared audio.",
+    });
+
+    if (!res.ok || data.ok === false) {
+      if (res.status === 403) {
+        setBillingStatus(toBillingStatus(data));
+        setShowPaywall(true);
+      }
+
+      throw new Error(data.error || "Unable to transcribe shared audio.");
+    }
+
+    appendTranscribedText(data.transcript ?? "");
+  }
+
+  function queueDisplayAudioTranscription(blob: Blob) {
+    transcriptionQueueRef.current = transcriptionQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await transcribeDisplayAudioChunk(blob);
+        } catch (error) {
+          setRequestError(
+            error instanceof Error ? error.message : "Unable to transcribe shared audio."
+          );
+        }
+      });
+  }
+
+  function startDisplayAudioRecorder(session: DisplayAudioCaptureSession) {
+    const mimeType = getSupportedDisplayAudioMimeType();
+    const recorder = mimeType
+      ? new MediaRecorder(session.audioStream, { mimeType })
+      : new MediaRecorder(session.audioStream);
+
+    displayRecorderStoppedPromiseRef.current = new Promise<void>((resolve) => {
+      displayRecorderStoppedResolveRef.current = resolve;
+    });
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        queueDisplayAudioTranscription(event.data);
+      }
+    };
+
+    recorder.onerror = () => {
+      setRequestError("Unable to capture shared tab or app audio.");
+    };
+
+    recorder.onstop = () => {
+      displayRecorderStoppedResolveRef.current?.();
+      displayRecorderStoppedResolveRef.current = null;
+      displayRecorderRef.current = null;
+    };
+
+    displayRecorderRef.current = recorder;
+    recorder.start(4000);
+  }
+
+  async function stopDisplayAudioRecorder() {
+    const recorder = displayRecorderRef.current;
+    const stoppedPromise = displayRecorderStoppedPromiseRef.current;
+
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+
+    if (stoppedPromise) {
+      await stoppedPromise;
+    }
+
+    await transcriptionQueueRef.current.catch(() => undefined);
+    displayRecorderStoppedPromiseRef.current = null;
+  }
 
   function applyDetectedQuestion(transcript: string) {
     const rawCandidate = extractInterviewQuestionCandidate(transcript);
@@ -631,21 +806,12 @@ export default function HirePilotClient() {
 
   async function startListening() {
     const recognition = recognitionRef.current;
-    if (!recognition || isListening) return;
+    if (!recognition || isAnyListening) return;
 
     const accessAllowed = await ensureInterviewSession();
     if (!accessAllowed) return;
 
-    transcriptRef.current = "";
-    combinedTranscriptRef.current = "";
-    stopHandledRef.current = false;
-    lastQuestionKeyRef.current = "";
-    setLiveTranscript("");
-    setDetectedQuestion("");
-    setDetectionStatus("idle");
-    setRequestError(null);
-    setMicError(null);
-    setStatusMessage("Listening...");
+    resetLiveListeningState("Listening to microphone");
     keepListeningRef.current = true;
     debugHirePilot("start listening");
 
@@ -654,6 +820,7 @@ export default function HirePilotClient() {
       setIsInfoPanelCollapsed(true);
     } catch {
       keepListeningRef.current = false;
+      setActiveListeningSource(null);
       setStatusMessage("Unable to start microphone listening.");
       setMicError("Unable to start microphone listening.");
     }
@@ -663,6 +830,43 @@ export default function HirePilotClient() {
     keepListeningRef.current = false;
     finalizeTranscriptDetection();
     recognitionRef.current?.stop();
+    setActiveListeningSource((current) => (current === "microphone" ? null : current));
+    setStatusMessage("Microphone idle");
+  }
+
+  async function handleComputerAudioBeforeConnect() {
+    if (isAnyListening) {
+      return false;
+    }
+
+    const accessAllowed = await ensureInterviewSession();
+    return accessAllowed;
+  }
+
+  async function handleComputerAudioConnected(session: DisplayAudioCaptureSession) {
+    resetLiveListeningState("Listening to shared tab/app audio");
+    setActiveListeningSource("computer");
+    setIsInfoPanelCollapsed(true);
+
+    try {
+      startDisplayAudioRecorder(session);
+    } catch {
+      setActiveListeningSource(null);
+      setRequestError("Unable to capture shared tab or app audio.");
+      session.stop();
+    }
+  }
+
+  async function handleComputerAudioDisconnected() {
+    setActiveListeningSource((current) => (current === "computer" ? null : current));
+    await stopDisplayAudioRecorder();
+
+    if (stopHandledRef.current) {
+      setStatusMessage("Microphone idle");
+      return;
+    }
+
+    finalizeTranscriptDetection();
     setStatusMessage("Microphone idle");
   }
 
@@ -731,7 +935,7 @@ export default function HirePilotClient() {
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-white">HirePilot</div>
                         <div className="truncate text-xs text-slate-300">
-                          {isListening ? "Listening..." : accessBadgeLabel}
+                          {isAnyListening ? liveListeningLabel : accessBadgeLabel}
                         </div>
                       </div>
                     </div>
@@ -875,44 +1079,64 @@ export default function HirePilotClient() {
               {activeMode === "live" ? (
                 <Card className="rounded-[24px] border border-white/10 bg-white/[0.06] shadow-[0_16px_40px_rgba(5,8,22,0.35)] backdrop-blur-xl">
                   <CardHeader>
-                    <CardTitle className="text-xl text-white">Microphone Control Panel</CardTitle>
+                    <CardTitle className="text-xl text-white">Live Listening Options</CardTitle>
                     <CardDescription className="text-slate-300">
-                      Use speech recognition to capture interview questions as they are spoken.
+                      Choose whether HirePilot should listen through your microphone or
+                      from shared tab/app audio on this computer.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <Button
-                        type="button"
-                        onClick={() => void startListening()}
-                        disabled={!isSupported || isListening || startingInterview}
-                        className="rounded-xl bg-sky-600 px-5 py-3 text-white hover:bg-sky-500"
-                      >
-                        <MicrophoneIcon className="h-5 w-5" />
-                        {startingInterview ? "Starting..." : "Start Listening"}
-                      </Button>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                        <div className="text-sm font-semibold text-white">
+                          Listen with your microphone
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          Use browser speech recognition to capture interview questions as
+                          they are spoken around you.
+                        </p>
 
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={stopListening}
-                        disabled={!isListening}
-                        className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                      >
-                        <StopIcon className="h-5 w-5" />
-                        Stop Listening
-                      </Button>
+                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                          <Button
+                            type="button"
+                            onClick={() => void startListening()}
+                            disabled={!isSupported || isAnyListening || startingInterview}
+                            className="rounded-xl bg-sky-600 px-5 py-3 text-white hover:bg-sky-500"
+                          >
+                            <MicrophoneIcon className="h-5 w-5" />
+                            {startingInterview ? "Starting..." : "Start Listening"}
+                          </Button>
 
-                      <div
-                        className={cn(
-                          "inline-flex items-center rounded-full px-3 py-1 text-sm font-medium",
-                          isListening
-                            ? "bg-emerald-500/15 text-emerald-200"
-                            : "bg-white/10 text-slate-300"
-                        )}
-                      >
-                        {isListening ? "Listening..." : statusMessage}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={stopListening}
+                            disabled={!isListening}
+                            className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                          >
+                            <StopIcon className="h-5 w-5" />
+                            Stop Listening
+                          </Button>
+
+                          <div
+                            className={cn(
+                              "inline-flex items-center rounded-full px-3 py-1 text-sm font-medium",
+                              isListening
+                                ? "bg-emerald-500/15 text-emerald-200"
+                                : "bg-white/10 text-slate-300"
+                            )}
+                          >
+                            {isListening ? "Listening to microphone" : statusMessage}
+                          </div>
+                        </div>
                       </div>
+
+                      <ComputerAudioCaptureCard
+                        disabled={startingInterview || (isAnyListening && !isComputerAudioListening)}
+                        onBeforeConnect={handleComputerAudioBeforeConnect}
+                        onConnected={handleComputerAudioConnected}
+                        onDisconnected={handleComputerAudioDisconnected}
+                      />
                     </div>
 
                     {!isSupported ? (

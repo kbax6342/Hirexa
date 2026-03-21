@@ -25,7 +25,7 @@ export default function ForgotPasswordPage() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/auth/password/forgot", {
+      const response = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: normalizedEmail }),
@@ -108,15 +108,18 @@ export default function ForgotPasswordPage() {
               <form className="mt-6 space-y-4" onSubmit={onSubmit}>
                 <div>
                   <label
-                    htmlFor="forgot-password-email"
+                    htmlFor="email"
                     className="block text-sm font-medium text-slate-700"
                   >
                     Email
                   </label>
                   <Input
-                    id="forgot-password-email"
+                    id="email"
+                    name="email"
                     type="email"
-                    autoComplete="email"
+                    inputMode="email"
+                    autoComplete="username"
+                    required
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     className="mt-1 h-12 bg-white text-slate-900"

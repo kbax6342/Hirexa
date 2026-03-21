@@ -2,9 +2,9 @@ import "server-only";
 
 import { getSiteUrl } from "@/app/lib/site-url";
 
-const DEFAULT_FROM_ADDRESS = "newsletter@updates.hirexa-ai.com";
+const DEFAULT_FROM_ADDRESS = "support@hirexa-ai.com";
 const DEFAULT_FROM_NAME = "Hirexa AI";
-const DEFAULT_SENDING_DOMAIN = "updates.hirexa-ai.com";
+const DEFAULT_SENDING_DOMAIN = "hirexa-ai.com";
 
 type ParsedLegacySender = {
   address: string | null;

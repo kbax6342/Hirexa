@@ -55,6 +55,13 @@ export async function sendEmail({
     headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
   }
 
+  console.info("[email] sending direct email", {
+    from,
+    replyTo: replyTo ?? null,
+    template: null,
+    toDomain: to.split("@")[1] ?? null,
+  });
+
   await getSendGridClient().send({
     to,
     from,

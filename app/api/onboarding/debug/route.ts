@@ -18,8 +18,8 @@ export async function GET() {
     const cookieSnapshot = {
       guest_user_id: guestId,
 
-      resume_id: c.get("resume_id")?.value ?? null,
-      resume_uploaded: c.get("resume_uploaded")?.value ?? null,
+      onboarding_resume_skipped:
+        c.get("onboarding_resume_skipped")?.value ?? null,
 
       job_interest_ids: c.get("job_interest_ids")?.value ?? null,
       job_interest_titles: c.get("job_interest_titles")?.value ?? null,
@@ -41,18 +41,6 @@ export async function GET() {
 
         resume: { select: { id: true } },
 
-        resumeFiles: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: {
-            id: true,
-            fileName: true,
-            mimeType: true,
-            sizeBytes: true,
-            createdAt: true,
-          },
-        },
-
         jobInterests: {
             orderBy: { id: "desc" },
             take: 10,
@@ -65,11 +53,8 @@ export async function GET() {
       },
     });
 
-    const hasResume =
-      !!profile?.resume ||
-      (profile?.resumeFiles?.length ?? 0) > 0 ||
-      !!cookieSnapshot.resume_uploaded ||
-      !!cookieSnapshot.resume_id;
+    const hasResume = Boolean(profile?.resume);
+    const resumeSkipped = cookieSnapshot.onboarding_resume_skipped === "1";
 
     return NextResponse.json({
       ok: true,
@@ -78,6 +63,7 @@ export async function GET() {
       hasProfile: !!profile,
       profile,
       hasResume,
+      resumeSkipped,
       jobInterestCount: profile?.jobInterests?.length ?? 0,
     });
   } catch (e: any) {

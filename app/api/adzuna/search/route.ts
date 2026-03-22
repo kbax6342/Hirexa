@@ -12,10 +12,29 @@ type Job = {
   posted: string;
   jobUrl: string;
   salary?: string;
+  salaryIsEstimated?: boolean;
   description?: string;
 };
 
-type CacheValue = { expiresAt: number; payload: { q: string; page: number; perPage: number; jobs: Job[] } };
+type AdzunaSearchJob = {
+  id?: string | number;
+  title?: string;
+  created?: string;
+  redirect_url?: string;
+  description?: string;
+  salary_min?: number;
+  salary_max?: number;
+  salary_currency?: string;
+  salary_interval?: string;
+  salary_is_predicted?: boolean | number | string;
+  company?: { display_name?: string };
+  location?: { display_name?: string };
+};
+
+type CacheValue = {
+  expiresAt: number;
+  payload: { q: string; page: number; perPage: number; jobs: Job[] };
+};
 
 const CACHE = new Map<string, CacheValue>();
 const IN_FLIGHT = new Map<string, Promise<Response>>();
@@ -30,13 +49,13 @@ function cacheKeyFromUrl(url: URL) {
 }
 
 async function sleep(ms: number) {
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchWithRetry(input: string, tries = 2) {
   let lastRes: Response | null = null;
 
-  for (let i = 0; i < tries; i++) {
+  for (let index = 0; index < tries; index += 1) {
     const res = await fetch(input, {
       cache: "no-store",
       headers: {
@@ -50,7 +69,7 @@ async function fetchWithRetry(input: string, tries = 2) {
 
     if (res.status === 429 || res.status === 502 || res.status === 503) {
       const retryAfter = res.headers.get("retry-after");
-      const waitMs = retryAfter ? Number(retryAfter) * 1000 : 400 * (i + 1);
+      const waitMs = retryAfter ? Number(retryAfter) * 1000 : 400 * (index + 1);
       await sleep(waitMs);
       continue;
     }
@@ -61,43 +80,47 @@ async function fetchWithRetry(input: string, tries = 2) {
   return lastRes!;
 }
 
-function formatMoney(n: number) {
-  return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+function formatMoney(value: number) {
+  return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
-function formatAdzunaSalary(j: any): string | undefined {
-  const min = typeof j.salary_min === "number" ? j.salary_min : null;
-  const max = typeof j.salary_max === "number" ? j.salary_max : null;
+function isPredictedSalary(value: unknown) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function getCurrencySymbol(currency: unknown) {
+  if (currency === "GBP") return "\u00A3";
+  if (currency === "EUR") return "\u20AC";
+  if (typeof currency === "string" && currency.trim()) return `${currency.trim()} `;
+  return "$";
+}
+
+function formatAdzunaSalary(job: AdzunaSearchJob): string | undefined {
+  const min = typeof job.salary_min === "number" ? job.salary_min : null;
+  const max = typeof job.salary_max === "number" ? job.salary_max : null;
 
   if (min == null && max == null) return undefined;
 
-  const currency =
-    typeof j.salary_currency === "string" && j.salary_currency.length
-      ? j.salary_currency
-      : "USD";
-
-  const symbol =
-    currency === "USD"
-      ? "$"
-      : currency === "GBP"
-        ? "£"
-        : currency === "EUR"
-          ? "€"
-          : `${currency} `;
-
+  const symbol = getCurrencySymbol(job.salary_currency);
   const interval =
-    typeof j.salary_interval === "string" && j.salary_interval.length
-      ? j.salary_interval
+    typeof job.salary_interval === "string" && job.salary_interval.trim()
+      ? job.salary_interval.trim()
       : "year";
-
   const suffix = ` / ${interval}`;
+  const estimatedSuffix = isPredictedSalary(job.salary_is_predicted)
+    ? " - estimated"
+    : "";
 
   if (min != null && max != null) {
-    return `${symbol}${formatMoney(min)} – ${symbol}${formatMoney(max)}${suffix}`;
+    if (Math.round(min) === Math.round(max)) {
+      return `${symbol}${formatMoney(min)}${suffix}${estimatedSuffix}`;
+    }
+
+    return `${symbol}${formatMoney(min)} - ${symbol}${formatMoney(max)}${suffix}${estimatedSuffix}`;
   }
 
-  const one = min ?? max;
-  return `${symbol}${formatMoney(one!)}${suffix}`;
+  const singleValue = min ?? max;
+  return `${symbol}${formatMoney(singleValue!)}${suffix}${estimatedSuffix}`;
 }
 
 export async function GET(req: Request) {
@@ -107,7 +130,7 @@ export async function GET(req: Request) {
   if (!appId || !appKey) {
     return NextResponse.json(
       { error: "Missing ADZUNA_APP_ID or ADZUNA_APP_KEY in .env.local" },
-      { status: 500 },
+      { status: 500 }
     );
   }
 
@@ -133,7 +156,9 @@ export async function GET(req: Request) {
       const country = url.searchParams.get("country") ?? "us";
       const location = (url.searchParams.get("location") ?? "").trim();
 
-      const adzunaUrl = new URL(`http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`);
+      const adzunaUrl = new URL(
+        `http://api.adzuna.com/v1/api/jobs/${country}/search/${page}`
+      );
       adzunaUrl.searchParams.set("app_id", appId);
       adzunaUrl.searchParams.set("app_key", appKey);
       adzunaUrl.searchParams.set("results_per_page", String(perPage));
@@ -153,21 +178,22 @@ export async function GET(req: Request) {
             contentType: res.headers.get("content-type"),
             bodyPreview: text.slice(0, 500),
           },
-          { status: 502 },
+          { status: 502 }
         );
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as { results?: AdzunaSearchJob[] };
 
-      const jobs: Job[] = (data.results ?? []).map((j: any, idx: number) => ({
-        id: String(j.id ?? `fallback-${page}-${idx}`),
-        title: String(j.title ?? "Untitled role"),
-        company: String(j.company?.display_name ?? "Unknown company"),
-        location: String(j.location?.display_name ?? "Unknown location"),
-        posted: String(j.created ?? ""),
-        jobUrl: String(j.redirect_url ?? ""),
-        salary: formatAdzunaSalary(j),
-        description: typeof j.description === "string" ? j.description : undefined,
+      const jobs: Job[] = (data.results ?? []).map((job, index: number) => ({
+        id: String(job.id ?? `fallback-${page}-${index}`),
+        title: String(job.title ?? "Untitled role"),
+        company: String(job.company?.display_name ?? "Unknown company"),
+        location: String(job.location?.display_name ?? "Unknown location"),
+        posted: String(job.created ?? ""),
+        jobUrl: String(job.redirect_url ?? ""),
+        salary: formatAdzunaSalary(job),
+        salaryIsEstimated: isPredictedSalary(job.salary_is_predicted),
+        description: typeof job.description === "string" ? job.description : undefined,
       }));
 
       const payload = { q, page, perPage, jobs };

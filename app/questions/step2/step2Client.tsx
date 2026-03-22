@@ -102,6 +102,7 @@ type ResumeInputMode = "upload" | "paste";
 const GOOGLE_DRIVE_DISCOVERY_DOC =
   "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const ONBOARDING_RESUME_SKIPPED_COOKIE = "onboarding_resume_skipped";
 
 function sanitizeGoogleConfigValue(value?: string | null) {
   if (!value) return undefined;
@@ -125,6 +126,14 @@ function loadScript(src: string) {
     script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
     document.body.appendChild(script);
   });
+}
+
+function setResumeSkippedCookie() {
+  document.cookie = `${ONBOARDING_RESUME_SKIPPED_COOKIE}=1; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
+}
+
+function clearResumeSkippedCookie() {
+  document.cookie = `${ONBOARDING_RESUME_SKIPPED_COOKIE}=; path=/; max-age=0; samesite=lax`;
 }
 
 export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
@@ -440,6 +449,7 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
         throw new Error(data?.error || "Upload failed");
       }
 
+      clearResumeSkippedCookie();
       setProof({ savedTo: data.savedTo, resume: data.resume });
       router.push(
         `/questions/step2Resume?resumeId=${encodeURIComponent(nextResumeId)}`
@@ -480,6 +490,7 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
         throw new Error(data?.error || "Resume paste failed");
       }
 
+      clearResumeSkippedCookie();
       setProof({ savedTo: data.savedTo, resume: data.resume });
       router.push(
         `/questions/step2Resume?resumeId=${encodeURIComponent(nextResumeId)}`
@@ -770,6 +781,11 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
         <div className="mt-8 flex items-center justify-between">
           <Link
             href="/onboarding/job-interest"
+            onClick={(event) => {
+              event.preventDefault();
+              setResumeSkippedCookie();
+              router.push("/onboarding/job-interest");
+            }}
             className="text-sm font-semibold text-white/80 underline underline-offset-4 hover:text-white"
           >
             Skip for now

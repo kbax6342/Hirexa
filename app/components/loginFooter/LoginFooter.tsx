@@ -94,10 +94,10 @@ export default function LoginFooter() {
                 </p>
 
                 <a
-                  href="mailto:support@hirexa.ai"
+                  href="mailto:support@hirexa-ai.com"
                   className="block font-medium text-foreground transition-colors hover:text-primary hover:underline"
                 >
-                  support@hirexa.ai
+                  support@hirexa-ai.com
                 </a>
 
                 <Link

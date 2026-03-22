@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   description: "Learn about Hirexa AI's accessibility commitment and how to request assistance.",
 };
 
-const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa.ai";
+const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa-ai.com";
 
 export default function AccessibilityPage() {
   return (

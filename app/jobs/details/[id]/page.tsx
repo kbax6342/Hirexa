@@ -14,11 +14,19 @@ import {
 } from "lucide-react";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import StructuredJobDescription from "@/app/components/jobs/StructuredJobDescription";
+import { cleanJobText } from "@/app/lib/jobs/clean-job-text";
+import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 
 type JobDetailsResponse = {
   job: JobDetail;
   pretty: JobPretty;
   fullDetailsUnavailable?: boolean;
+};
+
+type AdzunaStructuredJob = JobDetail & {
+  salaryIsEstimated?: boolean;
+  category?: string | null;
+  descriptionIntro?: string[] | null;
 };
 
 function formatPosted(value?: string | null) {
@@ -46,12 +54,180 @@ function safeText(value?: string | null) {
   return String(value ?? "").trim();
 }
 
+function dedupeTextItems(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = safeText(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(safeText(value));
+  }
+
+  return result;
+}
+
+function splitParagraphs(value?: string | null) {
+  return safeText(value)
+    .split(/\n{2,}/)
+    .map((paragraph) => safeText(paragraph))
+    .filter(Boolean);
+}
+
+function firstNonEmptyText(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = safeText(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function hasPrettyContent(pretty?: JobPretty | null) {
+  return Boolean(pretty?.highlights.length || pretty?.sections.length);
+}
+
+function normalizePrettyResponse(value: unknown): JobPretty | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const highlights = Array.isArray(raw.highlights)
+    ? raw.highlights
+        .map((highlight) => {
+          const item =
+            highlight && typeof highlight === "object"
+              ? (highlight as Record<string, unknown>)
+              : null;
+          const label = safeText(String(item?.label ?? ""));
+          const valueText = safeText(String(item?.value ?? ""));
+
+          return label && valueText ? { label, value: valueText } : null;
+        })
+        .filter(
+          (
+            highlight
+          ): highlight is JobPretty["highlights"][number] => highlight !== null
+        )
+    : [];
+
+  const sections = Array.isArray(raw.sections)
+    ? raw.sections
+        .map((section) => {
+          const item =
+            section && typeof section === "object"
+              ? (section as Record<string, unknown>)
+              : null;
+
+          const title = safeText(String(item?.title ?? ""));
+          const kind = safeText(String(item?.kind ?? ""));
+          if (!title || !kind) return null;
+
+          const paragraphs = Array.isArray(item?.paragraphs)
+            ? dedupeTextItems(item.paragraphs as string[])
+            : [];
+          const bullets = Array.isArray(item?.bullets)
+            ? dedupeTextItems(item.bullets as string[])
+            : [];
+          const calloutLabel = safeText(
+            String(
+              item?.callout && typeof item.callout === "object"
+                ? (item.callout as Record<string, unknown>).label ?? ""
+                : ""
+            )
+          );
+          const calloutValue = safeText(
+            String(
+              item?.callout && typeof item.callout === "object"
+                ? (item.callout as Record<string, unknown>).value ?? ""
+                : ""
+            )
+          );
+
+          if (kind === "bullets" && bullets.length > 0) {
+            return { title, kind: "bullets" as const, bullets };
+          }
+
+          if (kind === "callout" && calloutValue) {
+            return {
+              title,
+              kind: "callout" as const,
+              callout: calloutLabel
+                ? { label: calloutLabel, value: calloutValue }
+                : { value: calloutValue },
+            };
+          }
+
+          if (kind === "smallprint" && paragraphs.length > 0) {
+            return { title, kind: "smallprint" as const, paragraphs };
+          }
+
+          if (paragraphs.length > 0) {
+            return { title, kind: "paragraphs" as const, paragraphs };
+          }
+
+          return null;
+        })
+        .filter(
+          (section): section is JobPretty["sections"][number] => section !== null
+        )
+    : [];
+
+  if (highlights.length === 0 && sections.length === 0) {
+    return null;
+  }
+
+  return { highlights, sections };
+}
+
+function ensurePrettyContent(pretty: JobPretty | null, rawDescription: string) {
+  if (hasPrettyContent(pretty)) {
+    return pretty as JobPretty;
+  }
+
+  const paragraphs = dedupeTextItems(
+    splitParagraphs(cleanJobText(rawDescription, { source: "adzuna" }))
+  );
+  if (paragraphs.length === 0) {
+    return { highlights: [], sections: [] } satisfies JobPretty;
+  }
+
+  return {
+    highlights: [],
+    sections: [
+      {
+        title: "Position Overview",
+        kind: "paragraphs",
+        paragraphs,
+      },
+    ],
+  } satisfies JobPretty;
+}
+
+function getPrettyHighlightValue(
+  pretty: JobPretty | null,
+  matcher: RegExp
+) {
+  const match = pretty?.highlights.find((highlight) => matcher.test(highlight.label));
+  return safeText(match?.value);
+}
+
 export default function JobDetailsPage() {
   const { id } = useParams<{ id: string }>();
 
   const [data, setData] = useState<JobDetailsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [adzunaPretty, setAdzunaPretty] = useState<JobPretty | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -61,6 +237,7 @@ export default function JobDetailsPage() {
       try {
         setLoading(true);
         setErr(null);
+        setAdzunaPretty(null);
 
         const res = await fetch(`/api/jobs/details?id=${encodeURIComponent(id)}`, {
           cache: "no-store",
@@ -110,6 +287,8 @@ export default function JobDetailsPage() {
   );
 
   const metadata = data?.job.metadata ?? {};
+  const isAdzuna = data?.job.source === "adzuna";
+  const adzunaDetail = (isAdzuna ? data?.job : null) as AdzunaStructuredJob | null;
   const compensation = safeText(
     data?.job.salaryText || data?.job.salary || (metadata.salary ? String(metadata.salary) : "")
   );
@@ -152,6 +331,126 @@ export default function JobDetailsPage() {
     value: string;
     icon: typeof Briefcase;
   }>;
+
+  const adzunaSourceText = safeText(
+    cleanJobText(
+      adzunaDetail?.descriptionPlain ??
+        adzunaDetail?.content ??
+        adzunaDetail?.description ??
+        "",
+      { source: "adzuna" }
+    )
+  );
+
+  const adzunaLocalPretty = useMemo(() => {
+    if (!adzunaDetail) return null;
+
+    const immediatePretty =
+      data?.job.source === "adzuna" && hasPrettyContent(data.pretty)
+        ? data.pretty
+        : prettyFromDescription(adzunaSourceText, {
+            source: "adzuna",
+            detail: adzunaDetail,
+          });
+
+    return ensurePrettyContent(immediatePretty, adzunaSourceText);
+  }, [adzunaDetail, adzunaSourceText, data?.job.source, data?.pretty]);
+
+  const adzunaDisplayPretty = useMemo(() => {
+    if (!adzunaDetail) return null;
+    return ensurePrettyContent(adzunaPretty ?? adzunaLocalPretty, adzunaSourceText);
+  }, [adzunaDetail, adzunaLocalPretty, adzunaPretty, adzunaSourceText]);
+
+  const adzunaCategory = safeText(
+    adzunaDetail?.category ||
+      (typeof metadata.category === "string" ? metadata.category : "")
+  );
+  const adzunaEmploymentType = firstNonEmptyText(
+    getPrettyHighlightValue(adzunaDisplayPretty, /employment/i),
+    adzunaDetail?.employmentType,
+    data?.job.employmentType
+  );
+  const adzunaSchedule = firstNonEmptyText(
+    getPrettyHighlightValue(adzunaDisplayPretty, /schedule/i),
+    typeof metadata.schedule === "string" ? metadata.schedule : ""
+  );
+  const adzunaCompensation = firstNonEmptyText(
+    getPrettyHighlightValue(adzunaDisplayPretty, /compensation|salary/i),
+    compensation,
+    safeText(adzunaDetail?.salaryText ?? adzunaDetail?.salary)
+  );
+  const adzunaSnapshotItems = [
+    { label: "Source", value: "Adzuna", icon: Briefcase },
+    postedPretty
+      ? { label: "Posted", value: postedPretty, icon: CalendarDays }
+      : null,
+    adzunaEmploymentType
+      ? {
+          label: "Employment Type",
+          value: adzunaEmploymentType,
+          icon: Briefcase,
+        }
+      : null,
+    adzunaSchedule
+      ? { label: "Schedule", value: adzunaSchedule, icon: CalendarDays }
+      : null,
+    adzunaCompensation
+      ? { label: "Compensation", value: adzunaCompensation, icon: DollarSign }
+      : null,
+    adzunaCategory
+      ? { label: "Category", value: adzunaCategory, icon: CheckCircle2 }
+      : null,
+  ].filter(Boolean) as Array<{
+    label: string;
+    value: string;
+    icon: typeof Briefcase;
+  }>;
+
+  useEffect(() => {
+    if (!isAdzuna || !adzunaDetail || !adzunaSourceText) return;
+    if (adzunaPretty) return;
+
+    let cancelled = false;
+
+    async function enhanceAdzunaDetails() {
+      try {
+        const res = await fetch("/api/jobs/pretty", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jobId: data?.job.id ?? id,
+            source: "adzuna",
+            htmlOrText: adzunaSourceText,
+          }),
+        });
+
+        const json = (await res.json()) as unknown;
+        if (!res.ok || cancelled) return;
+
+        const normalized = normalizePrettyResponse(json);
+        if (!normalized) return;
+
+        if (!cancelled) {
+          setAdzunaPretty(ensurePrettyContent(normalized, adzunaSourceText));
+        }
+      } catch {
+        // Keep the immediate local parser result if the canonical formatter fails.
+      }
+    }
+
+    void enhanceAdzunaDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    adzunaDetail,
+    adzunaPretty,
+    adzunaSourceText,
+    data?.job.id,
+    id,
+    isAdzuna,
+  ]);
 
   return (
     <div className="min-h-screen bg-white">
@@ -203,10 +502,10 @@ export default function JobDetailsPage() {
                         <MapPin className="h-4 w-4" />
                         {location}
                       </span>
-                      {compensation ? (
+                      {adzunaCompensation || compensation ? (
                         <span className="inline-flex items-center gap-2">
                           <DollarSign className="h-4 w-4" />
-                          {compensation}
+                          {adzunaCompensation || compensation}
                         </span>
                       ) : null}
                     </div>
@@ -221,7 +520,28 @@ export default function JobDetailsPage() {
                 </div>
               </section>
 
-              {overviewItems.length > 0 ? (
+              {isAdzuna ? (
+                <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+                  <div className="text-sm font-semibold text-slate-900">Role Snapshot</div>
+
+                  <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                    {adzunaSnapshotItems.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <div key={item.label} className="flex gap-3">
+                          <Icon className="mt-0.5 h-5 w-5 text-slate-500" />
+                          <div>
+                            <div className="text-xs font-semibold text-slate-500">
+                              {item.label}
+                            </div>
+                            <div className="text-sm text-slate-800">{item.value}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : overviewItems.length > 0 ? (
                 <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
                   <div className="text-sm font-semibold text-slate-900">Overview</div>
 
@@ -255,11 +575,19 @@ export default function JobDetailsPage() {
                 </div>
 
                 <div className="mt-4">
-                  <StructuredJobDescription
-                    detail={data.job}
-                    pretty={data.pretty}
-                    emptyMessage="Open the original posting for the latest full description and application instructions."
-                  />
+                  {isAdzuna && adzunaDetail ? (
+                    <StructuredJobDescription
+                      pretty={adzunaDisplayPretty}
+                      emptyMessage="Open the original posting for the latest full description and application instructions."
+                      showHighlights={false}
+                    />
+                  ) : (
+                    <StructuredJobDescription
+                      detail={data.job}
+                      pretty={data.pretty}
+                      emptyMessage="Open the original posting for the latest full description and application instructions."
+                    />
+                  )}
                 </div>
               </section>
 

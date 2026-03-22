@@ -1,5 +1,10 @@
 import type { JobDetail, JobPretty, JobPrettySection, JobSource } from "@/app/lib/jobs/types";
-import { normalizeJobDescriptionText } from "@/app/lib/jobs/normalize-job-description";
+import { cleanJobListItem, cleanJobText } from "@/app/lib/jobs/clean-job-text";
+import {
+  filterHiddenMetadataValues,
+  isGloballyBannedJobLine,
+  isHiddenMetadataPair,
+} from "@/app/lib/jobs/formatJobText";
 
 type PrettyFromDescriptionOptions = {
   source?: JobSource | null;
@@ -28,6 +33,7 @@ const SMALLPRINT_SECTION_TITLES = new Set([
   "Equal Opportunity Employer",
   "Security and Clearance",
   "Legal Notices",
+  "Important Notes",
 ]);
 
 const HEADING_RULES: Array<{
@@ -36,18 +42,28 @@ const HEADING_RULES: Array<{
   kindHint?: JobPrettySection["kind"];
 }> = [
   { pattern: /^(about us|about the company|company overview|what we believe)$/i, title: "About the Company" },
-  { pattern: /^(about the role|role overview|job description|description)$/i, title: "About the Role" },
-  { pattern: /^(role snapshot|summary|overview)$/i, title: "Overview" },
+  { pattern: /^(about the role|role overview|job description|description|position overview)$/i, title: "Position Overview" },
+  { pattern: /^(role snapshot|summary|overview)$/i, title: "Position Overview" },
   { pattern: /^(what you'll do|what you ll do|responsibilities|position responsibilities|duties|the work)$/i, title: "Responsibilities", kindHint: "bullets" },
+  { pattern: /^(essential job functions|supportive functions)$/i, title: "Responsibilities", kindHint: "bullets" },
   { pattern: /^(example projects include)$/i, title: "Example Projects", kindHint: "bullets" },
-  { pattern: /^(what you bring|what you'll bring|what you ll bring|you may be a fit if|qualifications|basic qualifications|required qualifications|minimum qualifications)$/i, title: "Qualifications", kindHint: "bullets" },
+  { pattern: /^(what you bring|what you'll bring|what you ll bring|you may be a fit if|qualifications|basic qualifications|required qualifications|minimum qualifications|requirements|required)$/i, title: "Qualifications", kindHint: "bullets" },
+  { pattern: /^(specific job knowledge skills and abilities|knowledge skills and abilities)$/i, title: "Qualifications", kindHint: "bullets" },
   { pattern: /^(desired skills|preferred qualifications|nice to have|bonus points)$/i, title: "Preferred Qualifications", kindHint: "bullets" },
   { pattern: /^(benefits|benefits \+ perks|benefits and perks|benefits offered|total rewards|perks)$/i, title: "Benefits", kindHint: "bullets" },
   { pattern: /^(pay transparency notice|pay range|compensation|salary)$/i, title: "Compensation", kindHint: "callout" },
+  { pattern: /^(schedule|hours|shift|shift details)$/i, title: "Schedule", kindHint: "callout" },
+  { pattern: /^(reports to|reporting to)$/i, title: "Reports To", kindHint: "callout" },
   { pattern: /^(how to apply|applying|application process)$/i, title: "How to Apply" },
+  { pattern: /^(service expectations|guest experience|service standards)$/i, title: "Service / Guest Experience Standards", kindHint: "bullets" },
+  { pattern: /^(training|team support)$/i, title: "Training / Team Support" },
+  { pattern: /^(compliance|safety)$/i, title: "Compliance / Safety", kindHint: "bullets" },
+  { pattern: /^(culture|culture and values)$/i, title: "Company / Brand Overview" },
+  { pattern: /^(work environment|environment|work setting)$/i, title: "Work Environment" },
   { pattern: /^(required documents)$/i, title: "Required Documents", kindHint: "bullets" },
   { pattern: /^(how you will be evaluated)$/i, title: "How You Will Be Evaluated", kindHint: "bullets" },
   { pattern: /^(additional information|other important information you should know)$/i, title: "Additional Information", kindHint: "smallprint" },
+  { pattern: /^(important notes|important information|please note)$/i, title: "Important Notes", kindHint: "smallprint" },
   { pattern: /^(equal opportunity employer|equal employment opportunity|eeo statement)$/i, title: "Equal Opportunity Employer", kindHint: "smallprint" },
   { pattern: /^(security clearance|security clearance statement|clearance statement)$/i, title: "Security and Clearance", kindHint: "smallprint" },
   { pattern: /^(duties)$/i, title: "Responsibilities", kindHint: "bullets" },
@@ -96,11 +112,11 @@ function matchCanonicalHeading(line: string): HeadingMatch | null {
 }
 
 function looksLikeBulletLine(line: string) {
-  return /^[-*]\s+/.test(line) || /^\d+[\.\)]\s+/.test(line);
+  return /^(?:[-*]|\u2022|\u00b7)\s+/.test(line) || /^\d+[\.\)]\s+/.test(line);
 }
 
 function cleanBulletLine(line: string) {
-  return line.replace(/^[-*]\s+/, "").replace(/^\d+[\.\)]\s+/, "").trim();
+  return cleanJobListItem(line);
 }
 
 function splitBlocks(value: string) {
@@ -111,9 +127,13 @@ function splitBlocks(value: string) {
 }
 
 function toParagraphs(blocks: string[]) {
-  return blocks
+  return filterHiddenMetadataValues(
+    "",
+    blocks
     .map((block) => block.replace(/\n+/g, " ").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+    .filter((block) => !isGloballyBannedJobLine(block))
+    .filter(Boolean)
+  );
 }
 
 function toBullets(blocks: string[]) {
@@ -124,6 +144,7 @@ function toBullets(blocks: string[]) {
         .map((line) => cleanBulletLine(line))
         .filter(Boolean)
     )
+    .filter((line) => !isHiddenMetadataPair("", line))
     .filter(Boolean);
 }
 
@@ -153,7 +174,13 @@ function buildSection(
   if (!blocks.length) return null;
 
   if (kindHint === "callout") {
-    const paragraphs = toParagraphs(blocks);
+    const paragraphs = filterHiddenMetadataValues(title, toParagraphs(blocks));
+    if (
+      title === "Schedule" &&
+      paragraphs.every((paragraph) => isGloballyBannedJobLine(paragraph))
+    ) {
+      return null;
+    }
     if (paragraphs[0]) {
       return {
         title,
@@ -164,7 +191,7 @@ function buildSection(
   }
 
   if (kindHint === "smallprint" || SMALLPRINT_SECTION_TITLES.has(title)) {
-    const paragraphs = toParagraphs(blocks);
+    const paragraphs = filterHiddenMetadataValues(title, toParagraphs(blocks));
     if (!paragraphs.length) return null;
     return {
       title,
@@ -174,7 +201,7 @@ function buildSection(
   }
 
   if (kindHint === "bullets" || BULLET_SECTION_TITLES.has(title) || isMostlyBullets(blocks)) {
-    const bullets = toBullets(blocks);
+    const bullets = filterHiddenMetadataValues(title, toBullets(blocks));
     if (bullets.length) {
       return {
         title,
@@ -184,7 +211,7 @@ function buildSection(
     }
   }
 
-  const paragraphs = toParagraphs(blocks);
+  const paragraphs = filterHiddenMetadataValues(title, toParagraphs(blocks));
   if (!paragraphs.length) return null;
 
   return {
@@ -203,7 +230,9 @@ function extractSections(
 
   const sections: PrettySection[] = [];
   let currentTitle =
-    source === "ashby" || source === "remoteok" ? "About the Role" : "Overview";
+    source === "ashby" || source === "remoteok"
+      ? "Position Overview"
+      : "Position Overview";
   let currentKindHint: JobPrettySection["kind"] | undefined;
   let currentBlocks: string[] = [];
 
@@ -265,6 +294,7 @@ function addHighlight(
 ) {
   const normalized = String(value ?? "").trim();
   if (!normalized) return;
+  if (isHiddenMetadataPair(label, normalized)) return;
   if (highlights.some((item) => item.label === label && item.value === normalized)) {
     return;
   }
@@ -347,7 +377,7 @@ function normalizeSections(sections: PrettySection[]) {
 }
 
 export function extractCompanyLocationFromDescription(description: string) {
-  const normalized = normalizeJobDescriptionText(description);
+  const normalized = cleanJobText(description);
   const lines = normalized
     .split(/\n+/)
     .map((line) => line.trim())
@@ -385,7 +415,7 @@ export function prettyFromDescription(
   description: string,
   options: PrettyFromDescriptionOptions = {}
 ): JobPretty {
-  const normalized = normalizeJobDescriptionText(description, {
+  const normalized = cleanJobText(description, {
     source: options.source ?? options.detail?.source ?? null,
   });
 

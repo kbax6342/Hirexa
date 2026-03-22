@@ -218,8 +218,8 @@ export async function POST(req: NextRequest) {
     // ✅ return proof payload (what server can confirm immediately)
     const cookieProof = {
       guest_user_id: cookieStore.get("guest_user_id")?.value ?? null,
-      resume_id: cookieStore.get("resume_id")?.value ?? null,
-      resume_uploaded: cookieStore.get("resume_uploaded")?.value ?? null,
+      onboarding_resume_skipped:
+        cookieStore.get("onboarding_resume_skipped")?.value ?? null,
       job_interest_ids: cookieStore.get("job_interest_ids")?.value ?? null,
       job_interest_titles: cookieStore.get("job_interest_titles")?.value ?? null,
       min_comp_type: cookieStore.get("min_comp_type")?.value ?? null,

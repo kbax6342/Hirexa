@@ -506,7 +506,7 @@ export default async function SubscriptionSettingsPage() {
                   </Link>
                 ) : (
                   <span className="font-semibold text-gray-900">
-                    support@hirexa.ai (set EMAIL_SUPPORT)
+                    support@hirexa-ai.com (set EMAIL_SUPPORT)
                   </span>
                 )}
                 .

@@ -22,6 +22,7 @@ export type Job = {
   posted: string;
 
   salary?: string;
+  salaryIsEstimated?: boolean;
   badge?: "NEW" | "MVP";
   description?: string;    // list view can be short; details can fetch later
   jobUrl?: string;         // optional now; strongly recommended later
@@ -42,9 +43,11 @@ export type JobDetailSection = {
 export type JobDetail = Job & {
   remote?: boolean;
   salaryText?: string | null;
+  salaryIsEstimated?: boolean;
   salaryMin?: number | null;
   salaryMax?: number | null;
   employmentType?: string | null;
+  category?: string | null;
   applyUrl?: string | null;
   externalUrl?: string | null;
   descriptionHtml?: string | null;
@@ -53,6 +56,7 @@ export type JobDetail = Job & {
   descriptionPlain?: string | null;
   summary?: string | null;
   snippet?: string | null;
+  descriptionIntro?: string[] | null;
   sections?: JobDetailSection[];
   benefits?: string[];
   requirements?: string[];

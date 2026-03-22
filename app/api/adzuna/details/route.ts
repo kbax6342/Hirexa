@@ -2,6 +2,13 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 
+import {
+  buildAdzunaStructuredHtml,
+  splitAdzunaSections,
+} from "@/app/lib/jobs/adzunaStructuredDetail";
+import { cleanJobText } from "@/app/lib/jobs/clean-job-text";
+import { formatAdzunaDescription } from "@/app/lib/jobs/formatAdzunaDescription";
+
 type JsonLdNode = Record<string, unknown>;
 
 type SalaryInfo = {
@@ -22,12 +29,6 @@ const DESCRIPTION_SECTION_MARKERS = [
   />\s*About the Team\s*</i,
 ];
 
-const FOOTER_TEXT_PATTERN =
-  /\n\n(Jobseekers|Recruiters|Adzuna|Country selection|Terms(?:\s*&\s*Conditions|\s+and\s+Conditions)|Privacy Policy|Cookie Policy|\u00A9|&copy;|&#169;)\b/i;
-
-const FOOTER_HTML_PATTERN =
-  /(Jobseekers|Recruiters|Country selection|Terms(?:\s*&\s*Conditions|\s+and\s+Conditions)|Privacy Policy|Cookie Policy|Adzuna|&copy;|&#169;|\u00A9)/i;
-
 function decodeHtml(value: string) {
   return value
     .replace(/&nbsp;/g, " ")
@@ -47,15 +48,6 @@ function cleanText(value: string) {
       .replace(/[ \t]{2,}/g, " ")
       .trim()
   );
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function stripHtml(html: string) {
@@ -129,7 +121,7 @@ function extractJobPostingJsonLd(html: string) {
       const jobPosting = nodes.find((node) => hasJsonLdType(node, "JobPosting"));
       if (jobPosting) return jobPosting;
     } catch {
-      // Ignore malformed blocks.
+      // Ignore malformed JSON-LD blocks.
     }
   }
 
@@ -212,7 +204,6 @@ function readJobPostingCategory(jobPosting: JsonLdNode | null) {
     [
       ...asStringArray(jobPosting.occupationalCategory),
       ...asStringArray(jobPosting.industry),
-      ...asStringArray(jobPosting.jobLocationType),
     ].join(", ")
   );
 }
@@ -237,13 +228,8 @@ function formatPostedLabel(dateValue: string) {
   });
 }
 
-function readRemoteLabel(jobPosting: JsonLdNode | null) {
-  const locationType = cleanText(asString(jobPosting?.jobLocationType));
-  if (/remote|telecommute/i.test(locationType)) {
-    return "Remote";
-  }
-
-  return "";
+function isPredictedSalary(value: unknown) {
+  return value === true || value === 1 || value === "1" || value === "true";
 }
 
 function readSalaryInfo(baseSalary: unknown): SalaryInfo {
@@ -288,6 +274,14 @@ function readSalaryInfo(baseSalary: unknown): SalaryInfo {
   const unitSuffix = unitText ? ` / ${unitText}` : "";
 
   if (formattedMin && formattedMax) {
+    if (Math.round(minValue) === Math.round(maxValue)) {
+      return {
+        text: `${formattedMin}${unitSuffix}`,
+        min: minValue,
+        max: maxValue,
+      };
+    }
+
     return {
       text: `${formattedMin} - ${formattedMax}${unitSuffix}`,
       min: minValue,
@@ -310,287 +304,95 @@ function readSalaryInfo(baseSalary: unknown): SalaryInfo {
   };
 }
 
+function readSalaryIsEstimated(html: string, jobPosting: JsonLdNode | null) {
+  if (isPredictedSalary(jobPosting?.salary_is_predicted)) {
+    return true;
+  }
+
+  return (
+    /salary_is_predicted["']?\s*[:=]\s*(?:true|1)/i.test(html) ||
+    /\bestimated salary\b/i.test(html)
+  );
+}
+
+function formatSalaryText(text: string, estimated: boolean) {
+  const cleaned = cleanText(text);
+  if (!cleaned) return "";
+  return estimated ? `${cleaned} - estimated` : cleaned;
+}
+
 function readJobPostingUrl(jobPosting: JsonLdNode | null, fallbackUrl: string) {
   if (!jobPosting) return fallbackUrl;
   const url = cleanText(asString(jobPosting.url));
   return url || fallbackUrl;
 }
 
-function trimDescriptionText(value: string) {
-  const trimmed = cleanText(value);
-  if (!trimmed) return "";
-
-  const parts = trimmed.split(FOOTER_TEXT_PATTERN);
-  return cleanText(parts[0] ?? trimmed);
-}
-
-function sanitizeHtmlChunk(value: string) {
-  return value
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .trim();
-}
-
-function uniqueByNormalizedText(values: string[]) {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const value of values) {
-    const key = trimDescriptionText(stripHtml(value));
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    result.push(value);
-  }
-
-  return result;
-}
-
-function extractDescriptionHtmlCandidates(html: string, jobPosting: JsonLdNode | null) {
+function extractDescriptionCandidates(html: string, jobPosting: JsonLdNode | null) {
   const candidates: string[] = [];
 
-  const jsonLdDescription = asString(jobPosting?.description).trim();
-  if (/<[^>]+>/.test(jsonLdDescription)) {
+  const jsonLdDescription = stripHtml(asString(jobPosting?.description));
+  if (jsonLdDescription.length > 80) {
     candidates.push(jsonLdDescription);
   }
 
   for (const pattern of DESCRIPTION_SECTION_MARKERS) {
     const markerIndex = html.search(pattern);
     if (markerIndex === -1) continue;
-
-    const slice = html.slice(Math.max(0, markerIndex - 200), markerIndex + 120000);
-    const footerIndex = slice.search(FOOTER_HTML_PATTERN);
-    const chunk = sanitizeHtmlChunk(
-      footerIndex === -1 ? slice : slice.slice(0, footerIndex)
-    );
-
-    if (trimDescriptionText(stripHtml(chunk)).length > 180) {
+    const chunk = stripHtml(html.slice(Math.max(0, markerIndex - 200), markerIndex + 80000));
+    if (chunk.length > 80) {
       candidates.push(chunk);
     }
   }
 
-  const mainMatch = html.match(/<(main|article)[^>]*>([\s\S]{600,140000}?)<\/\1>/i);
+  const mainMatch = html.match(/<(main|article)[^>]*>([\s\S]{600,120000}?)<\/\1>/i);
   if (mainMatch?.[2]) {
-    const chunk = sanitizeHtmlChunk(mainMatch[2]);
-    if (trimDescriptionText(stripHtml(chunk)).length > 180) {
+    const chunk = stripHtml(mainMatch[2]);
+    if (chunk.length > 80) {
       candidates.push(chunk);
     }
   }
 
-  return uniqueByNormalizedText(candidates);
-}
-
-function removeDuplicatedHeaderText(params: {
-  text: string;
-  title?: string;
-  company?: string;
-  location?: string;
-}) {
-  const blocks = params.text
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-
-  const dedupeTargets = [params.title, params.company, params.location]
-    .map((value) => normalizeCompare(value))
-    .filter(Boolean);
-
-  while (blocks.length > 1) {
-    const firstBlock = normalizeCompare(blocks[0]);
-    if (!firstBlock) {
-      blocks.shift();
-      continue;
-    }
-
-    const looksDuplicative = dedupeTargets.some(
-      (target) =>
-        firstBlock === target ||
-        firstBlock.includes(target) ||
-        target.includes(firstBlock)
-    );
-
-    if (!looksDuplicative) {
-      break;
-    }
-
-    blocks.shift();
+  const fullText = stripHtml(html);
+  if (fullText.length > 80) {
+    candidates.push(fullText);
   }
 
-  return blocks.join("\n\n");
-}
+  const seen = new Set<string>();
+  const deduped: string[] = [];
 
-function renderPlainTextAsHtml(text: string) {
-  const lines = cleanText(text).split("\n");
-  const blocks: string[] = [];
-  const paragraphLines: string[] = [];
-  const listItems: string[] = [];
-  let listType: "ul" | "ol" | null = null;
-
-  const flushParagraph = () => {
-    if (!paragraphLines.length) return;
-    blocks.push(
-      `<p>${paragraphLines.map((line) => escapeHtml(line)).join("<br />")}</p>`
-    );
-    paragraphLines.length = 0;
-  };
-
-  const flushList = () => {
-    if (!listType || !listItems.length) return;
-    blocks.push(
-      `<${listType}>${listItems
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("")}</${listType}>`
-    );
-    listItems.length = 0;
-    listType = null;
-  };
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    const unorderedMatch = line.match(/^[-*\u2022]\s+(.+)$/);
-    if (unorderedMatch) {
-      flushParagraph();
-      if (listType && listType !== "ul") flushList();
-      listType = "ul";
-      listItems.push(unorderedMatch[1]);
-      continue;
-    }
-
-    const orderedMatch = line.match(/^\d+[\.\)]\s+(.+)$/);
-    if (orderedMatch) {
-      flushParagraph();
-      if (listType && listType !== "ol") flushList();
-      listType = "ol";
-      listItems.push(orderedMatch[1]);
-      continue;
-    }
-
-    flushList();
-
-    if (
-      /^(description|job description|overview|position overview|responsibilities|requirements|qualifications|benefits|how to apply|summary|about the role|about the team):?$/i.test(
-        line
-      )
-    ) {
-      flushParagraph();
-      blocks.push(`<h3>${escapeHtml(line.replace(/:$/, ""))}</h3>`);
-      continue;
-    }
-
-    paragraphLines.push(line);
+  for (const candidate of candidates) {
+    const cleanedCandidate = cleanJobText(candidate, { source: "adzuna" });
+    const key = normalizeCompare(cleanedCandidate);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(cleanedCandidate);
   }
 
-  flushParagraph();
-  flushList();
-
-  return blocks.join("\n");
+  return deduped;
 }
 
-function selectBestDescription(params: {
-  html: string;
-  jobPosting: JsonLdNode | null;
-  title: string;
-  company: string;
-  location: string;
+function scoreStructuredContent(params: {
+  descriptionIntro: string[];
+  responsibilities: string[];
+  qualifications: string[];
+  description: string;
 }) {
-  const htmlCandidates = extractDescriptionHtmlCandidates(
-    params.html,
-    params.jobPosting
+  return (
+    params.descriptionIntro.join(" ").length +
+    params.description.length +
+    params.responsibilities.length * 120 +
+    params.qualifications.length * 120
   );
-
-  const textCandidates = [
-    trimDescriptionText(stripHtml(asString(params.jobPosting?.description))),
-    ...htmlCandidates.map((candidate) => trimDescriptionText(stripHtml(candidate))),
-    trimDescriptionText(stripHtml(params.html)),
-  ]
-    .map((candidate) =>
-      removeDuplicatedHeaderText({
-        text: candidate,
-        title: params.title,
-        company: params.company,
-        location: params.location,
-      })
-    )
-    .filter((candidate) => candidate.length > 80)
-    .sort((a, b) => b.length - a.length);
-
-  const descriptionText = textCandidates[0] ?? "";
-
-  const richHtmlCandidates = htmlCandidates
-    .map((candidate) => {
-      const candidateText = removeDuplicatedHeaderText({
-        text: trimDescriptionText(stripHtml(candidate)),
-        title: params.title,
-        company: params.company,
-        location: params.location,
-      });
-
-      return {
-        html: candidate,
-        text: candidateText,
-      };
-    })
-    .filter((candidate) => candidate.text.length > 120)
-    .sort((a, b) => b.text.length - a.text.length);
-
-  let descriptionHtml = richHtmlCandidates[0]?.html ?? "";
-  const htmlTextLength = richHtmlCandidates[0]?.text.length ?? 0;
-
-  if (
-    descriptionText &&
-    (!descriptionHtml ||
-      (htmlTextLength > 0 &&
-        htmlTextLength < Math.min(descriptionText.length * 0.6, descriptionText.length - 250)))
-  ) {
-    descriptionHtml = renderPlainTextAsHtml(descriptionText);
-  }
-
-  return {
-    descriptionText,
-    descriptionHtml,
-  };
 }
 
-function buildRichDescriptionHtml(params: {
-  descriptionHtml: string;
-  descriptionText: string;
-  salaryText: string;
-  employmentType: string;
-  category: string;
-  postedLabel: string;
-  remote: string;
-}) {
-  const metadataItems = [
-    { label: "Source", value: "Adzuna" },
-    { label: "Posted", value: params.postedLabel },
-    { label: "Salary", value: params.salaryText },
-    { label: "Employment Type", value: params.employmentType },
-    { label: "Category", value: params.category },
-    { label: "Remote", value: params.remote },
-  ].filter((item) => item.value);
-
-  const metadataHtml =
-    metadataItems.length > 0
-      ? `<section><h3>Role Snapshot</h3><ul>${metadataItems
-          .map(
-            (item) =>
-              `<li><strong>${escapeHtml(item.label)}:</strong> ${escapeHtml(item.value)}</li>`
-          )
-          .join("")}</ul></section>`
-      : "";
-
-  const descriptionBody = params.descriptionHtml
-    ? `<section><h3>Job Description</h3>${params.descriptionHtml}</section>`
-    : params.descriptionText
-      ? `<section><h3>Job Description</h3>${renderPlainTextAsHtml(params.descriptionText)}</section>`
-      : "";
-
-  return [metadataHtml, descriptionBody].filter(Boolean).join("\n");
+function findSectionBullets(
+  sections: Array<{ title: string; bullets?: string[]; paragraphs?: string[] }>,
+  pattern: RegExp
+) {
+  return sections
+    .filter((section) => pattern.test(section.title))
+    .flatMap((section) => section.bullets ?? [])
+    .filter(Boolean);
 }
 
 export async function GET(req: Request) {
@@ -639,67 +441,133 @@ export async function GET(req: Request) {
       "Unknown location";
     const posted = readJobPostingDate(jobPosting);
     const postedLabel = formatPostedLabel(posted);
-    const salaryInfo = readSalaryInfo(jobPosting?.baseSalary);
     const employmentType = readJobPostingEmploymentType(jobPosting);
     const category = readJobPostingCategory(jobPosting);
-    const remote = readRemoteLabel(jobPosting);
+    const salaryInfo = readSalaryInfo(jobPosting?.baseSalary);
+    const salaryIsEstimated = readSalaryIsEstimated(html, jobPosting);
+    const salaryText = formatSalaryText(salaryInfo.text, salaryIsEstimated);
     const jobUrl = readJobPostingUrl(jobPosting, detailsUrl);
 
-    const { descriptionText, descriptionHtml } = selectBestDescription({
-      html,
-      jobPosting,
-      title,
-      company,
-      location,
-    });
+    const descriptionCandidates = extractDescriptionCandidates(html, jobPosting);
+    const structuredCandidates = descriptionCandidates
+      .map((candidate) => ({
+        raw: candidate,
+        structured: splitAdzunaSections(candidate, {
+          title,
+          company,
+          location,
+          salary: salaryText,
+        }),
+      }))
+      .filter(
+        ({ structured }) =>
+          structured.description.length > 0 ||
+          structured.descriptionIntro.length > 0 ||
+          structured.responsibilities.length > 0 ||
+          structured.qualifications.length > 0
+      )
+      .sort(
+        (left, right) =>
+          scoreStructuredContent(right.structured) -
+          scoreStructuredContent(left.structured)
+      );
 
-    const richDescriptionHtml = buildRichDescriptionHtml({
-      descriptionHtml,
-      descriptionText,
-      salaryText: salaryInfo.text,
-      employmentType,
-      category,
-      postedLabel,
-      remote,
-    });
+    const structured =
+      structuredCandidates[0]?.structured ?? {
+        descriptionIntro: [],
+        responsibilities: [],
+        qualifications: [],
+        description: "",
+      };
+
+    const structuredHtml = buildAdzunaStructuredHtml(structured);
+    const fallbackDescription =
+      structured.description ||
+      structured.descriptionIntro.join("\n\n") ||
+      descriptionCandidates[0] ||
+      "";
+    const cleanedFallbackDescription = cleanJobText(
+      fallbackDescription || descriptionCandidates[0] || "",
+      { source: "adzuna" }
+    );
+    const formatted = formatAdzunaDescription(
+      cleanedFallbackDescription || descriptionCandidates[0] || ""
+    );
+    const resolvedSalaryText =
+      salaryText ||
+      formatSalaryText(formatted?.compensation ?? "", salaryIsEstimated);
+    const resolvedIntro =
+      structured.descriptionIntro.length > 0
+        ? structured.descriptionIntro
+        : formatted?.intro ?? [];
+    const resolvedSections =
+      formatted?.sections.map((section) => ({
+        title: section.title,
+        kind: section.bullets?.length ? "bullets" : "paragraphs",
+        paragraphs: section.paragraphs ?? [],
+        bullets: section.bullets ?? [],
+      })) ?? [];
+    const resolvedResponsibilities =
+      structured.responsibilities.length > 0
+        ? structured.responsibilities
+        : findSectionBullets(resolvedSections, /responsibilities|what you'll do/i);
+    const resolvedQualifications =
+      structured.qualifications.length > 0
+        ? structured.qualifications
+        : findSectionBullets(
+            resolvedSections,
+            /requirements|qualifications|what we're looking for/i
+          );
+    const resolvedEmploymentType =
+      employmentType || formatted?.employmentType || "";
+    const resolvedSchedule =
+      formatted?.schedule || resolvedEmploymentType || "";
+    const rawDescription =
+      formatted?.rawDescription || cleanedFallbackDescription || "";
 
     return NextResponse.json({
       id,
-      source: "adzuna",
+      source: "Adzuna",
       title,
       company,
       companyName: company,
       location,
       posted: posted || "",
       postedLabel: postedLabel || "",
-      salary: salaryInfo.text || null,
-      salaryText: salaryInfo.text || null,
+      salary: resolvedSalaryText || null,
+      salaryText: resolvedSalaryText || null,
       salaryMin: salaryInfo.min,
       salaryMax: salaryInfo.max,
-      compensation: salaryInfo.text || null,
-      employmentType: employmentType || null,
-      schedule: employmentType || null,
+      salaryIsEstimated,
+      compensation: resolvedSalaryText || null,
+      employmentType: resolvedEmploymentType || null,
+      schedule: resolvedSchedule || null,
       category: category || null,
-      remote: remote || null,
+      descriptionIntro: resolvedIntro,
+      responsibilities: resolvedResponsibilities,
+      qualifications: resolvedQualifications,
+      sections: resolvedSections,
+      description: cleanedFallbackDescription,
+      descriptionText: cleanedFallbackDescription,
+      content: rawDescription || null,
+      contentHtml: structuredHtml || null,
+      descriptionHtml: structuredHtml || null,
+      summary: rawDescription || null,
+      snippet: rawDescription || null,
+      rawDescription: rawDescription || null,
       jobUrl,
       applyUrl: jobUrl,
       externalUrl: jobUrl,
       url: jobUrl,
       detailsUrl,
-      description: descriptionText,
-      descriptionText: descriptionText,
-      content: descriptionText || null,
-      contentHtml: richDescriptionHtml || null,
-      descriptionHtml: richDescriptionHtml || null,
-      summary: descriptionText || null,
-      snippet: descriptionText || null,
       metadata: {
         source: "Adzuna",
         postedLabel: postedLabel || null,
-        salaryText: salaryInfo.text || null,
-        employmentType: employmentType || null,
+        salaryText: resolvedSalaryText || null,
+        salaryIsEstimated,
+        employmentType: resolvedEmploymentType || null,
+        schedule: resolvedSchedule || null,
         category: category || null,
-        remote: remote || null,
       },
     });
   } catch (error) {

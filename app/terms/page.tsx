@@ -164,7 +164,7 @@ export default function TermsPage() {
             <p className="mt-5 font-medium">
               Hirexa AI
               <br />
-              support@hirexa.ai
+              support@hirexa-ai.com
             </p>
           </section>
 

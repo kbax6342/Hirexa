@@ -12,10 +12,6 @@ export const onboardingStatusSelect = {
   resume: {
     select: { id: true },
   },
-  resumeFiles: {
-    take: 1,
-    select: { id: true },
-  },
 } as const;
 
 export type OnboardingStatusProfile = {
@@ -26,7 +22,6 @@ export type OnboardingStatusProfile = {
   lastName?: string | null;
   email?: string | null;
   resume?: { id: string } | null;
-  resumeFiles?: Array<{ id: string }> | null;
 } | null;
 
 export function isOnboardingComplete(profile: OnboardingStatusProfile) {
@@ -38,7 +33,7 @@ export function isOnboardingComplete(profile: OnboardingStatusProfile) {
 }
 
 export function hasUploadedResume(profile: OnboardingStatusProfile) {
-  return Boolean(profile?.resume?.id || (profile?.resumeFiles?.length ?? 0) > 0);
+  return Boolean(profile?.resume?.id);
 }
 
 export function hasRequiredProfileDetails(profile: OnboardingStatusProfile) {
@@ -54,10 +49,6 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
     return null;
   }
 
-  if (!hasUploadedResume(profile)) {
-    return "/resume";
-  }
-
   if (!hasRequiredProfileDetails(profile)) {
     return "/onboarding/profile";
   }
@@ -71,7 +62,7 @@ export async function getOnboardingStatusForUser(userId?: string | null) {
     completed: false,
     hasResume: false,
     hasProfileDetails: false,
-    nextPath: "/resume",
+    nextPath: "/questions",
   };
 
   if (!userId) {

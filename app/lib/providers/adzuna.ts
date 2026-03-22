@@ -10,6 +10,7 @@ type AdzunaSearchResponse = {
     location?: { display_name?: string };
     salary_min?: number;
     salary_max?: number;
+    salary_is_predicted?: boolean | number | string;
     description?: string;
   }>;
 };
@@ -37,25 +38,31 @@ function cleanText(value: unknown, maxLength?: number) {
   return `${text.slice(0, maxLength).trimEnd()}...`;
 }
 
-function moneyRange(min?: number, max?: number) {
+function isPredictedSalary(value: unknown) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function moneyRange(min?: number, max?: number, predicted?: unknown) {
   const hasMin = typeof min === "number" && Number.isFinite(min);
   const hasMax = typeof max === "number" && Number.isFinite(max);
 
   if (!hasMin && !hasMax) return undefined;
+
+  const estimatedSuffix = isPredictedSalary(predicted) ? " - estimated" : "";
 
   if (hasMin && hasMax) {
     const roundedMin = Math.round(min);
     const roundedMax = Math.round(max);
 
     if (roundedMin === roundedMax) {
-      return `$${roundedMin.toLocaleString()} / year`;
+      return `$${roundedMin.toLocaleString()} / year${estimatedSuffix}`;
     }
 
-    return `$${roundedMin.toLocaleString()} - $${roundedMax.toLocaleString()} / year`;
+    return `$${roundedMin.toLocaleString()} - $${roundedMax.toLocaleString()} / year${estimatedSuffix}`;
   }
 
-  if (hasMin) return `From $${Math.round(min).toLocaleString()} / year`;
-  return `Up to $${Math.round(max!).toLocaleString()} / year`;
+  if (hasMin) return `From $${Math.round(min).toLocaleString()} / year${estimatedSuffix}`;
+  return `Up to $${Math.round(max!).toLocaleString()} / year${estimatedSuffix}`;
 }
 
 function formatPosted(iso?: string) {
@@ -124,7 +131,12 @@ export async function fetchAdzunaJobs(args: {
       company: cleanText(result.company?.display_name) || "Unknown",
       location: cleanText(result.location?.display_name) || "Unknown",
       posted: formatPosted(result.created),
-      salary: moneyRange(result.salary_min, result.salary_max),
+      salary: moneyRange(
+        result.salary_min,
+        result.salary_max,
+        result.salary_is_predicted
+      ),
+      salaryIsEstimated: isPredictedSalary(result.salary_is_predicted),
       description: cleanText(result.description) || undefined,
       jobUrl: cleanText(result.redirect_url) || undefined,
     }));
@@ -171,6 +183,16 @@ export async function fetchAdzunaJobDetails(
   }
 
   const data = await res.json();
+  const rawDescription =
+    typeof data.rawDescription === "string"
+      ? data.rawDescription
+      : typeof data.content === "string"
+        ? data.content
+        : typeof data.descriptionText === "string"
+          ? data.descriptionText
+          : typeof data.description === "string"
+            ? data.description
+            : null;
 
   return {
     id: `adzuna:${providerId}`,
@@ -191,17 +213,33 @@ export async function fetchAdzunaJobDetails(
       typeof data.salaryMin === "number" ? data.salaryMin : null,
     salaryMax:
       typeof data.salaryMax === "number" ? data.salaryMax : null,
+    salaryIsEstimated: Boolean(data.salaryIsEstimated),
     employmentType: data.employmentType ?? data.schedule ?? null,
+    category:
+      typeof data.category === "string"
+        ? data.category
+        : typeof data.metadata?.category === "string"
+          ? data.metadata.category
+          : null,
     jobUrl: data.jobUrl ?? data.url,
     applyUrl: data.applyUrl ?? data.jobUrl ?? data.url ?? null,
     externalUrl: data.externalUrl ?? data.jobUrl ?? data.url ?? null,
-    description: data.descriptionText ?? data.description ?? "",
+    description: data.descriptionText ?? data.description ?? rawDescription ?? "",
+    descriptionIntro: Array.isArray(data.descriptionIntro)
+      ? data.descriptionIntro.filter((value: unknown) => typeof value === "string")
+      : null,
     descriptionHtml: data.descriptionHtml ?? null,
     contentHtml: data.contentHtml ?? data.descriptionHtml ?? null,
-    content: data.content ?? data.descriptionText ?? data.description ?? null,
-    descriptionPlain: data.descriptionText ?? data.description ?? null,
-    summary: data.summary ?? data.descriptionText ?? data.description ?? null,
-    snippet: data.snippet ?? data.descriptionText ?? data.description ?? null,
+    content: data.content ?? rawDescription ?? data.descriptionText ?? data.description ?? null,
+    descriptionPlain: rawDescription ?? data.descriptionText ?? data.description ?? null,
+    summary: data.summary ?? rawDescription ?? data.descriptionText ?? data.description ?? null,
+    snippet: data.snippet ?? rawDescription ?? data.descriptionText ?? data.description ?? null,
+    duties: Array.isArray(data.responsibilities)
+      ? data.responsibilities.filter((value: unknown) => typeof value === "string")
+      : [],
+    requirements: Array.isArray(data.qualifications)
+      ? data.qualifications.filter((value: unknown) => typeof value === "string")
+      : [],
     metadata:
       data.metadata && typeof data.metadata === "object"
         ? data.metadata

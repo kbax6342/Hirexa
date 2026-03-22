@@ -7,7 +7,7 @@ export const metadata: Metadata = {
     "Get help with Hirexa AI account access, resume uploads, Smart Matches, applications, billing, and product troubleshooting.",
 };
 
-const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa.ai";
+const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa-ai.com";
 
 const sections = [
   {

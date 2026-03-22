@@ -21,7 +21,7 @@ export async function GET() {
 
     if (!userId) {
       return NextResponse.json(
-        { completed: false, data: null, nextPath: "/resume" },
+        { completed: false, data: null, nextPath: "/questions" },
         { status: 200 }
       );
     }

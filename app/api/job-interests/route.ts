@@ -87,16 +87,13 @@ export async function POST(req: Request) {
       select: { id: true },
     });
 
-    // ✅ Check resume exists in DB for this profile
-    const latestResume = await prisma.resumeFile.findFirst({
-      where: { profileId: profile.id },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, fileName: true, createdAt: true },
+    // Keep this aligned with the current onboarding resume model.
+    const latestResume = await prisma.resume.findUnique({
+      where: { userProfileId: profile.id },
+      select: { id: true, filename: true, createdAt: true },
     });
-
-    const cookieResumeId = c.get("resume_id")?.value ?? null;
-
-    const hasResume = !!latestResume || !!cookieResumeId;
+    const resumeSkipped = c.get("onboarding_resume_skipped")?.value === "1";
+    const hasResume = Boolean(latestResume);
 
     // ✅ Store jobs in cookies (small data only!)
     // Keep it compact to avoid cookie size issues
@@ -119,8 +116,9 @@ export async function POST(req: Request) {
       resume: {
         hasResume,
         dbResumeId: latestResume?.id ?? null,
-        cookieResumeId,
-        fileName: latestResume?.fileName ?? null,
+        cookieResumeId: null,
+        fileName: latestResume?.filename ?? null,
+        skippedDuringOnboarding: resumeSkipped,
       },
       jobs: {
         count: jobs.length,
@@ -133,7 +131,7 @@ export async function POST(req: Request) {
         job_interest_count: true,
         onboarding_job_interests_saved: true,
       },
-      note: "This proves resume presence + job interests stored in cookies. Final page can commit to DB.",
+      note: "This proves job interests were stored and shows whether resume upload was completed or skipped during onboarding.",
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message ?? "Unknown error" }, { status: 500 });

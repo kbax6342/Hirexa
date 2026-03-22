@@ -14,7 +14,24 @@ import {
   extractCompanyLocationFromDescription,
   prettyFromDescription,
 } from "@/app/lib/jobs/pretty-from-text";
+import {
+  cleanJobListItem,
+  cleanJobText,
+  isJunkJobLine,
+} from "@/app/lib/jobs/clean-job-text";
+import {
+  filterHiddenMetadataValues,
+  isHiddenMetadataPair,
+  isHiddenMetadataSectionTitle,
+  isHiddenStandaloneMetadataValue,
+} from "@/app/lib/jobs/formatJobText";
 import { buildJobDetailBodyHtml } from "@/app/lib/jobs/detailContent";
+import {
+  formatAdzunaDescription,
+  type FormattedAdzunaHighlight,
+  type FormattedAdzunaSection,
+} from "@/app/lib/jobs/formatAdzunaDescription";
+import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
 import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
 
 type SmartMatchesResponse = {
@@ -43,17 +60,140 @@ type JobDetailsResponse = {
 /** --------------------------
  * OPTIONAL: LLM formatting output
  * -------------------------- */
-type FormattedSection = {
-  title: string;
-  paragraphs?: string[];
-  bullets?: string[];
-};
+type FormattedSection = FormattedAdzunaSection;
 
 type FormattedJob = {
+  highlights?: FormattedAdzunaHighlight[];
   intro?: string[];
   sections: FormattedSection[];
   salary?: string | null;
 };
+
+type DashboardFilters = {
+  query: string;
+  location: string;
+  includeRemote: boolean;
+};
+
+function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
+  return (
+    left.query === right.query &&
+    left.location === right.location &&
+    left.includeRemote === right.includeRemote
+  );
+}
+
+function normalizeRenderedParagraph(value: string) {
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isJunkJobLine(line))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeRenderedBullets(values: string[]) {
+  return values.map((value) => cleanJobListItem(String(value ?? ""))).filter(Boolean);
+}
+
+function BlueDotBulletList({ bullets }: { bullets: string[] }) {
+  const cleanedBullets = normalizeRenderedBullets(bullets);
+
+  if (cleanedBullets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 space-y-2">
+      {cleanedBullets.map((bullet, index) => (
+        <div key={`${bullet}-${index}`} className="flex items-start gap-3">
+          <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-blue-600" />
+          <span className="text-sm leading-relaxed text-gray-700">{bullet}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function getVisibleDashboardHighlights<T extends { label: string; value: string }>(
+  highlights: T[] | undefined
+) {
+  return (highlights ?? []).filter(
+    (highlight) => !isHiddenMetadataPair(highlight.label, highlight.value)
+  );
+}
+
+function getVisibleDashboardParagraphs(title: string, paragraphs: string[] | undefined) {
+  return filterHiddenMetadataValues(
+    title,
+    (paragraphs ?? [])
+      .map((paragraph) => normalizeRenderedParagraph(paragraph))
+      .filter(Boolean)
+      .filter((paragraph) => !isHiddenStandaloneMetadataValue(paragraph))
+  );
+}
+
+function getVisibleDashboardBullets(title: string, bullets: string[] | undefined) {
+  return filterHiddenMetadataValues(
+    title,
+    normalizeRenderedBullets(bullets ?? []).filter(
+      (bullet) => !isHiddenStandaloneMetadataValue(bullet)
+    )
+  );
+}
+
+function getVisibleDashboardCalloutValue(title: string, value: string | null | undefined) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return null;
+  if (isHiddenStandaloneMetadataValue(normalized)) return null;
+  if (isHiddenMetadataPair(title, normalized)) return null;
+  return normalized;
+}
+
+function shouldHideDashboardSection(
+  title: string,
+  params: {
+    paragraphs?: string[];
+    bullets?: string[];
+    calloutValue?: string | null;
+  }
+) {
+  const visibleParagraphs = getVisibleDashboardParagraphs(title, params.paragraphs);
+  const visibleBullets = getVisibleDashboardBullets(title, params.bullets);
+  const visibleCalloutValue = getVisibleDashboardCalloutValue(
+    title,
+    params.calloutValue
+  );
+
+  if (
+    isHiddenMetadataSectionTitle(title) &&
+    visibleParagraphs.length === 0 &&
+    visibleBullets.length === 0 &&
+    !visibleCalloutValue
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizeDashboardHtmlFallback(html: string) {
+  return html
+    .replace(
+      /<(p|div|li|span|strong|em)>\s*Workplace\s*<\/\1>\s*<(p|div|li|span|strong|em)>\s*On(?:-| )?site\s*<\/\2>/gi,
+      ""
+    )
+    .replace(
+      /<(p|div|li|span|strong|em)>\s*Clearance\s*<\/\1>\s*<(p|div|li|span|strong|em)>\s*confidential\s*<\/\2>/gi,
+      ""
+    )
+    .replace(/<(h[1-6]|p|div|li|span|strong|em)>\s*Workplace\s*<\/\1>/gi, "")
+    .replace(/<(h[1-6]|p|div|li|span|strong|em)>\s*Clearance\s*<\/\1>/gi, "")
+    .replace(/<(p|div|li|span|strong|em)>\s*On(?:-| )?site\s*<\/\1>/gi, "")
+    .replace(/<(p|div|li|span|strong|em)>\s*confidential\s*<\/\1>/gi, "")
+    .trim();
+}
 
 function getJobIdentity(job: Pick<Job, "id" | "source">) {
   const normalizedId = String(job.id ?? "").trim();
@@ -86,18 +226,6 @@ function getSourceLabel(source: Job["source"]) {
   }
 }
 
-function isRemoteJob(job: Job) {
-  const searchableText = [
-    job.location,
-    job.description,
-    job.searchText,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return /\bremote\b/i.test(searchableText);
-}
-
 function dedupeJobs(jobList: Job[]) {
   const unique = new Set<string>();
 
@@ -117,7 +245,7 @@ function toJobDetailSummary(job: Job | null): JobDetail | null {
 
   return {
     ...job,
-    remote: /remote/i.test(job.location || ""),
+    remote: isRemoteJob(job),
     salaryText: job.salary ?? null,
     applyUrl: job.jobUrl ?? null,
     externalUrl: job.jobUrl ?? null,
@@ -135,23 +263,20 @@ export default function JobMatchesLayout() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [filters, setFilters] = useState({
-    query: searchParams.get("q")?.trim() || "",
-    location: searchParams.get("location")?.trim() || "",
-    includeRemote: searchParams.get("includeRemote")
-      ? searchParams.get("includeRemote") !== "0" &&
-        searchParams.get("includeRemote") !== "false"
-      : true,
-  });
-  const [appliedFilters, setAppliedFilters] = useState(() => ({
-    query: searchParams.get("q")?.trim() || "",
-    location: searchParams.get("location")?.trim() || "",
-    includeRemote: searchParams.get("includeRemote")
-      ? searchParams.get("includeRemote") !== "0" &&
-        searchParams.get("includeRemote") !== "false"
-      : true,
-  }));
+  const queryParam = searchParams.get("q")?.trim() || "";
+  const locationParam = searchParams.get("location")?.trim() || "";
+  const includeRemoteParam = searchParams.get("includeRemote");
+  const urlFilters = useMemo(
+    () => ({
+      query: queryParam,
+      location: locationParam,
+      includeRemote: includeRemoteParam === "1",
+    }),
+    [includeRemoteParam, locationParam, queryParam]
+  );
+  const [allJobs, setAllJobs] = useState<Job[]>([]);
+  const [filters, setFilters] = useState<DashboardFilters>(() => urlFilters);
+  const [appliedFilters, setAppliedFilters] = useState<DashboardFilters>(() => urlFilters);
   const [selectedId, setSelectedId] = useState<string>("");
   const [savingFilters, setSavingFilters] = useState(false);
   const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
@@ -189,10 +314,10 @@ export default function JobMatchesLayout() {
   const selectedJobParam = searchParams.get("job")?.trim() || "";
   const visibleJobs = useMemo(
     () =>
-      appliedFilters.includeRemote
-        ? jobs
-        : jobs.filter((job) => !isRemoteJob(job)),
-    [jobs, appliedFilters.includeRemote]
+      filters.includeRemote
+        ? allJobs
+        : allJobs.filter((job) => !isRemoteJob(job)),
+    [allJobs, filters.includeRemote]
   );
 
   const selectedSummary = useMemo(
@@ -296,6 +421,15 @@ export default function JobMatchesLayout() {
   }
 
   useEffect(() => {
+    setFilters((current) =>
+      sameDashboardFilters(current, urlFilters) ? current : urlFilters
+    );
+    setAppliedFilters((current) =>
+      sameDashboardFilters(current, urlFilters) ? current : urlFilters
+    );
+  }, [urlFilters]);
+
+  useEffect(() => {
     setAppliedJobs(dedupeJobs(loadAppliedJobsSession<Job>()));
     setAppliedJobsSessionReady(true);
   }, []);
@@ -319,10 +453,7 @@ export default function JobMatchesLayout() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const url = new URL("/api/jobs/smart-matches", window.location.origin);
         url.searchParams.set("limit", String(LIMIT));
-        url.searchParams.set(
-          "includeRemote",
-          appliedFilters.includeRemote ? "1" : "0"
-        );
+        url.searchParams.set("includeRemote", "1");
         if (appliedFilters.query) {
           url.searchParams.set("q", appliedFilters.query);
         }
@@ -349,10 +480,7 @@ export default function JobMatchesLayout() {
           const resolvedFilters = {
             query: appliedFilters.query || data.meta.query || "",
             location: appliedFilters.location || data.meta.preferredLocation || "",
-            includeRemote:
-              typeof data.meta.includeRemote === "boolean"
-                ? data.meta.includeRemote
-                : appliedFilters.includeRemote,
+            includeRemote: appliedFilters.includeRemote,
           };
           initializedFiltersRef.current = true;
           setFilters(resolvedFilters);
@@ -362,9 +490,6 @@ export default function JobMatchesLayout() {
 
         filtered = incoming.filter((job) => {
           if (!job?.id) return false;
-          if (!appliedFilters.includeRemote && isRemoteJob(job)) {
-            return false;
-          }
           const jobIdentity = getJobIdentity(job);
           if (seen.current.has(jobIdentity)) return false;
           seen.current.add(jobIdentity);
@@ -385,15 +510,23 @@ export default function JobMatchesLayout() {
       }
 
       setNextCursor(responseCursor);
-      setJobs((prev) => (options?.reset ? filtered : [...prev, ...filtered]));
+      setAllJobs((prev) =>
+        options?.reset ? filtered : dedupeJobs([...prev, ...filtered])
+      );
+
+      const visibleFiltered = filters.includeRemote
+        ? filtered
+        : filtered.filter((job) => !isRemoteJob(job));
 
       if (selectedJobParam) {
-        const selectedFromUrl = filtered.find((job) => job.id === selectedJobParam);
+        const selectedFromUrl = visibleFiltered.find(
+          (job) => job.id === selectedJobParam
+        );
         if (selectedFromUrl?.id) {
           setSelectedId(selectedFromUrl.id);
         }
-      } else if ((options?.reset || !selectedId) && filtered[0]?.id) {
-        setSelectedId(filtered[0].id);
+      } else if ((options?.reset || !selectedId) && visibleFiltered[0]?.id) {
+        setSelectedId(visibleFiltered[0].id);
       }
     } catch (error) {
       console.error("Smart matches feed failed:", error);
@@ -408,7 +541,7 @@ export default function JobMatchesLayout() {
 
   useEffect(() => {
     seen.current.clear();
-    setJobs([]);
+    setAllJobs([]);
     setSelectedId("");
     setSelectedDetails(null);
     setPretty({ sections: [], highlights: [] });
@@ -417,7 +550,7 @@ export default function JobMatchesLayout() {
     setResolutionMeta(null);
     void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedFilters]);
+  }, [appliedFilters.location, appliedFilters.query]);
 
   useEffect(() => {
     if (visibleJobs.length === 0) {
@@ -472,7 +605,15 @@ export default function JobMatchesLayout() {
     let cancelled = false;
 
     (async () => {
-      const selected = jobs.find((job) => job.id === selectedId) ?? null;
+      const selected = visibleJobs.find((job) => job.id === selectedId) ?? null;
+      if (!selected) {
+        if (!cancelled) {
+          setSelectedDetails(null);
+          setPretty({ sections: [], highlights: [] });
+          setFormatted(null);
+        }
+        return;
+      }
       const selectedSummaryJob = toJobDetailSummary(selected);
       const cachedDetail = detailCache.current.get(selectedId);
 
@@ -617,7 +758,7 @@ export default function JobMatchesLayout() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs, selectedId]);
+  }, [selectedId, visibleJobs]);
 
   const setActionState = (
     setter: Dispatch<SetStateAction<Record<string, ActionState>>>,
@@ -739,13 +880,129 @@ export default function JobMatchesLayout() {
     router.push("/agents/career-coach");
   };
 
+  const adzunaFormatted = useMemo(() => {
+    if (right?.source !== "adzuna") {
+      return null;
+    }
+
+    return formatAdzunaDescription(
+      String(
+        right.descriptionPlain ??
+          right.content ??
+          right.description ??
+          right.descriptionHtml ??
+          ""
+      )
+    );
+  }, [
+    right?.content,
+    right?.description,
+    right?.descriptionHtml,
+    right?.descriptionPlain,
+    right?.source,
+  ]);
+
+  const panelFormatted = useMemo<FormattedJob | null>(() => {
+    if (adzunaFormatted) {
+      return {
+        highlights: adzunaFormatted.highlights,
+        intro: adzunaFormatted.intro,
+        sections: adzunaFormatted.sections,
+        salary: right?.salaryText ?? right?.salary ?? null,
+      };
+    }
+
+    return formatted;
+  }, [adzunaFormatted, formatted, right?.salary, right?.salaryText]);
+
   const detailBodyHtml = useMemo(() => buildJobDetailBodyHtml(right), [right]);
+  const sanitizedDetailBodyHtml = useMemo(
+    () => (detailBodyHtml ? sanitizeDashboardHtmlFallback(detailBodyHtml) : ""),
+    [detailBodyHtml]
+  );
+  const hasPanelFormattedContent = Boolean(
+    panelFormatted &&
+      (getVisibleDashboardHighlights(panelFormatted.highlights).length > 0 ||
+        getVisibleDashboardParagraphs("Position Overview", panelFormatted.intro).length > 0 ||
+        panelFormatted.sections.some(
+          (section) =>
+            !shouldHideDashboardSection(section.title, {
+              paragraphs: section.paragraphs,
+              bullets: section.bullets,
+            }) &&
+            (getVisibleDashboardParagraphs(section.title, section.paragraphs).length > 0 ||
+              getVisibleDashboardBullets(section.title, section.bullets).length > 0)
+        ) ||
+        panelFormatted.salary)
+  );
+  const hasPrettyContent =
+    getVisibleDashboardHighlights(pretty.highlights).length > 0 ||
+    pretty.sections.some(
+      (section) =>
+        !shouldHideDashboardSection(section.title, {
+          paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
+          bullets: section.kind === "bullets" ? section.bullets : undefined,
+          calloutValue:
+            section.kind === "callout" ? section.callout?.value : undefined,
+        }) &&
+        (getVisibleDashboardParagraphs(
+          section.title,
+          "paragraphs" in section ? section.paragraphs : undefined
+        ).length > 0 ||
+          getVisibleDashboardBullets(
+            section.title,
+            section.kind === "bullets" ? section.bullets : undefined
+          ).length > 0 ||
+          Boolean(
+            section.kind === "callout"
+              ? getVisibleDashboardCalloutValue(section.title, section.callout?.value)
+              : null
+          ))
+    );
+  const cleanedDetailDescription = useMemo(
+    () =>
+      cleanJobText(
+        String(
+          right?.descriptionPlain ??
+            right?.content ??
+            right?.description ??
+            right?.descriptionHtml ??
+            ""
+        ),
+        { source: right?.source ?? null }
+      ),
+    [
+      right?.content,
+      right?.description,
+      right?.descriptionHtml,
+      right?.descriptionPlain,
+      right?.source,
+    ]
+  );
+  const cleanedFallbackParagraphs = useMemo(
+    () =>
+      cleanedDetailDescription
+        .split(/\n{2,}/)
+        .map((paragraph) => normalizeRenderedParagraph(paragraph))
+        .filter(Boolean),
+    [cleanedDetailDescription]
+  );
+  const shouldUseHtmlFallback =
+    !detailsLoading &&
+    !hasPanelFormattedContent &&
+    !hasPrettyContent &&
+    !!sanitizedDetailBodyHtml &&
+    right?.source !== "adzuna";
+  const shouldUseCleanTextFallback =
+    !detailsLoading &&
+    !hasPanelFormattedContent &&
+    !hasPrettyContent &&
+    cleanedFallbackParagraphs.length > 0;
   const showMinimalFallback =
     !detailsLoading &&
-    !detailBodyHtml &&
-    !formatted &&
-    pretty.sections.length === 0 &&
-    pretty.highlights.length === 0;
+    !hasPanelFormattedContent &&
+    !shouldUseHtmlFallback &&
+    !shouldUseCleanTextFallback;
 
   return (
     <div className="mt-[59]">
@@ -1102,7 +1359,209 @@ export default function JobMatchesLayout() {
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
               {detailsLoading ? (
                 <JobDetailsSkeleton />
-              ) : detailBodyHtml ? (
+              ) : panelFormatted && hasPanelFormattedContent ? (
+                <div className="space-y-6">
+                  {getVisibleDashboardHighlights(panelFormatted.highlights).length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {getVisibleDashboardHighlights(panelFormatted.highlights).map((highlight) => (
+                        <div
+                          key={`${highlight.label}-${highlight.value}`}
+                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+                        >
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            {highlight.label}
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-gray-900">
+                            {highlight.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {panelFormatted.salary &&
+                  !getVisibleDashboardHighlights(panelFormatted.highlights).some(
+                    (highlight) => highlight.label === "Compensation"
+                  ) ? (
+                    <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                      <div className="text-xs font-semibold text-green-700">
+                        Compensation
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-green-900">
+                        {panelFormatted.salary}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {Array.isArray(panelFormatted.intro) && panelFormatted.intro.length > 0 ? (
+                    <section className="rounded-xl border border-gray-200 bg-white p-4">
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        Position Overview
+                      </h3>
+                      <div className="mt-2 space-y-2">
+                        {getVisibleDashboardParagraphs(
+                          "Position Overview",
+                          panelFormatted.intro
+                        )
+                          .map((paragraph, index) => (
+                            <p
+                              key={`intro-${index}`}
+                              className="text-sm leading-relaxed text-gray-700"
+                            >
+                              {paragraph}
+                            </p>
+                          ))}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {Array.isArray(panelFormatted.sections) && panelFormatted.sections.length > 0 ? (
+                    <div className="space-y-6">
+                      {panelFormatted.sections.map((section, index) => {
+                        const visibleParagraphs = getVisibleDashboardParagraphs(
+                          section.title,
+                          section.paragraphs
+                        );
+                        const visibleBullets = getVisibleDashboardBullets(
+                          section.title,
+                          section.bullets
+                        );
+
+                        if (
+                          shouldHideDashboardSection(section.title, {
+                            paragraphs: section.paragraphs,
+                            bullets: section.bullets,
+                          }) ||
+                          (visibleParagraphs.length === 0 && visibleBullets.length === 0)
+                        ) {
+                          return null;
+                        }
+
+                        return (
+                          <section
+                            key={`${section.title}-${index}`}
+                            className="rounded-xl border border-gray-200 bg-white p-4"
+                          >
+                            <h3 className="text-sm font-semibold text-gray-900">
+                              {section.title}
+                            </h3>
+
+                            {visibleParagraphs.length > 0 ? (
+                              <div className="mt-2 space-y-2">
+                                {visibleParagraphs.map((paragraph, paragraphIndex) => (
+                                  <p
+                                    key={`${section.title}-paragraph-${paragraphIndex}`}
+                                    className="text-sm leading-relaxed text-gray-700"
+                                  >
+                                    {paragraph}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            {visibleBullets.length > 0 ? (
+                              <BlueDotBulletList bullets={visibleBullets} />
+                            ) : null}
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : hasPrettyContent ? (
+                <div className="space-y-6">
+                  {getVisibleDashboardHighlights(pretty.highlights).length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {getVisibleDashboardHighlights(pretty.highlights).map((highlight) => (
+                        <div
+                          key={`${highlight.label}-${highlight.value}`}
+                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+                        >
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                            {highlight.label}
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-gray-900">
+                            {highlight.value}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-6">
+                    {pretty.sections.map((section, idx) => {
+                      const visibleParagraphs = getVisibleDashboardParagraphs(
+                        section.title,
+                        "paragraphs" in section ? section.paragraphs : undefined
+                      );
+                      const visibleBullets = getVisibleDashboardBullets(
+                        section.title,
+                        section.kind === "bullets" ? section.bullets : undefined
+                      );
+                      const visibleCalloutValue =
+                        section.kind === "callout"
+                          ? getVisibleDashboardCalloutValue(
+                              section.title,
+                              section.callout?.value
+                            )
+                          : null;
+
+                      if (
+                        shouldHideDashboardSection(section.title, {
+                          paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
+                          bullets: section.kind === "bullets" ? section.bullets : undefined,
+                          calloutValue:
+                            section.kind === "callout" ? section.callout?.value : undefined,
+                        }) ||
+                        (visibleParagraphs.length === 0 &&
+                          visibleBullets.length === 0 &&
+                          !visibleCalloutValue)
+                      ) {
+                        return null;
+                      }
+
+                      return (
+                        <section
+                          key={`${section.title}-${idx}`}
+                          className="rounded-xl border border-gray-200 bg-white p-4"
+                        >
+                          <h3 className="text-sm font-semibold text-gray-900">
+                            {section.title}
+                          </h3>
+
+                          {visibleBullets.length > 0 ? (
+                            <BlueDotBulletList bullets={visibleBullets} />
+                          ) : null}
+
+                          {visibleParagraphs.length > 0 ? (
+                            <div className="mt-2 space-y-2">
+                              {visibleParagraphs.map((paragraph, paragraphIndex) => (
+                                <p
+                                  key={`${section.title}-${paragraphIndex}`}
+                                  className="text-sm leading-relaxed text-gray-700"
+                                >
+                                  {paragraph}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          {section.kind === "callout" && visibleCalloutValue ? (
+                            <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                              {section.callout.label ? (
+                                <span className="mr-2 font-semibold">
+                                  {section.callout.label}
+                                </span>
+                              ) : null}
+                              <span>{visibleCalloutValue}</span>
+                            </div>
+                          ) : null}
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : shouldUseHtmlFallback ? (
                 <div
                   className="
                     prose max-w-none
@@ -1126,129 +1585,24 @@ export default function JobMatchesLayout() {
                     prose-a:no-underline
                     hover:prose-a:underline
                   "
-                  dangerouslySetInnerHTML={{ __html: detailBodyHtml }}
+                  dangerouslySetInnerHTML={{ __html: sanitizedDetailBodyHtml }}
                 />
-              ) : formatted ? (
-                <div className="space-y-6">
-                  {formatted.salary ? (
-                    <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                      <div className="text-xs font-semibold text-green-700">
-                        Compensation
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-green-900">
-                        {formatted.salary}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {Array.isArray(formatted.intro) ? (
-                    <div className="space-y-3">
-                      {formatted.intro.map((p, idx) => (
-                        <p key={idx} className="text-sm leading-relaxed text-gray-700">
-                          {p}
-                        </p>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {Array.isArray(formatted.sections) ? (
-                    <div className="space-y-6">
-                      {formatted.sections.map((s, idx) => (
-                        <section
-                          key={idx}
-                          className="rounded-xl border border-gray-200 bg-white p-4"
-                        >
-                          <h3 className="text-sm font-semibold text-gray-900">
-                            {s.title}
-                          </h3>
-
-                          {Array.isArray(s.paragraphs) ? (
-                            <div className="mt-2 space-y-2">
-                              {s.paragraphs.map((p, i) => (
-                                <p key={i} className="text-sm text-gray-700">
-                                  {p}
-                                </p>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          {Array.isArray(s.bullets) ? (
-                            <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-gray-700 marker:text-blue-500">
-                              {s.bullets.map((b, i) => (
-                                <li key={i}>{b}</li>
-                              ))}
-                            </ul>
-                          ) : null}
-                        </section>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : pretty.sections.length > 0 || pretty.highlights.length > 0 ? (
-                <div className="space-y-6">
-                  {pretty.highlights.length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {pretty.highlights.map((highlight) => (
-                        <div
-                          key={`${highlight.label}-${highlight.value}`}
-                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
-                        >
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            {highlight.label}
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-gray-900">
-                            {highlight.value}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="space-y-6">
-                    {pretty.sections.map((section, idx) => (
-                      <section
-                        key={`${section.title}-${idx}`}
-                        className="rounded-xl border border-gray-200 bg-white p-4"
+              ) : shouldUseCleanTextFallback ? (
+                <section className="rounded-xl border border-gray-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    Job Description
+                  </h3>
+                  <div className="mt-3 space-y-3">
+                    {cleanedFallbackParagraphs.map((paragraph, index) => (
+                      <p
+                        key={`clean-fallback-${index}`}
+                        className="text-sm leading-relaxed text-gray-700"
                       >
-                        <h3 className="text-sm font-semibold text-gray-900">
-                          {section.title}
-                        </h3>
-
-                        {section.kind === "bullets" && section.bullets?.length ? (
-                          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-gray-700 marker:text-blue-500">
-                            {section.bullets.map((bullet, bulletIndex) => (
-                              <li key={`${section.title}-${bulletIndex}`}>{bullet}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-
-                        {"paragraphs" in section && section.paragraphs?.length ? (
-                          <div className="mt-2 space-y-2">
-                            {section.paragraphs.map((paragraph, paragraphIndex) => (
-                              <p
-                                key={`${section.title}-${paragraphIndex}`}
-                                className="text-sm text-gray-700"
-                              >
-                                {paragraph}
-                              </p>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        {section.kind === "callout" && section.callout ? (
-                          <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
-                            {section.callout.label ? (
-                              <span className="mr-2 font-semibold">
-                                {section.callout.label}
-                              </span>
-                            ) : null}
-                            <span>{section.callout.value}</span>
-                          </div>
-                        ) : null}
-                      </section>
+                        {paragraph}
+                      </p>
                     ))}
                   </div>
-                </div>
+                </section>
               ) : showMinimalFallback ? (
                 <section className="rounded-xl border border-gray-200 bg-white p-4">
                   <h3 className="text-sm font-semibold text-gray-900">

@@ -122,7 +122,7 @@ export const metadata = {
               </p>
   
               <p className="mt-3 font-medium text-white">
-                support@hirexa.ai
+                support@hirexa-ai.com
               </p>
             </section>
   

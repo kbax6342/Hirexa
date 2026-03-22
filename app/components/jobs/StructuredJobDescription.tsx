@@ -1,15 +1,46 @@
 "use client";
 
 import type { JobDetail, JobPretty, JobPrettySection } from "@/app/lib/jobs/types";
+import {
+  cleanJobListItem,
+  isJunkJobLine,
+} from "@/app/lib/jobs/clean-job-text";
 import { buildJobDetailBodyHtml } from "@/app/lib/jobs/detailContent";
 
 type StructuredJobDescriptionProps = {
   detail?: JobDetail | null;
   pretty?: JobPretty | null;
   emptyMessage?: string;
+  showHighlights?: boolean;
 };
 
+function normalizeRenderedParagraph(paragraph: string) {
+  const cleaned = paragraph
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => !isJunkJobLine(line))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned;
+}
+
+function normalizeRenderedBullets(bullets: string[]) {
+  return bullets.map((bullet) => cleanJobListItem(bullet)).filter(Boolean);
+}
+
 function renderSection(section: JobPrettySection, index: number) {
+  const paragraphs =
+    "paragraphs" in section && Array.isArray(section.paragraphs)
+      ? section.paragraphs
+          .map((paragraph) => normalizeRenderedParagraph(paragraph))
+          .filter(Boolean)
+      : [];
+  const bullets =
+    section.kind === "bullets" && Array.isArray(section.bullets)
+      ? normalizeRenderedBullets(section.bullets)
+      : [];
   const cardClass =
     section.kind === "smallprint"
       ? "rounded-2xl border border-slate-200/80 bg-slate-50 px-5 py-4"
@@ -29,17 +60,23 @@ function renderSection(section: JobPrettySection, index: number) {
         {section.title}
       </h3>
 
-      {section.kind === "bullets" && section.bullets?.length ? (
-        <ul className="mt-4 list-disc space-y-3 pl-5 text-sm leading-7 text-slate-700 marker:text-sky-500">
-          {section.bullets.map((bullet, bulletIndex) => (
-            <li key={`${section.title}-${bulletIndex}`}>{bullet}</li>
+      {section.kind === "bullets" && bullets.length > 0 ? (
+        <div className="mt-4 space-y-3">
+          {bullets.map((bullet, bulletIndex) => (
+            <div
+              key={`${section.title}-${bulletIndex}`}
+              className="flex items-start gap-3 text-sm leading-7 text-slate-700"
+            >
+              <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-sky-500" />
+              <span>{bullet}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       ) : null}
 
-      {"paragraphs" in section && section.paragraphs?.length ? (
+      {"paragraphs" in section && paragraphs.length > 0 ? (
         <div className="mt-4 space-y-3">
-          {section.paragraphs.map((paragraph, paragraphIndex) => (
+          {paragraphs.map((paragraph, paragraphIndex) => (
             <p
               key={`${section.title}-${paragraphIndex}`}
               className={
@@ -70,6 +107,7 @@ export default function StructuredJobDescription({
   detail,
   pretty,
   emptyMessage = "The full description is not available right now.",
+  showHighlights = true,
 }: StructuredJobDescriptionProps) {
   const safePretty: JobPretty = pretty ?? { sections: [], highlights: [] };
   const detailBodyHtml = detail ? buildJobDetailBodyHtml(detail) : null;
@@ -86,7 +124,7 @@ export default function StructuredJobDescription({
 
   return (
     <div className="space-y-6">
-      {safePretty.highlights.length > 0 ? (
+      {showHighlights && safePretty.highlights.length > 0 ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {safePretty.highlights.map((highlight) => (
             <div

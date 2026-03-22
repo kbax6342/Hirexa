@@ -231,7 +231,7 @@ export default function PrivacyPolicyPage() {
             <p className="mt-3 font-medium">
               Hirexa AI
               <br />
-              support@hirexa.ai
+              support@hirexa-ai.com
             </p>
           </section>
 

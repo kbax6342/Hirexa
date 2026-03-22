@@ -10,6 +10,17 @@ import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 
+type CallbackUserWithFlags = {
+  id?: string;
+  isExistingUser?: boolean;
+};
+
+type TokenWithFlags = {
+  id?: string;
+  isExistingUser?: boolean;
+  questionsCompleted?: boolean;
+};
+
 function normalizeEmail(value: string | null | undefined) {
   return value?.trim().toLowerCase() || null;
 }
@@ -152,8 +163,19 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         return true;
       }
 
+      const email = normalizeEmail(user.email ?? null);
+      if (!email) {
+        return false;
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      const wasExistingUser = Boolean(existingUser);
+
       const localUser = await ensureLocalUserForGoogle({
-        email: user.email ?? null,
+        email,
         name: user.name ?? null,
       });
 
@@ -161,49 +183,68 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         return false;
       }
 
-      (user as any).id = localUser.id;
+      const callbackUser = user as typeof user & CallbackUserWithFlags;
+      callbackUser.id = localUser.id;
+      callbackUser.isExistingUser = wasExistingUser;
       user.email = localUser.email;
       user.name = localUser.name ?? user.name;
 
       return true;
     },
     async jwt({ token, user }) {
-      if (user?.id) {
-        (token as any).id = user.id;
-        token.sub = user.id;
-      } else if (((token as any).id as string | undefined) == null && token.email) {
+      const authToken = token as typeof token & TokenWithFlags;
+      const callbackUser = user as (typeof user & CallbackUserWithFlags) | undefined;
+
+      if (callbackUser?.id) {
+        authToken.id = callbackUser.id;
+        token.sub = callbackUser.id;
+
+        if (typeof callbackUser.isExistingUser === "boolean") {
+          authToken.isExistingUser = callbackUser.isExistingUser;
+        } else {
+          delete authToken.isExistingUser;
+        }
+      } else if (authToken.id == null && token.email) {
         const localUser = await ensureLocalUserForGoogle({
           email: token.email,
           name: token.name ?? null,
         });
 
         if (localUser) {
-          (token as any).id = localUser.id;
+          authToken.id = localUser.id;
           token.sub = localUser.id;
         }
       }
 
       try {
         const onboarding = await getOnboardingStatusForUser(
-          ((token as any).id as string | undefined) ?? token.sub
+          authToken.id ?? token.sub
         );
-        (token as any).questionsCompleted = onboarding.completed;
+        authToken.questionsCompleted = onboarding.completed;
       } catch (error) {
         console.error("[auth] failed to load onboarding status for session token", {
-          userId: ((token as any).id as string | undefined) ?? token.sub ?? null,
+          userId: authToken.id ?? token.sub ?? null,
           error: error instanceof Error ? error.message : "Unknown error",
         });
-        (token as any).questionsCompleted = false;
+        authToken.questionsCompleted = false;
       }
 
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = (token as any).id ?? token.sub;
-        (session.user as any).questionsCompleted = Boolean(
-          (token as any).questionsCompleted
-        );
+        const authToken = token as typeof token & TokenWithFlags;
+        const sessionUser = session.user as typeof session.user & TokenWithFlags;
+        const resolvedUserId = authToken.id ?? token.sub;
+
+        if (resolvedUserId) {
+          sessionUser.id = resolvedUserId;
+        }
+        sessionUser.questionsCompleted = Boolean(authToken.questionsCompleted);
+
+        if (typeof authToken.isExistingUser === "boolean") {
+          sessionUser.isExistingUser = authToken.isExistingUser;
+        }
       }
       return session;
     },

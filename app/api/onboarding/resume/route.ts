@@ -486,6 +486,11 @@ export async function POST(req: Request) {
       });
     }
 
+    response.cookies.set("onboarding_resume_skipped", "", {
+      path: "/",
+      maxAge: 0,
+    });
+
     return response;
   } catch (e: any) {
     const info = extractStatusAndRequestId(e);

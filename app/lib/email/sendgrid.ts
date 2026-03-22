@@ -344,6 +344,13 @@ async function sendTemplateEmail(params: {
   }
 
   try {
+    console.info("[email] sending template email", {
+      from,
+      replyTo: replyTo ?? null,
+      template: params.template,
+      toDomain: params.to.split("@")[1] ?? null,
+    });
+
     await getSendGridClient().send({
       to: params.to,
       from,

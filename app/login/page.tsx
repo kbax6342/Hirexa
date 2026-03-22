@@ -14,6 +14,8 @@ type OAuthProvider = {
   name: string;
 };
 
+const GOOGLE_CALLBACK_URL = "/auth/google/redirect";
+
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -116,14 +118,7 @@ export default function LoginPage() {
             <form className="mt-6" onSubmit={onSubmit}>
               <LoginForm isSigningIn={isSigningIn} signInError={signInError} />
 
-              <div className="mt-3 text-right">
-                <Link
-                  href="/forgot-password"
-                  className="text-sm font-medium text-sky-600 hover:text-sky-700 hover:underline"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+             
 
               <Button
                 type="button"
@@ -154,6 +149,14 @@ export default function LoginPage() {
                   "Sign up for free"
                 )}
               </Button>
+              <div className="mt-3 text-right">
+                <Link
+                  href="/forgot-password"
+                  className="text-sm font-medium text-sky-600 hover:text-sky-700 hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              </div>
             </form>
 
             {oauthProviders.length > 0 ? (
@@ -174,7 +177,12 @@ export default function LoginPage() {
                       key={provider.id}
                       type="button"
                       onClick={() =>
-                        signIn(provider.id, { callbackUrl: oauthCallbackUrl })
+                        signIn(provider.id, {
+                          callbackUrl:
+                            provider.id === "google"
+                              ? GOOGLE_CALLBACK_URL
+                              : oauthCallbackUrl,
+                        })
                       }
                       className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                     >

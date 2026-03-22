@@ -6,7 +6,7 @@ export const metadata: Metadata = {
     "Learn how Hirexa AI subscriptions and HirePilot credits work, when credits are used, and what happens on cancellation or deletion.",
 };
 
-const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa.ai";
+const supportEmail = process.env.EMAIL_SUPPORT ?? "support@hirexa-ai.com";
 
 export default function BillingAndCreditsPage() {
   return (

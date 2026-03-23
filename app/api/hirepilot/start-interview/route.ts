@@ -38,10 +38,10 @@ export async function POST(req: Request) {
         id: existingSessionId,
         userId,
       },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
-    if (existingUsage) {
+    if (existingUsage?.status === "listening") {
       const status = await getHirePilotBillingStatus(userId);
 
       return NextResponse.json({

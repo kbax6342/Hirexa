@@ -30,22 +30,22 @@ export default function CookieConsentBanner({
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-[80] px-4 pb-4 sm:px-6 sm:pb-6">
-      <div className="mx-auto max-w-5xl rounded-[28px] border border-slate-200 bg-white/95 p-5 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.18)] backdrop-blur">
+      <div className="mx-auto max-w-5xl rounded-[28px] border border-slate-800/80 bg-slate-950/95 p-5 text-white shadow-[0_24px_60px_rgba(15,23,42,0.38)] backdrop-blur">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-300">
               Cookie Preferences
             </p>
-            <h2 className="mt-2 text-lg font-semibold text-slate-900">
+            <h2 className="mt-2 text-lg font-semibold text-white">
               We use essential cookies to keep Hirexa working and optional
               analytics to improve the site.
             </h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
+            <p className="mt-2 text-sm leading-6 text-slate-300">
               You can accept all cookies, reject non-essential cookies, or
               manage your preferences. See our{" "}
               <Link
                 href="/privacy/"
-                className="font-semibold text-sky-700 transition hover:text-sky-800 hover:underline"
+                className="font-semibold text-sky-300 transition hover:text-sky-200 hover:underline"
               >
                 Privacy Policy
               </Link>{" "}
@@ -57,22 +57,22 @@ export default function CookieConsentBanner({
             <Button
               type="button"
               variant="outline"
-              className="rounded-full border-slate-300 text-slate-700 hover:bg-slate-50"
+              className="rounded-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800 hover:text-white focus-visible:ring-slate-400"
               onClick={() => setPreferencesOpen((open) => !open)}
             >
-              Manage preferences
+              Manage Preferences
             </Button>
             <Button
               type="button"
               variant="outline"
-              className="rounded-full border-slate-300 text-slate-700 hover:bg-slate-50"
+              className="rounded-full border-slate-700 bg-slate-900 text-white hover:bg-slate-800 hover:text-white focus-visible:ring-slate-400"
               onClick={onRejectNonEssential}
             >
-              Reject non-essential
+              Reject Non-Essential
             </Button>
             <Button
               type="button"
-              className="rounded-full bg-sky-600 text-white hover:bg-sky-700"
+              className="rounded-full bg-sky-600 text-white hover:bg-sky-500 focus-visible:ring-sky-300"
               onClick={onAcceptAll}
             >
               Accept all
@@ -81,36 +81,36 @@ export default function CookieConsentBanner({
         </div>
 
         {preferencesOpen ? (
-          <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+          <div className="mt-5 rounded-3xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5">
             <div className="space-y-4">
-              <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-col gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">
+                  <h3 className="text-sm font-semibold text-white">
                     Strictly necessary
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                  <p className="mt-1 text-sm leading-6 text-slate-300">
                     Required for core functionality like sessions, security, and
                     navigation state.
                   </p>
                 </div>
-                <span className="inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                <span className="inline-flex w-fit rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
                   Always active
                 </span>
               </div>
 
-              <label className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-start sm:justify-between">
+              <label className="flex flex-col gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="pr-4">
-                  <h3 className="text-sm font-semibold text-slate-900">
+                  <h3 className="text-sm font-semibold text-white">
                     Analytics
                   </h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                  <p className="mt-1 text-sm leading-6 text-slate-300">
                     Helps us understand site performance and improve the
                     marketing experience over time.
                   </p>
                 </div>
 
                 <span className="inline-flex items-center gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                     {analyticsEnabled ? "On" : "Off"}
                   </span>
                   <input
@@ -128,7 +128,7 @@ export default function CookieConsentBanner({
             <div className="mt-4 flex flex-wrap gap-3">
               <Button
                 type="button"
-                className="rounded-full bg-sky-600 text-white hover:bg-sky-700"
+                className="rounded-full bg-sky-600 text-white hover:bg-sky-500 focus-visible:ring-sky-300"
                 onClick={() =>
                   onSavePreferences({ analytics: analyticsEnabled })
                 }
@@ -138,7 +138,7 @@ export default function CookieConsentBanner({
               <Button
                 type="button"
                 variant="ghost"
-                className="rounded-full text-slate-600 hover:bg-white"
+                className="rounded-full text-white hover:bg-slate-800 hover:text-white focus-visible:ring-slate-400"
                 onClick={() => setPreferencesOpen(false)}
               >
                 Cancel

@@ -1,5 +1,94 @@
 import type { NextConfig } from "next";
 
+const isProduction = process.env.NODE_ENV === "production";
+
+const contentSecurityPolicyDirectives = [
+  "default-src 'self'",
+  [
+    "script-src",
+    "'self'",
+    "'unsafe-inline'",
+    !isProduction ? "'unsafe-eval'" : null,
+    "https://js.stripe.com",
+    "https://checkout.stripe.com",
+    "https://connect.facebook.net",
+    "https://accounts.google.com",
+    "https://apis.google.com",
+    "https://www.google.com",
+    "https://www.gstatic.com",
+    "https://www.recaptcha.net",
+    "https://www.dropbox.com",
+    // TODO(security): Expand script-src only when additional client-side providers
+    // are verified in production. Keep Google OAuth / Drive Picker in sync here.
+  ]
+    .filter(Boolean)
+    .join(" "),
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  [
+    "connect-src",
+    "'self'",
+    "https://api.stripe.com",
+    "https://checkout.stripe.com",
+    "https://js.stripe.com",
+    "https://www.googleapis.com",
+    "https://accounts.google.com",
+    "https://oauth2.googleapis.com",
+    "https://www.google.com",
+    "https://www.gstatic.com",
+    "https://www.facebook.com",
+    "https://connect.facebook.net",
+    "https://vitals.vercel-insights.com",
+    "https://api.linkedin.com",
+    "https://www.linkedin.com",
+    "https://www.dropbox.com",
+    "https://content.dropboxapi.com",
+    // TODO(security): Expand connect-src if new browser-side SaaS integrations
+    // are added. Prefer explicit domains over broad wildcards.
+  ].join(" "),
+  [
+    "frame-src",
+    "'self'",
+    "https://js.stripe.com",
+    "https://hooks.stripe.com",
+    "https://checkout.stripe.com",
+    "https://accounts.google.com",
+    "https://docs.google.com",
+    "https://drive.google.com",
+    "https://www.google.com",
+    "https://recaptcha.google.com",
+    "https://www.recaptcha.net",
+  ].join(" "),
+  "worker-src 'self' blob:",
+  "child-src 'self' blob: https://docs.google.com https://drive.google.com https://checkout.stripe.com https://js.stripe.com",
+  "media-src 'self' blob: data:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "form-action 'self' https://checkout.stripe.com https://accounts.google.com https://www.linkedin.com https://www.google.com",
+  ...(isProduction ? ["upgrade-insecure-requests"] : []),
+].join("; ");
+
+const securityHeaders = [
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=63072000; includeSubDomains; preload",
+  },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  {
+    key: "Permissions-Policy",
+    value:
+      "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), payment=(self), usb=(), microphone=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)",
+  },
+  { key: "Content-Security-Policy", value: contentSecurityPolicyDirectives },
+  // Keep Google OAuth / Picker popup compatibility intact.
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+  { key: "Cross-Origin-Embedder-Policy", value: "unsafe-none" },
+];
+
 const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
@@ -15,18 +104,11 @@ const nextConfig: NextConfig = {
     ],
   },
   serverExternalPackages: ["pdf-parse"],
-  // Fix OAuth and Picker popup issues caused by COOP.
   async headers() {
     return [
       {
         source: "/:path*",
-        headers: [
-          {
-            key: "Cross-Origin-Opener-Policy",
-            value: "same-origin-allow-popups",
-          },
-          { key: "Cross-Origin-Embedder-Policy", value: "unsafe-none" },
-        ],
+        headers: securityHeaders,
       },
     ];
   },

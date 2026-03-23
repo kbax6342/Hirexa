@@ -8,9 +8,7 @@ import {
 } from "@/app/lib/billing/userBilling";
 import {
   EMPTY_HIREPILOT_CREDIT_SUMMARY,
-  ensureHirePilotCreditsForUser,
   getHirePilotCreditSummary,
-  grantHirePilotMonthlyCredits,
   grantPurchasedHirePilotCredits,
 } from "@/app/lib/hirepilot/credits";
 import { sendHirePilotCreditsRenewedEmailIfNeeded } from "@/app/lib/email/lifecycle";
@@ -72,11 +70,6 @@ export type HirePilotBillingStatus = {
     stripeCheckoutSessionId: string | null;
   } | null;
 };
-
-function getMonthlyIncludedCreditsForEmail() {
-  const parsed = Number(process.env.HIREPILOT_MONTHLY_INCLUDED_CREDITS ?? "30");
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 30;
-}
 
 function getRelevantHirePilotRows(rows: HirePilotBillingRow[]) {
   return rows.filter(
@@ -276,33 +269,11 @@ export async function upsertHirePilotMonthlyBilling(params: {
     canceledAt: params.canceledAt ?? null,
     trialStart: params.trialStart ?? null,
     trialEnd: params.trialEnd ?? null,
-    // HirePilot monthly now grants a monthly credit bucket instead of unlimited usage.
-    hirePilotUnlimited: false,
+    hirePilotCredits: 0,
+    hirePilotUnlimited: hasAccess,
     subscriptionPurchasedAt: params.paidAt ?? undefined,
     ...(hasAccess ? { lastPaymentReceivedAt: params.paidAt ?? new Date() } : {}),
   });
-
-  if (hasAccess && params.currentPeriodStart && params.currentPeriodEnd) {
-    await grantHirePilotMonthlyCredits({
-      userId: params.userId,
-      cycleStart: params.currentPeriodStart,
-      cycleEnd: params.currentPeriodEnd,
-      stripeSubscriptionId: params.stripeSubscriptionId ?? null,
-    });
-    await sendHirePilotCreditsRenewedEmailIfNeeded({
-      userId: params.userId,
-      dedupeKey: `credits-renewed:${params.userId}:${params.currentPeriodStart.toISOString()}`,
-      creditsAdded: getMonthlyIncludedCreditsForEmail(),
-      sourceLabel: "monthly",
-    }).catch((error) => {
-      console.warn("[hirepilot billing] monthly credits email failed", {
-        userId: params.userId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  } else {
-    await ensureHirePilotCreditsForUser(params.userId);
-  }
 }
 
 export async function incrementHirePilotCredits(params: {

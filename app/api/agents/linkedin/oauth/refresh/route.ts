@@ -3,6 +3,17 @@ import { prisma } from "@/app/lib/prisma";
 import { getAuthedUserId, unauthorizedJson } from "@/app/lib/agents/getAuthedUser";
 import { fetchLinkedInUserInfo } from "@/app/lib/agents/linkedinOAuth";
 
+const linkedInAccountSafeSelect = {
+  id: true,
+  provider: true,
+  email: true,
+  importedName: true,
+  importedHeadline: true,
+  importedLocation: true,
+  importedSkills: true,
+  tokenExpiresAt: true,
+} as const;
+
 type OidcNameSource = {
   name?: string;
   given_name?: string;
@@ -77,7 +88,15 @@ export async function POST() {
     const userId = await getAuthedUserId();
     if (!userId) return unauthorizedJson();
 
-    const account = await prisma.linkedInAccount.findUnique({ where: { userId } });
+    const account = await prisma.linkedInAccount.findUnique({
+      where: { userId },
+      select: {
+        accessToken: true,
+        tokenExpiresAt: true,
+        providerAccountId: true,
+        email: true,
+      },
+    });
     if (!account?.accessToken) {
       return NextResponse.json(
         { ok: false, error: "LinkedIn is not connected." },
@@ -108,6 +127,7 @@ export async function POST() {
           profileSnapshot.skills.length > 0 ? profileSnapshot.skills : undefined,
         importedLocation: profileSnapshot.location ?? undefined,
       },
+      select: linkedInAccountSafeSelect,
     });
 
     return NextResponse.json({ ok: true, connected: true, account: updated });

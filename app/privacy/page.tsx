@@ -79,7 +79,9 @@ export default function PrivacyPolicyPage() {
 
             <p>
               Payments are processed by third-party providers such as Stripe.
-              Hirexa AI does not store full credit card numbers.
+              Hirexa AI does not store full credit card numbers, and payment
+              card data is handled by those payment providers under their own
+              systems and controls.
             </p>
 
             <h3 className="font-semibold text-white mt-6 mb-2">
@@ -157,9 +159,13 @@ export default function PrivacyPolicyPage() {
             </h2>
 
             <p>
-              We implement industry-standard security measures including
-              encryption, secure authentication, and access control. However,
-              no internet transmission is completely secure.
+              We use HTTPS/TLS to protect data in transit between your browser
+              and Hirexa AI. We also apply access controls and targeted
+              encryption protections for certain high-sensitivity stored data.
+              Payment card data is processed by third-party payment providers
+              such as Stripe rather than stored by Hirexa AI. No internet
+              transmission or storage system can be guaranteed to be completely
+              secure.
             </p>
           </section>
 

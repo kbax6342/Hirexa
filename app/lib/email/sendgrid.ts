@@ -161,6 +161,7 @@ function buildHirexaEmail(params: {
   paragraphs: string[];
   bullets?: string[];
   jobs?: LifecycleJobSummary[];
+  customSections?: string[];
   primaryAction?: { href: string; label: string } | null;
   footerLines?: Array<string | null | undefined>;
 }) {
@@ -184,6 +185,7 @@ function buildHirexaEmail(params: {
       ${title}
       ${renderParagraphs(params.paragraphs)}
       ${renderBulletList(params.bullets ?? [])}
+      ${(params.customSections ?? []).join("")}
       ${params.jobs?.length ? `<div style="margin-top:16px">${renderJobs(params.jobs)}</div>` : ""}
       ${primaryAction}
       ${footer}
@@ -435,20 +437,77 @@ export async function sendWelcomeEmail(to: string, name?: string | null) {
 export async function sendVerificationCodeEmail(to: string, code: string) {
   const subject = "Your Hirexa AI verification code";
   const { supportEmail } = getEmailConfig();
+  const officialSiteUrl = resolveAppUrl();
+  const greeting = "Hi there,";
+  const warningParagraph =
+    "Only enter this code on an official Hirexa AI app or website. Never share this code with anyone. Sharing it could give someone unauthorized access to your account and any information associated with it.";
+  const suspiciousActivityParagraph =
+    "If you did not request this code, someone may be trying to access your account. Please reset your password through the official Hirexa AI website.";
+  const securityBullets = [
+    "Be cautious of suspicious links or messages asking for your login details.",
+    "Only sign in through official Hirexa AI pages.",
+    "Take steps to secure your account if anything seems unusual.",
+  ];
 
-  await sendTemplateEmail({
+  const text = buildTextBody([
+    greeting,
+    "",
+    "Use the verification code below to continue setting up your Hirexa account. This code expires in 10 minutes.",
+    "",
+    `Verification code: ${code}`,
+    "",
+    warningParagraph,
+    suspiciousActivityParagraph,
+    "",
+    "For your security:",
+    ...securityBullets.map((item) => `- ${item}`),
+    "",
+    `Official Hirexa AI website: ${officialSiteUrl}`,
+    supportEmail ? `Support: ${supportEmail}` : null,
+    "",
+    "Hirexa AI Security Team",
+  ]);
+
+  const html = buildHirexaEmail({
+    greeting,
+    title: "Verify your email",
+    paragraphs: [
+      "Use the verification code below to continue setting up your Hirexa account. This code expires in 10 minutes.",
+    ],
+    customSections: [
+      `
+        <div style="margin-top:16px;border:1px solid #dbeafe;border-radius:16px;background:#eff6ff;padding:20px;text-align:center">
+          <div style="font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#1d4ed8">Security code</div>
+          <div style="margin-top:10px;font-size:32px;font-weight:800;letter-spacing:0.28em;color:#0f172a">${escapeHtml(code)}</div>
+        </div>
+      `,
+      `
+        <div style="margin-top:16px;border:1px solid #fde68a;border-radius:16px;background:#fffbeb;padding:18px">
+          <div style="font-size:16px;font-weight:700;color:#92400e">Account security notice</div>
+          <p style="margin:12px 0 0;color:#78350f">${escapeHtml(warningParagraph)}</p>
+          <p style="margin:12px 0 0;color:#78350f">${escapeHtml(suspiciousActivityParagraph)}</p>
+          <div style="margin-top:14px;font-weight:700;color:#78350f">For your security:</div>
+          <ul style="margin:10px 0 0 18px;padding:0;color:#78350f">
+            ${securityBullets
+              .map((item) => `<li style="margin:0 0 8px">${escapeHtml(item)}</li>`)
+              .join("")}
+          </ul>
+        </div>
+      `,
+    ],
+    footerLines: [
+      `Official Hirexa AI website: ${officialSiteUrl}`,
+      supportEmail ? `Support: ${supportEmail}` : null,
+      "Hirexa AI Security Team",
+    ],
+  });
+
+  await sendEmail({
     to,
     subject,
-    template: "verificationCode",
-    dynamicTemplateData: buildTemplateData({
-      subject,
-      preheader: "Use this code to verify your Hirexa email address.",
-      headline: "Verify your email",
-      bodyText:
-        "Use the verification code below to continue setting up your Hirexa account. This code expires in 10 minutes.",
-      verificationCode: code,
-      supportEmail,
-    }),
+    html,
+    text,
+    category: "transactional",
   });
 }
 

@@ -7,8 +7,6 @@ import {
   Bot,
 } from "lucide-react"
 
-
-
 const features = [
   {
     icon: Search,
@@ -23,13 +21,13 @@ const features = [
   },
   {
     icon: Zap,
-    title: "AI Job Auto Apply",
+    title: "Smart Application Assistant",
     description:
-      "Let Hirexa automatically submit job applications for you so you can focus on interviews instead of repetitive forms.",
+      "Let Hirexa help you apply smarter with personalized application materials that save time and support you through every stage of the job search.",
     bullets: [
-      "Automatically applies to matching jobs",
-      "Uses your saved resume and profile",
-      "Submit more applications effortlessly",
+      "Generates a tailored resume",
+      "Creates a role-specific cover letter",
+      "Writes a pre-interview email and a post-interview follow-up email",
     ],
   },
   {

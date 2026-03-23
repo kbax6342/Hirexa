@@ -3,6 +3,16 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { getAuthedUserId, unauthorizedJson } from "@/app/lib/agents/getAuthedUser";
 
+const linkedInAccountSafeSelect = {
+  id: true,
+  provider: true,
+  email: true,
+  importedName: true,
+  importedHeadline: true,
+  importedLocation: true,
+  importedSkills: true,
+} as const;
+
 function redactDatabaseUrl(raw: string | undefined) {
   if (!raw) return "unknown";
   try {
@@ -60,7 +70,10 @@ export async function GET() {
     const userId = await getAuthedUserId();
     if (!userId) return unauthorizedJson();
 
-    const account = await prisma.linkedInAccount.findUnique({ where: { userId } });
+    const account = await prisma.linkedInAccount.findUnique({
+      where: { userId },
+      select: linkedInAccountSafeSelect,
+    });
     return NextResponse.json({ ok: true, connected: Boolean(account), account });
   } catch (err) {
     return NextResponse.json(
@@ -70,7 +83,7 @@ export async function GET() {
   }
 }
 
-export async function POST(req: Request) {
+export async function POST() {
   try {
     await logDbDebugInfo();
     return NextResponse.json(
@@ -111,7 +124,10 @@ export async function PATCH(req: Request) {
 
     const importedSkills = normalizeSkills(body?.importedSkills);
 
-    const account = await prisma.linkedInAccount.findUnique({ where: { userId } });
+    const account = await prisma.linkedInAccount.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
     if (!account) {
       return NextResponse.json(
         { ok: false, error: "LinkedIn is not connected." },
@@ -124,6 +140,7 @@ export async function PATCH(req: Request) {
       data: {
         importedSkills,
       },
+      select: linkedInAccountSafeSelect,
     });
 
     return NextResponse.json({ ok: true, connected: true, account: updated });

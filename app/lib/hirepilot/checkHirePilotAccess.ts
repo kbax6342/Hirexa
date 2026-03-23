@@ -28,6 +28,16 @@ export async function checkHirePilotAccess(
   const consumeCredit = Boolean(options?.consumeCredit);
   const status = await getCanonicalHirePilotBillingStatus(userId);
 
+  if (status.hirePilotUnlimited) {
+    return {
+      allowed: true,
+      unlimited: true,
+      credits: status.hirePilotCredits,
+      monthlyCredits: status.monthlyCredits + status.rolloverCredits,
+      purchasedCredits: status.purchasedCredits,
+    };
+  }
+
   if (status.hirePilotCredits > 0) {
     if (!consumeCredit) {
       return {
@@ -52,16 +62,6 @@ export async function checkHirePilotAccess(
       monthlyCredits:
         consumption.summary.monthlyCredits + consumption.summary.rolloverCredits,
       purchasedCredits: consumption.summary.purchasedCredits,
-    };
-  }
-
-  if (status.hirePilotUnlimited) {
-    return {
-      allowed: true,
-      unlimited: true,
-      credits: 0,
-      monthlyCredits: 0,
-      purchasedCredits: 0,
     };
   }
 

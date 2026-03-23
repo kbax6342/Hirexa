@@ -6,9 +6,13 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/app/lib/prisma";
 import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
+import { validateSecurityEnvironment } from "@/lib/security/env";
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+const useSecureCookies = process.env.NODE_ENV === "production";
+
+validateSecurityEnvironment();
 
 type CallbackUserWithFlags = {
   id?: string;
@@ -119,6 +123,10 @@ async function ensureLocalUserForGoogle(params: {
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  trustHost: true,
+  // Vercel terminates TLS before the app, so production auth cookies should
+  // stay marked secure and only travel over HTTPS.
+  useSecureCookies,
 
   providers: [
     Credentials({

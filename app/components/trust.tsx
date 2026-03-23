@@ -28,8 +28,7 @@ export function Trust() {
     <section className="relative py-24 md:py-32">
       <div className="mx-auto max-w-7xl px-6">
         <div className="relative overflow-hidden rounded-2xl border border-border bg-card p-10 md:p-16">
-          {/* Subtle glow */}
-          <div className="pointer-events-none absolute -top-32 left-1/2 -translate-x-1/2 h-64 w-[500px] rounded-full bg-primary/8 blur-[100px]" />
+          <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-[500px] -translate-x-1/2 rounded-full bg-primary/8 blur-[100px]" />
 
           <div className="relative mx-auto max-w-2xl text-center">
             <h2 className="font-heading text-3xl font-bold tracking-tight text-foreground sm:text-4xl text-balance">

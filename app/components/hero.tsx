@@ -49,11 +49,10 @@ export function Hero({ href }: { href: string }) {
           <div>
             <h1 className="font-heading text-4xl font-bold leading-[1.1] tracking-tight text-foreground text-balance sm:text-5xl md:text-5xl">
               Stop Searching Harder{" "}
-             
             </h1>
             <span className="text-accent text-sky-500 text-4xl">
-                Start applying smarter.
-              </span>
+              Start applying smarter.
+            </span>
 
             <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">
               Hirexa AI helps you find relevant jobs, improve your application

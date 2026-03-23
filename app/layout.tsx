@@ -1,10 +1,17 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
+import Script from "next/script";
 
 import "./globals.css";
+import MetaPixelPageView from "./components/analytics/MetaPixelPageView";
 import { Navbar } from "./components/navbar";
 import PwaRegister from "./components/pwa/PwaRegister";
 import RecaptchaProvider from "./components/providers/RecaptchaProvider";
+import {
+  getMetaPixelInitScript,
+  getMetaPixelNoscriptUrl,
+  META_PIXEL_ID,
+} from "./lib/meta-pixel";
 import Providers from "./providers";
 
 const inter = Inter({
@@ -61,6 +68,20 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
       <body className="font-sans antialiased">
+        <Script id="meta-pixel" strategy="beforeInteractive">
+          {getMetaPixelInitScript(META_PIXEL_ID)}
+        </Script>
+        <noscript>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt=""
+            height="1"
+            width="1"
+            style={{ display: "none" }}
+            src={getMetaPixelNoscriptUrl(META_PIXEL_ID)}
+          />
+        </noscript>
+        <MetaPixelPageView />
         <RecaptchaProvider>
           <Providers>
             <Navbar />

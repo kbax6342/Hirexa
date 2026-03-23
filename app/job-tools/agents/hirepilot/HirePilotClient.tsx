@@ -33,6 +33,13 @@ import {
   extractInterviewQuestion,
   extractInterviewQuestionCandidate,
 } from "@/app/lib/hirepilot/extractInterviewQuestion";
+import type {
+  HirePilotDetectedQuestion,
+  HirePilotInterviewReport,
+  HirePilotSessionInputSource,
+  HirePilotSessionStatus,
+  HirePilotSuggestedAnswer,
+} from "@/app/lib/hirepilot/interviewReport";
 import { cn } from "@/app/lib/utils";
 
 type RewriteMode = "default" | "shorten" | "expand" | "professional";
@@ -102,6 +109,21 @@ type HirePilotTranscriptionResponse = {
   earliestPurchasedExpiryAt?: string | null;
   lowBalance?: boolean;
   hasExpiringCredits?: boolean;
+};
+
+type HirePilotSessionResponse = {
+  ok?: boolean;
+  error?: string;
+  reportAvailable?: boolean;
+  session?: {
+    id?: string;
+    status?: HirePilotSessionStatus | null;
+    inputSource?: HirePilotSessionInputSource | null;
+    reportEligible?: boolean;
+    report?: HirePilotInterviewReport | null;
+    createdAt?: string | null;
+    endedAt?: string | null;
+  } | null;
 };
 
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
@@ -237,6 +259,11 @@ export default function HirePilotClient() {
   const combinedTranscriptRef = useRef("");
   const stopHandledRef = useRef(false);
   const lastQuestionKeyRef = useRef("");
+  const sessionInputSourceRef = useRef<HirePilotSessionInputSource | null>(null);
+  const reportEligibleRef = useRef(false);
+  const completingSessionRef = useRef(false);
+  const detectedQuestionsRef = useRef<HirePilotDetectedQuestion[]>([]);
+  const suggestedAnswersRef = useRef<HirePilotSuggestedAnswer[]>([]);
   const displayRecorderRef = useRef<MediaRecorder | null>(null);
   const displayRecorderStoppedPromiseRef = useRef<Promise<void> | null>(null);
   const displayRecorderStoppedResolveRef = useRef<(() => void) | null>(null);
@@ -282,6 +309,10 @@ export default function HirePilotClient() {
   const [showPaywall, setShowPaywall] = useState(false);
   const [interviewSessionStarted, setInterviewSessionStarted] = useState(false);
   const [isInfoPanelCollapsed, setIsInfoPanelCollapsed] = useState(false);
+  const [interviewReport, setInterviewReport] = useState<HirePilotInterviewReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [completedSessionSource, setCompletedSessionSource] =
+    useState<HirePilotSessionInputSource | null>(null);
 
   const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
   const isComputerAudioListening = activeListeningSource === "computer";
@@ -313,6 +344,191 @@ export default function HirePilotClient() {
       : accessBadgeLabel;
   const monthlyCreditBucket =
     Number(billingStatus.monthlyCredits ?? 0) + Number(billingStatus.rolloverCredits ?? 0);
+
+  function resetInterviewReportState() {
+    sessionInputSourceRef.current = null;
+    reportEligibleRef.current = false;
+    detectedQuestionsRef.current = [];
+    suggestedAnswersRef.current = [];
+    completingSessionRef.current = false;
+    setInterviewReport(null);
+    setCompletedSessionSource(null);
+    setReportLoading(false);
+  }
+
+  function rememberDetectedQuestion(question: string) {
+    const normalizedQuestion = normalizeSpace(question);
+    if (!normalizedQuestion) return;
+
+    const key = normalizeQuestionKey(normalizedQuestion);
+    if (!key) return;
+
+    const existing = detectedQuestionsRef.current.find(
+      (item) => normalizeQuestionKey(item.question) === key
+    );
+
+    if (existing) {
+      return;
+    }
+
+    detectedQuestionsRef.current = [
+      ...detectedQuestionsRef.current,
+      { question: normalizedQuestion },
+    ];
+  }
+
+  function rememberSuggestedAnswer(
+    question: string,
+    answerText: string,
+    source: "openai" | "fallback" | null
+  ) {
+    const normalizedQuestion = normalizeSpace(question);
+    const normalizedAnswer = normalizeSpace(answerText);
+    if (!normalizedQuestion || !normalizedAnswer) return;
+
+    const key = normalizeQuestionKey(normalizedQuestion);
+    const nextEntry: HirePilotSuggestedAnswer = {
+      question: normalizedQuestion,
+      answer: normalizedAnswer,
+      source,
+    };
+
+    const existingIndex = suggestedAnswersRef.current.findIndex(
+      (item) => normalizeQuestionKey(item.question) === key
+    );
+
+    if (existingIndex === -1) {
+      suggestedAnswersRef.current = [...suggestedAnswersRef.current, nextEntry];
+      return;
+    }
+
+    const nextAnswers = [...suggestedAnswersRef.current];
+    nextAnswers[existingIndex] = nextEntry;
+    suggestedAnswersRef.current = nextAnswers;
+  }
+
+  const updateInterviewSession = useCallback(
+    async (payload: {
+      action: "mark-source" | "complete";
+      inputSource?: HirePilotSessionInputSource | null;
+      reportEligible?: boolean;
+      status?: HirePilotSessionStatus;
+      transcript?: string;
+      detectedQuestions?: HirePilotDetectedQuestion[];
+      suggestedAnswers?: HirePilotSuggestedAnswer[];
+    }) => {
+      const res = await fetch("/api/hirepilot/session", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await readJsonSafely<HirePilotSessionResponse>(res, {
+        ok: false,
+        error: "Unable to update the HirePilot session.",
+      });
+
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || "Unable to update the HirePilot session.");
+      }
+
+      return data;
+    },
+    []
+  );
+
+  const markInterviewSessionSource = useCallback(
+    async (inputSource: HirePilotSessionInputSource, reportEligible: boolean) => {
+      if (!interviewSessionStarted) {
+        return;
+      }
+
+      if (
+        sessionInputSourceRef.current === "tab_audio" &&
+        reportEligibleRef.current &&
+        inputSource !== "tab_audio"
+      ) {
+        return;
+      }
+
+      sessionInputSourceRef.current = inputSource;
+      reportEligibleRef.current = reportEligible;
+
+      try {
+        await updateInterviewSession({
+          action: "mark-source",
+          inputSource,
+          reportEligible,
+        });
+      } catch (error) {
+        debugHirePilot("failed to mark interview session source", {
+          inputSource,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [interviewSessionStarted, updateInterviewSession]
+  );
+
+  const completeInterviewSession = useCallback(
+    async (preferredStatus?: HirePilotSessionStatus) => {
+      if (!interviewSessionStarted || completingSessionRef.current) {
+        return;
+      }
+
+      completingSessionRef.current = true;
+
+      const transcript = normalizeSpace(combinedTranscriptRef.current || transcriptRef.current);
+      const detectedQuestions = detectedQuestionsRef.current;
+      const suggestedAnswers = suggestedAnswersRef.current;
+      const hasMeaningfulContent =
+        transcript.length >= 80 || detectedQuestions.length > 0 || suggestedAnswers.length > 0;
+      const status =
+        preferredStatus ?? (hasMeaningfulContent ? "completed" : "canceled");
+      const inputSource = sessionInputSourceRef.current;
+      const shouldShowReportLoading =
+        inputSource === "tab_audio" &&
+        reportEligibleRef.current &&
+        status === "completed";
+
+      setReportLoading(shouldShowReportLoading);
+
+      try {
+        const data = await updateInterviewSession({
+          action: "complete",
+          inputSource,
+          reportEligible: reportEligibleRef.current,
+          status,
+          transcript,
+          detectedQuestions,
+          suggestedAnswers,
+        });
+
+        const resolvedSource = data.session?.inputSource ?? inputSource ?? null;
+        setCompletedSessionSource(resolvedSource);
+        setInterviewReport(
+          resolvedSource === "tab_audio"
+            ? ((data.session?.report ?? null) as HirePilotInterviewReport | null)
+            : null
+        );
+      } catch (error) {
+        debugHirePilot("failed to complete interview session", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setCompletedSessionSource(null);
+        setInterviewReport(null);
+      } finally {
+        setReportLoading(false);
+        setInterviewSessionStarted(false);
+        sessionInputSourceRef.current = null;
+        reportEligibleRef.current = false;
+        completingSessionRef.current = false;
+      }
+    },
+    [interviewSessionStarted, updateInterviewSession]
+  );
 
   const answerStatus = useMemo(() => {
     if (isGenerating) {
@@ -570,7 +786,7 @@ export default function HirePilotClient() {
       : { rawCandidate, cleanedQuestion: null, questionKey: "" };
   }
 
-  function finalizeTranscriptDetection() {
+  async function finalizeTranscriptDetection() {
     if (stopHandledRef.current) {
       return;
     }
@@ -608,13 +824,14 @@ export default function HirePilotClient() {
     }
 
     lastQuestionKeyRef.current = detected.questionKey;
+    rememberDetectedQuestion(detected.cleanedQuestion);
     setDetectedQuestion(detected.cleanedQuestion);
     setDetectionStatus("found");
     debugHirePilot("detected question state updated", {
       status: "found",
       question: detected.cleanedQuestion,
     });
-    void generateAnswer(detected.cleanedQuestion, "default");
+    await generateAnswer(detected.cleanedQuestion, "default");
   }
 
   async function generateAnswer(
@@ -672,6 +889,9 @@ export default function HirePilotClient() {
       setAnswer(data.answer ?? "");
       setTips(Array.isArray(data.tips) && data.tips.length > 0 ? data.tips : defaultTips);
       setResponseSource(data.source ?? null);
+      if (!practiceMode && data.answer) {
+        rememberSuggestedAnswer(normalizedQuestion, data.answer, data.source ?? null);
+      }
       debugHirePilot("answer generation completed", {
         success: true,
         source: data.source ?? null,
@@ -793,6 +1013,7 @@ export default function HirePilotClient() {
         throw new Error(data.message ?? "Unable to start HirePilot.");
       }
 
+      resetInterviewReportState();
       setInterviewSessionStarted(true);
       setShowPaywall(false);
       return true;
@@ -817,6 +1038,7 @@ export default function HirePilotClient() {
 
     try {
       recognition.start();
+      void markInterviewSessionSource("microphone", false);
       setIsInfoPanelCollapsed(true);
     } catch {
       keepListeningRef.current = false;
@@ -826,12 +1048,13 @@ export default function HirePilotClient() {
     }
   }
 
-  function stopListening() {
+  async function stopListening() {
     keepListeningRef.current = false;
-    finalizeTranscriptDetection();
     recognitionRef.current?.stop();
     setActiveListeningSource((current) => (current === "microphone" ? null : current));
     setStatusMessage("Microphone idle");
+    await finalizeTranscriptDetection();
+    await completeInterviewSession();
   }
 
   async function handleComputerAudioBeforeConnect() {
@@ -850,6 +1073,7 @@ export default function HirePilotClient() {
 
     try {
       startDisplayAudioRecorder(session);
+      await markInterviewSessionSource("tab_audio", true);
     } catch {
       setActiveListeningSource(null);
       setRequestError("Unable to capture shared tab or app audio.");
@@ -860,14 +1084,9 @@ export default function HirePilotClient() {
   async function handleComputerAudioDisconnected() {
     setActiveListeningSource((current) => (current === "computer" ? null : current));
     await stopDisplayAudioRecorder();
-
-    if (stopHandledRef.current) {
-      setStatusMessage("Microphone idle");
-      return;
-    }
-
-    finalizeTranscriptDetection();
     setStatusMessage("Microphone idle");
+    await finalizeTranscriptDetection();
+    await completeInterviewSession();
   }
 
   async function handleCopy() {
@@ -885,6 +1104,8 @@ export default function HirePilotClient() {
     nextIndex?: number,
     options?: { forceGenerate?: boolean }
   ) {
+    setCompletedSessionSource(null);
+    setInterviewReport(null);
     const safeIndex = typeof nextIndex === "number" ? nextIndex : practiceIndex;
     const question = practiceQuestions[safeIndex] ?? practiceQuestions[0];
     const normalizedQuestion =
@@ -1110,7 +1331,7 @@ export default function HirePilotClient() {
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={stopListening}
+                            onClick={() => void stopListening()}
                             disabled={!isListening}
                             className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                           >
@@ -1372,6 +1593,154 @@ export default function HirePilotClient() {
                 ) : null}
               </CardContent>
             </Card>
+
+            {activeMode === "live" &&
+            (reportLoading || (completedSessionSource === "tab_audio" && interviewReport)) ? (
+              <Card className="rounded-[24px] border border-white/10 bg-white/[0.06] shadow-[0_16px_40px_rgba(5,8,22,0.35)] backdrop-blur-xl">
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-xl text-white">Interview Report</CardTitle>
+                      <CardDescription className="mt-1 text-slate-300">
+                        Interview Report is only available for completed sessions captured from
+                        shared tab or app audio.
+                      </CardDescription>
+                    </div>
+                    <Badge className="border border-sky-300/20 bg-sky-500/10 text-sky-100">
+                      {reportLoading ? "Generating..." : "Available"}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {reportLoading || !interviewReport ? (
+                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-slate-300">
+                      Building your post-interview summary and coaching notes.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                        <div className="text-sm font-semibold text-white">Interview Summary</div>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          {interviewReport.summary}
+                        </p>
+                        <div className="mt-2 text-xs text-slate-400">
+                          Interview date/time: {interviewReport.interviewDateTime}
+                        </div>
+                      </div>
+
+                      {interviewReport.interviewTopics.length > 0 ? (
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="text-sm font-semibold text-white">Detected Topics</div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {interviewReport.interviewTopics.map((topic) => (
+                              <span
+                                key={topic}
+                                className="rounded-full border border-sky-300/20 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100"
+                              >
+                                {topic}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {interviewReport.strongestAnswers.length > 0 ? (
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="text-sm font-semibold text-white">Strongest Answers</div>
+                          <div className="mt-3 space-y-3">
+                            {interviewReport.strongestAnswers.map((item) => (
+                              <div
+                                key={item.question}
+                                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
+                              >
+                                <div className="text-sm font-semibold text-white">
+                                  {item.question}
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-slate-300">
+                                  {item.answer}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        {interviewReport.weakerAnswerOpportunities.length > 0 ? (
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                            <div className="text-sm font-semibold text-white">
+                              Weaker Answer Opportunities
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {interviewReport.weakerAnswerOpportunities.map((item) => (
+                                <div
+                                  key={item}
+                                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300"
+                                >
+                                  {item}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {interviewReport.followUpQuestions.length > 0 ? (
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                            <div className="text-sm font-semibold text-white">
+                              Follow-up Questions to Prepare For
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {interviewReport.followUpQuestions.map((item) => (
+                                <div
+                                  key={item}
+                                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300"
+                                >
+                                  {item}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="text-sm font-semibold text-white">Coaching Tips</div>
+                          <div className="mt-3 space-y-2">
+                            {interviewReport.coachingTips.map((tip) => (
+                              <div
+                                key={tip}
+                                className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300"
+                              >
+                                {tip}
+                              </div>
+                            ))}
+                          </div>
+                          <p className="mt-4 text-sm leading-6 text-slate-300">
+                            {interviewReport.overallSummary}
+                          </p>
+                        </div>
+
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="text-sm font-semibold text-white">Feedback</div>
+                          <div className="mt-3 space-y-3 text-sm text-slate-300">
+                            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                              Confidence: {interviewReport.feedback.confidence}
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                              Clarity: {interviewReport.feedback.clarity}
+                            </div>
+                            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                              Specificity: {interviewReport.feedback.specificity}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
 
           <aside className="space-y-6">
@@ -1442,7 +1811,7 @@ export default function HirePilotClient() {
                   {billingLoading
                     ? "Checking HirePilot access..."
                     : billingStatus.hirePilotUnlimited
-                    ? "Unlimited plan active."
+                    ? "Unlimited HirePilot subscription active."
                     : billingStatus.hirePilotCredits > 0
                     ? `${billingStatus.hirePilotCredits} credits remaining.`
                     : billingStatus.productKey === "hirepilot_monthly" &&
@@ -1451,30 +1820,50 @@ export default function HirePilotClient() {
                       : "Practice questions are free. Live HirePilot access is not active."}
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
-                  <div>Monthly credits: {monthlyCreditBucket}</div>
-                  <div className="mt-1">Purchased credits: {billingStatus.purchasedCredits ?? 0}</div>
-                  {billingStatus.nextMonthlyResetAt ? (
-                    <div className="mt-1 text-xs text-slate-400">
-                      Next monthly reset:{" "}
-                      {new Date(billingStatus.nextMonthlyResetAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </div>
-                  ) : null}
-                  {billingStatus.earliestPurchasedExpiryAt ? (
-                    <div className="mt-1 text-xs text-slate-400">
-                      Earliest purchased expiry:{" "}
-                      {new Date(
-                        billingStatus.earliestPurchasedExpiryAt
-                      ).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </div>
-                  ) : null}
+                  {billingStatus.hirePilotUnlimited ? (
+                    <>
+                      <div>Unlimited live access active.</div>
+                      {billingStatus.currentPeriodEnd ? (
+                        <div className="mt-1 text-xs text-slate-400">
+                          Current billing period ends:{" "}
+                          {new Date(billingStatus.currentPeriodEnd).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <div>Monthly credits: {monthlyCreditBucket}</div>
+                      <div className="mt-1">
+                        Purchased credits: {billingStatus.purchasedCredits ?? 0}
+                      </div>
+                      {billingStatus.nextMonthlyResetAt ? (
+                        <div className="mt-1 text-xs text-slate-400">
+                          Next monthly reset:{" "}
+                          {new Date(billingStatus.nextMonthlyResetAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </div>
+                      ) : null}
+                      {billingStatus.earliestPurchasedExpiryAt ? (
+                        <div className="mt-1 text-xs text-slate-400">
+                          Earliest purchased expiry:{" "}
+                          {new Date(
+                            billingStatus.earliestPurchasedExpiryAt
+                          ).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
                   Start a live session for real-time listening, or use practice mode for demo

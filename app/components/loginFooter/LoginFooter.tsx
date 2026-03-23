@@ -1,5 +1,6 @@
 // File: /Hirexa/my-app/components/login-footer.tsx
 import Link from "next/link";
+import { FooterTrustRow } from "../footer-trust-row";
 
 const columns: Array<{
   title: string;
@@ -111,8 +112,10 @@ export default function LoginFooter() {
           </div>
         </div>
 
+        <FooterTrustRow />
+
         {/* Bottom bar */}
-        <div className="mt-10 flex gap-3 border-t border-border pt-6 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
+        <div className="mt-8 flex gap-3 border-t border-border pt-6 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
          
             <p className="text-sm text-muted-foreground">
               &copy; {new Date().getFullYear()} Hirexa AI. All rights reserved.

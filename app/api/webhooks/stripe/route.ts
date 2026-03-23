@@ -42,6 +42,33 @@ function normalizeCustomerId(
   return typeof customer === "string" ? customer : customer.id;
 }
 
+async function syncHirePilotBillingEntitlement(params: {
+  userId: string;
+  subscription: Stripe.Subscription | null;
+  stripeCustomerId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  paidAt?: Date | null;
+}) {
+  const priceDetails = getStripePriceDetailsFromSubscription(params.subscription);
+
+  await upsertHirePilotMonthlyBilling({
+    userId: params.userId,
+    status: params.subscription?.status ?? "active",
+    stripeCustomerId: params.stripeCustomerId ?? null,
+    stripeSubscriptionId: params.subscription?.id ?? null,
+    stripeCheckoutSessionId: params.stripeCheckoutSessionId ?? null,
+    stripePriceId: priceDetails.priceId,
+    stripeProductId: priceDetails.productId,
+    currentPeriodStart: priceDetails.currentPeriodStart,
+    currentPeriodEnd: priceDetails.currentPeriodEnd,
+    cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
+    canceledAt: priceDetails.canceledAt,
+    trialStart: priceDetails.trialStart,
+    trialEnd: priceDetails.trialEnd,
+    paidAt: params.paidAt ?? null,
+  });
+}
+
 async function getUserProfileFromSubscription(
   stripeClient: Stripe,
   subscriptionId: string
@@ -362,22 +389,12 @@ export async function POST(req: Request) {
         const subscription = subscriptionId
           ? await stripeClient.subscriptions.retrieve(subscriptionId)
           : null;
-        const priceDetails = getStripePriceDetailsFromSubscription(subscription);
 
-        await upsertHirePilotMonthlyBilling({
+        await syncHirePilotBillingEntitlement({
           userId: hirePilotUserId,
-          status: subscription?.status ?? "active",
+          subscription,
           stripeCustomerId: customerId,
-          stripeSubscriptionId: subscriptionId,
           stripeCheckoutSessionId: session.id,
-          stripePriceId: priceDetails.priceId,
-          stripeProductId: priceDetails.productId,
-          currentPeriodStart: priceDetails.currentPeriodStart,
-          currentPeriodEnd: priceDetails.currentPeriodEnd,
-          cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
-          canceledAt: priceDetails.canceledAt,
-          trialStart: priceDetails.trialStart,
-          trialEnd: priceDetails.trialEnd,
           paidAt: new Date(),
         });
       }
@@ -523,19 +540,10 @@ export async function POST(req: Request) {
           });
 
           if (hirePilotUserId) {
-            await upsertHirePilotMonthlyBilling({
+            await syncHirePilotBillingEntitlement({
               userId: hirePilotUserId,
-              status: subscription.status ?? "active",
+              subscription,
               stripeCustomerId: normalizeCustomerId(invoice.customer),
-              stripeSubscriptionId: subscriptionId,
-              stripePriceId: priceDetails.priceId,
-              stripeProductId: priceDetails.productId,
-              currentPeriodStart: priceDetails.currentPeriodStart,
-              currentPeriodEnd: priceDetails.currentPeriodEnd,
-              cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
-              canceledAt: priceDetails.canceledAt,
-              trialStart: priceDetails.trialStart,
-              trialEnd: priceDetails.trialEnd,
               paidAt: new Date(
                 (invoice.status_transitions.paid_at ?? Math.floor(Date.now() / 1000)) * 1000
               ),
@@ -612,19 +620,10 @@ export async function POST(req: Request) {
         });
 
         if (hirePilotUserId) {
-          await upsertHirePilotMonthlyBilling({
+          await syncHirePilotBillingEntitlement({
             userId: hirePilotUserId,
-            status: subscription.status ?? null,
+            subscription,
             stripeCustomerId: normalizeCustomerId(subscription.customer),
-            stripeSubscriptionId: subscription.id,
-            stripePriceId: priceDetails.priceId,
-            stripeProductId: priceDetails.productId,
-            currentPeriodStart: priceDetails.currentPeriodStart,
-            currentPeriodEnd: priceDetails.currentPeriodEnd,
-            cancelAtPeriodEnd: priceDetails.cancelAtPeriodEnd,
-            canceledAt: priceDetails.canceledAt,
-            trialStart: priceDetails.trialStart,
-            trialEnd: priceDetails.trialEnd,
           });
         }
       }

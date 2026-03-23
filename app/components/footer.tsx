@@ -1,7 +1,8 @@
 import Link from "next/link";
+import { FooterTrustRow } from "./footer-trust-row";
 
 const footerLinks = [
-  { label: "Features", href: "/features" },
+
   { label: "Pricing", href: "/pricing" },
   { label: "About", href: "/about" },
   { label: "Blog", href: "/blog" },
@@ -45,7 +46,10 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-8 border-t border-border pt-8 text-center">
+       
+
+        <div className="mt-3  pt-8 text-center">
+        <FooterTrustRow />
           <p className="text-sm text-muted-foreground">
             &copy; {new Date().getFullYear()} Hirexa AI. All rights reserved.
           </p>

@@ -4,6 +4,7 @@ import { Navbar } from "./components/navbar"
 import { Hero } from "./components/hero"
 import { WhyHirexa } from "./components/why-hirexa"
 import { Features } from "./components/features"
+import { HirePilotWorksEverywhere } from "./components/hirepilot-works-everywhere"
 import { ComingSoon } from "./components/coming-soon"
 import { Trust } from "./components/trust"
 import { Audience } from "./components/audience"
@@ -31,6 +32,7 @@ export default async function Home() {
       <Hero href={href} />
       <WhyHirexa />
       <Features />
+      <HirePilotWorksEverywhere />
       <ComingSoon />
       <Trust />
       <Audience />

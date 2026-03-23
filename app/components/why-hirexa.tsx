@@ -44,8 +44,7 @@ export function WhyHirexa() {
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
               Applying for jobs shouldn{"'"}t feel like a second full-time job.
-              Hirexa streamlines the entire process — from finding roles to
-              following up — using smart tools designed for real job seekers.
+              Hirexa AI streamlines the entire process.
             </p>
 
             <ul className="mt-8 flex flex-col gap-4" role="list">

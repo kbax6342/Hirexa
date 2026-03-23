@@ -465,13 +465,22 @@ model Subscription {
 }
 
 model HirePilotUsage {
-  id        String   @id @default(cuid())
-  userId    String
-  jobTitle  String?
-  company   String?
-  createdAt DateTime @default(now())
+  id              String    @id @default(cuid())
+  userId          String
+  jobTitle        String?
+  company         String?
+  status          String    @default("listening")
+  inputSource     String?
+  reportEligible  Boolean   @default(false)
+  endedAt         DateTime?
+  transcript      Json?
+  detectedQuestions Json?
+  suggestedAnswers Json?
+  report          Json?
+  createdAt       DateTime  @default(now())
 
   @@index([userId, createdAt])
+  @@index([userId, status, createdAt])
 }
 
 model HirePilotCreditGrant {

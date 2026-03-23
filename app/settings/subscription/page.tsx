@@ -198,6 +198,12 @@ export default async function SubscriptionSettingsPage() {
     : creditSummary.totalAvailable > 0
       ? "Credits available"
       : "Inactive";
+  const hirePilotUnlimitedAccess = view.access.hirepilot === "Unlimited access active";
+  const hasTrackedHirePilotCredits =
+    creditSummary.totalAvailable > 0 ||
+    creditSummary.monthlyCredits > 0 ||
+    creditSummary.rolloverCredits > 0 ||
+    creditSummary.purchasedCredits > 0;
   const hirepilotCanCancel = cancelableKeys.has(BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY);
   const hirepilotPlanLabel = hirepilotSubscription
     ? hirepilotSubscription.planLabel
@@ -395,63 +401,72 @@ export default async function SubscriptionSettingsPage() {
                     Prisma credits setup and regenerate the Prisma client, then reload the app.
                   </div>
                 ) : null}
-                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <CreditStat label="Total available" value={String(creditSummary.totalAvailable)} />
-                  <CreditStat label="Monthly credits" value={String(creditSummary.monthlyCredits)} />
-                  <CreditStat label="Rollover credits" value={String(creditSummary.rolloverCredits)} />
-                  <CreditStat label="Purchased credits" value={String(creditSummary.purchasedCredits)} />
-                  <CreditStat
-                    label="Next monthly reset"
-                    value={formatDate(creditSummary.nextMonthlyResetAt)}
-                  />
-                  <CreditStat
-                    label="Earliest purchased expiry"
-                    value={formatDate(creditSummary.earliestPurchasedExpiryAt)}
-                  />
-                </div>
-
-                {creditSummary.lowBalance || creditSummary.hasExpiringCredits ? (
-                  <div className="mt-4 space-y-2">
-                    {creditSummary.lowBalance ? (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        Your HirePilot balance is getting low. Review your remaining credits before
-                        starting another live session.
-                      </div>
-                    ) : null}
-                    {creditSummary.hasExpiringCredits ? (
-                      <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-                        Some HirePilot credits are expiring soon. Use older credits first to avoid
-                        losing them.
-                      </div>
-                    ) : null}
+                {hirePilotUnlimitedAccess && !hasTrackedHirePilotCredits ? (
+                  <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                    Unlimited HirePilot subscription active. Live listening is available without
+                    monthly or purchased credits.
                   </div>
-                ) : null}
-
-                <div className="mt-6">
-                  <h4 className="text-sm font-semibold text-slate-900">Recent usage</h4>
-                  {creditSummary.recentUsage.length > 0 ? (
-                    <div className="mt-3 space-y-2">
-                      {creditSummary.recentUsage.map((usage) => (
-                        <div
-                          key={usage.id}
-                          className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
-                        >
-                          <span>
-                            {usage.amount} credit{usage.amount === 1 ? "" : "s"} used for{" "}
-                            {usage.sourceType?.replace(/_/g, " ") ?? "HirePilot usage"}
-                          </span>
-                          <span className="text-xs text-slate-500">
-                            {formatDate(usage.createdAt)}
-                          </span>
-                        </div>
-                      ))}
+                ) : (
+                  <>
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <CreditStat label="Total available" value={String(creditSummary.totalAvailable)} />
+                      <CreditStat label="Monthly credits" value={String(creditSummary.monthlyCredits)} />
+                      <CreditStat label="Rollover credits" value={String(creditSummary.rolloverCredits)} />
+                      <CreditStat label="Purchased credits" value={String(creditSummary.purchasedCredits)} />
+                      <CreditStat
+                        label="Next monthly reset"
+                        value={formatDate(creditSummary.nextMonthlyResetAt)}
+                      />
+                      <CreditStat
+                        label="Earliest purchased expiry"
+                        value={formatDate(creditSummary.earliestPurchasedExpiryAt)}
+                      />
                     </div>
-                  ) : (
-                    <p className="mt-3 text-sm text-slate-500">
-                      No HirePilot credit usage has been recorded yet.
-                    </p>
-                  )}
-                </div>
+
+                    {creditSummary.lowBalance || creditSummary.hasExpiringCredits ? (
+                      <div className="mt-4 space-y-2">
+                        {creditSummary.lowBalance ? (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            Your HirePilot balance is getting low. Review your remaining credits before
+                            starting another live session.
+                          </div>
+                        ) : null}
+                        {creditSummary.hasExpiringCredits ? (
+                          <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                            Some HirePilot credits are expiring soon. Use older credits first to avoid
+                            losing them.
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-6">
+                      <h4 className="text-sm font-semibold text-slate-900">Recent usage</h4>
+                      {creditSummary.recentUsage.length > 0 ? (
+                        <div className="mt-3 space-y-2">
+                          {creditSummary.recentUsage.map((usage) => (
+                            <div
+                              key={usage.id}
+                              className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
+                            >
+                              <span>
+                                {usage.amount} credit{usage.amount === 1 ? "" : "s"} used for{" "}
+                                {usage.sourceType?.replace(/_/g, " ") ?? "HirePilot usage"}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {formatDate(usage.createdAt)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm text-slate-500">
+                          No HirePilot credit usage has been recorded yet.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="mt-6 flex flex-wrap gap-3">

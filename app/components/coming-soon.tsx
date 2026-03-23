@@ -1,23 +1,24 @@
 import { Mic, MapPin } from "lucide-react"
+
 import { Badge } from "../components/ui/badge"
 
 const upcoming = [
   {
     icon: Mic,
-    title: "Interview Buddy",
+    title: "HirePilot Extension",
     description:
-      "Practice smarter with guided interview prep and real-time feedback.",
+      "Bring HirePilot with you as you browse, so you can get support during your job search and interview process without switching tabs.",
     bullets: [
-      "Role-specific interview questions",
-      "Confidence-building responses",
-      "Practice at your own pace",
+      "Real-time support while you browse",
+      "Easy access across your workflow",
+      "Faster, more seamless experience",
     ],
   },
   {
     icon: MapPin,
     title: "Job Fairs & Hiring Events",
     description:
-      "Discover local and national job fairs — virtual and in-person — all in one place.",
+      "Discover local and national job fairs â€” virtual and in-person â€” all in one place.",
     bullets: [
       "Curated hiring events",
       "Easy discovery by location or industry",
@@ -41,7 +42,7 @@ export function ComingSoon() {
             Built With Purpose
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            We{"'"}re building new tools to help you at every stage — here{"'"}s
+            We{"'"}re building new tools to help you at every stage â€” here{"'"}s
             what{"'"}s next on the roadmap.
           </p>
         </div>

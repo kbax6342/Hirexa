@@ -84,6 +84,18 @@ function planStatusFromSubscription(subscription: Stripe.Subscription): string {
   return subscription.status ?? "unknown";
 }
 
+function nextRegistrationStatusAfterProfileSave(currentStatus?: string | null) {
+  if (
+    currentStatus === "QUESTIONS_COMPLETE_PENDING_BENEFITS" ||
+    currentStatus === "KEY_QUESTIONS_COMPLETE" ||
+    currentStatus === "BENEFITS_COMPLETE"
+  ) {
+    return currentStatus;
+  }
+
+  return "PROFILE_COMPLETE";
+}
+
 /**
  * ✅ Always use upsert (NOT updateMany) so:
  * - we never depend on the row existing
@@ -263,6 +275,7 @@ export async function POST(req: Request) {
       where: { userId },
       select: {
         workplaceLocations: true,
+        registrationStatus: true,
       },
     });
     const hasExplicitWorkplaceLocation = Boolean(
@@ -298,6 +311,9 @@ export async function POST(req: Request) {
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
+        registrationStatus: nextRegistrationStatusAfterProfileSave(
+          existingProfile?.registrationStatus
+        ),
         ...(derivedWorkplaceLocationsJson
           ? { workplaceLocations: derivedWorkplaceLocationsJson }
           : {}),
@@ -322,6 +338,9 @@ export async function POST(req: Request) {
         stateSearch: privateFields.stateSearch,
         linkedinUrl: normalizeText(body.linkedinUrl),
         portfolioUrl: normalizeText(body.portfolioUrl),
+        registrationStatus: nextRegistrationStatusAfterProfileSave(
+          existingProfile?.registrationStatus
+        ),
         ...(!hasExplicitWorkplaceLocation && derivedWorkplaceLocationsJson
           ? { workplaceLocations: derivedWorkplaceLocationsJson }
           : {}),

@@ -114,6 +114,7 @@ export async function POST(req: Request) {
         where: { id: profile.id },
         data: {
           questionsCompleted: true,
+          registrationStatus: "BENEFITS_COMPLETE",
         },
         select: { id: true },
       });

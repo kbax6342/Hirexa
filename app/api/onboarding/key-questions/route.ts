@@ -86,20 +86,25 @@ export async function POST(req: Request) {
       create: {
         userId,
         questionsCompleted: true,
-        registrationStatus: "KEY_QUESTIONS_COMPLETE",
+        registrationStatus: "QUESTIONS_COMPLETE_PENDING_BENEFITS",
         keyQuestions: payload,
         ...payload,
       },
       update: {
         questionsCompleted: true,
-        registrationStatus: "KEY_QUESTIONS_COMPLETE",
+        registrationStatus: "QUESTIONS_COMPLETE_PENDING_BENEFITS",
         keyQuestions: payload,
         ...payload,
       },
       select: { id: true },
     });
 
-    return NextResponse.json({ ok: true }, { status: 200 });
+    const onboarding = await getOnboardingStatusForUser(userId);
+
+    return NextResponse.json(
+      { ok: true, nextPath: onboarding.nextPath ?? "/dashboard" },
+      { status: 200 }
+    );
   } catch (error) {
     return NextResponse.json(
       {

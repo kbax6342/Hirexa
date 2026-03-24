@@ -9,6 +9,10 @@ export const onboardingStatusSelect = {
   firstName: true,
   lastName: true,
   email: true,
+  benefitSelections: {
+    select: { id: true },
+    take: 1,
+  },
   resume: {
     select: { id: true },
   },
@@ -21,26 +25,52 @@ export type OnboardingStatusProfile = {
   firstName?: string | null;
   lastName?: string | null;
   email?: string | null;
+  benefitSelections?: Array<{ id: string }> | null;
   resume?: { id: string } | null;
 } | null;
 
-export function isOnboardingComplete(profile: OnboardingStatusProfile) {
+function registrationStatus(profile: OnboardingStatusProfile) {
+  return profile?.registrationStatus?.trim() ?? null;
+}
+
+export function hasCompletedQuestionsStep(profile: OnboardingStatusProfile) {
+  const status = registrationStatus(profile);
+
   return Boolean(
     profile?.questionsCompleted ||
       profile?.keyQuestions ||
-      profile?.registrationStatus === "KEY_QUESTIONS_COMPLETE"
+      status === "QUESTIONS_COMPLETE_PENDING_BENEFITS" ||
+      status === "KEY_QUESTIONS_COMPLETE" ||
+      status === "BENEFITS_COMPLETE"
   );
+}
+
+export function hasCompletedBenefitsStep(profile: OnboardingStatusProfile) {
+  const status = registrationStatus(profile);
+
+  return Boolean(
+    profile?.benefitSelections?.length ||
+      status === "KEY_QUESTIONS_COMPLETE" ||
+      status === "BENEFITS_COMPLETE"
+  );
+}
+
+export function isOnboardingComplete(profile: OnboardingStatusProfile) {
+  return hasCompletedQuestionsStep(profile) && hasCompletedBenefitsStep(profile);
 }
 
 export function hasUploadedResume(profile: OnboardingStatusProfile) {
   return Boolean(profile?.resume?.id);
 }
 
-export function hasRequiredProfileDetails(profile: OnboardingStatusProfile) {
+export function hasCompletedProfileStep(profile: OnboardingStatusProfile) {
+  const status = registrationStatus(profile);
+
   return Boolean(
-    profile?.firstName?.trim() &&
-      profile?.lastName?.trim() &&
-      profile?.email?.trim()
+    status === "PROFILE_COMPLETE" ||
+      status === "QUESTIONS_COMPLETE_PENDING_BENEFITS" ||
+      status === "KEY_QUESTIONS_COMPLETE" ||
+      status === "BENEFITS_COMPLETE"
   );
 }
 
@@ -49,8 +79,16 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
     return null;
   }
 
-  if (!hasRequiredProfileDetails(profile)) {
+  if (!hasCompletedProfileStep(profile)) {
     return "/onboarding/profile";
+  }
+
+  if (!hasCompletedQuestionsStep(profile)) {
+    return "/questions";
+  }
+
+  if (!hasCompletedBenefitsStep(profile)) {
+    return "/benefits";
   }
 
   return "/questions";
@@ -79,7 +117,7 @@ export async function getOnboardingStatusForUser(userId?: string | null) {
       profile,
       completed: isOnboardingComplete(profile),
       hasResume: hasUploadedResume(profile),
-      hasProfileDetails: hasRequiredProfileDetails(profile),
+      hasProfileDetails: hasCompletedProfileStep(profile),
       nextPath: getNextOnboardingPath(profile),
     };
   } catch (error) {

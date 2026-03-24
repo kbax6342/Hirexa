@@ -5,12 +5,26 @@ import { validatePassword, hashPassword } from "../../../../lib/security/passwor
 import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
 import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 
+function normalizeName(value: unknown) {
+  const name = String(value ?? "").trim();
+  return name.length > 0 ? name : null;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+    const firstName = normalizeName(body.firstName);
+    const lastName = normalizeName(body.lastName);
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     const recaptchaToken = body.recaptchaToken ?? null;
+
+    if (!firstName || !lastName) {
+      return NextResponse.json(
+        { error: "First name and last name are required." },
+        { status: 400 }
+      );
+    }
 
     if (!email.includes("@")) {
       return NextResponse.json({ error: "Valid email required" }, { status: 400 });
@@ -31,20 +45,39 @@ export async function POST(req: Request) {
     await prisma.user.upsert({
       where: { email },
       create: {
+        name: `${firstName} ${lastName}`,
         email,
         password: passwordHash,
         isGuest: false,
         emailVerifiedAt: null,
-        userProfile: { create: { email, registrationStatus: "pending_verification" } },
+        userProfile: {
+          create: {
+            email,
+            firstName,
+            lastName,
+            registrationStatus: "pending_verification",
+          },
+        },
       },
       update: {
+        name: `${firstName} ${lastName}`,
         password: passwordHash,
         isGuest: false,
         emailVerifiedAt: null,
         userProfile: {
           upsert: {
-            create: { email, registrationStatus: "pending_verification" },
-            update: { email, registrationStatus: "pending_verification" },
+            create: {
+              email,
+              firstName,
+              lastName,
+              registrationStatus: "pending_verification",
+            },
+            update: {
+              email,
+              firstName,
+              lastName,
+              registrationStatus: "pending_verification",
+            },
           },
         },
       },

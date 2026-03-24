@@ -122,6 +122,11 @@ export default function QuestionsClient() {
           return;
         }
 
+        if (data?.nextPath && data.nextPath !== "/questions") {
+          router.replace(data.nextPath);
+          return;
+        }
+
         if (!cancelled && data?.data) {
           setForm((prev) => ({ ...prev, ...data.data }));
         }
@@ -167,7 +172,7 @@ export default function QuestionsClient() {
         throw new Error(data?.error || "Failed to save");
       }
 
-      router.replace("/dashboard");
+      router.replace(data?.nextPath || "/dashboard");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Something went wrong.";
       setError(message);

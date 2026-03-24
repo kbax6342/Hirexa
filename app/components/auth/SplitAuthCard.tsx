@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 
+import Link from "next/link";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
@@ -137,6 +138,8 @@ export default function SplitAuthCard() {
 
   const [step, setStep] = useState<Step>("signup");
 
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -161,7 +164,12 @@ export default function SplitAuthCard() {
   const pwScore = useMemo(() => scorePassword(pw), [pw]);
   const router = useRouter();
 
-  const canContinue = email.includes("@") && pwScore.passed >= 4 && pw === pw2;
+  const canContinue =
+    firstName.trim().length > 0 &&
+    lastName.trim().length > 0 &&
+    email.includes("@") &&
+    pwScore.passed >= 4 &&
+    pw === pw2;
 
   async function startSignup() {
     setMsg(null);
@@ -178,7 +186,13 @@ export default function SplitAuthCard() {
       const res = await fetch("/api/auth/register/init", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pw, recaptchaToken }),
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          email,
+          password: pw,
+          recaptchaToken,
+        }),
       });
   
       const data = await res.json().catch(() => ({}));
@@ -234,8 +248,8 @@ export default function SplitAuthCard() {
   }
 
   return (
-    <div className="w-full max-w-lg  mt-[50] max-h-[85vh] shadow-glow border border-white/10 bg-white">
-      <div className="relative bg-white h-[670] ">
+    <div className="w-full max-w-lg overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)]">
+      <div className="relative min-h-[670px] bg-white">
           <div className="overflow-hidden">
             <div
               className={[
@@ -246,116 +260,221 @@ export default function SplitAuthCard() {
               {/* =======================
                   STEP 1: SIGNUP
                  ======================= */}
-              <div className="w-1/3 p-8 md:p-10">
-                <h3 className="text-2xl font-semibold text-gray-900">Create account</h3>
-                <p className="text-gray-500 mt-1">Enter a secure password and verify your email.</p>
-
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Email</label>
-                    <input
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      type="email"
-                      placeholder="Email address"
-                      className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                    />
+              <div className="w-1/3 px-8 py-10 md:px-10 md:py-12">
+                <div className="mx-auto max-w-md">
+                  <div className="text-center">
+                    <h3 className="text-3xl font-semibold tracking-tight text-slate-900">
+                      Create account
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Enter a secure password and verify your email.
+                    </p>
                   </div>
 
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Password</label>
-                    <div className="relative mt-1">
-                      <input
-                        value={pw}
-                        onChange={(e) => setPw(e.target.value)}
-                        type={showPw ? "text" : "password"}
-                        placeholder="Password"
-                        className="w-full rounded-xl border border-gray-200 px-4 py-3 pr-12 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPw((prev) => !prev)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500 hover:text-gray-700"
-                        aria-label={showPw ? "Hide password" : "Show password"}
-                      >
-                        {showPw ? "Hide" : "Show"}
-                      </button>
-                    </div>
-
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">Strength</span>
-                        <span
-                          className={[
-                            "font-medium",
-                            pwScore.label === "Weak"
-                              ? "text-red-500"
-                              : pwScore.label === "Okay"
-                              ? "text-amber-500"
-                              : pwScore.label === "Good"
-                              ? "text-hirexa-cyan"
-                              : "text-hirexa-blue",
-                          ].join(" ")}
+                  <div className="mt-8 space-y-5">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label
+                          htmlFor="signup-first-name"
+                          className="text-sm font-medium text-slate-700"
                         >
-                          {pwScore.label}
-                        </span>
+                          First name
+                        </label>
+                        <input
+                          id="signup-first-name"
+                          name="firstName"
+                          autoComplete="given-name"
+                          value={firstName}
+                          onChange={(e) => setFirstName(e.target.value)}
+                          type="text"
+                          placeholder="First name"
+                          className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                        />
                       </div>
-                      <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-hirexa-blue transition-all"
-                          style={{ width: `${(pwScore.passed / 5) * 100}%` }}
+
+                      <div>
+                        <label
+                          htmlFor="signup-last-name"
+                          className="text-sm font-medium text-slate-700"
+                        >
+                          Last name
+                        </label>
+                        <input
+                          id="signup-last-name"
+                          name="lastName"
+                          autoComplete="family-name"
+                          value={lastName}
+                          onChange={(e) => setLastName(e.target.value)}
+                          type="text"
+                          placeholder="Last name"
+                          className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
                         />
                       </div>
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="text-sm font-medium text-gray-700">Confirm password</label>
-                    <div className="relative mt-1">
-                      <input
-                        value={pw2}
-                        onChange={(e) => setPw2(e.target.value)}
-                        type={showPw2 ? "text" : "password"}
-                        placeholder="Confirm password"
-                        className="w-full rounded-xl border border-gray-200 px-4 py-3 pr-12 text-black placeholder-black/60 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPw2((prev) => !prev)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500 hover:text-gray-700"
-                        aria-label={showPw2 ? "Hide confirm password" : "Show confirm password"}
+                    <div>
+                      <label
+                        htmlFor="signup-email"
+                        className="text-sm font-medium text-slate-700"
                       >
-                        {showPw2 ? "Hide" : "Show"}
-                      </button>
+                        Email
+                      </label>
+                      <input
+                        id="signup-email"
+                        name="email"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        type="email"
+                        placeholder="Email address"
+                        className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                      />
                     </div>
-                    {pw2.length > 0 && pw !== pw2 && (
-                      <div className="mt-1 text-xs text-red-600">Passwords do not match.</div>
+
+                    <div>
+                      <label
+                        htmlFor="signup-password"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Password
+                      </label>
+                      <div className="relative mt-2">
+                        <input
+                          id="signup-password"
+                          name="password"
+                          autoComplete="new-password"
+                          value={pw}
+                          onChange={(e) => setPw(e.target.value)}
+                          type={showPw ? "text" : "password"}
+                          placeholder="Password"
+                          className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-14 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPw((prev) => !prev)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-500 transition hover:text-slate-700"
+                          aria-label={showPw ? "Hide password" : "Show password"}
+                        >
+                          {showPw ? "Hide" : "Show"}
+                        </button>
+                      </div>
+
+                      <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                        <div className="flex items-center justify-between text-xs font-medium">
+                          <span className="text-slate-500">Password strength</span>
+                          <span
+                            className={[
+                              pwScore.label === "Weak"
+                                ? "text-red-500"
+                                : pwScore.label === "Okay"
+                                  ? "text-amber-500"
+                                  : pwScore.label === "Good"
+                                    ? "text-hirexa-cyan"
+                                    : "text-hirexa-blue",
+                            ].join(" ")}
+                          >
+                            {pwScore.label}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-5 gap-2">
+                          {Array.from({ length: 5 }, (_, index) => (
+                            <div
+                              key={index}
+                              className={[
+                                "h-2 rounded-full transition-colors",
+                                index < pwScore.passed ? "bg-hirexa-blue" : "bg-slate-200",
+                              ].join(" ")}
+                            />
+                          ))}
+                        </div>
+                        <p className="mt-3 text-xs leading-5 text-slate-500">
+                          Use 8+ characters with uppercase, lowercase, a number, and a
+                          symbol.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="signup-confirm-password"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Confirm password
+                      </label>
+                      <div className="relative mt-2">
+                        <input
+                          id="signup-confirm-password"
+                          name="confirmPassword"
+                          autoComplete="new-password"
+                          value={pw2}
+                          onChange={(e) => setPw2(e.target.value)}
+                          type={showPw2 ? "text" : "password"}
+                          placeholder="Confirm password"
+                          className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-14 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPw2((prev) => !prev)}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-500 transition hover:text-slate-700"
+                          aria-label={showPw2 ? "Hide confirm password" : "Show confirm password"}
+                        >
+                          {showPw2 ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      {pw2.length > 0 && pw !== pw2 && (
+                        <div className="mt-2 text-xs font-medium text-red-600">
+                          Passwords do not match.
+                        </div>
+                      )}
+                    </div>
+
+                    {msg && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                        {msg}
+                      </div>
                     )}
-                  </div>
 
-                  {msg && <div className="text-sm text-gray-700">{msg}</div>}
+                    <button
+                      type="button"
+                      disabled={!canContinue || loading}
+                      onClick={startSignup}
+                      className={[
+                        "w-full rounded-2xl px-4 py-3.5 text-sm font-semibold text-white transition focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30 focus:ring-offset-2",
+                        !canContinue || loading
+                          ? "cursor-not-allowed bg-slate-300"
+                          : "bg-hirexa-blue hover:bg-hirexa-cyan",
+                      ].join(" ")}
+                    >
+                      {loading ? "Sending code..." : "Continue"}
+                    </button>
 
-                  <button
-                    disabled={!canContinue || loading}
-                    onClick={startSignup}
-                    className={[
-                      "w-full rounded-xl py-3 font-semibold text-white transition",
-                      !canContinue || loading
-                        ? "bg-gray-300 cursor-not-allowed"
-                        : "bg-hirexa-blue hover:bg-hirexa-cyan",
-                    ].join(" ")}
-                  >
-                    {loading ? "Sending code..." : "Continue"}
-                  </button>
+                    <p className="px-2 text-center text-xs leading-5 text-slate-500">
+                      By continuing, you agree to Hirexa AI&apos;s{" "}
+                      <Link
+                        href="/terms"
+                        className="font-medium text-slate-700 transition hover:text-hirexa-blue hover:underline"
+                      >
+                        Terms
+                      </Link>{" "}
+                      and{" "}
+                      <Link
+                        href="/privacy"
+                        className="font-medium text-slate-700 transition hover:text-hirexa-blue hover:underline"
+                      >
+                        Privacy
+                      </Link>
+                      .
+                    </p>
 
-                  <div className="border-t border-gray-100 px-6 py-4 text-center text-xs text-gray-500">
-                    By continuing, you agree to Hirexa AI's Terms &amp; Privacy.
-                  </div>
-                  <div className="text-center text-sm text-gray-500">
-                    Already have an account?{" "}
-                    <a className="text-hirexa-blue hover:underline" href="/login">
-                      Log in
-                    </a>
+                    <div className="text-center text-sm text-slate-500">
+                      Already have an account?{" "}
+                      <Link
+                        href="/login"
+                        className="font-semibold text-hirexa-blue transition hover:underline"
+                      >
+                        Log in
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </div>

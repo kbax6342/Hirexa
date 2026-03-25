@@ -1,4 +1,6 @@
 import type { Job, JobSource } from "../types";
+import { getJobLocationMatch } from "../locationMatch";
+import { normalizeLocationLabel, normalizeStateInput } from "@/app/lib/locationOptions";
 
 export type SourceFetchArgs = {
   query?: string;
@@ -21,6 +23,24 @@ const QA_QUERY_VARIANTS = [
   "automation tester",
   "software tester",
   "cypress io",
+];
+const ROLE_SEPARATOR_REGEX = /\s*(?:\/|,|&|\band\b|\|)\s*/i;
+const ROLE_VARIANT_EXPANSIONS: Array<{
+  test: RegExp;
+  queries: string[];
+}> = [
+  {
+    test: /\bbarista\b|\bcashier\b/i,
+    queries: ["Cafe Barista", "Coffee Shop Cashier"],
+  },
+  {
+    test: /\bsales\b|\bcustomer service\b/i,
+    queries: ["Retail Sales", "Customer Support", "Sales Associate"],
+  },
+  {
+    test: /\bqa\b|\bquality assurance\b|\btest engineer\b/i,
+    queries: ["QA Engineer", "Quality Assurance", "Test Engineer"],
+  },
 ];
 
 export function parseCsvEnv(name: string) {
@@ -109,12 +129,53 @@ function normalizeText(value: string | null | undefined) {
     .trim();
 }
 
+function dedupeNormalized(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+export function expandRoleQueryVariants(query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const splitVariants = trimmed
+    .split(ROLE_SEPARATOR_REGEX)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const phraseVariant =
+    splitVariants.length > 1 ? splitVariants.join(" ") : splitVariants[0] ?? trimmed;
+  const specialExpansions = ROLE_VARIANT_EXPANSIONS.flatMap((entry) =>
+    entry.test.test(trimmed) ? entry.queries : []
+  );
+
+  return dedupeNormalized([
+    ...splitVariants,
+    phraseVariant,
+    trimmed,
+    ...specialExpansions,
+  ]);
+}
+
 function expandQueryVariants(query: string) {
-  const normalized = query.trim().toLowerCase();
+  const normalized = normalizeText(query);
   if (!normalized) return [];
 
+  const roleVariants = expandRoleQueryVariants(query);
   const looksLikeQaQuery = QA_QUERY_VARIANTS.some((term) => normalized.includes(term));
-  return looksLikeQaQuery ? [normalized, ...QA_QUERY_VARIANTS] : [normalized];
+  const variants = looksLikeQaQuery
+    ? [...roleVariants, ...QA_QUERY_VARIANTS]
+    : roleVariants;
+
+  return dedupeNormalized(variants);
 }
 
 function isRemoteFriendlyJob(job: Job) {
@@ -158,9 +219,25 @@ function matchesLocation(job: Job, args: SourceFetchArgs) {
     return includeRemote || !isRemoteJob;
   }
 
+  const normalizedLocation = normalizeLocationLabel(args.location ?? "");
+  const isStateLevelLocation =
+    Boolean(normalizedLocation) &&
+    !normalizedLocation.includes(",") &&
+    Boolean(normalizeStateInput(normalizedLocation));
+
+  // For provider requests already scoped to a state, trust the upstream state
+  // filter and defer local-vs-state ranking to the shared Smart Matches scorer.
+  if (isStateLevelLocation) {
+    return includeRemote || !isRemoteJob;
+  }
+
+  const locationMatch = getJobLocationMatch(job, args.location ?? "", includeRemote);
+
   return (
-    job.location.toLowerCase().includes(location) ||
-    (includeRemote && isRemoteJob)
+    locationMatch.tier === "exact" ||
+    locationMatch.tier === "nearby" ||
+    locationMatch.tier === "same_state" ||
+    locationMatch.tier === "remote"
   );
 }
 

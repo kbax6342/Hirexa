@@ -1,5 +1,6 @@
 import "server-only";
 
+import { applyLocationMatchMetadata } from "@/app/lib/jobs/locationMatch";
 import { cleanText, humanizeSlug, summarizeHtmlText } from "./sources/common";
 
 export type GreenhouseBoardConfig<TCategory extends string = string> = {
@@ -222,12 +223,11 @@ export function filterGreenhouseJobs<TCategory extends string>(
     query?: string;
     location?: string;
     category?: TCategory | null;
+    includeRemote?: boolean;
   }
 ) {
   const query = (options.query ?? "").trim().toLowerCase();
-  const location = (options.location ?? "").trim().toLowerCase();
-
-  return jobs.filter((job) => {
+  const filtered = jobs.filter((job) => {
     if (options.category && job.category !== options.category) return false;
 
     if (query) {
@@ -240,8 +240,39 @@ export function filterGreenhouseJobs<TCategory extends string>(
       }
     }
 
-    return matchesGreenhouseLocation(job, location);
+    return true;
   });
+
+  if (!options.location?.trim()) {
+    return filtered;
+  }
+
+  const ranked = applyLocationMatchMetadata(
+    filtered.map((job) => ({
+      id: `${job.source}:${job.sourceId}`,
+      source: job.source,
+      title: job.title,
+      company: job.companyLabel,
+      location: job.location ?? "",
+      posted: job.updatedAt ?? "",
+      description: job.description ?? undefined,
+      jobUrl: job.absoluteUrl,
+      searchText: [job.department, job.description].filter(Boolean).join(" "),
+    })),
+    options.location,
+    options.includeRemote !== false
+  );
+  const rankedIds = new Map(
+    ranked.map((job, index) => [job.id.replace(/^greenhouse:/, ""), index] as const)
+  );
+
+  return filtered
+    .filter((job) => rankedIds.has(job.sourceId))
+    .sort((left, right) => {
+      const leftRank = rankedIds.get(left.sourceId) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = rankedIds.get(right.sourceId) ?? Number.MAX_SAFE_INTEGER;
+      return leftRank - rightRank;
+    });
 }
 
 export async function fetchGreenhouseListings<TCategory extends string = string>(

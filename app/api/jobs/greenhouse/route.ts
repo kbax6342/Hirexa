@@ -160,6 +160,7 @@ function getCacheKey(params: {
   category: JobCategory | null;
   limit: number;
   offset: number;
+  includeRemote: boolean;
 }) {
   const boardKey = BOARDS.map((board) => `${board.board}:${board.category}`).join(",");
   return JSON.stringify({ boardKey, ...params });
@@ -170,11 +171,25 @@ export async function GET(request: Request) {
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
   const location = (searchParams.get("location") ?? "").trim().toLowerCase();
+  const remoteParam = (searchParams.get("remote") ?? searchParams.get("includeRemote") ?? "").trim();
   const category = parseCategory(searchParams.get("category"));
   const limit = Math.max(1, Math.min(Number(searchParams.get("limit") ?? 100), 250));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
+  const includeRemote =
+    remoteParam === ""
+      ? true
+      : remoteParam !== "false" && remoteParam !== "0";
 
-  const cacheKey = getCacheKey({ q, location, category, limit, offset });
+  console.info("[SMART_PROVIDER] greenhouse route request", {
+    query: q || null,
+    location: location || null,
+    includeRemote,
+    category,
+    limit,
+    offset,
+  });
+
+  const cacheKey = getCacheKey({ q, location, category, limit, offset, includeRemote });
   const cached = responseCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     if (process.env.NODE_ENV !== "production") {
@@ -206,15 +221,34 @@ export async function GET(request: Request) {
     query: q,
     location,
     category,
+    includeRemote,
   }) as Job[];
 
-  filtered.sort((a, b) => {
-    const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
-    const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
-    return bt - at;
+  if (!location) {
+    filtered.sort((a, b) => {
+      const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+      const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+      return bt - at;
+    });
+  }
+
+  console.info("[SMART_LOCATION] greenhouse route filtering", {
+    query: q || null,
+    location: location || null,
+    includeRemote,
+    before: mergedJobs.length,
+    after: filtered.length,
   });
 
   const paginated = filtered.slice(offset, offset + limit) as Job[];
+
+  console.info("[SMART_RANK] greenhouse route ranking", {
+    location: location || null,
+    includeRemote,
+    returned: paginated.length,
+    offset,
+    limit,
+  });
 
   const body: JobsResponse = {
     jobs: paginated,

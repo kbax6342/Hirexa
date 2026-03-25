@@ -2,7 +2,7 @@
 "use client";
 
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 import {
@@ -40,6 +40,8 @@ type SmartMatchesResponse = {
   meta?: {
     query?: string;
     preferredLocation?: string | null;
+    profileQuery?: string | null;
+    profilePreferredLocation?: string | null;
     includeRemote?: boolean;
     requestedState?: string | null;
     resolvedState?: string | null;
@@ -73,6 +75,10 @@ type DashboardFilters = {
   query: string;
   location: string;
   includeRemote: boolean;
+};
+
+type JobMatchesLayoutProps = {
+  initialProfileFilters?: DashboardFilters | null;
 };
 
 function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
@@ -259,24 +265,37 @@ function toJobDetailSummary(job: Job | null): JobDetail | null {
   };
 }
 
-export default function JobMatchesLayout() {
+export default function JobMatchesLayout({
+  initialProfileFilters = null,
+}: JobMatchesLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const queryParam = searchParams.get("q")?.trim() || "";
   const locationParam = searchParams.get("location")?.trim() || "";
   const includeRemoteParam = searchParams.get("includeRemote");
-  const urlFilters = useMemo(
-    () => ({
-      query: queryParam,
-      location: locationParam,
-      includeRemote: includeRemoteParam === "1",
-    }),
-    [includeRemoteParam, locationParam, queryParam]
+  const explicitParam = searchParams.get("explicit")?.trim();
+  const hasTransientFilterParams =
+    Boolean(queryParam || locationParam) ||
+    includeRemoteParam !== null ||
+    explicitParam === "1";
+  const profileBackedFilters = useMemo(
+    () =>
+      initialProfileFilters ?? {
+        query: "",
+        location: "",
+        includeRemote: false,
+      },
+    [initialProfileFilters]
   );
   const [allJobs, setAllJobs] = useState<Job[]>([]);
-  const [filters, setFilters] = useState<DashboardFilters>(() => urlFilters);
-  const [appliedFilters, setAppliedFilters] = useState<DashboardFilters>(() => urlFilters);
+  const [filters, setFilters] = useState<DashboardFilters>(() => profileBackedFilters);
+  const [appliedFilters, setAppliedFilters] = useState<DashboardFilters>(
+    () => profileBackedFilters
+  );
+  const [profileDefaultFilters, setProfileDefaultFilters] =
+    useState<DashboardFilters | null>(() => initialProfileFilters);
+  const [explicitFiltersActive, setExplicitFiltersActive] = useState(false);
   const [selectedId, setSelectedId] = useState<string>("");
   const [savingFilters, setSavingFilters] = useState(false);
   const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(true);
@@ -311,13 +330,21 @@ export default function JobMatchesLayout() {
   const hadJobParam = useRef(false);
   const detailCache = useRef<Map<string, JobDetailsResponse>>(new Map());
   const initializedFiltersRef = useRef(false);
+  const profileDefaultsInitializedRef = useRef(Boolean(initialProfileFilters));
+  const explicitFiltersRequestedRef = useRef(false);
+  const activeFeedRequestRef = useRef<AbortController | null>(null);
+  const inFlightFeedRequestRef = useRef<string | null>(null);
+  const latestFeedRequestIdRef = useRef(0);
+  const requestSourceRef = useRef<"initial-load" | "apply-filters" | "load-more">(
+    "initial-load"
+  );
   const selectedJobParam = searchParams.get("job")?.trim() || "";
   const visibleJobs = useMemo(
     () =>
-      filters.includeRemote
+      appliedFilters.includeRemote
         ? allJobs
         : allJobs.filter((job) => !isRemoteJob(job)),
-    [allJobs, filters.includeRemote]
+    [allJobs, appliedFilters.includeRemote]
   );
 
   const selectedSummary = useMemo(
@@ -360,48 +387,17 @@ export default function JobMatchesLayout() {
     window.history.replaceState(window.history.state, "", nextUrl);
   }
 
-  function replaceFilterParams(nextFilters: typeof appliedFilters) {
+  const clearTransientFilterParams = useCallback(() => {
     const nextParams = new URLSearchParams(searchParams.toString());
-
-    if (nextFilters.query) {
-      nextParams.set("q", nextFilters.query);
-    } else {
-      nextParams.delete("q");
-    }
-
-    if (nextFilters.location) {
-      nextParams.set("location", nextFilters.location);
-    } else {
-      nextParams.delete("location");
-    }
-
-    nextParams.set("includeRemote", nextFilters.includeRemote ? "1" : "0");
+    nextParams.delete("q");
+    nextParams.delete("location");
+    nextParams.delete("includeRemote");
+    nextParams.delete("explicit");
 
     const nextQuery = nextParams.toString();
     const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }
-
-  async function persistFilters(nextFilters: typeof appliedFilters) {
-    try {
-      setSavingFilters(true);
-      await fetch("/api/profile/preferences", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roleFocus: nextFilters.query,
-          includeRemote: nextFilters.includeRemote,
-          workplaceLocations: nextFilters.location
-            ? [{ label: nextFilters.location }]
-            : null,
-        }),
-      });
-    } catch (error) {
-      console.error("Failed to sync Smart Matches filters:", error);
-    } finally {
-      setSavingFilters(false);
-    }
-  }
+  }, [pathname, searchParams]);
 
   function applyFilters() {
     const nextFilters = {
@@ -410,9 +406,30 @@ export default function JobMatchesLayout() {
       includeRemote: filters.includeRemote,
     };
 
+    console.info("[SMART_FILTERS] applying dashboard filters", {
+      profileTargetRole: profileDefaultFilters?.query || null,
+      profilePreferredLocation: profileDefaultFilters?.location || null,
+      activeFilterRole: nextFilters.query || null,
+      activeFilterLocation: nextFilters.location || null,
+      includeRemote: nextFilters.includeRemote,
+      requestSource: "apply-filters",
+    });
+
+    requestSourceRef.current = "apply-filters";
+    setSavingFilters(true);
+    explicitFiltersRequestedRef.current = true;
+    setExplicitFiltersActive(true);
     setAppliedFilters(nextFilters);
-    replaceFilterParams(nextFilters);
-    void persistFilters(nextFilters);
+    console.info("[SMART_SESSION] stored temporary Smart Matches session filters", {
+      profileTargetRole: profileDefaultFilters?.query || null,
+      profilePreferredLocation: profileDefaultFilters?.location || null,
+      activeFilterRole: nextFilters.query || null,
+      activeFilterLocation: nextFilters.location || null,
+      includeRemote: nextFilters.includeRemote,
+      requestSource: "apply-filters",
+      persistedToProfile: false,
+      persistedAcrossRefresh: false,
+    });
   }
 
   function handleSelectJob(jobId: string) {
@@ -421,13 +438,49 @@ export default function JobMatchesLayout() {
   }
 
   useEffect(() => {
-    setFilters((current) =>
-      sameDashboardFilters(current, urlFilters) ? current : urlFilters
-    );
-    setAppliedFilters((current) =>
-      sameDashboardFilters(current, urlFilters) ? current : urlFilters
-    );
-  }, [urlFilters]);
+    const nextFilters = profileDefaultFilters ?? profileBackedFilters;
+    const temporarySessionActive = explicitFiltersRequestedRef.current;
+
+    console.info("[SMART_INIT] hydrating Smart Matches dashboard filters", {
+      profileTargetRole: nextFilters.query || null,
+      profilePreferredLocation: nextFilters.location || null,
+      activeFilterRole: nextFilters.query || null,
+      activeFilterLocation: nextFilters.location || null,
+      hydrationSource: "profile",
+      ignoredTemporaryFilterState: hasTransientFilterParams,
+      requestSource: "initial-load",
+    });
+
+    if (!temporarySessionActive) {
+      setFilters((current) =>
+        sameDashboardFilters(current, nextFilters) ? current : nextFilters
+      );
+      setAppliedFilters((current) =>
+        sameDashboardFilters(current, nextFilters) ? current : nextFilters
+      );
+    }
+
+    if (hasTransientFilterParams) {
+      console.info("[SMART_SESSION] ignored stale temporary Smart Matches filters on refresh", {
+        profileTargetRole: nextFilters.query || null,
+        profilePreferredLocation: nextFilters.location || null,
+        ignoredQuery: queryParam || null,
+        ignoredLocation: locationParam || null,
+        ignoredIncludeRemote:
+          includeRemoteParam === null ? null : includeRemoteParam === "1",
+        hydrationSource: "profile",
+      });
+      clearTransientFilterParams();
+    }
+  }, [
+    hasTransientFilterParams,
+    includeRemoteParam,
+    locationParam,
+    profileBackedFilters,
+    profileDefaultFilters,
+    queryParam,
+    clearTransientFilterParams,
+  ]);
 
   useEffect(() => {
     setAppliedJobs(dedupeJobs(loadAppliedJobsSession<Job>()));
@@ -440,7 +493,58 @@ export default function JobMatchesLayout() {
   }, [appliedJobs, appliedJobsSessionReady]);
 
   async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
-    if (loadingMore) return;
+    const requestExplicit =
+      explicitFiltersRequestedRef.current || explicitFiltersActive;
+    const requestSource = options?.reset
+      ? requestSourceRef.current
+      : "load-more";
+    const requestSignature = JSON.stringify({
+      cursor: cursor ?? "",
+      query: appliedFilters.query,
+      location: appliedFilters.location,
+      includeRemote: appliedFilters.includeRemote,
+      explicit: requestExplicit,
+      requestSource,
+      reset: Boolean(options?.reset),
+    });
+
+    if (loadingMore && !options?.reset) {
+      if (inFlightFeedRequestRef.current === requestSignature) {
+        console.info("[SMART_DEDUPE] skipped duplicate Smart Matches client request", {
+          cursor,
+          query: appliedFilters.query || null,
+          location: appliedFilters.location || null,
+          explicitFiltersActive: requestExplicit,
+        });
+      }
+      return;
+    }
+
+    if (inFlightFeedRequestRef.current === requestSignature) {
+      console.info("[SMART_DEDUPE] skipped in-flight Smart Matches client request", {
+        cursor,
+        query: appliedFilters.query || null,
+        location: appliedFilters.location || null,
+        explicitFiltersActive: requestExplicit,
+      });
+      return;
+    }
+
+    const requestId = latestFeedRequestIdRef.current + 1;
+    latestFeedRequestIdRef.current = requestId;
+
+    if (options?.reset && activeFeedRequestRef.current) {
+      console.info("[SMART_ABORT] aborting stale Smart Matches request", {
+        query: appliedFilters.query || null,
+        location: appliedFilters.location || null,
+        explicitFiltersActive: requestExplicit,
+      });
+      activeFeedRequestRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    activeFeedRequestRef.current = controller;
+    inFlightFeedRequestRef.current = requestSignature;
 
     setLoadingMore(true);
 
@@ -450,21 +554,56 @@ export default function JobMatchesLayout() {
       let filtered: Job[] = [];
       let responseCursor: string | null = cursor;
 
+      console.info("[SMART_INPUT] dashboard Smart Matches request", {
+        profileTargetRole: profileDefaultFilters?.query || null,
+        profilePreferredLocation: profileDefaultFilters?.location || null,
+        activeFilterRole: appliedFilters.query || null,
+        activeFilterLocation: appliedFilters.location || null,
+        includeRemote: appliedFilters.includeRemote,
+        requestSource,
+        activeFilterOverrideUsed:
+          Boolean(appliedFilters.query || appliedFilters.location) &&
+          (profileDefaultFilters === null ||
+            appliedFilters.query !== (profileDefaultFilters.query || "") ||
+            appliedFilters.location !== (profileDefaultFilters.location || "")),
+      });
+
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const url = new URL("/api/jobs/smart-matches", window.location.origin);
         url.searchParams.set("limit", String(LIMIT));
-        url.searchParams.set("includeRemote", "1");
+        url.searchParams.set(
+          "includeRemote",
+          appliedFilters.includeRemote ? "1" : "0"
+        );
         if (appliedFilters.query) {
           url.searchParams.set("q", appliedFilters.query);
         }
         if (appliedFilters.location) {
           url.searchParams.set("location", appliedFilters.location);
         }
+        if (requestExplicit) {
+          url.searchParams.set("explicit", "1");
+        }
         if (requestCursor) {
           url.searchParams.set("cursor", requestCursor);
         }
 
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        console.info("[SMART_PROVIDER] dashboard smart-matches request", {
+          attempt: attempt + 1,
+          cursor: requestCursor,
+          profileTargetRole: profileDefaultFilters?.query || null,
+          profilePreferredLocation: profileDefaultFilters?.location || null,
+          activeFilterRole: appliedFilters.query || null,
+          activeFilterLocation: appliedFilters.location || null,
+          includeRemote: appliedFilters.includeRemote,
+          requestSource,
+          url: url.toString(),
+        });
+
+        const res = await fetch(url.toString(), {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         if (!res.ok) {
           throw new Error("Failed to load smart matches");
         }
@@ -477,15 +616,23 @@ export default function JobMatchesLayout() {
         }
 
         if (!initializedFiltersRef.current && data?.meta) {
-          const resolvedFilters = {
-            query: appliedFilters.query || data.meta.query || "",
-            location: appliedFilters.location || data.meta.preferredLocation || "",
-            includeRemote: appliedFilters.includeRemote,
+          const resolvedProfileDefaults = {
+            query: data.meta.profileQuery || data.meta.query || "",
+            location:
+              data.meta.profilePreferredLocation ||
+              data.meta.preferredLocation ||
+              "",
+            includeRemote: data.meta.includeRemote ?? appliedFilters.includeRemote,
           };
           initializedFiltersRef.current = true;
-          setFilters(resolvedFilters);
-          setAppliedFilters(resolvedFilters);
-          replaceFilterParams(resolvedFilters);
+          if (!profileDefaultsInitializedRef.current) {
+            profileDefaultsInitializedRef.current = true;
+            setProfileDefaultFilters(resolvedProfileDefaults);
+          }
+          if (!requestExplicit) {
+            setFilters(resolvedProfileDefaults);
+            setAppliedFilters(resolvedProfileDefaults);
+          }
         }
 
         filtered = incoming.filter((job) => {
@@ -509,12 +656,31 @@ export default function JobMatchesLayout() {
         requestCursor = responseCursor;
       }
 
+      if (latestFeedRequestIdRef.current !== requestId) {
+        console.info("[SMART_DEDUPE] ignored stale Smart Matches response", {
+          query: appliedFilters.query || null,
+          location: appliedFilters.location || null,
+          explicitFiltersActive: requestExplicit,
+        });
+        return;
+      }
+
       setNextCursor(responseCursor);
       setAllJobs((prev) =>
         options?.reset ? filtered : dedupeJobs([...prev, ...filtered])
       );
 
-      const visibleFiltered = filters.includeRemote
+      console.info("[SMART_RESULT] dashboard Smart Matches page result", {
+        profileTargetRole: profileDefaultFilters?.query || null,
+        profilePreferredLocation: profileDefaultFilters?.location || null,
+        activeFilterRole: appliedFilters.query || null,
+        activeFilterLocation: appliedFilters.location || null,
+        requestSource,
+        returnedJobs: filtered.length,
+        nextCursor: responseCursor,
+      });
+
+      const visibleFiltered = appliedFilters.includeRemote
         ? filtered
         : filtered.filter((job) => !isRemoteJob(job));
 
@@ -529,18 +695,56 @@ export default function JobMatchesLayout() {
         setSelectedId(visibleFiltered[0].id);
       }
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.info("[SMART_ABORT] Smart Matches request aborted", {
+          query: appliedFilters.query || null,
+          location: appliedFilters.location || null,
+          explicitFiltersActive: requestExplicit,
+        });
+        return;
+      }
       console.error("Smart matches feed failed:", error);
     } finally {
-      setLoadingMore(false);
+      if (activeFeedRequestRef.current === controller) {
+        activeFeedRequestRef.current = null;
+      }
+      if (inFlightFeedRequestRef.current === requestSignature) {
+        inFlightFeedRequestRef.current = null;
+      }
+      if (latestFeedRequestIdRef.current === requestId) {
+        setLoadingMore(false);
+        if (options?.reset) {
+          setSavingFilters(false);
+          requestSourceRef.current = "initial-load";
+        }
+      }
     }
   }
 
   async function loadMore() {
+    requestSourceRef.current = "load-more";
+    console.info("[SMART_LOAD_MORE] continuing Smart Matches session", {
+      profileTargetRole: profileDefaultFilters?.query || null,
+      profilePreferredLocation: profileDefaultFilters?.location || null,
+      activeFilterRole: appliedFilters.query || null,
+      activeFilterLocation: appliedFilters.location || null,
+      requestSource: "load-more",
+      nextCursor,
+    });
     await loadPage(nextCursor);
   }
 
   useEffect(() => {
+    console.info("[SMART_FILTERS] resetting Smart Matches feed", {
+      profileTargetRole: profileDefaultFilters?.query || null,
+      profilePreferredLocation: profileDefaultFilters?.location || null,
+      activeFilterRole: appliedFilters.query || null,
+      activeFilterLocation: appliedFilters.location || null,
+      includeRemote: appliedFilters.includeRemote,
+      requestSource: requestSourceRef.current,
+    });
     seen.current.clear();
+    detailCache.current.clear();
     setAllJobs([]);
     setSelectedId("");
     setSelectedDetails(null);
@@ -548,9 +752,17 @@ export default function JobMatchesLayout() {
     setFormatted(null);
     setNextCursor(null);
     setResolutionMeta(null);
+    if (!initializedFiltersRef.current) {
+      requestSourceRef.current = "initial-load";
+    }
     void loadPage(null, { reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedFilters.location, appliedFilters.query]);
+  }, [
+    appliedFilters.includeRemote,
+    appliedFilters.location,
+    appliedFilters.query,
+    explicitFiltersActive,
+  ]);
 
   useEffect(() => {
     if (visibleJobs.length === 0) {
@@ -1130,7 +1342,7 @@ export default function JobMatchesLayout() {
                           disabled={savingFilters}
                           className="ml-auto shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {savingFilters ? "Saving..." : "Apply filters"}
+                          {savingFilters ? "Applying..." : "Apply filters"}
                         </button>
                       </div>
                     </div>
@@ -1174,6 +1386,12 @@ export default function JobMatchesLayout() {
                         <span className="ml-1 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-green-700">
                           {getSourceLabel(job.source)}
                         </span>
+
+                        {job.matchLabel ? (
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                            {job.matchLabel}
+                          </span>
+                        ) : null}
 
                         {job.badge ? (
                           <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-800">

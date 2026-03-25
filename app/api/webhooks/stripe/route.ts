@@ -42,6 +42,11 @@ function normalizeCustomerId(
   return typeof customer === "string" ? customer : customer.id;
 }
 
+function normalizeEmail(value: string | null | undefined) {
+  const email = value?.trim().toLowerCase();
+  return email ? email : null;
+}
+
 async function syncHirePilotBillingEntitlement(params: {
   userId: string;
   subscription: Stripe.Subscription | null;
@@ -96,6 +101,50 @@ async function getUserProfileFromSubscription(
   return profile ?? null;
 }
 
+async function getUserProfileByEmail(email: string | null | undefined) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return null;
+
+  return prisma.userProfile.findFirst({
+    where: {
+      OR: [
+        { email: { equals: normalizedEmail, mode: "insensitive" } },
+        { subscriptionEmail: { equals: normalizedEmail, mode: "insensitive" } },
+      ],
+    },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, userId: true },
+  });
+}
+
+async function getCustomerEmail(
+  stripeClient: Stripe,
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
+) {
+  if (!customer) return null;
+
+  if (typeof customer !== "string") {
+    return "deleted" in customer && customer.deleted
+      ? null
+      : normalizeEmail(customer.email ?? null);
+  }
+
+  try {
+    const resolvedCustomer = await stripeClient.customers.retrieve(customer);
+    if ("deleted" in resolvedCustomer && resolvedCustomer.deleted) {
+      return null;
+    }
+
+    return normalizeEmail(resolvedCustomer.email ?? null);
+  } catch (error) {
+    logStripeWebhook("warn", "customer email lookup failed", {
+      stripeCustomerId: customer,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    return null;
+  }
+}
+
 async function applyPaymentStatus(params: {
   userProfileId: string;
   userId?: string | null;
@@ -121,6 +170,7 @@ async function applyPaymentStatus(params: {
   canceledAt?: Date | null;
   trialStart?: Date | null;
   trialEnd?: Date | null;
+  subscriptionEmail?: string | null;
 }) {
   const paidAt = params.paidAt ?? new Date();
   const current = await prisma.userProfile.findUnique({
@@ -172,6 +222,7 @@ async function applyPaymentStatus(params: {
           subscriptionCheckedAt: new Date(),
           stripeSubscriptionId: params.subscriptionId ?? undefined,
           stripeCustomerId: params.customerId ?? undefined,
+          subscriptionEmail: params.subscriptionEmail ?? undefined,
         }
       : params.planType === "monthly"
         ? {
@@ -186,6 +237,7 @@ async function applyPaymentStatus(params: {
             subscriptionCheckedAt: new Date(),
             stripeSubscriptionId: params.subscriptionId ?? undefined,
             stripeCustomerId: params.customerId ?? undefined,
+            subscriptionEmail: params.subscriptionEmail ?? undefined,
           }
         : {
             trialSubscriber: false,
@@ -199,7 +251,19 @@ async function applyPaymentStatus(params: {
             subscriptionCheckedAt: new Date(),
             stripeSubscriptionId: params.subscriptionId ?? undefined,
             stripeCustomerId: params.customerId ?? undefined,
+            subscriptionEmail: params.subscriptionEmail ?? undefined,
           };
+
+  logStripeWebhook("info", "applying payment status to profile", {
+    userProfileId: params.userProfileId,
+    userId: params.userId ?? null,
+    planType: params.planType,
+    status: resolvedStatus,
+    hasAccess,
+    stripeCustomerId: params.customerId ?? null,
+    stripeSubscriptionId: params.subscriptionId ?? null,
+    subscriptionEmail: params.subscriptionEmail ?? null,
+  });
 
   await prisma.userProfile.update({
     where: { id: params.userProfileId },
@@ -282,11 +346,11 @@ function logStripeWebhook(
     level === "error" ? console.error : level === "warn" ? console.warn : console.info;
 
   if (metadata && Object.keys(metadata).length > 0) {
-    logger(`[stripe webhook] ${message}`, metadata);
+    logger(`[STRIPE_SYNC] ${message}`, metadata);
     return;
   }
 
-  logger(`[stripe webhook] ${message}`);
+  logger(`[STRIPE_SYNC] ${message}`);
 }
 
 export async function POST(req: Request) {
@@ -427,6 +491,19 @@ export async function POST(req: Request) {
         const planFromMetadata =
           session.metadata?.hirexa_plan ?? subscription.metadata?.hirexa_plan;
 
+        const subscriptionEmail =
+          normalizeEmail(
+            session.customer_details?.email ??
+              session.customer_email ??
+              subscription.metadata?.hirexa_customer_email ??
+              subscription.metadata?.subscriptionEmail ??
+              null
+          ) ??
+          (await getCustomerEmail(
+            stripeClient,
+            session.customer as string | Stripe.Customer | Stripe.DeletedCustomer | null
+          ));
+
         const userProfile =
           (session.client_reference_id
             ? await prisma.userProfile.findUnique({
@@ -446,6 +523,18 @@ export async function POST(req: Request) {
                 select: { id: true, userId: true },
               })
             : null);
+        const resolvedUserProfile =
+          userProfile ?? (await getUserProfileByEmail(subscriptionEmail));
+
+        if (!resolvedUserProfile) {
+          logStripeWebhook("warn", "unable to resolve user profile for checkout session", {
+            eventId: event.id,
+            sessionId: session.id,
+            subscriptionId,
+            stripeCustomerId: customerId,
+            subscriptionEmail,
+          });
+        }
 
         const planType: PlanType =
           planFromMetadata === "annual"
@@ -454,10 +543,10 @@ export async function POST(req: Request) {
               ? "trial"
               : "monthly";
 
-        if (userProfile?.id) {
+        if (resolvedUserProfile?.id) {
           await applyPaymentStatus({
-            userProfileId: userProfile.id,
-            userId: userProfile.userId ?? null,
+            userProfileId: resolvedUserProfile.id,
+            userId: resolvedUserProfile.userId ?? null,
             planType,
             status: "payment approved",
             paidAt: new Date(),
@@ -472,12 +561,13 @@ export async function POST(req: Request) {
             canceledAt: priceDetails.canceledAt,
             trialStart: priceDetails.trialStart,
             trialEnd: priceDetails.trialEnd,
+            subscriptionEmail,
           });
         }
 
         await saveStripePayment({
           stripeEventId: event.id,
-          userProfileId: userProfile?.id ?? null,
+          userProfileId: resolvedUserProfile?.id ?? null,
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscriptionId,
           stripeCheckoutSessionId: session.id,
@@ -551,7 +641,24 @@ export async function POST(req: Request) {
           }
         }
 
-        const userProfile = await getUserProfileFromSubscription(stripeClient, subscriptionId);
+        const subscriptionEmail =
+          normalizeEmail(
+            typeof invoice.customer_email === "string" ? invoice.customer_email : null
+          ) ?? (await getCustomerEmail(stripeClient, invoice.customer));
+        const userProfile =
+          (await getUserProfileFromSubscription(stripeClient, subscriptionId)) ??
+          (await getUserProfileByEmail(subscriptionEmail));
+
+        if (!userProfile) {
+          logStripeWebhook("warn", "unable to resolve user profile for invoice payment", {
+            eventId: event.id,
+            invoiceId: invoice.id,
+            subscriptionId,
+            stripeCustomerId: normalizeCustomerId(invoice.customer),
+            subscriptionEmail,
+          });
+        }
+
         const line = invoice.lines.data[0];
         const linePrice = (line as any)?.price;
         const interval = linePrice?.recurring?.interval;
@@ -577,6 +684,7 @@ export async function POST(req: Request) {
             canceledAt: priceDetails.canceledAt,
             trialStart: priceDetails.trialStart,
             trialEnd: priceDetails.trialEnd,
+            subscriptionEmail,
           });
         }
 
@@ -631,8 +739,23 @@ export async function POST(req: Request) {
       const userProfile = subscription.id
         ? await getUserProfileFromSubscription(stripeClient, subscription.id)
         : null;
+      const subscriptionEmail =
+        normalizeEmail(subscription.metadata?.hirexa_customer_email ?? null) ??
+        (await getCustomerEmail(stripeClient, subscription.customer));
+      const resolvedUserProfile =
+        userProfile ?? (await getUserProfileByEmail(subscriptionEmail));
 
-      if (userProfile?.id && subscription.metadata?.hirexa_plan) {
+      if (!resolvedUserProfile) {
+        logStripeWebhook("warn", "unable to resolve user profile for subscription update", {
+          eventId: event.id,
+          subscriptionId: subscription.id,
+          stripeCustomerId: normalizeCustomerId(subscription.customer),
+          subscriptionEmail,
+          status: subscription.status ?? null,
+        });
+      }
+
+      if (resolvedUserProfile?.id && subscription.metadata?.hirexa_plan) {
         const planType: PlanType =
           subscription.metadata.hirexa_plan === "annual"
             ? "yearly"
@@ -641,8 +764,8 @@ export async function POST(req: Request) {
               : "monthly";
 
         await applyPaymentStatus({
-          userProfileId: userProfile.id,
-          userId: userProfile.userId ?? null,
+          userProfileId: resolvedUserProfile.id,
+          userId: resolvedUserProfile.userId ?? null,
           planType,
           status: (subscription.status ?? "canceled") as
             | "payment approved"
@@ -664,6 +787,7 @@ export async function POST(req: Request) {
           canceledAt: priceDetails.canceledAt,
           trialStart: priceDetails.trialStart,
           trialEnd: priceDetails.trialEnd,
+          subscriptionEmail,
         });
       }
     }

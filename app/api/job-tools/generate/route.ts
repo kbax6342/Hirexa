@@ -3,7 +3,9 @@ import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import mammoth from "mammoth";
 
+import { auth } from "@/app/lib/auth";
 import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
+import { prisma } from "@/app/lib/prisma";
 
 export const runtime = "nodejs";
 
@@ -19,6 +21,27 @@ type GeneratePayload = {
   instructions: string | null;
   pastedJobText: string | null;
   resumeFile: File | null;
+};
+
+type GeneratedDocumentPayload = {
+  job?: {
+    title?: string;
+    company?: string;
+    location?: string;
+    summary?: string;
+    keyRequirements?: string[];
+  };
+  coverLetter?: string;
+  resumeUpdates?: {
+    summaryRewrite?: string;
+    skillsToAdd?: string[];
+    bulletEdits?: Array<{ section: string; before: string; after: string }>;
+    atsKeywords?: string[];
+  };
+  emails?: {
+    beforeInterview?: string;
+    afterInterview?: string;
+  };
 };
 
 function cleanText(s: string) {
@@ -141,6 +164,49 @@ async function extractResumeTextFromFile(file: File) {
   return "";
 }
 
+function resolveCandidateName(input: {
+  firstName?: string | null;
+  lastName?: string | null;
+  fullName?: string | null;
+}) {
+  const fullName = input.fullName?.trim();
+  if (fullName) return fullName;
+
+  const combined = [input.firstName?.trim(), input.lastName?.trim()]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return combined || null;
+}
+
+function replaceNamePlaceholders(text: string, candidateName: string | null) {
+  if (!candidateName) return cleanText(text);
+
+  return cleanText(
+    text
+      .replace(/\[your name\]/gi, candidateName)
+      .replace(/\[candidate name\]/gi, candidateName)
+      .replace(/\bcandidate\b/gi, candidateName)
+  );
+}
+
+function ensureSignedDocument(
+  text: string,
+  candidateName: string | null,
+  defaultSignoff: "Sincerely" | "Best"
+) {
+  const normalized = replaceNamePlaceholders(text, candidateName);
+  if (!candidateName) return normalized;
+  if (normalized.toLowerCase().includes(candidateName.toLowerCase())) return normalized;
+
+  if (/(sincerely|best regards|kind regards|regards|best|thank you|thanks),?\s*$/i.test(normalized)) {
+    return `${normalized}\n${candidateName}`;
+  }
+
+  return `${normalized}\n\n${defaultSignoff},\n${candidateName}`;
+}
+
 async function readPayload(req: Request): Promise<GeneratePayload> {
   const contentType = req.headers.get("content-type") || "";
 
@@ -186,6 +252,19 @@ export async function POST(req: Request) {
   try {
     const payload = await readPayload(req);
     const tone = payload.tone ?? "professional";
+    const session = await auth();
+    const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+    const profile = userId
+      ? await prisma.userProfile.findUnique({
+          where: { userId },
+          select: { firstName: true, lastName: true },
+        })
+      : null;
+    const candidateName = resolveCandidateName({
+      firstName: profile?.firstName ?? null,
+      lastName: profile?.lastName ?? null,
+      fullName: session?.user?.name ?? null,
+    });
 
     let resumeText = payload.resumeText;
     if (!resumeText && payload.resumeFile) {
@@ -238,6 +317,7 @@ export async function POST(req: Request) {
 You are an expert career coach + recruiter. Produce concise, high-quality, ATS-friendly writing.
 Return ONLY valid JSON matching the schema I give you. No markdown.
 Tone: ${tone}.
+${candidateName ? `Use the candidate name exactly as provided: ${candidateName}. Never use placeholders like "Candidate" or "[Your Name]".` : ""}
 `.trim();
 
     const schema = {
@@ -270,6 +350,7 @@ ${resumeText ?? "[not provided]"}
 
 FOCUS AREAS: ${selectedFocus}
 EXTRA INSTRUCTIONS: ${payload.instructions ?? "none"}
+CANDIDATE NAME: ${candidateName ?? "[not provided]"}
 
 TASK:
 1) Infer job title/company/location if possible.
@@ -282,6 +363,7 @@ TASK:
 4) Write two emails that reference the revised resume points where relevant:
    - before interview: confirming interest + asking 1-2 smart questions
    - after interview: thank-you email
+If a candidate name is provided, make sure each document includes it. The cover letter and both emails must end with the candidate's name.
 Return JSON ONLY matching this schema shape:
 ${JSON.stringify(schema, null, 2)}
 `.trim();
@@ -309,7 +391,32 @@ ${JSON.stringify(schema, null, 2)}
       );
     }
 
-    return NextResponse.json(parsed, { status: 200 });
+    const generated = (parsed ?? {}) as GeneratedDocumentPayload;
+
+    return NextResponse.json(
+      {
+        ...generated,
+        candidateName,
+        coverLetter: ensureSignedDocument(
+          generated.coverLetter ?? "",
+          candidateName,
+          "Sincerely"
+        ),
+        emails: {
+          beforeInterview: ensureSignedDocument(
+            generated.emails?.beforeInterview ?? "",
+            candidateName,
+            "Best"
+          ),
+          afterInterview: ensureSignedDocument(
+            generated.emails?.afterInterview ?? "",
+            candidateName,
+            "Best"
+          ),
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });

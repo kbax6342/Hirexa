@@ -1,5 +1,9 @@
 import { prisma } from "@/app/lib/prisma";
 import {
+  deriveLocationLabel,
+  normalizeLocationLabel,
+} from "@/app/lib/locationOptions";
+import {
   deriveSafeLocationSearchFields,
   getSafePrivateProfileFields,
   readRawPrivateProfileFieldsByIds,
@@ -33,6 +37,28 @@ export type SmartMatchSearchConfig = {
   preferredLocation: string | null;
   locationOptions: string[];
   includeRemote: boolean;
+  debug?: {
+    personalInfoCity: string | null;
+    personalInfoState: string | null;
+    resolvedProfileDefaultLocation: string | null;
+    legacySmartMatchesPreferenceLocation: string | null;
+    finalDefaultLocationSource:
+      | "personal-info"
+      | "smart-matches-preference"
+      | "fallback-empty";
+  };
+};
+
+type ResolvedDefaultLocation = {
+  personalInfoCity: string | null;
+  personalInfoState: string | null;
+  resolvedProfileDefaultLocation: string | null;
+  legacySmartMatchesPreferenceLocation: string | null;
+  finalDefaultLocationSource:
+    | "personal-info"
+    | "smart-matches-preference"
+    | "fallback-empty";
+  locationOptions: string[];
 };
 
 function trimOrNull(value?: string | null) {
@@ -78,10 +104,6 @@ function readRoleFocus(value: unknown) {
   return trimOrNull((value as { roleFocus?: string | null }).roleFocus ?? null);
 }
 
-function buildPreferredLocation(profile: ProfileSnapshot | null) {
-  return buildLocationOptions(profile)[0] ?? null;
-}
-
 function buildSearchTitles(profile: ProfileSnapshot | null) {
   const roleFocus = readRoleFocus(profile?.keyQuestions);
   const selectedTitles = dedupeValues(
@@ -103,8 +125,12 @@ function buildSkillTerms(profile: ProfileSnapshot | null) {
   return dedupeValues([...(profile?.skills ?? []), ...(profile?.resumeSkills ?? [])]).slice(0, 8);
 }
 
-function buildLocationOptions(profile: ProfileSnapshot | null) {
-  const workplaceLocation = readWorkplaceLocation(profile?.workplaceLocations);
+function resolveDefaultLocation(profile: ProfileSnapshot | null): ResolvedDefaultLocation {
+  const legacySmartMatchesPreferenceLocation = trimOrNull(
+    normalizeLocationLabel(readWorkplaceLocation(profile?.workplaceLocations) ?? "")
+  );
+  const personalInfoCity = trimOrNull(profile?.city);
+  const personalInfoState = trimOrNull(profile?.state);
   const safeLocation = deriveSafeLocationSearchFields({
     city: profile?.city,
     citySearch: profile?.citySearch,
@@ -113,19 +139,44 @@ function buildLocationOptions(profile: ProfileSnapshot | null) {
     postalCode: profile?.postalCode,
     postalCodeSearch: profile?.postalCodeSearch,
   });
-  const city = trimOrNull(safeLocation.citySearch);
-  const state = trimOrNull(safeLocation.stateSearch);
-  const country = trimOrNull(profile?.country);
+  const personalInfoLocation =
+    personalInfoCity && personalInfoState
+      ? deriveLocationLabel(personalInfoCity, personalInfoState)
+      : null;
+  const stateLabel =
+    personalInfoState
+      ? deriveLocationLabel(null, personalInfoState)
+      : trimOrNull(normalizeLocationLabel(safeLocation.stateSearch ?? ""));
+  const cityLabel =
+    personalInfoCity
+      ? normalizeLocationLabel(personalInfoCity)
+      : trimOrNull(normalizeLocationLabel(safeLocation.citySearch ?? ""));
+  const country = trimOrNull(normalizeLocationLabel(profile?.country ?? ""));
 
-  return dedupeValues(
-    [
-      workplaceLocation,
-      city && state ? `${city}, ${state}` : null,
-      city,
-      state,
-      country,
-    ].filter((value): value is string => Boolean(value))
-  );
+  const resolvedProfileDefaultLocation =
+    personalInfoLocation ?? legacySmartMatchesPreferenceLocation ?? null;
+  const finalDefaultLocationSource = personalInfoLocation
+    ? "personal-info"
+    : legacySmartMatchesPreferenceLocation
+      ? "smart-matches-preference"
+      : "fallback-empty";
+
+  return {
+    personalInfoCity,
+    personalInfoState,
+    resolvedProfileDefaultLocation,
+    legacySmartMatchesPreferenceLocation,
+    finalDefaultLocationSource,
+    locationOptions: dedupeValues(
+      [
+        personalInfoLocation,
+        legacySmartMatchesPreferenceLocation,
+        cityLabel,
+        stateLabel,
+        country,
+      ].filter((value): value is string => Boolean(value))
+    ),
+  };
 }
 
 export function buildSmartMatchSearchConfig(
@@ -133,16 +184,25 @@ export function buildSmartMatchSearchConfig(
 ): SmartMatchSearchConfig {
   const jobTitles = buildSearchTitles(profile);
   const skillTerms = buildSkillTerms(profile);
-  const locationOptions = buildLocationOptions(profile);
-  const preferredLocation = buildPreferredLocation(profile);
+  const resolvedDefaultLocation = resolveDefaultLocation(profile);
 
   return {
     searchQuery: jobTitles[0] ?? skillTerms[0] ?? "jobs",
     jobTitles,
     skillTerms,
-    preferredLocation,
-    locationOptions,
+    preferredLocation: resolvedDefaultLocation.resolvedProfileDefaultLocation,
+    locationOptions: resolvedDefaultLocation.locationOptions,
     includeRemote: profile?.includeRemote ?? true,
+    debug: {
+      personalInfoCity: resolvedDefaultLocation.personalInfoCity,
+      personalInfoState: resolvedDefaultLocation.personalInfoState,
+      resolvedProfileDefaultLocation:
+        resolvedDefaultLocation.resolvedProfileDefaultLocation,
+      legacySmartMatchesPreferenceLocation:
+        resolvedDefaultLocation.legacySmartMatchesPreferenceLocation,
+      finalDefaultLocationSource:
+        resolvedDefaultLocation.finalDefaultLocationSource,
+    },
   };
 }
 
@@ -182,7 +242,17 @@ export async function getSmartMatchSearchConfigForUser(
     });
 
     if (!profile) {
-      return buildSmartMatchSearchConfig(null);
+      const config = buildSmartMatchSearchConfig(null);
+      console.info("[SMART_FILTERS] resolved profile Smart Matches defaults", {
+        userId,
+        personalInfoCity: null,
+        personalInfoState: null,
+        resolvedProfileDefaultLocation: null,
+        legacySmartMatchesPreferenceLocation: null,
+        finalDefaultLocationSource: "fallback-empty",
+        profileTargetRole: config.searchQuery,
+      });
+      return config;
     }
 
     const privateFieldsById = await readRawPrivateProfileFieldsByIds(prisma, [profile.id]);
@@ -197,7 +267,7 @@ export async function getSmartMatchSearchConfigForUser(
       postalCodeSearch: rawPrivateFields?.postalCodeSearch,
     });
 
-    return buildSmartMatchSearchConfig({
+    const config = buildSmartMatchSearchConfig({
       ...profile,
       city: safePrivateFields.city,
       citySearch: safeLocationFields.citySearch,
@@ -206,6 +276,21 @@ export async function getSmartMatchSearchConfigForUser(
       postalCode: safePrivateFields.postalCode,
       postalCodeSearch: safeLocationFields.postalCodeSearch,
     });
+
+    console.info("[SMART_FILTERS] resolved profile Smart Matches defaults", {
+      userId,
+      personalInfoCity: config.debug?.personalInfoCity ?? null,
+      personalInfoState: config.debug?.personalInfoState ?? null,
+      resolvedProfileDefaultLocation:
+        config.debug?.resolvedProfileDefaultLocation ?? null,
+      legacySmartMatchesPreferenceLocation:
+        config.debug?.legacySmartMatchesPreferenceLocation ?? null,
+      finalDefaultLocationSource:
+        config.debug?.finalDefaultLocationSource ?? "fallback-empty",
+      profileTargetRole: config.searchQuery,
+    });
+
+    return config;
   } catch (error) {
     console.error("[SMART_MATCHES] failed to load safe profile search config", {
       userId,

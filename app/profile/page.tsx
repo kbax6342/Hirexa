@@ -184,6 +184,27 @@ const SENIORITY_LEVEL_OPTIONS = [
   "Manager",
 ];
 
+function formatProfileDate(value?: string | null, options?: { includeTime?: boolean }) {
+  if (!value) return "Not found";
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    ...(options?.includeTime
+      ? {
+          hour: "numeric" as const,
+          minute: "2-digit" as const,
+        }
+      : {}),
+  }).format(parsed);
+}
+
 export default function ProfilePage() {
   const [expandedExp, setExpandedExp] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -232,6 +253,7 @@ export default function ProfilePage() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
+  const personalDetailsCardRef = useRef<HTMLDivElement | null>(null);
 
   // ✅ show all experiences toggle
   const [showAllExperiences, setShowAllExperiences] = useState(false);
@@ -366,8 +388,8 @@ export default function ProfilePage() {
         ? "Yes"
         : "No",
       planStatus: profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
-      purchasedAt: profile?.subscriptionPurchasedAt ?? "Not found",
-      checkedAt: profile?.subscriptionCheckedAt ?? "Not found",
+      purchasedAt: formatProfileDate(profile?.subscriptionPurchasedAt),
+      checkedAt: formatProfileDate(profile?.subscriptionCheckedAt),
     }),
     [
       profile?.email,
@@ -458,6 +480,37 @@ export default function ProfilePage() {
         : [],
     });
   }, [profile]);
+
+  const savedTargetRole = useMemo(() => {
+    const normalized = preferencesForm.roleFocus.trim();
+    return normalized || "Not provided in database";
+  }, [preferencesForm.roleFocus]);
+
+  const savedSmartMatchesLocation = useMemo(() => {
+    const city = profile?.displayCity ?? profile?.city ?? "";
+    const state = profile?.displayState ?? profile?.state ?? "";
+    const personalInfoLocation = [city, state].filter(Boolean).join(", ").trim();
+    if (personalInfoLocation) {
+      return personalInfoLocation;
+    }
+
+    const fallbackLocation = normalizeLocationLabel(
+      preferencesForm.workplaceLocations[0] ?? ""
+    );
+
+    return fallbackLocation || "Not provided in database";
+  }, [
+    preferencesForm.workplaceLocations,
+    profile?.city,
+    profile?.displayCity,
+    profile?.displayState,
+    profile?.state,
+  ]);
+
+  function openSmartMatchesLocationEditor() {
+    startEditPersonal();
+    personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function savePersonalDetails() {
     try {
@@ -974,6 +1027,7 @@ function ToggleField({
             {/* =======================
                 PERSONAL DETAILS
                ======================= */}
+            <div ref={personalDetailsCardRef}>
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
@@ -1128,6 +1182,7 @@ function ToggleField({
                 </div>
               )}
             </Card>
+            </div>
 
             {/* =======================
                 PREFERENCES
@@ -1137,8 +1192,20 @@ function ToggleField({
               <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
                 Add more details (roles, locations, salary, availability) to boost match quality.
               </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <FieldRow label="Target role" value={savedTargetRole} />
+                <FieldRow
+                  label="Smart Matches default location"
+                  value={savedSmartMatchesLocation}
+                />
+              </div>
               <p className="mt-2 text-sm text-slate-600">
                 Minimum salary: <span className="font-semibold">{formattedMinCompensation}</span>
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Target role is saved in Job-matching signals. Smart Matches default
+                location comes from Personal details city and state, and only falls
+                back to the saved location preference if city/state is blank.
               </p>
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -1148,6 +1215,13 @@ function ToggleField({
                   className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
                 >
                   {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
+                </button>
+                <button
+                  type="button"
+                  onClick={openSmartMatchesLocationEditor}
+                  className={SKY_BTN_MUTED}
+                >
+                  Edit City & State
                 </button>
               </div>
 
@@ -1210,7 +1284,7 @@ function ToggleField({
                     />
 
                     <LocationAutocompleteField
-                      label="Preferred location"
+                      label="Fallback location (used only when city/state is blank)"
                       value={preferencesForm.workplaceLocations[0] ?? ""}
                       onChange={(value) =>
                         setPreferencesForm((prev) => ({

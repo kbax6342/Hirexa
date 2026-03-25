@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowPathIcon,
+  ChatBubbleLeftRightIcon,
   ChevronDownIcon,
   ClipboardDocumentIcon,
+  ComputerDesktopIcon,
   LightBulbIcon,
   MicrophoneIcon,
+  PlayCircleIcon,
   SparklesIcon,
   StopIcon,
 } from "@heroicons/react/24/outline";
@@ -183,6 +186,13 @@ const practiceQuestions = [
   "Describe a time you handled a difficult challenge at work.",
   "Tell me about a project you are proud of.",
   "Why should we hire you?",
+];
+
+const compatibilityPlatforms = [
+  { name: "Zoom", accentClassName: "bg-sky-400" },
+  { name: "Google Meet", accentClassName: "bg-emerald-400" },
+  { name: "Microsoft Teams", accentClassName: "bg-violet-400" },
+  { name: "HackerRank", accentClassName: "bg-lime-400" },
 ];
 
 function normalizeSpace(value: string) {
@@ -1173,57 +1183,183 @@ export default function HirePilotClient() {
                 </CardContent>
               </Card>
             ) : (
-              <Card className="overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl transition-all duration-200">
-                <CardHeader className="gap-6 border-b border-white/10 px-6 py-7 sm:px-8">
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className="border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
-                        HirePilot AI
+              <>
+                <Card className="overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl transition-all duration-200 lg:hidden">
+                  <CardHeader className="gap-6 px-5 py-6 sm:px-6">
+                    <div className="space-y-4">
+                      <Badge className="w-fit border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
+                        AI Interview Assistant
                       </Badge>
-                      <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
-                        Interview Assistant
-                      </Badge>
-                      <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
-                        {accessBadgeLabel}
-                      </Badge>
-                    </div>
-                    <div className="space-y-3">
-                      <CardTitle className="space-y-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                        <span className="flex items-center gap-3">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500">
-                            <PaperAirplaneIcon className="h-5 w-5 text-white" />
+                      <div className="space-y-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/80">
+                          Universal Compatibility
+                        </p>
+                        <CardTitle className="text-3xl font-semibold tracking-tight text-white">
+                          Your Invisible Interview Co-Pilot
+                        </CardTitle>
+                        <CardDescription className="max-w-2xl text-sm leading-7 text-slate-300">
+                          HirePilot works across Zoom, Google Meet, Microsoft Teams,
+                          and more, listening in real time so it can detect
+                          interview questions and surface instant, invisible
+                          support.
+                        </CardDescription>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          "Interview Confidently. On Any Platform.",
+                          "Real-time question detection",
+                          "Instant invisible support",
+                        ].map((pill) => (
+                          <span
+                            key={pill}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-100"
+                          >
+                            <SparklesIcon className="h-4 w-4 text-sky-300" />
+                            {pill}
                           </span>
-                          <span>HirePilot</span>
-                        </span>
-                        <span className="block">AI Interview Assistant</span>
-                      </CardTitle>
-                      <CardDescription className="max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">
-                        HirePilot listens to interview questions in real time and suggests
-                        strong, personalized answers based on your resume, skills, and
-                        experience.
-                      </CardDescription>
+                        ))}
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-end">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {[
-                        "Real-time interview listening",
-                        "AI generated answer suggestions",
-                        "Resume-aware responses",
-                        "Behavioral question guidance",
-                        "Confidence coaching",
-                      ].map((feature) => (
-                        <div
-                          key={feature}
-                          className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
-                        >
-                          {feature}
+                    <div className="space-y-4">
+                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
+                            <MicrophoneIcon className="h-5 w-5" />
+                          </span>
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
+                              Step 1
+                            </p>
+                            <p className="mt-1 text-lg font-semibold text-white">
+                              Live Listening
+                            </p>
+                          </div>
                         </div>
-                      ))}
+                        <p className="mt-3 text-sm leading-6 text-slate-300">
+                          Choose whether HirePilot listens through your
+                          microphone or from shared tab/app audio while the
+                          interview is happening.
+                        </p>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                            <div className="text-sm font-semibold text-white">
+                              Listen with your microphone
+                            </div>
+                            <div className="mt-4 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-center text-xs font-medium text-slate-100">
+                              Start Listening
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-sky-400/25 bg-sky-500/10 p-4">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                              <ComputerDesktopIcon className="h-4 w-4 text-sky-200" />
+                              Listen to interview audio
+                            </div>
+                            <div className="mt-4 rounded-full bg-sky-500 px-4 py-2 text-center text-xs font-semibold text-white">
+                              Share tab or app audio
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
+                            <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                          </span>
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
+                              Step 2
+                            </p>
+                            <p className="mt-1 text-lg font-semibold text-white">
+                              Real-Time Detection
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-slate-300">
+                          HirePilot picks up likely interview questions in real
+                          time so you always know what to answer next.
+                        </p>
+                        <div className="mt-4 rounded-2xl border border-white/8 bg-slate-950/40 px-4 py-4 text-sm leading-7 text-slate-100">
+                          &ldquo;Can you tell me about a time you had to optimize
+                          a complex system under a tight deadline?&rdquo;
+                        </div>
+                      </div>
+
+                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
+                            <SparklesIcon className="h-5 w-5" />
+                          </span>
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
+                              Step 3
+                            </p>
+                            <p className="mt-1 text-lg font-semibold text-white">
+                              AI-Generated Answers
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-slate-300">
+                          Get instant structured answer help, grounded in your
+                          resume, experience, and skills.
+                        </p>
+                        <div className="mt-4 rounded-2xl border border-white/8 bg-slate-950/40 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                              STAR-style Preview
+                            </p>
+                            <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-slate-200">
+                              <ClipboardDocumentIcon className="h-3.5 w-3.5 text-sky-300" />
+                              Copy
+                            </span>
+                          </div>
+                          <div className="mt-4 space-y-2 text-sm leading-6 text-slate-200">
+                            <p>
+                              <span className="font-semibold text-white">Situation:</span>{" "}
+                              Critical launch performance was slowed by 5-second
+                              database queries.
+                            </p>
+                            <p>
+                              <span className="font-semibold text-white">Action:</span>{" "}
+                              Added composite indexes and cached frequent reads
+                              with Redis.
+                            </p>
+                            <p>
+                              <span className="font-semibold text-white">Result:</span>{" "}
+                              Reduced load time below 200ms in 48 hours.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="space-y-3">
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                      <div className="flex items-center gap-2">
+                        <LightBulbIcon className="h-5 w-5 text-amber-300" />
+                        <div className="text-sm font-semibold text-white">
+                          Works with your interview workflow
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        {compatibilityPlatforms.map((platform) => (
+                          <div
+                            key={platform.name}
+                            className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm font-medium text-slate-100"
+                          >
+                            <span
+                              className={[
+                                "h-2.5 w-2.5 rounded-full",
+                                platform.accentClassName,
+                              ].join(" ")}
+                            />
+                            <span>{platform.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <Button
                         type="button"
                         onClick={() => {
@@ -1246,27 +1382,108 @@ export default function HirePilotClient() {
                         disabled={startingInterview}
                         className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                       >
-                        <SparklesIcon className="h-5 w-5" />
+                        <PlayCircleIcon className="h-5 w-5" />
                         View Demo
                       </Button>
                     </div>
-                  </div>
+                  </CardHeader>
+                </Card>
 
-                  <div className="flex flex-wrap gap-2">
-                    {["Uses profile", "Uses resume", "Uses experience", "Uses skills"].map(
-                      (item) => (
-                        <Badge
-                          key={item}
-                          variant="outline"
-                          className="border-sky-300/20 bg-sky-500/10 text-sky-100"
-                        >
-                          {item}
+                <Card className="hidden overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl transition-all duration-200 lg:block">
+                  <CardHeader className="gap-6 border-b border-white/10 px-6 py-7 sm:px-8">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge className="border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
+                          HirePilot AI
                         </Badge>
-                      )
-                    )}
-                  </div>
-                </CardHeader>
-              </Card>
+                        <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
+                          Interview Assistant
+                        </Badge>
+                        <Badge className="border border-white/10 bg-white/5 text-slate-200 hover:bg-white/5">
+                          {accessBadgeLabel}
+                        </Badge>
+                      </div>
+                      <div className="space-y-3">
+                        <CardTitle className="space-y-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                          <span className="flex items-center gap-3">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500">
+                              <PaperAirplaneIcon className="h-5 w-5 text-white" />
+                            </span>
+                            <span>HirePilot</span>
+                          </span>
+                          <span className="block">AI Interview Assistant</span>
+                        </CardTitle>
+                        <CardDescription className="max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">
+                          HirePilot listens to interview questions in real time and suggests
+                          strong, personalized answers based on your resume, skills, and
+                          experience.
+                        </CardDescription>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-end">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {[
+                          "Real-time interview listening",
+                          "AI generated answer suggestions",
+                          "Resume-aware responses",
+                          "Behavioral question guidance",
+                          "Confidence coaching",
+                        ].map((feature) => (
+                          <div
+                            key={feature}
+                            className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                          >
+                            {feature}
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-3">
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            setActiveMode("live");
+                            void startListening();
+                          }}
+                          disabled={startingInterview}
+                          className="w-full rounded-xl bg-sky-600 text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] hover:bg-sky-500"
+                        >
+                          <MicrophoneIcon className="h-5 w-5" />
+                          {startingInterview ? "Starting..." : "Start HirePilot"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setActiveMode("practice");
+                            void handlePracticeQuestion(0);
+                          }}
+                          disabled={startingInterview}
+                          className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                        >
+                          <SparklesIcon className="h-5 w-5" />
+                          View Demo
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {["Uses profile", "Uses resume", "Uses experience", "Uses skills"].map(
+                        (item) => (
+                          <Badge
+                            key={item}
+                            variant="outline"
+                            className="border-sky-300/20 bg-sky-500/10 text-sky-100"
+                          >
+                            {item}
+                          </Badge>
+                        )
+                      )}
+                    </div>
+                  </CardHeader>
+                </Card>
+              </>
             )}
 
             <div className="space-y-6">

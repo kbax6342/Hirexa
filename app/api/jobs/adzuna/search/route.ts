@@ -24,9 +24,15 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const q = String(searchParams.get("q") ?? "software engineer").trim();
+  const q = String(searchParams.get("q") ?? "jobs").trim();
   const location = String(searchParams.get("location") ?? "").trim();
   const page = Number(searchParams.get("page") ?? "1") || 1;
+
+  console.info("[SMART_PROVIDER] adzuna search request", {
+    query: q || null,
+    location: location || null,
+    page,
+  });
 
   const adzunaUrl = new URL(`https://api.adzuna.com/v1/api/jobs/us/search/${page}`);
   adzunaUrl.searchParams.set("app_id", appId);

@@ -27,6 +27,8 @@ export type Job = {
   description?: string;    // list view can be short; details can fetch later
   jobUrl?: string;         // optional now; strongly recommended later
   searchText?: string;     // internal matching context; safe for clients to ignore
+  matchTier?: "exact" | "nearby" | "same_state" | "remote" | "broader";
+  matchLabel?: string | null;
 };
 
 export type JobDetailSection = {

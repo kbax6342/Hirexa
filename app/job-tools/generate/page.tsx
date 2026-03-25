@@ -15,6 +15,7 @@ import {
 } from "@heroicons/react/24/solid";
 
 type Result = {
+  candidateName?: string | null;
   job: {
     title?: string;
     company?: string;
@@ -43,6 +44,8 @@ type PlanStatusResponse = {
   active?: boolean;
   pending?: boolean;
   accessState?: "active" | "pending" | "inactive";
+  planType?: string | null;
+  planStatus?: string | null;
   trialSubscriber?: boolean;
   monthlySubscriber?: boolean;
   yearlySubscriber?: boolean;
@@ -124,9 +127,17 @@ function JobToolsGeneratePageContent() {
 
   function getActiveDocText(r: Result | null, tab: TabKey) {
     if (!r) return "";
-    if (tab === "coverLetter") return r.coverLetter || "";
-    if (tab === "preInterview") return r.emails?.beforeInterview || "";
-    if (tab === "postInterview") return r.emails?.afterInterview || "";
+    const candidateName = r.candidateName?.trim() || "";
+    const withCandidateHeader = (text: string) => {
+      const normalized = text.trim();
+      if (!candidateName || !normalized) return normalized;
+      if (normalized.toLowerCase().includes(candidateName.toLowerCase())) return normalized;
+      return `${candidateName}\n\n${normalized}`;
+    };
+
+    if (tab === "coverLetter") return withCandidateHeader(r.coverLetter || "");
+    if (tab === "preInterview") return withCandidateHeader(r.emails?.beforeInterview || "");
+    if (tab === "postInterview") return withCandidateHeader(r.emails?.afterInterview || "");
 
     // updatedResume: turn the structured resume updates into a readable “draft”
     const parts: string[] = [];
@@ -153,7 +164,7 @@ function JobToolsGeneratePageContent() {
             .join("\n\n")
       );
     }
-    return parts.join("\n\n").trim();
+    return withCandidateHeader(parts.join("\n\n").trim());
   }
 
   async function copyActive() {
@@ -414,21 +425,53 @@ function JobToolsGeneratePageContent() {
 
     setLoading(true);
     try {
-      const planRes = await fetch("/api/billing/plan-status", { cache: "no-store" });
-      if (planRes.status === 401) {
-        const nextUrl = `/job-tools/generate${url.trim() ? `?jobUrl=${encodeURIComponent(url.trim())}` : ""}`;
-        window.location.href = `/login?next=${encodeURIComponent(nextUrl)}`;
-        return;
-      }
-      if (!planRes.ok) {
-        throw new Error("Unable to verify subscription status.");
+      const nextUrl = `/job-tools/generate${url.trim() ? `?jobUrl=${encodeURIComponent(url.trim())}` : ""}`;
+      const readPlanStatus = async (forceSync = false) => {
+        const planRes = await fetch(
+          forceSync ? "/api/billing/plan-status?forceSync=1" : "/api/billing/plan-status",
+          { cache: "no-store" }
+        );
+
+        if (planRes.status === 401) {
+          window.location.href = `/login?next=${encodeURIComponent(nextUrl)}`;
+          return null;
+        }
+        if (!planRes.ok) {
+          throw new Error("Unable to verify subscription status.");
+        }
+
+        return (await planRes.json()) as PlanStatusResponse;
+      };
+
+      let planData = await readPlanStatus(false);
+      if (!planData) return;
+
+      if (planData?.pending === true || planData?.active !== true) {
+        const refreshedPlanData = await readPlanStatus(true);
+        if (!refreshedPlanData) return;
+
+        console.log("[GENERATE_GATE] forced access recheck", {
+          userId: refreshedPlanData?.userId ?? null,
+          trialSubscriber: refreshedPlanData?.trialSubscriber ?? false,
+          monthlySubscriber: refreshedPlanData?.monthlySubscriber ?? false,
+          yearlySubscriber: refreshedPlanData?.yearlySubscriber ?? false,
+          trialPlanStatus: refreshedPlanData?.trialPlanStatus ?? null,
+          monthlyPlanStatus: refreshedPlanData?.monthlyPlanStatus ?? null,
+          yearlyPlanStatus: refreshedPlanData?.yearlyPlanStatus ?? null,
+          planType: refreshedPlanData?.planType ?? null,
+          planStatus: refreshedPlanData?.planStatus ?? null,
+          accessState: refreshedPlanData?.accessState ?? "inactive",
+          pendingAccess: refreshedPlanData?.pending === true,
+          hasPaidAccess: refreshedPlanData?.active === true,
+        });
+
+        planData = refreshedPlanData;
       }
 
-      const planData = (await planRes.json()) as PlanStatusResponse;
       const hasPaidAccess = planData?.active === true;
       const pendingAccess = planData?.pending === true;
 
-      console.log("[AI_GENERATE] access check", {
+      console.log("[GENERATE_GATE] initial access check", {
         userId: planData?.userId ?? null,
         trialSubscriber: planData?.trialSubscriber ?? false,
         monthlySubscriber: planData?.monthlySubscriber ?? false,
@@ -436,16 +479,23 @@ function JobToolsGeneratePageContent() {
         trialPlanStatus: planData?.trialPlanStatus ?? null,
         monthlyPlanStatus: planData?.monthlyPlanStatus ?? null,
         yearlyPlanStatus: planData?.yearlyPlanStatus ?? null,
+        planType: planData?.planType ?? null,
+        planStatus: planData?.planStatus ?? null,
         accessState: planData?.accessState ?? "inactive",
         pendingAccess,
         hasPaidAccess,
       });
 
       if (pendingAccess) {
-        console.log("[AI_GENERATE] payment sync pending", {
+        console.warn("[GENERATE_GATE] payment sync still pending after forced recheck", {
           userId: planData?.userId ?? null,
+          accessState: planData?.accessState ?? "pending",
+          planStatus: planData?.planStatus ?? null,
         });
         setError("We’re confirming your subscription. Please wait a moment and try Generate again.");
+        setError(
+          "We're still syncing your subscription. Refresh once or revisit your billing confirmation page, then try Generate again."
+        );
         return;
       }
 
@@ -453,7 +503,7 @@ function JobToolsGeneratePageContent() {
         const params = new URLSearchParams();
         params.set("source", "job-tools-generate");
         if (url.trim()) params.set("jobUrl", url.trim());
-        console.log("[AI_GENERATE] redirecting unpaid user", {
+        console.log("[GENERATE_GATE] redirecting unpaid user", {
           userId: planData?.userId ?? null,
           destination: `/plans?${params.toString()}`,
         });

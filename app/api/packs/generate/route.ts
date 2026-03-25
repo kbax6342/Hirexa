@@ -9,13 +9,32 @@ type GenerateBody = {
   notes?: string;
 };
 
-function generatePlaceholderPack(input: { jobTitle?: string | null; company?: string | null; resumeText: string; notes?: string }) {
+function resolveCandidateName(input: {
+  firstName?: string | null;
+  lastName?: string | null;
+}) {
+  const combined = [input.firstName?.trim(), input.lastName?.trim()]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return combined || null;
+}
+
+function generatePlaceholderPack(input: {
+  jobTitle?: string | null;
+  company?: string | null;
+  resumeText: string;
+  notes?: string;
+  candidateName?: string | null;
+}) {
   const header = `${input.jobTitle ?? "Target Role"}${input.company ? ` at ${input.company}` : ""}`;
   const notesPart = input.notes?.trim() ? `\n\nAdditional notes: ${input.notes.trim()}` : "";
+  const candidateHeader = input.candidateName ? `${input.candidateName}\n\n` : "";
+  const signoffName = input.candidateName ?? "Candidate";
 
   return {
-    optimizedResume: `Optimized Resume for ${header}\n\n- Summary tuned for ATS matching\n- Experience bullets rewritten with action + impact\n- Skills section aligned to job keywords\n\nSource resume excerpt:\n${input.resumeText.slice(0, 1200)}${notesPart}`,
-    coverLetter: `Dear Hiring Team,\n\nI am excited to apply for ${header}. My background aligns closely with the requirements, and I can contribute quickly by bringing measurable outcomes and strong cross-functional collaboration.\n\nWhy I am a fit:\n- Relevant experience mapped to responsibilities\n- Clear ownership and measurable results\n- Strong communication and execution\n\nSincerely,\nCandidate`,
+    optimizedResume: `${candidateHeader}Optimized Resume for ${header}\n\n- Summary tuned for ATS matching\n- Experience bullets rewritten with action + impact\n- Skills section aligned to job keywords\n\nSource resume excerpt:\n${input.resumeText.slice(0, 1200)}${notesPart}`,
+    coverLetter: `Dear Hiring Team,\n\nI am excited to apply for ${header}. My background aligns closely with the requirements, and I can contribute quickly by bringing measurable outcomes and strong cross-functional collaboration.\n\nWhy I am a fit:\n- Relevant experience mapped to responsibilities\n- Clear ownership and measurable results\n- Strong communication and execution\n\nSincerely,\n${signoffName}`,
     interviewPrep: `Interview Prep for ${header}\n\n1) Tell me about yourself in 60 seconds.\n2) Why this role and company?\n3) A project where you improved a metric.\n4) A challenge and how you handled it.\n5) Questions to ask the interviewer:\n   - What does success look like in 90 days?\n   - What are the top priorities for this role?`,
   };
 }
@@ -53,11 +72,23 @@ export async function POST(req: Request) {
       },
     });
 
+    const candidateProfile = existing.userId
+      ? await prisma.userProfile.findUnique({
+          where: { userId: existing.userId },
+          select: { firstName: true, lastName: true },
+        })
+      : null;
+    const candidateName = resolveCandidateName({
+      firstName: candidateProfile?.firstName ?? null,
+      lastName: candidateProfile?.lastName ?? null,
+    });
+
     const generated = generatePlaceholderPack({
       jobTitle: existing.jobTitle,
       company: existing.company,
       resumeText,
       notes,
+      candidateName,
     });
 
     const pack = await prisma.jobHunterPack.update({

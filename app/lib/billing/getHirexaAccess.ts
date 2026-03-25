@@ -77,6 +77,21 @@ type GetHirexaAccessArgs = {
   forceSync?: boolean;
 };
 
+function logSubscriptionAccess(
+  level: "info" | "warn",
+  message: string,
+  metadata?: Record<string, unknown>
+) {
+  const logger = level === "warn" ? console.warn : console.info;
+
+  if (metadata && Object.keys(metadata).length > 0) {
+    logger(`[SUB_ACCESS] ${message}`, metadata);
+    return;
+  }
+
+  logger(`[SUB_ACCESS] ${message}`);
+}
+
 function normalizeText(value: string | null | undefined) {
   const text = value?.trim();
   return text ? text : null;
@@ -217,13 +232,17 @@ function isPendingAccess(snapshot: HirexaAccessProfile | null, active: boolean) 
   const hasTransitionalStatus = statuses.some((status) =>
     ["payment approved", "processing", "incomplete"].includes(status!)
   );
+  const hasKnownInactiveStatus = statuses.some((status) =>
+    ["canceled", "cancelled", "incomplete_expired", "expired", "paused"].includes(
+      status!
+    )
+  );
 
   return (
     hasTransitionalStatus ||
-    isRecent(snapshot.subscriptionPurchasedAt, BILLING_PENDING_WINDOW_MS) ||
-    isRecent(snapshot.lastPaymentReceivedAt, BILLING_PENDING_WINDOW_MS) ||
-    (isRecent(snapshot.subscriptionCheckedAt, BILLING_PENDING_WINDOW_MS) &&
-      Boolean(snapshot.stripeCustomerId || snapshot.stripeSubscriptionId))
+    (!hasKnownInactiveStatus &&
+      (isRecent(snapshot.subscriptionPurchasedAt, BILLING_PENDING_WINDOW_MS) ||
+        isRecent(snapshot.lastPaymentReceivedAt, BILLING_PENDING_WINDOW_MS)))
   );
 }
 
@@ -276,7 +295,7 @@ async function findStripeCustomer(params: {
         return customer;
       }
     } catch (error) {
-      console.warn("[HIREXA_BILLING] customer lookup by id failed", {
+      logSubscriptionAccess("warn", "customer lookup by id failed", {
         stripeCustomerId: params.stripeCustomerId,
         error: error instanceof Error ? error.message : "Unknown error",
       });
@@ -361,8 +380,26 @@ async function syncHirexaBillingFromStripe(args: GetHirexaAccessArgs) {
     normalizeText(existing.snapshot?.subscriptionEmail) ??
     normalizeText(args.sessionEmail);
 
+  logSubscriptionAccess("info", "starting Stripe access sync", {
+    userId: args.userId,
+    forceSync: Boolean(args.forceSync),
+    sessionEmail: normalizeText(args.sessionEmail),
+    emailToLookup,
+    stripeCustomerId: existing.snapshot?.stripeCustomerId ?? null,
+    stripeSubscriptionId: existing.snapshot?.stripeSubscriptionId ?? null,
+    currentPlanStatus:
+      normalizeText(existing.billing?.status) ??
+      existing.snapshot?.trialPlanStatus ??
+      existing.snapshot?.monthlyPlanStatus ??
+      existing.snapshot?.yearlyPlanStatus ??
+      null,
+  });
+
   if (!emailToLookup && !existing.snapshot?.stripeCustomerId) {
     await upsertUserProfileBilling(args.userId, { subscriptionCheckedAt: checkedAt });
+    logSubscriptionAccess("info", "skipped Stripe sync because no lookup key was available", {
+      userId: args.userId,
+    });
     return readHirexaAccessState(args.userId);
   }
 
@@ -375,6 +412,10 @@ async function syncHirexaBillingFromStripe(args: GetHirexaAccessArgs) {
     await upsertUserProfileBilling(args.userId, {
       subscriptionCheckedAt: checkedAt,
       ...(emailToLookup ? { subscriptionEmail: emailToLookup } : {}),
+    });
+    logSubscriptionAccess("info", "no Stripe customer found for access sync", {
+      userId: args.userId,
+      emailToLookup,
     });
     return readHirexaAccessState(args.userId);
   }
@@ -426,6 +467,12 @@ async function syncHirexaBillingFromStripe(args: GetHirexaAccessArgs) {
         emailToLookup ?? normalizeText(customer.email) ?? existing.profile?.subscriptionEmail,
     });
 
+    logSubscriptionAccess("info", "no Stripe subscription found for customer", {
+      userId: args.userId,
+      stripeCustomerId: customer.id,
+      emailToLookup,
+    });
+
     return readHirexaAccessState(args.userId);
   }
 
@@ -470,19 +517,34 @@ async function syncHirexaBillingFromStripe(args: GetHirexaAccessArgs) {
     ...(hasAccess ? { lastPaymentReceivedAt: checkedAt } : {}),
   });
 
+  logSubscriptionAccess("info", "synced Stripe subscription into billing state", {
+    userId: args.userId,
+    stripeCustomerId: customer.id,
+    stripeSubscriptionId: subscription.id,
+    planType,
+    status,
+    hasAccess,
+  });
+
   return readHirexaAccessState(args.userId);
 }
 
 export async function getHirexaAccessForUser(
   args: GetHirexaAccessArgs
 ): Promise<HirexaAccessResult> {
+  logSubscriptionAccess("info", "loading access state", {
+    userId: args.userId,
+    sessionEmail: normalizeText(args.sessionEmail),
+    forceSync: Boolean(args.forceSync),
+  });
+
   let state = await readHirexaAccessState(args.userId);
 
   if (shouldSyncProfile(state.snapshot, args.forceSync, state.billing)) {
     try {
       state = await syncHirexaBillingFromStripe(args);
     } catch (error) {
-      console.warn("[HIREXA_BILLING] access sync failed", {
+      logSubscriptionAccess("warn", "access sync failed", {
         userId: args.userId,
         error: error instanceof Error ? error.message : "Unknown error",
       });
@@ -499,10 +561,24 @@ export async function getHirexaAccessForUser(
   const active = state.billing
     ? isActiveBillingStatus(state.billing.status)
     : hasActivePlan(state.profile);
+  const pending = isPendingAccess(state.snapshot, active);
+
+  logSubscriptionAccess("info", "resolved access state", {
+    userId: args.userId,
+    active,
+    pending,
+    planType,
+    planStatus,
+    stripeCustomerId: state.snapshot?.stripeCustomerId ?? null,
+    stripeSubscriptionId: state.snapshot?.stripeSubscriptionId ?? null,
+    subscriptionEmail: state.snapshot?.subscriptionEmail ?? null,
+    lastPaymentReceivedAt: state.snapshot?.lastPaymentReceivedAt?.toISOString() ?? null,
+    subscriptionCheckedAt: state.snapshot?.subscriptionCheckedAt?.toISOString() ?? null,
+  });
 
   return {
     active,
-    pending: isPendingAccess(state.snapshot, active),
+    pending,
     planType,
     planStatus,
     profile: state.snapshot,

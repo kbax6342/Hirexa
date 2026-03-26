@@ -1,6 +1,6 @@
 import sgMail from "@sendgrid/mail";
 
-import { getEmailConfig, sendEmail } from "./mailer";
+import { getEmailConfig, getSecurityEmailConfig, sendEmail } from "./mailer";
 
 type LifecycleJobSummary = {
   title: string;
@@ -10,6 +10,7 @@ type LifecycleJobSummary = {
 };
 
 type EmailCategory = "transactional" | "marketing";
+type SenderProfile = "default" | "security";
 export type PasswordResetSendMode = "template" | "plain-test";
 
 const TEMPLATE_IDS = {
@@ -334,8 +335,11 @@ async function sendTemplateEmail(params: {
   subject: string;
   category?: EmailCategory;
   dynamicTemplateData: TemplateData;
+  senderProfile?: SenderProfile;
 }) {
-  const { from, replyTo, supportEmail } = getEmailConfig();
+  const senderProfile = params.senderProfile ?? "default";
+  const { from, replyTo, supportEmail } =
+    senderProfile === "security" ? getSecurityEmailConfig() : getEmailConfig();
   const category = params.category ?? "transactional";
   const appUrl = resolveAppUrl();
   const headers: Record<string, string> = {};
@@ -508,6 +512,7 @@ export async function sendVerificationCodeEmail(to: string, code: string) {
     html,
     text,
     category: "transactional",
+    senderProfile: "security",
   });
 }
 
@@ -556,6 +561,7 @@ export async function sendPasswordChangedEmail(to: string, name?: string | null)
     html,
     text,
     category: "transactional",
+    senderProfile: "security",
   });
 }
 
@@ -566,7 +572,7 @@ export async function sendPasswordResetEmail(params: {
   expiresInMinutes?: number;
 }): Promise<PasswordResetSendMode> {
   const subject = "Reset your Hirexa password";
-  const { from, replyTo, supportEmail } = getEmailConfig();
+  const { from, replyTo, supportEmail } = getSecurityEmailConfig();
   const expiresInMinutes = params.expiresInMinutes ?? 30;
   const mode = getPasswordResetSendMode();
 
@@ -608,6 +614,7 @@ export async function sendPasswordResetEmail(params: {
         html,
         text,
         category: "transactional",
+        senderProfile: "security",
       });
       return mode;
     } catch (error) {
@@ -629,6 +636,7 @@ export async function sendPasswordResetEmail(params: {
     to: params.to,
     subject,
     template: "passwordReset",
+    senderProfile: "security",
     dynamicTemplateData: buildTemplateData({
       subject,
       preheader: "Use your secure link to choose a new password.",

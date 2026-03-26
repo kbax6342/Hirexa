@@ -4,6 +4,7 @@
 import Link from "next/link";
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import {
   ArrowPathIcon,
   ArrowDownTrayIcon,
@@ -24,6 +25,7 @@ type Result = {
     keyRequirements?: string[];
   };
   coverLetter: string;
+  fullResumeText?: string;
   resumeUpdates: {
     summaryRewrite?: string;
     skillsToAdd?: string[];
@@ -138,6 +140,7 @@ function JobToolsGeneratePageContent() {
     if (tab === "coverLetter") return withCandidateHeader(r.coverLetter || "");
     if (tab === "preInterview") return withCandidateHeader(r.emails?.beforeInterview || "");
     if (tab === "postInterview") return withCandidateHeader(r.emails?.afterInterview || "");
+    if (r.fullResumeText?.trim()) return r.fullResumeText.trim();
 
     // updatedResume: turn the structured resume updates into a readable “draft”
     const parts: string[] = [];
@@ -167,8 +170,16 @@ function JobToolsGeneratePageContent() {
     return withCandidateHeader(parts.join("\n\n").trim());
   }
 
+  function normalizeDocumentText(value: string) {
+    return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  }
+
+  function getMeaningfulDocText(r: Result | null, tab: TabKey) {
+    return normalizeDocumentText(getActiveDocText(r, tab));
+  }
+
   async function copyActive() {
-    const text = getActiveDocText(result, activeTab);
+    const text = getMeaningfulDocText(result, activeTab);
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -201,10 +212,15 @@ function JobToolsGeneratePageContent() {
       .replace(/[\u2018\u2019]/g, "'")
       .replace(/[\u201C\u201D]/g, '"')
       .replace(/[\u2013\u2014]/g, "-")
+      .replace(/\u2026/g, "...")
       .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
   }
 
-  function wrapTextToLines(text: string, maxChars = 95) {
+  function wrapPdfTextToLines(
+    text: string,
+    maxWidth: number,
+    measure: (value: string) => number
+  ) {
     const normalized = normalizePdfText(text);
     const finalLines: string[] = [];
 
@@ -219,27 +235,35 @@ function JobToolsGeneratePageContent() {
       const words = line.split(/\s+/).filter(Boolean);
       for (const word of words) {
         const next = current ? `${current} ${word}` : word;
-        if (next.length <= maxChars) {
+        if (measure(next) <= maxWidth) {
           current = next;
           continue;
         }
 
         if (current) finalLines.push(current);
 
-        if (word.length <= maxChars) {
+        if (measure(word) <= maxWidth) {
           current = word;
           continue;
         }
 
         let sliceStart = 0;
         while (sliceStart < word.length) {
-          const chunk = word.slice(sliceStart, sliceStart + maxChars);
-          if (chunk.length === maxChars) {
+          let sliceEnd = sliceStart + 1;
+          while (
+            sliceEnd <= word.length &&
+            measure(word.slice(sliceStart, sliceEnd)) <= maxWidth
+          ) {
+            sliceEnd += 1;
+          }
+
+          const chunk = word.slice(sliceStart, Math.max(sliceStart + 1, sliceEnd - 1));
+          if (sliceEnd - 1 < word.length) {
             finalLines.push(chunk);
           } else {
             current = chunk;
           }
-          sliceStart += maxChars;
+          sliceStart = Math.max(sliceStart + 1, sliceEnd - 1);
         }
       }
 
@@ -249,67 +273,69 @@ function JobToolsGeneratePageContent() {
     return finalLines;
   }
 
-  function escapePdfLiteral(text: string) {
-    return text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-  }
-
-  function createPdfBytes(text: string, title: string): Uint8Array {
-    const allLines = wrapTextToLines(text || " ");
-    const linesPerPage = 50;
-    const pages: string[][] = [];
-
-    for (let i = 0; i < allLines.length; i += linesPerPage) {
-      pages.push(allLines.slice(i, i + linesPerPage));
+  async function createPdfBlob(text: string, title: string): Promise<Blob> {
+    const normalizedText = normalizeDocumentText(text);
+    if (!normalizedText) {
+      throw new Error("There is no generated content to download yet.");
     }
-    if (!pages.length) pages.push([""]);
 
-    const objectBodies: string[] = [];
+    const pdfDoc = await PDFDocument.create();
+    const bodyFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const titleFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const pageSize: [number, number] = [612, 792];
+    const margin = 50;
+    const titleSize = 15;
+    const bodySize = 11;
+    const lineHeight = 16;
+    const titleGap = 28;
+    const maxWidth = pageSize[0] - margin * 2;
+    const safeTitle = normalizePdfText(title);
+    const lines = wrapPdfTextToLines(normalizedText, maxWidth, (value) =>
+      bodyFont.widthOfTextAtSize(value, bodySize)
+    );
 
-    objectBodies.push("<< /Type /Catalog /Pages 2 0 R >>");
+    let page = pdfDoc.addPage(pageSize);
+    let cursorY = pageSize[1] - margin;
 
-    const pageCount = pages.length;
-    const firstPageObject = 4;
-    const kids = Array.from({ length: pageCount }, (_, i) => `${firstPageObject + i * 2} 0 R`).join(" ");
-    objectBodies.push(`<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`);
-
-    objectBodies.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-
-    for (let i = 0; i < pageCount; i++) {
-      const pageObjectId = firstPageObject + i * 2;
-      const contentObjectId = pageObjectId + 1;
-      objectBodies.push(
-        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectId} 0 R >>`
-      );
-
-      const lines = pages[i];
-      const textParts = lines.map((line, lineIndex) => {
-        const escaped = escapePdfLiteral(line);
-        if (lineIndex === 0) {
-          return `50 742 Td (${escaped}) Tj`;
-        }
-        return `T* (${escaped}) Tj`;
+    const drawPageHeader = () => {
+      page.drawText(safeTitle, {
+        x: margin,
+        y: cursorY,
+        size: titleSize,
+        font: titleFont,
+        color: rgb(0.1, 0.15, 0.25),
       });
+      cursorY -= titleGap;
+    };
 
-      const safeTitle = escapePdfLiteral(normalizePdfText(title));
-      const stream = `BT\n/F1 12 Tf\n14 TL\n50 764 Td\n(${safeTitle}) Tj\nT*\nT*\n${textParts.join("\n")}\nET`;
-      objectBodies.push(`<< /Length ${textEncoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
+    drawPageHeader();
+
+    for (const line of lines) {
+      if (cursorY < margin) {
+        page = pdfDoc.addPage(pageSize);
+        cursorY = pageSize[1] - margin;
+        drawPageHeader();
+      }
+
+      if (line) {
+        page.drawText(line, {
+          x: margin,
+          y: cursorY,
+          size: bodySize,
+          font: bodyFont,
+          color: rgb(0.18, 0.18, 0.2),
+        });
+      }
+
+      cursorY -= lineHeight;
     }
 
-    let pdf = "%PDF-1.4\n";
-    const offsets: number[] = [0];
-    for (let i = 0; i < objectBodies.length; i++) {
-      offsets.push(textEncoder.encode(pdf).length);
-      pdf += `${i + 1} 0 obj\n${objectBodies[i]}\nendobj\n`;
-    }
-
-    const xrefOffset = textEncoder.encode(pdf).length;
-    pdf += `xref\n0 ${objectBodies.length + 1}\n`;
-    pdf += "0000000000 65535 f \n";
-    for (let i = 1; i < offsets.length; i++) {
-      pdf += `${offsets[i].toString().padStart(10, "0")} 00000 n \n`;
-    }
-    pdf += `trailer\n<< /Size ${objectBodies.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-    return textEncoder.encode(pdf);
+    const pdfBytes = await pdfDoc.save();
+    const pdfBuffer = pdfBytes.buffer.slice(
+      pdfBytes.byteOffset,
+      pdfBytes.byteOffset + pdfBytes.byteLength
+    ) as ArrayBuffer;
+    return new Blob([pdfBuffer], { type: "application/pdf" });
   }
 
   function crc32(bytes: Uint8Array) {
@@ -393,30 +419,65 @@ function JobToolsGeneratePageContent() {
   }
 
   async function downloadActive() {
-    const text = getActiveDocText(result, activeTab);
-    if (!text) return;
+    const text = getMeaningfulDocText(result, activeTab);
+    if (!text) {
+      setError("There is no generated content to download yet.");
+      return;
+    }
 
-    const { filename, title } = getDocumentFileMeta(activeTab);
-    const bytes = createPdfBytes(text, title);
-    const pdfBuffer = Uint8Array.from(bytes).buffer;
-    downloadBlob(filename, new Blob([pdfBuffer], { type: "application/pdf" }));
+    try {
+      const { filename, title } = getDocumentFileMeta(activeTab);
+      const pdfBlob = await createPdfBlob(text, title);
+      downloadBlob(filename, pdfBlob);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Unable to generate the PDF right now."
+      );
+    }
   }
 
-  function downloadAll() {
-    if (!result) return;
+  async function downloadAll() {
+    if (!result) {
+      setError("Generate documents first before downloading them.");
+      return;
+    }
 
     const allTabs: TabKey[] = ["coverLetter", "updatedResume", "preInterview", "postInterview"];
-    const files = allTabs.map((tab) => {
-      const text = getActiveDocText(result, tab);
-      const meta = getDocumentFileMeta(tab);
-      return {
-        filename: meta.filename,
-        bytes: createPdfBytes(text, meta.title),
-      };
-    });
+    const resolvedFiles = await Promise.all(
+      allTabs.map(async (tab) => {
+        const text = getMeaningfulDocText(result, tab);
+        if (!text) return null;
 
-    const zipBlob = buildZip(files);
-    downloadBlob("application-documents.zip", zipBlob);
+        const meta = getDocumentFileMeta(tab);
+        const pdfBlob = await createPdfBlob(text, meta.title);
+        return {
+          filename: meta.filename,
+          bytes: new Uint8Array(await pdfBlob.arrayBuffer()),
+        };
+      })
+    );
+    const files: Array<{ filename: string; bytes: Uint8Array }> = [];
+    for (const file of resolvedFiles) {
+      if (file) files.push(file);
+    }
+
+    if (files.length === 0) {
+      setError("There is no generated content to download yet.");
+      return;
+    }
+
+    try {
+      const zipBlob = buildZip(files);
+      downloadBlob("application-documents.zip", zipBlob);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Unable to generate the PDF files right now."
+      );
+    }
   }
 
   async function onGenerate() {
@@ -551,11 +612,18 @@ function JobToolsGeneratePageContent() {
   }
 
   const activeText = getActiveDocText(result, activeTab);
+  const hasDownloadableActiveText = Boolean(getMeaningfulDocText(result, activeTab));
+  const hasAnyDownloadableDocs = Boolean(
+    result &&
+      (["coverLetter", "updatedResume", "preInterview", "postInterview"] as TabKey[]).some(
+        (tab) => Boolean(getMeaningfulDocText(result, tab))
+      )
+  );
   const activeTitle =
     activeTab === "coverLetter"
       ? "AI-Generated Cover Letter"
       : activeTab === "updatedResume"
-      ? "AI-Generated Resume Updates"
+      ? "AI-Generated Revised Resume"
       : activeTab === "preInterview"
       ? "AI-Generated Pre-Interview Email"
       : "AI-Generated Post-Interview Email";
@@ -714,7 +782,7 @@ function JobToolsGeneratePageContent() {
               <button
                 type="button"
                 onClick={copyActive}
-                disabled={!activeText}
+                disabled={!hasDownloadableActiveText}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 <ClipboardIcon className="h-4 w-4" />
@@ -724,7 +792,7 @@ function JobToolsGeneratePageContent() {
               <button
                 type="button"
                 onClick={downloadActive}
-                disabled={!activeText}
+                disabled={!hasDownloadableActiveText}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 <ArrowDownTrayIcon className="h-4 w-4" />
@@ -846,7 +914,7 @@ function JobToolsGeneratePageContent() {
                 <button
                   type="button"
                   onClick={downloadAll}
-                  disabled={!result}
+                  disabled={!hasAnyDownloadableDocs}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50 sm:w-auto"
                 >
                   <ArrowDownTrayIcon className="h-5 w-5" />

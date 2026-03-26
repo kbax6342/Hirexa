@@ -1,8 +1,9 @@
 import sgMail from "@sendgrid/mail";
 
-import { getEmailConfig } from "./config";
+import { getEmailConfig, getSecurityEmailConfig } from "./config";
 
 type EmailCategory = "transactional" | "marketing";
+type SenderProfile = "default" | "security";
 
 type SendEmailParams = {
   to: string;
@@ -10,6 +11,7 @@ type SendEmailParams = {
   html: string;
   text?: string;
   category?: EmailCategory;
+  senderProfile?: SenderProfile;
 };
 
 let sendGridConfigured = false;
@@ -35,7 +37,7 @@ function stripHtml(html: string) {
     .replace(/\s+/g, " ")
     .trim();
 }
-export { getEmailConfig } from "./config";
+export { getEmailConfig, getSecurityEmailConfig } from "./config";
 
 export async function sendEmail({
   to,
@@ -43,8 +45,10 @@ export async function sendEmail({
   html,
   text,
   category = "transactional",
+  senderProfile = "default",
 }: SendEmailParams) {
-  const { from, replyTo, supportEmail, appUrl } = getEmailConfig();
+  const { from, replyTo, supportEmail, appUrl } =
+    senderProfile === "security" ? getSecurityEmailConfig() : getEmailConfig();
   const finalText = text && text.trim().length > 0 ? text : stripHtml(html);
 
   const headers: Record<string, string> = {};

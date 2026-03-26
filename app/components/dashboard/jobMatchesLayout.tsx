@@ -5,6 +5,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
+import { useSession } from "next-auth/react";
 import {
   loadAppliedJobsSession,
   saveAppliedJobsSession,
@@ -79,6 +80,11 @@ type DashboardFilters = {
 
 type JobMatchesLayoutProps = {
   initialProfileFilters?: DashboardFilters | null;
+};
+
+type PlanStatusResponse = {
+  active?: boolean;
+  pending?: boolean;
 };
 
 function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
@@ -269,6 +275,7 @@ export default function JobMatchesLayout({
   initialProfileFilters = null,
 }: JobMatchesLayoutProps) {
   const router = useRouter();
+  const { status: authStatus } = useSession();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const queryParam = searchParams.get("q")?.trim() || "";
@@ -315,6 +322,7 @@ export default function JobMatchesLayout({
   const [appliedJobs, setAppliedJobs] = useState<Job[]>([]);
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
+  const [cardAiApplyLoadingId, setCardAiApplyLoadingId] = useState<string | null>(null);
   const [appliedJobsSessionReady, setAppliedJobsSessionReady] = useState(false);
 
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -1092,6 +1100,69 @@ export default function JobMatchesLayout({
     router.push("/agents/career-coach");
   };
 
+  const handleAiApplyFromCard = async (job: Job) => {
+    const jobUrl = job.jobUrl?.trim() ?? "";
+    if (!jobUrl) return;
+
+    const aiApplyHref = `/job-tools/ai-assistant/apply?jobUrl=${encodeURIComponent(jobUrl)}`;
+    const loadingId = getJobIdentity(job);
+
+    if (authStatus === "loading") {
+      return;
+    }
+
+    if (authStatus !== "authenticated") {
+      router.push(`/login?callbackUrl=${encodeURIComponent(aiApplyHref)}`);
+      return;
+    }
+
+    setCardAiApplyLoadingId(loadingId);
+
+    const readPlanStatus = async (forceSync: boolean) => {
+      const res = await fetch(
+        forceSync ? "/api/billing/plan-status?forceSync=1" : "/api/billing/plan-status",
+        { cache: "no-store" }
+      );
+
+      if (res.status === 401) {
+        router.push(`/login?callbackUrl=${encodeURIComponent(aiApplyHref)}`);
+        return null;
+      }
+
+      if (!res.ok) {
+        throw new Error("Unable to verify subscription status.");
+      }
+
+      return (await res.json()) as PlanStatusResponse;
+    };
+
+    try {
+      let planData = await readPlanStatus(false);
+      if (!planData) return;
+
+      if (planData.pending === true || planData.active !== true) {
+        const refreshedPlanData = await readPlanStatus(true);
+        if (!refreshedPlanData) return;
+        planData = refreshedPlanData;
+      }
+
+      if (planData.pending === true || planData.active !== true) {
+        const params = new URLSearchParams();
+        params.set("source", "smart-matches-ai-apply");
+        params.set("jobUrl", jobUrl);
+        router.push(`/plans?${params.toString()}`);
+        return;
+      }
+
+      router.push(aiApplyHref);
+    } catch (error) {
+      console.error("[SMART_MATCHES] AI apply access check failed", error);
+      router.push(aiApplyHref);
+    } finally {
+      setCardAiApplyLoadingId((current) => (current === loadingId ? null : current));
+    }
+  };
+
   const adzunaFormatted = useMemo(() => {
     if (right?.source !== "adzuna") {
       return null;
@@ -1361,10 +1432,12 @@ export default function JobMatchesLayout({
           <div className="mt-5 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             {visibleJobs.map((job) => {
               const active = job.id === selectedId;
+              const jobIdentity = getJobIdentity(job);
+              const isCardAiApplyLoading = cardAiApplyLoadingId === jobIdentity;
 
               return (
                 <div
-                  key={getJobIdentity(job)}
+                  key={jobIdentity}
                   className={[
                     "flex w-full flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition",
                     active
@@ -1425,13 +1498,26 @@ export default function JobMatchesLayout({
                           <span>Job Posted {job.posted}</span>
                         </div>
 
-                        <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                        <div className="flex w-full flex-col gap-2 xl:w-auto xl:flex-row xl:items-center xl:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => void handleAiApplyFromCard(job)}
+                            disabled={
+                              authStatus === "loading" ||
+                              isCardAiApplyLoading ||
+                              !job.jobUrl
+                            }
+                            className="w-full rounded-md bg-[linear-gradient(135deg,#F97316_0%,#EA580C_100%)] px-3 py-2 text-center text-[11px] font-semibold text-white shadow-[0_10px_22px_rgba(194,65,12,0.28)] transition hover:bg-[linear-gradient(135deg,#EA580C_0%,#C2410C_100%)] hover:shadow-[0_12px_24px_rgba(194,65,12,0.34)] disabled:cursor-not-allowed disabled:opacity-60 xl:w-auto xl:min-w-[150px]"
+                          >
+                            {isCardAiApplyLoading ? "Opening..." : "AI Assistant Apply"}
+                          </button>
+
                           {job.jobUrl ? (
                             <a
                               href={job.jobUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="min-w-[110px] rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50"
+                              className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50 xl:w-auto xl:min-w-[110px]"
                             >
                               View Posting
                             </a>

@@ -193,6 +193,8 @@ const compatibilityPlatforms = [
   { name: "Google Meet", accentClassName: "bg-emerald-400" },
   { name: "Microsoft Teams", accentClassName: "bg-violet-400" },
   { name: "HackerRank", accentClassName: "bg-lime-400" },
+  { name: "HirePilot AI", accentClassName: "bg-cyan-300" },
+  { name: "Interview Assistant", accentClassName: "bg-amber-300" },
 ];
 
 function normalizeSpace(value: string) {
@@ -1185,206 +1187,290 @@ export default function HirePilotClient() {
             ) : (
               <>
                 <Card className="overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.06] shadow-[0_24px_80px_rgba(5,8,22,0.45)] backdrop-blur-2xl transition-all duration-200 lg:hidden">
-                  <CardHeader className="gap-6 px-5 py-6 sm:px-6">
-                    <div className="space-y-4">
-                      <Badge className="w-fit border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
-                        AI Interview Assistant
-                      </Badge>
-                      <div className="space-y-3">
+                  <CardHeader className="gap-5 px-5 py-6 sm:px-6">
+                    <div className="rounded-[24px] border border-sky-400/20 bg-[linear-gradient(180deg,rgba(14,165,233,0.14),rgba(255,255,255,0.03))] p-5 shadow-[0_18px_40px_rgba(8,47,73,0.35)]">
+                      <div className="space-y-4">
                         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/80">
                           Universal Compatibility
                         </p>
-                        <CardTitle className="text-3xl font-semibold tracking-tight text-white">
-                          Your Invisible Interview Co-Pilot
-                        </CardTitle>
-                        <CardDescription className="max-w-2xl text-sm leading-7 text-slate-300">
-                          HirePilot works across Zoom, Google Meet, Microsoft Teams,
-                          and more, listening in real time so it can detect
-                          interview questions and surface instant, invisible
-                          support.
-                        </CardDescription>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          "Interview Confidently. On Any Platform.",
-                          "Real-time question detection",
-                          "Instant invisible support",
-                        ].map((pill) => (
-                          <span
-                            key={pill}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-100"
-                          >
-                            <SparklesIcon className="h-4 w-4 text-sky-300" />
-                            {pill}
-                          </span>
-                        ))}
+                        <div className="space-y-3">
+                          <CardTitle className="text-3xl font-semibold tracking-tight text-white">
+                            Interview Confidently.
+                            <span className="mt-1 block text-sky-100">
+                              On Any Platform.
+                            </span>
+                          </CardTitle>
+                          <CardDescription className="text-sm leading-7 text-slate-200">
+                            HirePilot seamlessly integrates with your favorite meeting
+                            tools. Our advanced AI detects questions in real time across
+                            Zoom, Teams, Meet, and more, providing instant, invisible
+                            support.
+                          </CardDescription>
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setActiveMode("practice");
+                            void handlePracticeQuestion(0);
+                          }}
+                          disabled={startingInterview}
+                          className="w-full rounded-xl border-white/15 bg-white/[0.08] text-white hover:bg-white/[0.12] hover:text-white sm:w-auto"
+                        >
+                          <PlayCircleIcon className="h-5 w-5" />
+                          Watch Demo
+                        </Button>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          {compatibilityPlatforms.map((platform) => (
+                            <div
+                              key={platform.name}
+                              className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/45 px-3 py-3 text-sm font-medium text-slate-100"
+                            >
+                              <span
+                                className={[
+                                  "h-2.5 w-2.5 rounded-full",
+                                  platform.accentClassName,
+                                ].join(" ")}
+                              />
+                              <span>{platform.name}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
 
-                    <div className="space-y-4">
-                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-4">
+                        <div className="space-y-3">
+                          <Badge className="w-fit border border-sky-300/20 bg-sky-500/10 text-sky-100 hover:bg-sky-500/10">
+                            HirePilot AI Interview Assistant
+                          </Badge>
+                          <CardDescription className="text-sm leading-7 text-slate-300">
+                            HirePilot listens to interview questions in real time and
+                            suggests strong, personalized answers based on your resume,
+                            skills, and experience.
+                          </CardDescription>
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {[
+                            "Real-time interview listening",
+                            "AI generated answer suggestions",
+                          ].map((feature) => (
+                            <div
+                              key={feature}
+                              className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm font-medium text-slate-100"
+                            >
+                              {feature}
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Button
+                            type="button"
+                            onClick={() => {
+                              setActiveMode("live");
+                              void startListening();
+                            }}
+                            disabled={startingInterview}
+                            className="w-full rounded-xl bg-sky-600 text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] hover:bg-sky-500"
+                          >
+                            <MicrophoneIcon className="h-5 w-5" />
+                            {startingInterview ? "Starting..." : "Start HirePilot"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setActiveMode("practice");
+                              void handlePracticeQuestion(0);
+                            }}
+                            disabled={startingInterview}
+                            className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                          >
+                            <PlayCircleIcon className="h-5 w-5" />
+                            View Demo
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-3">
                         <div className="flex items-center gap-3">
                           <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
                             <MicrophoneIcon className="h-5 w-5" />
                           </span>
                           <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
-                              Step 1
+                            <p className="text-lg font-semibold text-white">
+                              Live Listening Options
                             </p>
-                            <p className="mt-1 text-lg font-semibold text-white">
-                              Live Listening
+                            <p className="mt-1 text-sm leading-6 text-slate-300">
+                              Choose whether HirePilot should listen through your
+                              microphone or from shared tab/app audio.
                             </p>
                           </div>
                         </div>
-                        <p className="mt-3 text-sm leading-6 text-slate-300">
-                          Choose whether HirePilot listens through your
-                          microphone or from shared tab/app audio while the
-                          interview is happening.
-                        </p>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+
+                        <div className="grid gap-3">
                           <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                             <div className="text-sm font-semibold text-white">
                               Listen with your microphone
                             </div>
-                            <div className="mt-4 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-center text-xs font-medium text-slate-100">
-                              Start Listening
-                            </div>
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setActiveMode("live");
+                                void startListening();
+                              }}
+                              disabled={startingInterview}
+                              className="mt-4 w-full rounded-xl bg-sky-600 text-white hover:bg-sky-500"
+                            >
+                              {startingInterview ? "Starting..." : "Start Listening"}
+                            </Button>
                           </div>
-                          <div className="rounded-2xl border border-sky-400/25 bg-sky-500/10 p-4">
+
+                          <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-white">
                               <ComputerDesktopIcon className="h-4 w-4 text-sky-200" />
                               Listen to interview audio
                             </div>
-                            <div className="mt-4 rounded-full bg-sky-500 px-4 py-2 text-center text-xs font-semibold text-white">
+                            <p className="mt-3 text-sm text-slate-300">
                               Share tab or app audio
-                            </div>
+                            </p>
                           </div>
                         </div>
                       </div>
+                    </div>
 
-                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-3">
                         <div className="flex items-center gap-3">
                           <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
                             <ChatBubbleLeftRightIcon className="h-5 w-5" />
                           </span>
                           <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
-                              Step 2
-                            </p>
-                            <p className="mt-1 text-lg font-semibold text-white">
-                              Real-Time Detection
+                            <p className="text-lg font-semibold text-white">
+                              Detected Question
                             </p>
                           </div>
                         </div>
-                        <p className="mt-3 text-sm leading-6 text-slate-300">
-                          HirePilot picks up likely interview questions in real
-                          time so you always know what to answer next.
-                        </p>
-                        <div className="mt-4 rounded-2xl border border-white/8 bg-slate-950/40 px-4 py-4 text-sm leading-7 text-slate-100">
-                          &ldquo;Can you tell me about a time you had to optimize
-                          a complex system under a tight deadline?&rdquo;
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-4 text-sm leading-7 text-slate-100">
+                          &ldquo;Can you tell me about a time you had to optimize a
+                          complex system under a tight deadline?&rdquo;
                         </div>
                       </div>
+                    </div>
 
-                      <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
-                            <SparklesIcon className="h-5 w-5" />
-                          </span>
-                          <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-200/80">
-                              Step 3
-                            </p>
-                            <p className="mt-1 text-lg font-semibold text-white">
-                              AI-Generated Answers
-                            </p>
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
+                              <SparklesIcon className="h-5 w-5" />
+                            </span>
+                            <div>
+                              <p className="text-lg font-semibold text-white">
+                                Suggested Answer
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <p className="mt-3 text-sm leading-6 text-slate-300">
-                          Get instant structured answer help, grounded in your
-                          resume, experience, and skills.
-                        </p>
-                        <div className="mt-4 rounded-2xl border border-white/8 bg-slate-950/40 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                              STAR-style Preview
-                            </p>
-                            <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-slate-200">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-slate-200"
+                            >
                               <ClipboardDocumentIcon className="h-3.5 w-3.5 text-sky-300" />
                               Copy
-                            </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-slate-200"
+                            >
+                              Shorten
+                            </button>
                           </div>
-                          <div className="mt-4 space-y-2 text-sm leading-6 text-slate-200">
-                            <p>
-                              <span className="font-semibold text-white">Situation:</span>{" "}
-                              Critical launch performance was slowed by 5-second
-                              database queries.
-                            </p>
-                            <p>
-                              <span className="font-semibold text-white">Action:</span>{" "}
-                              Added composite indexes and cached frequent reads
-                              with Redis.
-                            </p>
-                            <p>
-                              <span className="font-semibold text-white">Result:</span>{" "}
-                              Reduced load time below 200ms in 48 hours.
-                            </p>
-                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 text-sm leading-7 text-slate-200">
+                          <p>
+                            In my previous role at TechCorp, we faced a critical
+                            performance bottleneck right before a major product launch.
+                            The main database queries were taking over 5 seconds to
+                            resolve.
+                          </p>
+                          <p className="mt-4">
+                            I took the initiative to analyze the query execution plans
+                            and identified missing composite indexes. By implementing
+                            those and caching frequent read-heavy responses using Redis,
+                            I reduced the load time to under 200ms within a 48-hour
+                            window, ensuring a smooth launch.
+                          </p>
                         </div>
                       </div>
                     </div>
 
-                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-                      <div className="flex items-center gap-2">
-                        <LightBulbIcon className="h-5 w-5 text-amber-300" />
-                        <div className="text-sm font-semibold text-white">
-                          Works with your interview workflow
-                        </div>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        {compatibilityPlatforms.map((platform) => (
-                          <div
-                            key={platform.name}
-                            className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-3 text-sm font-medium text-slate-100"
-                          >
-                            <span
-                              className={[
-                                "h-2.5 w-2.5 rounded-full",
-                                platform.accentClassName,
-                              ].join(" ")}
-                            />
-                            <span>{platform.name}</span>
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+                            <LightBulbIcon className="h-5 w-5" />
+                          </span>
+                          <div>
+                            <p className="text-lg font-semibold text-white">
+                              Interview Tips
+                            </p>
                           </div>
-                        ))}
+                        </div>
+                        <div className="rounded-2xl border border-amber-300/15 bg-amber-400/5 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200/80">
+                            Tip
+                          </p>
+                          <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                            <li>Structure answers using STAR method.</li>
+                            <li>
+                              Keep answers grounded in specific work examples instead
+                              of broad claims.
+                            </li>
+                          </ul>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Button
-                        type="button"
-                        onClick={() => {
-                          setActiveMode("live");
-                          void startListening();
-                        }}
-                        disabled={startingInterview}
-                        className="w-full rounded-xl bg-sky-600 text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] hover:bg-sky-500"
-                      >
-                        <MicrophoneIcon className="h-5 w-5" />
-                        {startingInterview ? "Starting..." : "Start HirePilot"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          setActiveMode("practice");
-                          void handlePracticeQuestion(0);
-                        }}
-                        disabled={startingInterview}
-                        className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-                      >
-                        <PlayCircleIcon className="h-5 w-5" />
-                        View Demo
-                      </Button>
+                    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sky-500/15 text-sky-200">
+                            <PaperAirplaneIcon className="h-5 w-5" />
+                          </span>
+                          <div>
+                            <p className="text-lg font-semibold text-white">
+                              HirePilot Workflow
+                            </p>
+                          </div>
+                        </div>
+
+                        <ol className="space-y-3 text-sm leading-6 text-slate-200">
+                          {[
+                            "Detect the interview question from your microphone or practice mode.",
+                            "Pull context from your saved profile, resume, experience, and skills.",
+                            "Generate an answer you can copy, shorten, expand, or make more professional.",
+                          ].map((step, index) => (
+                            <li
+                              key={step}
+                              className="flex gap-3 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3"
+                            >
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-100">
+                                {index + 1}
+                              </span>
+                              <span>{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
                     </div>
                   </CardHeader>
                 </Card>

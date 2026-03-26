@@ -2,10 +2,15 @@ import { NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
 import mammoth from "mammoth";
+import type { Prisma } from "@prisma/client";
 
 import { auth } from "@/app/lib/auth";
 import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
 import { prisma } from "@/app/lib/prisma";
+import {
+  getSafePrivateProfileFields,
+  readRawPrivateProfileFieldsByIds,
+} from "@/app/lib/profile/privateProfileFields";
 
 export const runtime = "nodejs";
 
@@ -32,6 +37,7 @@ type GeneratedDocumentPayload = {
     keyRequirements?: string[];
   };
   coverLetter?: string;
+  fullResumeText?: string;
   resumeUpdates?: {
     summaryRewrite?: string;
     skillsToAdd?: string[];
@@ -43,6 +49,244 @@ type GeneratedDocumentPayload = {
     afterInterview?: string;
   };
 };
+
+const generateProfileSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  phone: true,
+  address: true,
+  city: true,
+  state: true,
+  postalCode: true,
+  linkedinUrl: true,
+  portfolioUrl: true,
+  startDate: true,
+  minCompensation: true,
+  compensationType: true,
+  includeRemote: true,
+  workplaceLocations: true,
+  keyQuestions: true,
+  skills: true,
+  resumeSkills: true,
+  jobInterests: {
+    orderBy: { id: "asc" },
+    take: 6,
+    select: {
+      title: true,
+    },
+  },
+  benefitSelections: {
+    orderBy: { updatedAt: "desc" },
+    take: 2,
+    select: {
+      selectedPlan: true,
+      benefits: true,
+    },
+  },
+  resumeFiles: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      fileName: true,
+      mimeType: true,
+      sizeBytes: true,
+      createdAt: true,
+      blob: true,
+    },
+  },
+  resume: {
+    select: {
+      filename: true,
+      mimeType: true,
+      updatedAt: true,
+      resumeExperiences: {
+        select: {
+          experiences: true,
+        },
+      },
+      experiences: {
+        orderBy: { order: "asc" },
+        take: 10,
+        select: {
+          title: true,
+          company: true,
+          location: true,
+          dateRange: true,
+          bullets: {
+            orderBy: { order: "asc" },
+            take: 5,
+            select: {
+              text: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.UserProfileSelect;
+
+type GenerateProfile = Prisma.UserProfileGetPayload<{
+  select: typeof generateProfileSelect;
+}>;
+
+type CandidateExperienceItem = {
+  title: string;
+  company: string;
+  location: string | null;
+  dateRange: string | null;
+  bullets: string[];
+};
+
+type CandidateContext = {
+  candidateProfile: {
+    fullName: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    email: string | null;
+    phone: string | null;
+    address: string | null;
+    city: string | null;
+    state: string | null;
+    postalCode: string | null;
+    linkedinUrl: string | null;
+    portfolioUrl: string | null;
+  };
+  candidateResumeSource: {
+    uploadedResumeText: string | null;
+    savedResumeText: string | null;
+    combinedResumeText: string | null;
+    savedResumeMetadata: {
+      fileName: string | null;
+      mimeType: string | null;
+      sizeBytes: number | null;
+      createdAt: string | null;
+    } | null;
+  };
+  candidateExperience: CandidateExperienceItem[];
+  candidateSignals: {
+    targetRole: string | null;
+    savedTargetRoles: string[];
+    preferredLocations: string[];
+    compensation: string | null;
+    availability: string | null;
+    includeRemote: boolean | null;
+    skills: string[];
+    preferences: string[];
+  };
+};
+
+function trimText(value: unknown, maxLength = 1200) {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function dedupeStrings(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = trimText(value);
+    if (!normalized) continue;
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+function normalizeList(value: unknown, maxItems = 8) {
+  return Array.isArray(value)
+    ? dedupeStrings(value.map((item) => trimText(item))).slice(0, maxItems)
+    : [];
+}
+
+function readRoleFocus(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const roleFocus = trimText((value as { roleFocus?: string | null }).roleFocus);
+  return roleFocus || null;
+}
+
+function readWorkplaceLocations(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return dedupeStrings(
+    value.map((item) =>
+      item && typeof item === "object"
+        ? trimText((item as { label?: string | null }).label)
+        : ""
+    )
+  ).slice(0, 4);
+}
+
+function formatCompensation(amount?: number | null, compensationType?: string | null) {
+  if (typeof amount !== "number" || Number.isNaN(amount)) {
+    return null;
+  }
+
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(amount);
+
+  const suffix =
+    compensationType === "hourly"
+      ? "/hour"
+      : compensationType === "monthly"
+        ? "/month"
+        : compensationType === "weekly"
+          ? "/week"
+          : "/year";
+
+  return `${formatted}${suffix}`;
+}
+
+function parseResumeExperiencesJson(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Record<string, unknown>;
+      const title = trimText(raw.title || raw.role || raw.position) || "Role";
+      const company = trimText(raw.company || raw.employer) || "Company";
+      const location = trimText(raw.location) || null;
+      const dateRange = trimText(raw.dateRange || raw.dates || raw.duration) || null;
+      const bullets = normalizeList(raw.bullets || raw.highlights || raw.achievements, 5);
+
+      return {
+        title,
+        company,
+        location,
+        dateRange,
+        bullets,
+      } satisfies CandidateExperienceItem;
+    })
+    .filter((item): item is CandidateExperienceItem => Boolean(item));
+}
+
+function collectCandidateExperience(profile: GenerateProfile | null) {
+  const structuredExperiences = (profile?.resume?.experiences ?? []).map((item) => ({
+    title: trimText(item.title) || "Role",
+    company: trimText(item.company) || "Company",
+    location: trimText(item.location) || null,
+    dateRange: trimText(item.dateRange) || null,
+    bullets: dedupeStrings(item.bullets.map((bullet) => trimText(bullet.text))).slice(0, 5),
+  }));
+
+  if (structuredExperiences.length > 0) {
+    return structuredExperiences;
+  }
+
+  return parseResumeExperiencesJson(profile?.resume?.resumeExperiences?.experiences).slice(0, 8);
+}
 
 function cleanText(s: string) {
   return s
@@ -141,7 +385,14 @@ async function extractResumeTextFromFile(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
   const type = (file.type || "").toLowerCase();
   const name = file.name.toLowerCase();
+  return extractResumeTextFromBuffer(buffer, type, name);
+}
 
+async function extractResumeTextFromBuffer(
+  buffer: Buffer,
+  type: string,
+  name: string
+) {
   if (type.includes("pdf") || name.endsWith(".pdf")) {
     const { fullText } = await extractPdfText(buffer);
     return cleanText(fullText);
@@ -162,6 +413,25 @@ async function extractResumeTextFromFile(file: File) {
   }
 
   return "";
+}
+
+async function extractResumeTextFromStoredFile(
+  file:
+    | {
+        blob: Uint8Array;
+        fileName: string;
+        mimeType: string;
+      }
+    | null
+    | undefined
+) {
+  if (!file?.blob) return "";
+
+  return extractResumeTextFromBuffer(
+    Buffer.from(file.blob),
+    String(file.mimeType ?? "").toLowerCase(),
+    String(file.fileName ?? "").toLowerCase()
+  );
 }
 
 function resolveCandidateName(input: {
@@ -205,6 +475,159 @@ function ensureSignedDocument(
   }
 
   return `${normalized}\n\n${defaultSignoff},\n${candidateName}`;
+}
+
+function buildCandidateContext(args: {
+  profile: GenerateProfile | null;
+  candidateName: string | null;
+  sessionEmail: string | null;
+  privateFields: ReturnType<typeof getSafePrivateProfileFields>;
+  uploadedResumeText: string | null;
+  savedResumeText: string | null;
+}): CandidateContext {
+  const { profile, privateFields, uploadedResumeText, savedResumeText, candidateName } = args;
+  const savedTargetRoles = dedupeStrings((profile?.jobInterests ?? []).map((item) => item.title));
+  const roleFocus = readRoleFocus(profile?.keyQuestions) ?? savedTargetRoles[0] ?? null;
+  const preferredLocations = dedupeStrings([
+    ...readWorkplaceLocations(profile?.workplaceLocations),
+    [trimText(privateFields.city), trimText(privateFields.state)].filter(Boolean).join(", "),
+  ]);
+  const keyQuestionExpertise =
+    profile?.keyQuestions &&
+    typeof profile.keyQuestions === "object" &&
+    !Array.isArray(profile.keyQuestions)
+      ? normalizeList((profile.keyQuestions as Record<string, unknown>).expertise, 10)
+      : [];
+  const preferences = dedupeStrings([
+    ...(profile?.benefitSelections ?? []).flatMap((selection) => [
+      trimText(selection.selectedPlan),
+      ...normalizeList(selection.benefits, 6),
+    ]),
+  ]).slice(0, 8);
+  const skills = dedupeStrings([
+    ...(profile?.skills ?? []),
+    ...(profile?.resumeSkills ?? []),
+    ...keyQuestionExpertise,
+  ]).slice(0, 14);
+  const combinedResumeText = cleanText([uploadedResumeText, savedResumeText].filter(Boolean).join("\n\n"));
+
+  return {
+    candidateProfile: {
+      fullName: candidateName,
+      firstName: trimText(profile?.firstName) || null,
+      lastName: trimText(profile?.lastName) || null,
+      email: trimText(profile?.email) || trimText(args.sessionEmail) || null,
+      phone: trimText(profile?.phone) || null,
+      address: trimText(privateFields.address) || null,
+      city: trimText(privateFields.city) || null,
+      state: trimText(privateFields.state) || null,
+      postalCode: trimText(privateFields.postalCode) || null,
+      linkedinUrl: trimText(profile?.linkedinUrl) || null,
+      portfolioUrl: trimText(profile?.portfolioUrl) || null,
+    },
+    candidateResumeSource: {
+      uploadedResumeText: uploadedResumeText || null,
+      savedResumeText: savedResumeText || null,
+      combinedResumeText: combinedResumeText || null,
+      savedResumeMetadata: profile?.resumeFiles?.[0]
+        ? {
+            fileName: profile.resumeFiles[0].fileName ?? null,
+            mimeType: profile.resumeFiles[0].mimeType ?? null,
+            sizeBytes: profile.resumeFiles[0].sizeBytes ?? null,
+            createdAt: profile.resumeFiles[0].createdAt?.toISOString?.() ?? null,
+          }
+        : null,
+    },
+    candidateExperience: collectCandidateExperience(profile),
+    candidateSignals: {
+      targetRole: roleFocus,
+      savedTargetRoles,
+      preferredLocations,
+      compensation: formatCompensation(
+        profile?.minCompensation ?? null,
+        profile?.compensationType ?? null
+      ),
+      availability: trimText(profile?.startDate) || null,
+      includeRemote:
+        typeof profile?.includeRemote === "boolean" ? profile.includeRemote : null,
+      skills,
+      preferences,
+    },
+  };
+}
+
+function buildFallbackResumeText(
+  context: CandidateContext,
+  generated: GeneratedDocumentPayload,
+  candidateName: string | null
+) {
+  const profile = context.candidateProfile;
+  const contactLine = dedupeStrings([
+    profile.email,
+    profile.phone,
+    [profile.city, profile.state].filter(Boolean).join(", "),
+    profile.linkedinUrl,
+    profile.portfolioUrl,
+  ]).join(" | ");
+  const summary = cleanText(
+    generated.resumeUpdates?.summaryRewrite ||
+      generated.job?.summary ||
+      [
+        context.candidateSignals.targetRole
+          ? `Targeting ${context.candidateSignals.targetRole} opportunities`
+          : null,
+        context.candidateExperience[0]
+          ? `with experience as ${context.candidateExperience[0].title} at ${context.candidateExperience[0].company}`
+          : null,
+        context.candidateSignals.skills.length
+          ? `bringing strengths in ${context.candidateSignals.skills.slice(0, 5).join(", ")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ")
+  );
+  const skills = dedupeStrings([
+    ...context.candidateSignals.skills,
+    ...(generated.resumeUpdates?.skillsToAdd ?? []),
+    ...(generated.resumeUpdates?.atsKeywords ?? []),
+  ]).slice(0, 16);
+
+  const experienceSections = context.candidateExperience
+    .map((experience) => {
+      const header = [
+        `${experience.title} | ${experience.company}`,
+        experience.location || null,
+        experience.dateRange || null,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      const bullets = experience.bullets.length
+        ? experience.bullets
+        : generated.resumeUpdates?.bulletEdits
+            ?.filter((edit) =>
+              edit.section.toLowerCase().includes(experience.title.toLowerCase()) ||
+              edit.section.toLowerCase().includes(experience.company.toLowerCase())
+            )
+            .map((edit) => edit.after)
+            .filter(Boolean) ?? [];
+
+      return cleanText(
+        [header, ...bullets.slice(0, 4).map((bullet) => `- ${bullet}`)].join("\n")
+      );
+    })
+    .filter(Boolean);
+
+  const sections = [
+    candidateName || "Candidate",
+    contactLine,
+    summary ? `SUMMARY\n${summary}` : "",
+    skills.length ? `SKILLS\n${skills.join(" | ")}` : "",
+    experienceSections.length
+      ? `PROFESSIONAL EXPERIENCE\n${experienceSections.join("\n\n")}`
+      : "",
+  ].filter(Boolean);
+
+  return cleanText(sections.join("\n\n"));
 }
 
 async function readPayload(req: Request): Promise<GeneratePayload> {
@@ -257,19 +680,42 @@ export async function POST(req: Request) {
     const profile = userId
       ? await prisma.userProfile.findUnique({
           where: { userId },
-          select: { firstName: true, lastName: true },
+          select: generateProfileSelect,
         })
       : null;
+    const rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
+      prisma,
+      profile?.id ? [profile.id] : []
+    );
+    const rawPrivateFields =
+      profile?.id && rawPrivateFieldsById.get(profile.id)
+        ? (rawPrivateFieldsById.get(profile.id) as Record<string, unknown>)
+        : {};
+    const privateFields = getSafePrivateProfileFields({
+      ...rawPrivateFields,
+      ...(profile ?? {}),
+    });
     const candidateName = resolveCandidateName({
       firstName: profile?.firstName ?? null,
       lastName: profile?.lastName ?? null,
       fullName: session?.user?.name ?? null,
     });
 
-    let resumeText = payload.resumeText;
-    if (!resumeText && payload.resumeFile) {
-      resumeText = await extractResumeTextFromFile(payload.resumeFile);
+    let uploadedResumeText = cleanText(payload.resumeText ?? "");
+    if (!uploadedResumeText && payload.resumeFile) {
+      uploadedResumeText = await extractResumeTextFromFile(payload.resumeFile);
     }
+    const savedResumeText = profile?.resumeFiles?.[0]
+      ? await extractResumeTextFromStoredFile(profile.resumeFiles[0])
+      : "";
+    const candidateContext = buildCandidateContext({
+      profile,
+      candidateName,
+      sessionEmail: session?.user?.email ?? null,
+      privateFields,
+      uploadedResumeText: uploadedResumeText || null,
+      savedResumeText: savedResumeText || null,
+    });
 
     let jobText = cleanText(payload.pastedJobText ?? "");
 
@@ -312,12 +758,22 @@ export async function POST(req: Request) {
     }
 
     const selectedFocus = payload.focusAreas.length ? payload.focusAreas.join(", ") : "none provided";
+    const promptResumeText =
+      candidateContext.candidateResumeSource.combinedResumeText?.slice(0, 12000) ??
+      "[not provided]";
 
     const system = `
 You are an expert career coach + recruiter. Produce concise, high-quality, ATS-friendly writing.
 Return ONLY valid JSON matching the schema I give you. No markdown.
 Tone: ${tone}.
 ${candidateName ? `Use the candidate name exactly as provided: ${candidateName}. Never use placeholders like "Candidate" or "[Your Name]".` : ""}
+Use real saved profile details, saved resume context, and saved work experience whenever available.
+Prefer omission over fabrication. If data is missing, do not invent employers, dates, degrees, certifications, addresses, or metrics.
+Every resume bullet must read like a polished final resume bullet, not a note to the candidate.
+Start most bullets with strong action verbs such as Delivered, Prepared, Processed, Maintained, Supported, Resolved, Improved, Coordinated, Streamlined, or Strengthened.
+Avoid weak phrasing like "helped with", "responsible for", or "worked on".
+When exact metrics are unavailable, do not invent numbers; instead make bullets outcome-focused, credible, and ATS-friendly.
+For customer service, barista, cashier, retail, and hospitality roles, emphasize speed, accuracy, customer satisfaction, cleanliness, safety, cash handling, POS use, upselling, shift support, multitasking, teamwork, reliability, and high-volume service where supported by the context.
 `.trim();
 
     const schema = {
@@ -329,6 +785,7 @@ ${candidateName ? `Use the candidate name exactly as provided: ${candidateName}.
         keyRequirements: ["string"],
       },
       coverLetter: "string",
+      fullResumeText: "string",
       resumeUpdates: {
         summaryRewrite: "string?",
         skillsToAdd: ["string"],
@@ -345,8 +802,35 @@ ${candidateName ? `Use the candidate name exactly as provided: ${candidateName}.
 JOB POSTING TEXT:
 ${jobText}
 
-CANDIDATE RESUME:
-${resumeText ?? "[not provided]"}
+CANDIDATE PROFILE JSON:
+${JSON.stringify(candidateContext.candidateProfile, null, 2)}
+
+CANDIDATE SIGNALS JSON:
+${JSON.stringify(candidateContext.candidateSignals, null, 2)}
+
+SAVED EXPERIENCE JSON:
+${JSON.stringify(candidateContext.candidateExperience, null, 2)}
+
+RESUME SOURCE SUMMARY JSON:
+${JSON.stringify(
+  {
+    ...candidateContext.candidateResumeSource,
+    uploadedResumeText: candidateContext.candidateResumeSource.uploadedResumeText
+      ? "[provided]"
+      : null,
+    savedResumeText: candidateContext.candidateResumeSource.savedResumeText
+      ? "[available from database]"
+      : null,
+    combinedResumeText: candidateContext.candidateResumeSource.combinedResumeText
+      ? "[merged source available]"
+      : null,
+  },
+  null,
+  2
+)}
+
+MERGED RESUME SOURCE TEXT:
+${promptResumeText}
 
 FOCUS AREAS: ${selectedFocus}
 EXTRA INSTRUCTIONS: ${payload.instructions ?? "none"}
@@ -355,15 +839,24 @@ CANDIDATE NAME: ${candidateName ?? "[not provided]"}
 TASK:
 1) Infer job title/company/location if possible.
 2) Generate a tailored cover letter (1 page max).
-3) Propose resume updates:
+3) Generate a complete final resume in plain text that is ready to export directly. It must be a full developed resume, not patch notes. Use clear sections when data exists, such as:
+   - Name / Contact
+   - Summary
+   - Skills
+   - Professional Experience
+   - Education / Certifications
+   Use the real saved profile details and saved experience where available. Tailor the summary, skills, and bullet phrasing to the job posting.
+   Rewrite the experience bullets so they are noticeably stronger, more specific, and more hireable than the source wording.
+4) Propose resume updates:
    - optional new summary
    - skills to add
-   - 4-8 bullet edits: if resume is provided, rewrite based on that resume; if not provided, create realistic placeholders.
+   - 4-8 bullet edits: if real resume/experience context exists, rewrite based on that context; if not, keep them conservative and generic instead of inventing unsupported facts.
    - ATS keyword list
-4) Write two emails that reference the revised resume points where relevant:
+5) Write two emails that reference the revised resume points where relevant:
    - before interview: confirming interest + asking 1-2 smart questions
    - after interview: thank-you email
-If a candidate name is provided, make sure each document includes it. The cover letter and both emails must end with the candidate's name.
+If a candidate name is provided, make sure each document includes it. The cover letter and both emails must end with the candidate's name. The full resume must start with the candidate's name when provided.
+The full resume should be strong enough to use as the final exported resume document.
 Return JSON ONLY matching this schema shape:
 ${JSON.stringify(schema, null, 2)}
 `.trim();
@@ -371,6 +864,7 @@ ${JSON.stringify(schema, null, 2)}
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       temperature: 0.4,
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
         { role: "user", content: userPrompt },
@@ -392,11 +886,19 @@ ${JSON.stringify(schema, null, 2)}
     }
 
     const generated = (parsed ?? {}) as GeneratedDocumentPayload;
+    const fullResumeText = replaceNamePlaceholders(
+      cleanText(
+        generated.fullResumeText ||
+          buildFallbackResumeText(candidateContext, generated, candidateName)
+      ),
+      candidateName
+    );
 
     return NextResponse.json(
       {
         ...generated,
         candidateName,
+        fullResumeText,
         coverLetter: ensureSignedDocument(
           generated.coverLetter ?? "",
           candidateName,

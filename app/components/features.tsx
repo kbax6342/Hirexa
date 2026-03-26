@@ -7,6 +7,8 @@ import {
   Bot,
 } from "lucide-react"
 
+import { GlobalReachBanner } from "./global-reach-banner"
+
 const features = [
   {
     icon: Search,
@@ -80,7 +82,9 @@ export function Features() {
   return (
     <section id="features" className="relative py-24 md:py-32">
       <div className="mx-auto max-w-7xl px-6">
-        <div className="mx-auto max-w-2xl text-center">
+        <GlobalReachBanner />
+
+        <div className="mx-auto mt-14 max-w-2xl text-center md:mt-16">
           <p className="text-sm font-semibold uppercase tracking-wider text-primary">
             Core Features
           </p>

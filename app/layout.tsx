@@ -13,6 +13,7 @@ import {
   META_PIXEL_ID,
 } from "./lib/meta-pixel";
 import Providers from "./providers";
+import StyledJsxRegistry from "./registry";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -82,13 +83,15 @@ export default function RootLayout({
           />
         </noscript>
         <MetaPixelPageView />
-        <RecaptchaProvider>
-          <Providers>
-            <Navbar />
-            {children}
-            <PwaRegister />
-          </Providers>
-        </RecaptchaProvider>
+        <StyledJsxRegistry>
+          <RecaptchaProvider>
+            <Providers>
+              <Navbar />
+              {children}
+              <PwaRegister />
+            </Providers>
+          </RecaptchaProvider>
+        </StyledJsxRegistry>
       </body>
     </html>
   );

@@ -55,48 +55,74 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid code" }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
+    const { userId } = await prisma.$transaction(async (tx) => {
+      const verifiedAt = new Date();
+
       const user = await tx.user.update({
         where: { email },
         data: {
-          emailVerifiedAt: new Date(),
+          emailVerifiedAt: verifiedAt,
           isGuest: false,
         },
-        select: { id: true },
+        select: { id: true, name: true },
       });
 
-      await tx.userProfile.updateMany({
-        where: { email },
-        data: { registrationStatus: "verified" },
-      });
+      const [firstNameFromUser, ...remainingNameParts] = String(user.name ?? "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      const lastNameFromUser = remainingNameParts.join(" ").trim() || null;
 
-      await tx.userProfile.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          email,
-          registrationStatus: "registered",
-        },
-        update: {
-          email,
-          registrationStatus: "registered",
-        },
-      });
+      const mergeResult = guestId
+        ? await mergeGuestProfileIntoUserProfile(tx, {
+            userId: user.id,
+            guestId,
+            email,
+          })
+        : null;
 
-      if (guestId) {
-        await mergeGuestProfileIntoUserProfile(tx, {
-          userId: user.id,
-          guestId,
-          email,
+      if (mergeResult?.profileId) {
+        await tx.userProfile.update({
+          where: { id: mergeResult.profileId },
+          data: {
+            email,
+            subscriptionEmail: email,
+            emailVerifiedAt: verifiedAt,
+          },
+          select: { id: true },
+        });
+      } else {
+        await tx.userProfile.upsert({
+          where: { userId: user.id },
+          create: {
+            userId: user.id,
+            email,
+            subscriptionEmail: email,
+            emailVerifiedAt: verifiedAt,
+            registrationStatus: "registered",
+            firstName: firstNameFromUser || undefined,
+            lastName: lastNameFromUser ?? undefined,
+          },
+          update: {
+            email,
+            subscriptionEmail: email,
+            emailVerifiedAt: verifiedAt,
+            registrationStatus: "registered",
+            ...(firstNameFromUser
+              ? { firstName: firstNameFromUser, lastName: lastNameFromUser }
+              : {}),
+          },
         });
       }
 
       await tx.emailOtp.deleteMany({ where: { email } });
       await tx.emailVerificationCode.deleteMany({ where: { email } });
+
+      return { userId: user.id };
     });
 
-    const profile = await prisma.userProfile.findFirst({
-      where: { email },
+    const profile = await prisma.userProfile.findUnique({
+      where: { userId },
       select: { id: true, firstName: true, welcomeEmailSentAt: true, userId: true },
     });
 
@@ -115,7 +141,7 @@ export async function POST(req: Request) {
     }
 
     invalidateCachedProfile({
-      userId: profile?.userId ?? null,
+      userId,
       guestId,
     });
 

@@ -7,6 +7,13 @@ import {
   ALL_BENEFIT_OPTIONS,
   BENEFIT_CATEGORIES,
 } from "@/app/lib/benefits/catalog";
+import {
+  ACCOUNT_ROUTE,
+  BENEFITS_ROUTE,
+  CHOOSE_WORKPLACE_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 /**
  * NOTE:
@@ -79,7 +86,7 @@ export default function JobBenefitsSelectionPage() {
         throw new Error(data?.error ?? "Failed to save benefits.");
       }
 
-      router.push("/dashboard");
+      router.push(getNextOnboardingRoute(BENEFITS_ROUTE) ?? ACCOUNT_ROUTE);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Failed to save benefits.";
       setSaveError(message);
@@ -229,7 +236,12 @@ export default function JobBenefitsSelectionPage() {
             <button
               type="button"
               className="flex items-center gap-2 rounded-full border border-slate-300 px-6 py-2.5 font-medium text-slate-700 transition-all hover:border-slate-400 hover:bg-slate-50"
-              onClick={() => window.history.back()}
+              onClick={() =>
+                router.push(
+                  getPreviousOnboardingRoute(BENEFITS_ROUTE) ??
+                    CHOOSE_WORKPLACE_ROUTE
+                )
+              }
             >
               <i className="fa-solid fa-arrow-left text-sm" /> Back
             </button>

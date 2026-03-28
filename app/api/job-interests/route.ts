@@ -87,6 +87,18 @@ export async function POST(req: Request) {
       select: { id: true },
     });
 
+    await prisma.$transaction([
+      prisma.jobInterest.deleteMany({ where: { userProfileId: profile.id } }),
+      prisma.jobInterest.createMany({
+        data: jobs.map((job) => ({
+          userProfileId: profile.id,
+          uuid: String(job.uuid),
+          title: String(job.title),
+        })),
+        skipDuplicates: true,
+      }),
+    ]);
+
     // Keep this aligned with the current onboarding resume model.
     const latestResume = await prisma.resume.findUnique({
       where: { userProfileId: profile.id },
@@ -125,6 +137,7 @@ export async function POST(req: Request) {
         ids: jobIds,
         titles: jobTitles,
       },
+      savedToDatabase: true,
       cookiesSet: {
         job_interest_ids: true,
         job_interest_titles: true,

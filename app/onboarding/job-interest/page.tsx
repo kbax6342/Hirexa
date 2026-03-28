@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  JOB_INTEREST_ROUTE,
+  RESUME_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 
 interface Job {
@@ -185,7 +191,9 @@ export default function JobSearchPage() {
         throw new Error(parsed?.error ?? parsed?.message ?? text ?? "Save failed");
       }
   
-      router.push("/onboarding/time-saved");
+      router.push(
+        getNextOnboardingRoute(JOB_INTEREST_ROUTE) ?? "/onboarding/time-saved"
+      );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error";
       console.error("handleNext failed:", message, error);
@@ -196,7 +204,9 @@ export default function JobSearchPage() {
   
   const handleBack = () => {
     console.log("Going back");
-    router.back();
+    router.push(
+      getPreviousOnboardingRoute(JOB_INTEREST_ROUTE) ?? RESUME_ROUTE
+    );
   };
 
 

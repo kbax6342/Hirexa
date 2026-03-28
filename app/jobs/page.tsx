@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import AdzunaAttribution from "../components/jobs/AdzunaAttribution";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import { Navbar } from "../components/navbar";
 import Spinner from "../components/spinner/Spinner";
@@ -266,6 +267,8 @@ function JobCardItem({ job }: { job: JobCard }) {
         ) : (
           <div className="mt-3 h-4" />
         )}
+
+        <AdzunaAttribution className="mt-3" />
       </div>
 
       <div className="mt-auto pt-5">

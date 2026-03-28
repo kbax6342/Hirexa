@@ -1,7 +1,15 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  ONBOARDING_PROFILE_ROUTE,
+  QUESTIONS_CLIENTS_ROUTE,
+  QUESTIONS_LEGACY_ROUTE,
+  RESUME_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 type FormState = {
   authorizedUS: string;
@@ -26,8 +34,6 @@ const SPONSORSHIP_OPTIONS = [
   "No, I do not require sponsorship",
   "Yes, I will require sponsorship",
 ];
-
-const FELONY_OPTIONS = ["No", "Yes", "Prefer not to say"];
 
 const START_DATE_OPTIONS = [
   "Immediately",
@@ -72,14 +78,18 @@ const inputBase =
   "shadow-sm outline-none transition focus:border-sky-500 focus:ring-4 focus:ring-sky-500/15";
 
 const labelBase = "text-xs font-semibold text-slate-700";
+const REQUIRED_FIELD_KEYS = ["authorizedUS", "sponsorship"] as const;
+
+type RequiredFieldKey = (typeof REQUIRED_FIELD_KEYS)[number];
 
 export default function QuestionsClient() {
   const router = useRouter();
+  const fieldRefs = useRef<Partial<Record<RequiredFieldKey, HTMLDivElement | null>>>({});
 
   const [form, setForm] = useState<FormState>({
     authorizedUS: "",
     sponsorship: "",
-    felony: "",
+    felony: "Prefer not to say",
     startDate: "Immediately",
     screening: "",
     relocate: "No",
@@ -93,19 +103,24 @@ export default function QuestionsClient() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showValidationErrors, setShowValidationErrors] = useState(false);
 
   const handleChange = (field: keyof FormState, value: string) => {
     setError(null);
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const missingRequiredFields = useMemo(
+    () => ({
+      authorizedUS: !form.authorizedUS.trim(),
+      sponsorship: !form.sponsorship.trim(),
+    }),
+    [form.authorizedUS, form.sponsorship]
+  );
+
   const requiredOk = useMemo(() => {
-    return Boolean(
-      form.authorizedUS.trim() &&
-        form.sponsorship.trim() &&
-        form.felony.trim()
-    );
-  }, [form.authorizedUS, form.sponsorship, form.felony]);
+    return !Object.values(missingRequiredFields).some(Boolean);
+  }, [missingRequiredFields]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,18 +132,26 @@ export default function QuestionsClient() {
         });
         const data = await res.json();
 
+        if (
+          data?.nextPath &&
+          data.nextPath !== QUESTIONS_CLIENTS_ROUTE &&
+          data.nextPath !== QUESTIONS_LEGACY_ROUTE
+        ) {
+          router.replace(data.nextPath);
+          return;
+        }
+
         if (data?.completed) {
           router.replace("/dashboard");
           return;
         }
 
-        if (data?.nextPath && data.nextPath !== "/questions") {
-          router.replace(data.nextPath);
-          return;
-        }
-
         if (!cancelled && data?.data) {
-          setForm((prev) => ({ ...prev, ...data.data }));
+          setForm((prev) => ({
+            ...prev,
+            ...data.data,
+            felony: String(data?.data?.felony ?? "").trim() || prev.felony,
+          }));
         }
       } catch {
         // Intentionally silent to preserve existing behavior.
@@ -150,7 +173,18 @@ export default function QuestionsClient() {
     setError(null);
 
     if (!requiredOk) {
+      setShowValidationErrors(true);
       setError("Please answer the required questions before continuing.");
+
+      const firstMissingField = REQUIRED_FIELD_KEYS.find(
+        (field) => missingRequiredFields[field]
+      );
+      if (firstMissingField) {
+        fieldRefs.current[firstMissingField]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
       return;
     }
 
@@ -158,6 +192,7 @@ export default function QuestionsClient() {
       return;
     }
 
+    setShowValidationErrors(false);
     setSaving(true);
 
     try {
@@ -172,7 +207,9 @@ export default function QuestionsClient() {
         throw new Error(data?.error || "Failed to save");
       }
 
-      router.replace(data?.nextPath || "/dashboard");
+      router.push(
+        getNextOnboardingRoute(QUESTIONS_CLIENTS_ROUTE) || RESUME_ROUTE
+      );
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Something went wrong.";
       setError(message);
@@ -183,11 +220,17 @@ export default function QuestionsClient() {
 
   function handleBack() {
     if (typeof window !== "undefined" && window.history.length <= 1) {
-      router.push("/questions");
+      router.push(
+        getPreviousOnboardingRoute(QUESTIONS_CLIENTS_ROUTE) ??
+          ONBOARDING_PROFILE_ROUTE
+      );
       return;
     }
 
-    router.back();
+    router.push(
+      getPreviousOnboardingRoute(QUESTIONS_CLIENTS_ROUTE) ??
+        ONBOARDING_PROFILE_ROUTE
+    );
   }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -217,19 +260,27 @@ export default function QuestionsClient() {
           value={form.authorizedUS}
           onChange={(value) => handleChange("authorizedUS", value)}
           options={AUTHORIZED_OPTIONS}
+          testId="question-authorizedUS"
+          required
+          invalid={showValidationErrors && missingRequiredFields.authorizedUS}
+          containerRef={(element) => {
+            fieldRefs.current.authorizedUS = element;
+          }}
         />
         <Select
           label="Will you now or in the future require sponsorship to work in the United States?"
           value={form.sponsorship}
           onChange={(value) => handleChange("sponsorship", value)}
           options={SPONSORSHIP_OPTIONS}
+          testId="question-sponsorship"
+          required
+          invalid={showValidationErrors && missingRequiredFields.sponsorship}
+          containerRef={(element) => {
+            fieldRefs.current.sponsorship = element;
+          }}
         />
-        <Select
-          label="Have you ever been convicted of a felony?"
-          value={form.felony}
-          onChange={(value) => handleChange("felony", value)}
-          options={FELONY_OPTIONS}
-        />
+        <input type="hidden" value={form.felony} readOnly data-testid="question-felony" />
+       
         <Select
           label="When can you start a new job?"
           value={form.startDate}
@@ -293,6 +344,7 @@ export default function QuestionsClient() {
           <button
             type="submit"
             disabled={saving}
+            data-testid="questions-next"
             className={[
               "inline-flex h-11 items-center justify-center rounded-md px-5 text-sm font-semibold text-white shadow-sm transition",
               saving
@@ -313,19 +365,39 @@ type SelectProps = {
   value: string;
   onChange: (value: string) => void;
   options: string[];
+  required?: boolean;
+  invalid?: boolean;
+  containerRef?: (element: HTMLDivElement | null) => void;
+  testId?: string;
 };
 
-function Select({ label, value, onChange, options }: SelectProps) {
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+  required = false,
+  invalid = false,
+  containerRef,
+  testId,
+}: SelectProps) {
   return (
-    <div>
+    <div ref={containerRef}>
       <label className={labelBase}>
-        {label} <span className="text-rose-500">*</span>
+        {label} {required ? <span className="text-rose-500">*</span> : null}
       </label>
       <div className="mt-1">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={inputBase}
+          aria-invalid={invalid}
+          data-testid={testId}
+          className={[
+            inputBase,
+            invalid
+              ? "border-rose-400 focus:border-rose-500 focus:ring-rose-500/15"
+              : "",
+          ].join(" ")}
         >
           <option value="">Select...</option>
           {options.map((option) => (
@@ -334,6 +406,11 @@ function Select({ label, value, onChange, options }: SelectProps) {
             </option>
           ))}
         </select>
+        {invalid ? (
+          <p className="mt-2 text-xs font-medium text-rose-600">
+            This question is required.
+          </p>
+        ) : null}
       </div>
     </div>
   );

@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
+import { startOnboarding } from "@/app/api/actions/startOnboarding";
 import { Button } from "../components/ui/button";
 
 export function CTA({ href }: { href: string }) {
+  const isAuthenticatedHref = href === "/dashboard";
+
   return (
     <section className="relative py-24 md:py-32">
       <div className="mx-auto max-w-7xl px-6">
@@ -19,16 +22,29 @@ export function CTA({ href }: { href: string }) {
               Join Hirexa and start applying smarter - not harder.
             </p>
             <div className="mt-10">
-              <Button
-                asChild
-                size="lg"
-                className="h-13 rounded-full bg-primary px-10 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90"
-              >
-                <Link href={href}>
-                  Get Started Today
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Link>
-              </Button>
+              {isAuthenticatedHref ? (
+                <Button
+                  asChild
+                  size="lg"
+                  className="h-13 rounded-full bg-primary px-10 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90"
+                >
+                  <Link href={href}>
+                    Get Started Today
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Link>
+                </Button>
+              ) : (
+                <form action={startOnboarding}>
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="h-13 rounded-full bg-primary px-10 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/25 hover:bg-primary/90"
+                  >
+                    Get Started Today
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </form>
+              )}
             </div>
           </div>
         </div>

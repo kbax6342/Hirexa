@@ -18,5 +18,5 @@ export async function startOnboarding() {
     cookieStore.set(GUEST_USER_COOKIE, guestId, getGuestUserCookieOptions());
   }
 
-  redirect("/resume");
+  redirect("/onboarding/profile");
 }

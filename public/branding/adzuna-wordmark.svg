@@ -1,0 +1,9 @@
+<!-- File: public/branding/adzuna-wordmark.svg -->
+<svg width="94" height="24" viewBox="0 0 94 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="adzuna-wordmark-title">
+  <title id="adzuna-wordmark-title">Adzuna</title>
+  <rect x="1" y="2" width="20" height="20" rx="10" fill="#ED5C0E"/>
+  <path d="M11 6.75L15.65 17H13.5L12.55 14.82H9.4L8.47 17H6.35L11 6.75ZM10.98 9.94L10.14 11.91H11.8L10.98 9.94Z" fill="white"/>
+  <text x="28" y="16.1" fill="#0F172A" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" letter-spacing="0.1">
+    Adzuna
+  </text>
+</svg>

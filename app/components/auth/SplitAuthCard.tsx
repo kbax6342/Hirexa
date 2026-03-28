@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import Link from "next/link";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
@@ -107,7 +107,7 @@ function OtpBoxes({
   }
 
   return (
-    <div className="mt-3 flex justify-center gap-2">
+    <div className="mt-3 flex justify-center gap-2" data-testid="otp-boxes">
       {digits.map((d, i) => (
         <input
           key={i}
@@ -127,6 +127,7 @@ function OtpBoxes({
             disabled ? "opacity-60" : "",
           ].join(" ")}
           aria-label={`Digit ${i + 1}`}
+          data-testid={`otp-digit-${i}`}
         />
       ))}
     </div>
@@ -163,6 +164,43 @@ export default function SplitAuthCard() {
 
   const pwScore = useMemo(() => scorePassword(pw), [pw]);
   const router = useRouter();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfileDefaults() {
+      try {
+        const res = await fetch("/api/profile", { cache: "no-store" });
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok || cancelled) {
+          return;
+        }
+
+        const profile = data?.profile as
+          | {
+              firstName?: string | null;
+              lastName?: string | null;
+              email?: string | null;
+            }
+          | undefined;
+
+        if (!profile) return;
+
+        setFirstName((prev) => prev || String(profile.firstName ?? "").trim());
+        setLastName((prev) => prev || String(profile.lastName ?? "").trim());
+        setEmail((prev) => prev || String(profile.email ?? "").trim());
+      } catch {
+        // Preserve existing behavior if the profile lookup fails.
+      }
+    }
+
+    void loadProfileDefaults();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const canContinue =
     firstName.trim().length > 0 &&
@@ -201,7 +239,7 @@ export default function SplitAuthCard() {
         throw new Error(data?.error ?? "Failed to start signup");
       }
       // 2) Move UI forward
-      setStep("peek");
+      setStep("verify");
       setMsg("We sent a 6-digit verification code to your email.");
     } catch (e: unknown) {
       setMsg(getErrorMessage(e));
@@ -239,7 +277,7 @@ export default function SplitAuthCard() {
         throw new Error("Email verified, but automatic sign-in failed. Please log in.");
       }
 
-      router.push("/onboarding/profile")
+      router.push("/dashboard")
     } catch (e: unknown) {
       setMsg(getErrorMessage(e));
     } finally {
@@ -248,7 +286,7 @@ export default function SplitAuthCard() {
   }
 
   return (
-    <div className="w-full max-w-lg overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)]">
+    <div className="w-full mt-[50] max-w-lg overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)]">
       <div className="relative min-h-[670px] bg-white">
           <div className="overflow-hidden">
             <div
@@ -327,6 +365,7 @@ export default function SplitAuthCard() {
                         onChange={(e) => setEmail(e.target.value)}
                         type="email"
                         placeholder="Email address"
+                        data-testid="signup-email"
                         className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
                       />
                     </div>
@@ -347,6 +386,7 @@ export default function SplitAuthCard() {
                           onChange={(e) => setPw(e.target.value)}
                           type={showPw ? "text" : "password"}
                           placeholder="Password"
+                          data-testid="signup-password"
                           className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-14 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
                         />
                         <button
@@ -410,6 +450,7 @@ export default function SplitAuthCard() {
                           onChange={(e) => setPw2(e.target.value)}
                           type={showPw2 ? "text" : "password"}
                           placeholder="Confirm password"
+                          data-testid="signup-confirm-password"
                           className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 pr-14 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
                         />
                         <button
@@ -438,6 +479,7 @@ export default function SplitAuthCard() {
                       type="button"
                       disabled={!canContinue || loading}
                       onClick={startSignup}
+                      data-testid="signup-continue"
                       className={[
                         "w-full rounded-2xl px-4 py-3.5 text-sm font-semibold text-white transition focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30 focus:ring-offset-2",
                         !canContinue || loading
@@ -550,6 +592,7 @@ export default function SplitAuthCard() {
                           type="button"
                           onClick={verifyOtp}
                           disabled={otp.length !== 6 || loading}
+                          data-testid="signup-peek-verify"
                           className={[
                             "mt-3 w-full rounded-xl py-3 font-semibold text-white transition",
                             otp.length !== 6 || loading
@@ -564,6 +607,7 @@ export default function SplitAuthCard() {
                           type="button"
                           onClick={startSignup}
                           disabled={loading}
+                          data-testid="signup-resend-code"
                           className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-gray-700 border border-gray-200 hover:bg-gray-50 transition"
                         >
                           Resend code
@@ -580,6 +624,7 @@ export default function SplitAuthCard() {
                 <button
                   type="button"
                   onClick={() => setStep("signup")}
+                  data-testid="signup-back"
                   className="mt-3 w-full rounded-xl py-3 font-semibold text-red-700 border border-red-200 bg-red-50 hover:bg-red-100 transition "
                 >
                   Back
@@ -603,6 +648,7 @@ export default function SplitAuthCard() {
                       onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
                       inputMode="numeric"
                       placeholder="123456"
+                      data-testid="otp-input"
                       className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 tracking-[0.3em] text-lg text-black placeholder-black/50 focus:outline-none focus:ring-2 focus:ring-hirexa-blue/30"
                     />
                   </div>
@@ -612,6 +658,7 @@ export default function SplitAuthCard() {
                   <button
                     disabled={otp.length !== 6 || loading}
                     onClick={verifyOtp}
+                    data-testid="otp-submit"
                     className={[
                       "w-full rounded-xl py-3 font-semibold text-white transition",
                       otp.length !== 6 || loading
@@ -619,14 +666,15 @@ export default function SplitAuthCard() {
                         : "bg-hirexa-blue hover:bg-hirexa-cyan",
                     ].join(" ")}
                   >
-                    {loading ? "Verifying..." : "Unlock my jobs"}
+                    {loading ? "Verifying..." : "Verify and continue"}
                   </button>
 
                   <div className="flex items-center justify-between text-sm">
                     <button
                       type="button"
-                      onClick={() => setStep("peek")}
-                    className="text-red-600 hover:text-red-700"
+                      onClick={() => setStep("signup")}
+                      data-testid="otp-back"
+                      className="text-red-600 hover:text-red-700"
                     >
                       ← Back
                     </button>
@@ -634,6 +682,7 @@ export default function SplitAuthCard() {
                     <button
                       type="button"
                       onClick={startSignup}
+                      data-testid="otp-resend"
                       className="text-hirexa-blue hover:underline"
                     >
                       Resend code

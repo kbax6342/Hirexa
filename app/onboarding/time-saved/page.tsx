@@ -1,8 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  JOB_INTEREST_ROUTE,
+  TIME_SAVED_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 
 
@@ -21,13 +26,17 @@ export default function JobApplicationsPage() {
   };
 
   const handleNext = () => {
-    router.push("/onboarding/min-salary")
+    router.push(
+      getNextOnboardingRoute(TIME_SAVED_ROUTE) ?? "/onboarding/min-salary"
+    )
     console.log("Job count selected:", jobCount);
   };
 
   const handleBack = () => {
     console.log("Going back");
-    router.push("/onboarding/job-interest");
+    router.push(
+      getPreviousOnboardingRoute(TIME_SAVED_ROUTE) ?? JOB_INTEREST_ROUTE
+    );
   };
 
   return (

@@ -11,12 +11,14 @@ import {
   CheckCircleIcon,
 } from "@heroicons/react/24/outline";
 
+import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 import { usePublicJobLocation } from "@/app/hooks/usePublicJobLocation";
 
 export type Job = {
   id: string;
   title: string;
   company: string;
+  source?: string;
   location?: string;
   posted?: string;
   salary?: string;
@@ -284,6 +286,7 @@ export default function JobsExplorerClient({
     selectedAnalysis?.schedule ?? normalizeDisplayText(selected?.schedule);
   const selectedCareerLevel =
     selectedAnalysis?.careerLevel ?? normalizeCareerLevel(selected?.level);
+  const selectedIsAdzuna = selected?.source?.toLowerCase() === "adzuna";
   const loginHref = useMemo(
     () =>
       `/login?callbackUrl=${encodeURIComponent(`/jobs/${categorySlug}`)}`,
@@ -412,56 +415,63 @@ export default function JobsExplorerClient({
                   {visibleJobs.map((job) => {
                     const active = job.id === (selected?.id ?? selectedId);
                     const normalizedSalary = normalizeSalaryText(job.salary);
+                    const isAdzunaJob = job.source?.toLowerCase() === "adzuna";
 
                     return (
-                      <button
+                      <div
                         key={job.id}
-                        type="button"
-                        onClick={() => setSelectedId(job.id)}
                         className={cx(
-                          "w-full rounded-2xl border p-4 text-left shadow-sm transition",
+                          "rounded-2xl border p-4 shadow-sm transition",
                           active
                             ? "border-sky-200 bg-sky-50/50"
                             : "border-slate-200 bg-white hover:bg-slate-50"
                         )}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900">
-                              {job.title}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(job.id)}
+                          className="w-full text-left"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900">
+                                {job.title}
+                              </div>
+
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                                <span className="inline-flex items-center gap-1">
+                                  <BuildingOffice2Icon className="h-4 w-4 text-slate-400" />
+                                  {job.company}
+                                </span>
+                                {job.location ? (
+                                  <span className="inline-flex items-center gap-1">
+                                    <MapPinIcon className="h-4 w-4 text-slate-400" />
+                                    {job.location}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {job.posted ? (
+                                <div className="mt-3 line-clamp-1 text-xs text-slate-500">
+                                  {job.posted}
+                                </div>
+                              ) : (
+                                <div className="mt-3 h-4" />
+                              )}
                             </div>
 
-                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-                              <span className="inline-flex items-center gap-1">
-                                <BuildingOffice2Icon className="h-4 w-4 text-slate-400" />
-                                {job.company}
-                              </span>
-                              {job.location ? (
-                                <span className="inline-flex items-center gap-1">
-                                  <MapPinIcon className="h-4 w-4 text-slate-400" />
-                                  {job.location}
+                            <div className="flex flex-col items-end gap-2">
+                              {normalizedSalary ? (
+                                <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                                  {normalizedSalary}
                                 </span>
                               ) : null}
                             </div>
-
-                            {job.posted ? (
-                              <div className="mt-3 line-clamp-1 text-xs text-slate-500">
-                                {job.posted}
-                              </div>
-                            ) : (
-                              <div className="mt-3 h-4" />
-                            )}
                           </div>
+                        </button>
 
-                          <div className="flex flex-col items-end gap-2">
-                            {normalizedSalary ? (
-                              <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100">
-                                {normalizedSalary}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </button>
+                        {isAdzunaJob ? <AdzunaAttribution className="mt-3" /> : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -503,6 +513,8 @@ export default function JobsExplorerClient({
                             </span>
                           ) : null}
                         </div>
+
+                        {selectedIsAdzuna ? <AdzunaAttribution className="mt-4" /> : null}
                       </div>
 
                       <div className="flex items-center gap-2">

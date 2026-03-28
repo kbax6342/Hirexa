@@ -5,6 +5,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
+import {
+  JOB_INTEREST_ROUTE,
+  RESUME_ROUTE,
+  getNextOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 declare global {
   interface Window {
@@ -784,7 +789,9 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
             onClick={(event) => {
               event.preventDefault();
               setResumeSkippedCookie();
-              router.push("/onboarding/job-interest");
+              router.push(
+                getNextOnboardingRoute(RESUME_ROUTE) ?? JOB_INTEREST_ROUTE
+              );
             }}
             className="text-sm font-semibold text-white/80 underline underline-offset-4 hover:text-white"
           >

@@ -11,29 +11,10 @@ import {
   saveAppliedJobsSession,
 } from "@/app/lib/appliedJobsSession";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
-import {
-  extractCompanyLocationFromDescription,
-  prettyFromDescription,
-} from "@/app/lib/jobs/pretty-from-text";
-import {
-  cleanJobListItem,
-  cleanJobText,
-  isJunkJobLine,
-} from "@/app/lib/jobs/clean-job-text";
-import {
-  filterHiddenMetadataValues,
-  isHiddenMetadataPair,
-  isHiddenMetadataSectionTitle,
-  isHiddenStandaloneMetadataValue,
-} from "@/app/lib/jobs/formatJobText";
-import { buildJobDetailBodyHtml } from "@/app/lib/jobs/detailContent";
-import {
-  formatAdzunaDescription,
-  type FormattedAdzunaHighlight,
-  type FormattedAdzunaSection,
-} from "@/app/lib/jobs/formatAdzunaDescription";
+import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
-import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
+import JobDetailsPanel, { type FormattedJob } from "@/app/components/dashboard/JobDetailsPanel";
+import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 
 type SmartMatchesResponse = {
   jobs: Job[];
@@ -60,18 +41,6 @@ type JobDetailsResponse = {
   fullDetailsUnavailable?: boolean;
 };
 
-/** --------------------------
- * OPTIONAL: LLM formatting output
- * -------------------------- */
-type FormattedSection = FormattedAdzunaSection;
-
-type FormattedJob = {
-  highlights?: FormattedAdzunaHighlight[];
-  intro?: string[];
-  sections: FormattedSection[];
-  salary?: string | null;
-};
-
 type DashboardFilters = {
   query: string;
   location: string;
@@ -95,117 +64,6 @@ function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
   );
 }
 
-function normalizeRenderedParagraph(value: string) {
-  return value
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line && !isJunkJobLine(line))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeRenderedBullets(values: string[]) {
-  return values.map((value) => cleanJobListItem(String(value ?? ""))).filter(Boolean);
-}
-
-function BlueDotBulletList({ bullets }: { bullets: string[] }) {
-  const cleanedBullets = normalizeRenderedBullets(bullets);
-
-  if (cleanedBullets.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="mt-3 space-y-2">
-      {cleanedBullets.map((bullet, index) => (
-        <div key={`${bullet}-${index}`} className="flex items-start gap-3">
-          <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-blue-600" />
-          <span className="text-sm leading-relaxed text-gray-700">{bullet}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function getVisibleDashboardHighlights<T extends { label: string; value: string }>(
-  highlights: T[] | undefined
-) {
-  return (highlights ?? []).filter(
-    (highlight) => !isHiddenMetadataPair(highlight.label, highlight.value)
-  );
-}
-
-function getVisibleDashboardParagraphs(title: string, paragraphs: string[] | undefined) {
-  return filterHiddenMetadataValues(
-    title,
-    (paragraphs ?? [])
-      .map((paragraph) => normalizeRenderedParagraph(paragraph))
-      .filter(Boolean)
-      .filter((paragraph) => !isHiddenStandaloneMetadataValue(paragraph))
-  );
-}
-
-function getVisibleDashboardBullets(title: string, bullets: string[] | undefined) {
-  return filterHiddenMetadataValues(
-    title,
-    normalizeRenderedBullets(bullets ?? []).filter(
-      (bullet) => !isHiddenStandaloneMetadataValue(bullet)
-    )
-  );
-}
-
-function getVisibleDashboardCalloutValue(title: string, value: string | null | undefined) {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) return null;
-  if (isHiddenStandaloneMetadataValue(normalized)) return null;
-  if (isHiddenMetadataPair(title, normalized)) return null;
-  return normalized;
-}
-
-function shouldHideDashboardSection(
-  title: string,
-  params: {
-    paragraphs?: string[];
-    bullets?: string[];
-    calloutValue?: string | null;
-  }
-) {
-  const visibleParagraphs = getVisibleDashboardParagraphs(title, params.paragraphs);
-  const visibleBullets = getVisibleDashboardBullets(title, params.bullets);
-  const visibleCalloutValue = getVisibleDashboardCalloutValue(
-    title,
-    params.calloutValue
-  );
-
-  if (
-    isHiddenMetadataSectionTitle(title) &&
-    visibleParagraphs.length === 0 &&
-    visibleBullets.length === 0 &&
-    !visibleCalloutValue
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function sanitizeDashboardHtmlFallback(html: string) {
-  return html
-    .replace(
-      /<(p|div|li|span|strong|em)>\s*Workplace\s*<\/\1>\s*<(p|div|li|span|strong|em)>\s*On(?:-| )?site\s*<\/\2>/gi,
-      ""
-    )
-    .replace(
-      /<(p|div|li|span|strong|em)>\s*Clearance\s*<\/\1>\s*<(p|div|li|span|strong|em)>\s*confidential\s*<\/\2>/gi,
-      ""
-    )
-    .replace(/<(h[1-6]|p|div|li|span|strong|em)>\s*Workplace\s*<\/\1>/gi, "")
-    .replace(/<(h[1-6]|p|div|li|span|strong|em)>\s*Clearance\s*<\/\1>/gi, "")
-    .replace(/<(p|div|li|span|strong|em)>\s*On(?:-| )?site\s*<\/\1>/gi, "")
-    .replace(/<(p|div|li|span|strong|em)>\s*confidential\s*<\/\1>/gi, "")
-    .trim();
-}
 
 function getJobIdentity(job: Pick<Job, "id" | "source">) {
   const normalizedId = String(job.id ?? "").trim();
@@ -366,22 +224,6 @@ export default function JobMatchesLayout({
 
   const right = selectedDetails ?? selectedSummaryDetail;
 
-  const descriptionSource = String(right?.description ?? "");
-  const parsedMeta = useMemo(
-    () => extractCompanyLocationFromDescription(descriptionSource),
-    [descriptionSource]
-  );
-
-  const displayCompany =
-    right?.company && right.company !== "Unknown company"
-      ? right.company
-      : parsedMeta.company ?? "Unknown company";
-
-  const displayLocation =
-    right?.location && right.location !== "Unknown location"
-      ? right.location
-      : parsedMeta.location ?? "Unknown location";
-
   function replaceSelectedJobParam(jobId: string | null) {
     const nextParams = new URLSearchParams(searchParams.toString());
     if (jobId) {
@@ -443,6 +285,18 @@ export default function JobMatchesLayout({
   function handleSelectJob(jobId: string) {
     setSelectedId(jobId);
     replaceSelectedJobParam(jobId);
+  }
+
+  function handleOpenJob(jobId: string) {
+    if (
+      typeof window !== "undefined" &&
+      !window.matchMedia("(min-width: 1024px)").matches
+    ) {
+      router.push(`/dashboard/job/${encodeURIComponent(jobId)}`);
+      return;
+    }
+
+    handleSelectJob(jobId);
   }
 
   useEffect(() => {
@@ -1163,130 +1017,6 @@ export default function JobMatchesLayout({
     }
   };
 
-  const adzunaFormatted = useMemo(() => {
-    if (right?.source !== "adzuna") {
-      return null;
-    }
-
-    return formatAdzunaDescription(
-      String(
-        right.descriptionPlain ??
-          right.content ??
-          right.description ??
-          right.descriptionHtml ??
-          ""
-      )
-    );
-  }, [
-    right?.content,
-    right?.description,
-    right?.descriptionHtml,
-    right?.descriptionPlain,
-    right?.source,
-  ]);
-
-  const panelFormatted = useMemo<FormattedJob | null>(() => {
-    if (adzunaFormatted) {
-      return {
-        highlights: adzunaFormatted.highlights,
-        intro: adzunaFormatted.intro,
-        sections: adzunaFormatted.sections,
-        salary: right?.salaryText ?? right?.salary ?? null,
-      };
-    }
-
-    return formatted;
-  }, [adzunaFormatted, formatted, right?.salary, right?.salaryText]);
-
-  const detailBodyHtml = useMemo(() => buildJobDetailBodyHtml(right), [right]);
-  const sanitizedDetailBodyHtml = useMemo(
-    () => (detailBodyHtml ? sanitizeDashboardHtmlFallback(detailBodyHtml) : ""),
-    [detailBodyHtml]
-  );
-  const hasPanelFormattedContent = Boolean(
-    panelFormatted &&
-      (getVisibleDashboardHighlights(panelFormatted.highlights).length > 0 ||
-        getVisibleDashboardParagraphs("Position Overview", panelFormatted.intro).length > 0 ||
-        panelFormatted.sections.some(
-          (section) =>
-            !shouldHideDashboardSection(section.title, {
-              paragraphs: section.paragraphs,
-              bullets: section.bullets,
-            }) &&
-            (getVisibleDashboardParagraphs(section.title, section.paragraphs).length > 0 ||
-              getVisibleDashboardBullets(section.title, section.bullets).length > 0)
-        ) ||
-        panelFormatted.salary)
-  );
-  const hasPrettyContent =
-    getVisibleDashboardHighlights(pretty.highlights).length > 0 ||
-    pretty.sections.some(
-      (section) =>
-        !shouldHideDashboardSection(section.title, {
-          paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
-          bullets: section.kind === "bullets" ? section.bullets : undefined,
-          calloutValue:
-            section.kind === "callout" ? section.callout?.value : undefined,
-        }) &&
-        (getVisibleDashboardParagraphs(
-          section.title,
-          "paragraphs" in section ? section.paragraphs : undefined
-        ).length > 0 ||
-          getVisibleDashboardBullets(
-            section.title,
-            section.kind === "bullets" ? section.bullets : undefined
-          ).length > 0 ||
-          Boolean(
-            section.kind === "callout"
-              ? getVisibleDashboardCalloutValue(section.title, section.callout?.value)
-              : null
-          ))
-    );
-  const cleanedDetailDescription = useMemo(
-    () =>
-      cleanJobText(
-        String(
-          right?.descriptionPlain ??
-            right?.content ??
-            right?.description ??
-            right?.descriptionHtml ??
-            ""
-        ),
-        { source: right?.source ?? null }
-      ),
-    [
-      right?.content,
-      right?.description,
-      right?.descriptionHtml,
-      right?.descriptionPlain,
-      right?.source,
-    ]
-  );
-  const cleanedFallbackParagraphs = useMemo(
-    () =>
-      cleanedDetailDescription
-        .split(/\n{2,}/)
-        .map((paragraph) => normalizeRenderedParagraph(paragraph))
-        .filter(Boolean),
-    [cleanedDetailDescription]
-  );
-  const shouldUseHtmlFallback =
-    !detailsLoading &&
-    !hasPanelFormattedContent &&
-    !hasPrettyContent &&
-    !!sanitizedDetailBodyHtml &&
-    right?.source !== "adzuna";
-  const shouldUseCleanTextFallback =
-    !detailsLoading &&
-    !hasPanelFormattedContent &&
-    !hasPrettyContent &&
-    cleanedFallbackParagraphs.length > 0;
-  const showMinimalFallback =
-    !detailsLoading &&
-    !hasPanelFormattedContent &&
-    !shouldUseHtmlFallback &&
-    !shouldUseCleanTextFallback;
-
   return (
     <div className="mt-[59]">
       <div className="mt-4 grid min-h-0 grid-cols-1 gap-4 lg:mt-6 lg:grid-cols-12 lg:gap-6 xl:h-[calc(100vh-140px)]">
@@ -1450,7 +1180,7 @@ export default function JobMatchesLayout({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => handleSelectJob(job.id)}
+                          onClick={() => handleOpenJob(job.id)}
                           className="truncate text-sm font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-800"
                         >
                           {job.title}
@@ -1494,8 +1224,13 @@ export default function JobMatchesLayout({
                       )}
 
                       <div className="mt-5 flex flex-col gap-3 text-[11px] text-gray-500 sm:mt-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="w-full sm:w-auto">
+                        <div className="w-full space-y-2 sm:w-auto">
                           <span>Job Posted {job.posted}</span>
+                          {job.source === "adzuna" ? (
+                            <div>
+                              <AdzunaAttribution className="text-[11px]" />
+                            </div>
+                          ) : null}
                         </div>
 
                         <div className="flex w-full flex-col gap-2 xl:w-auto xl:flex-row xl:items-center xl:justify-end">
@@ -1507,9 +1242,17 @@ export default function JobMatchesLayout({
                               isCardAiApplyLoading ||
                               !job.jobUrl
                             }
-                            className="w-full rounded-md bg-[linear-gradient(135deg,#F97316_0%,#EA580C_100%)] px-3 py-2 text-center text-[11px] font-semibold text-white shadow-[0_10px_22px_rgba(194,65,12,0.28)] transition hover:bg-[linear-gradient(135deg,#EA580C_0%,#C2410C_100%)] hover:shadow-[0_12px_24px_rgba(194,65,12,0.34)] disabled:cursor-not-allowed disabled:opacity-60 xl:w-auto xl:min-w-[150px]"
+                            className="w-full rounded-md bg-[linear-gradient(135deg,#F97316_0%,#EA580C_100%)] px-3 py-2 text-center text-[11px] font-semibold text-white shadow-[0_10px_22px_rgba(194,65,12,0.28)] transition hover:bg-[linear-gradient(135deg,#EA580C_0%,#C2410C_100%)] hover:shadow-[0_12px_24px_rgba(194,65,12,0.34)] disabled:cursor-not-allowed disabled:opacity-60 lg:hidden xl:w-auto xl:min-w-[150px]"
                           >
                             {isCardAiApplyLoading ? "Opening..." : "AI Assistant Apply"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenJob(job.id)}
+                            className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50 lg:hidden xl:w-auto xl:min-w-[110px]"
+                          >
+                            View Posting
                           </button>
 
                           {job.jobUrl ? (
@@ -1517,7 +1260,7 @@ export default function JobMatchesLayout({
                               href={job.jobUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50 xl:w-auto xl:min-w-[110px]"
+                              className="hidden w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50 lg:inline-flex lg:w-auto lg:min-w-[110px] lg:items-center lg:justify-center"
                             >
                               View Posting
                             </a>
@@ -1622,306 +1365,18 @@ export default function JobMatchesLayout({
         </aside>
 
         {/* RIGHT DETAILS */}
-        <section className="flex min-h-0 flex-col lg:col-span-7">
-          <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-gray-200 bg-white shadow-sm">
-            <div className="shrink-0 border-b border-gray-100 p-5">
-              <h2 className="text-lg font-semibold text-gray-900">
-                {right?.title ?? "Select a job"}
-              </h2>
-
-              <div className="mt-1 text-xs text-gray-600">
-                <span className="font-medium text-gray-700">{displayCompany}</span>
-                <> • {displayLocation}</>
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleAiApplyFromDetails}
-                  disabled={!right?.id || aiApplyLoading}
-                  className="w-full rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(146,64,14,0.22)] bg-[linear-gradient(135deg,#C2410C_0%,#B45309_100%)] hover:shadow-[0_10px_22px_rgba(146,64,14,0.28)] hover:bg-[linear-gradient(135deg,#B45309_0%,#92400E_100%)] active:bg-[#7C2D12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(194,65,12,0.24)] sm:w-auto"
-                >
-                  {aiApplyLoading ? "Opening..." : "AI Assistant Apply"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCareerCoachFromDetails}
-                  className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
-                >
-                  Career Coach
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOutreachFromDetails}
-                  className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
-                >
-                  Outreach Copilot
-                </button>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              {detailsLoading ? (
-                <JobDetailsSkeleton />
-              ) : panelFormatted && hasPanelFormattedContent ? (
-                <div className="space-y-6">
-                  {getVisibleDashboardHighlights(panelFormatted.highlights).length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {getVisibleDashboardHighlights(panelFormatted.highlights).map((highlight) => (
-                        <div
-                          key={`${highlight.label}-${highlight.value}`}
-                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
-                        >
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            {highlight.label}
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-gray-900">
-                            {highlight.value}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {panelFormatted.salary &&
-                  !getVisibleDashboardHighlights(panelFormatted.highlights).some(
-                    (highlight) => highlight.label === "Compensation"
-                  ) ? (
-                    <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-                      <div className="text-xs font-semibold text-green-700">
-                        Compensation
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-green-900">
-                        {panelFormatted.salary}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {Array.isArray(panelFormatted.intro) && panelFormatted.intro.length > 0 ? (
-                    <section className="rounded-xl border border-gray-200 bg-white p-4">
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        Position Overview
-                      </h3>
-                      <div className="mt-2 space-y-2">
-                        {getVisibleDashboardParagraphs(
-                          "Position Overview",
-                          panelFormatted.intro
-                        )
-                          .map((paragraph, index) => (
-                            <p
-                              key={`intro-${index}`}
-                              className="text-sm leading-relaxed text-gray-700"
-                            >
-                              {paragraph}
-                            </p>
-                          ))}
-                      </div>
-                    </section>
-                  ) : null}
-
-                  {Array.isArray(panelFormatted.sections) && panelFormatted.sections.length > 0 ? (
-                    <div className="space-y-6">
-                      {panelFormatted.sections.map((section, index) => {
-                        const visibleParagraphs = getVisibleDashboardParagraphs(
-                          section.title,
-                          section.paragraphs
-                        );
-                        const visibleBullets = getVisibleDashboardBullets(
-                          section.title,
-                          section.bullets
-                        );
-
-                        if (
-                          shouldHideDashboardSection(section.title, {
-                            paragraphs: section.paragraphs,
-                            bullets: section.bullets,
-                          }) ||
-                          (visibleParagraphs.length === 0 && visibleBullets.length === 0)
-                        ) {
-                          return null;
-                        }
-
-                        return (
-                          <section
-                            key={`${section.title}-${index}`}
-                            className="rounded-xl border border-gray-200 bg-white p-4"
-                          >
-                            <h3 className="text-sm font-semibold text-gray-900">
-                              {section.title}
-                            </h3>
-
-                            {visibleParagraphs.length > 0 ? (
-                              <div className="mt-2 space-y-2">
-                                {visibleParagraphs.map((paragraph, paragraphIndex) => (
-                                  <p
-                                    key={`${section.title}-paragraph-${paragraphIndex}`}
-                                    className="text-sm leading-relaxed text-gray-700"
-                                  >
-                                    {paragraph}
-                                  </p>
-                                ))}
-                              </div>
-                            ) : null}
-
-                            {visibleBullets.length > 0 ? (
-                              <BlueDotBulletList bullets={visibleBullets} />
-                            ) : null}
-                          </section>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              ) : hasPrettyContent ? (
-                <div className="space-y-6">
-                  {getVisibleDashboardHighlights(pretty.highlights).length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {getVisibleDashboardHighlights(pretty.highlights).map((highlight) => (
-                        <div
-                          key={`${highlight.label}-${highlight.value}`}
-                          className="rounded-xl border border-gray-200 bg-gray-50 p-4"
-                        >
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                            {highlight.label}
-                          </div>
-                          <div className="mt-1 text-sm font-semibold text-gray-900">
-                            {highlight.value}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="space-y-6">
-                    {pretty.sections.map((section, idx) => {
-                      const visibleParagraphs = getVisibleDashboardParagraphs(
-                        section.title,
-                        "paragraphs" in section ? section.paragraphs : undefined
-                      );
-                      const visibleBullets = getVisibleDashboardBullets(
-                        section.title,
-                        section.kind === "bullets" ? section.bullets : undefined
-                      );
-                      const visibleCalloutValue =
-                        section.kind === "callout"
-                          ? getVisibleDashboardCalloutValue(
-                              section.title,
-                              section.callout?.value
-                            )
-                          : null;
-
-                      if (
-                        shouldHideDashboardSection(section.title, {
-                          paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
-                          bullets: section.kind === "bullets" ? section.bullets : undefined,
-                          calloutValue:
-                            section.kind === "callout" ? section.callout?.value : undefined,
-                        }) ||
-                        (visibleParagraphs.length === 0 &&
-                          visibleBullets.length === 0 &&
-                          !visibleCalloutValue)
-                      ) {
-                        return null;
-                      }
-
-                      return (
-                        <section
-                          key={`${section.title}-${idx}`}
-                          className="rounded-xl border border-gray-200 bg-white p-4"
-                        >
-                          <h3 className="text-sm font-semibold text-gray-900">
-                            {section.title}
-                          </h3>
-
-                          {visibleBullets.length > 0 ? (
-                            <BlueDotBulletList bullets={visibleBullets} />
-                          ) : null}
-
-                          {visibleParagraphs.length > 0 ? (
-                            <div className="mt-2 space-y-2">
-                              {visibleParagraphs.map((paragraph, paragraphIndex) => (
-                                <p
-                                  key={`${section.title}-${paragraphIndex}`}
-                                  className="text-sm leading-relaxed text-gray-700"
-                                >
-                                  {paragraph}
-                                </p>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          {section.kind === "callout" && visibleCalloutValue ? (
-                            <div className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-900">
-                              {section.callout.label ? (
-                                <span className="mr-2 font-semibold">
-                                  {section.callout.label}
-                                </span>
-                              ) : null}
-                              <span>{visibleCalloutValue}</span>
-                            </div>
-                          ) : null}
-                        </section>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : shouldUseHtmlFallback ? (
-                <div
-                  className="
-                    prose max-w-none
-                    text-gray-700
-                    prose-p:mb-4
-                    prose-p:leading-7
-                    prose-strong:text-gray-900
-                    prose-em:text-gray-700
-                    prose-ul:mb-5
-                    prose-ul:mt-3
-                    prose-ol:mb-5
-                    prose-ol:mt-3
-                    prose-li:mb-2
-                    prose-li:leading-7
-                    prose-li:marker:text-blue-500
-                    prose-h3:mb-3
-                    prose-h3:mt-8
-                    prose-h3:text-base
-                    prose-h3:font-semibold
-                    prose-a:text-blue-600
-                    prose-a:no-underline
-                    hover:prose-a:underline
-                  "
-                  dangerouslySetInnerHTML={{ __html: sanitizedDetailBodyHtml }}
-                />
-              ) : shouldUseCleanTextFallback ? (
-                <section className="rounded-xl border border-gray-200 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-gray-900">
-                    Job Description
-                  </h3>
-                  <div className="mt-3 space-y-3">
-                    {cleanedFallbackParagraphs.map((paragraph, index) => (
-                      <p
-                        key={`clean-fallback-${index}`}
-                        className="text-sm leading-relaxed text-gray-700"
-                      >
-                        {paragraph}
-                      </p>
-                    ))}
-                  </div>
-                </section>
-              ) : showMinimalFallback ? (
-                <section className="rounded-xl border border-gray-200 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-gray-900">
-                    Job Description
-                  </h3>
-                  <p className="mt-3 text-sm leading-7 text-gray-700">
-                    Open the original posting for the latest full description and
-                    application instructions.
-                  </p>
-                </section>
-              ) : (
-                <div />
-              )}
-            </div>
-          </div>
+        <section className="hidden min-h-0 flex-col lg:col-span-7 lg:flex">
+          <JobDetailsPanel
+            job={right}
+            pretty={pretty}
+            formatted={formatted}
+            detailsLoading={detailsLoading}
+            aiApplyLoading={aiApplyLoading}
+            onAiApply={handleAiApplyFromDetails}
+            onCareerCoach={handleCareerCoachFromDetails}
+            onOutreach={handleOutreachFromDetails}
+            hideAdzunaAttribution
+          />
         </section>
       </div>
 

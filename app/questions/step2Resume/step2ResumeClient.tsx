@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
+import {
+  JOB_INTEREST_ROUTE,
+  RESUME_ROUTE,
+  getNextOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 type Experience = {
   id: string;
@@ -236,11 +241,14 @@ export default function Step2ResumeClient() {
         </div>
 
         <div className="mt-10 flex items-center justify-between">
-          <Link href="/resume" className="rounded-full border px-6 py-3 text-sm font-semibold text-black">
+          <Link href={RESUME_ROUTE} className="rounded-full border px-6 py-3 text-sm font-semibold text-black">
             Back
           </Link>
 
-          <Link href="/onboarding/job-interest" className="rounded-full bg-blue-600 px-6 py-3 text-sm font-semibold text-white">
+          <Link
+            href={getNextOnboardingRoute(RESUME_ROUTE) ?? JOB_INTEREST_ROUTE}
+            className="rounded-full bg-blue-600 px-6 py-3 text-sm font-semibold text-white"
+          >
             Next
           </Link>
         </div>

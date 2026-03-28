@@ -1,6 +1,11 @@
 import "server-only";
 
 import { prisma } from "@/app/lib/prisma";
+import {
+  BENEFITS_ROUTE,
+  ONBOARDING_PROFILE_ROUTE,
+  QUESTIONS_CLIENTS_ROUTE,
+} from "@/app/lib/onboarding-flow";
 
 export const onboardingStatusSelect = {
   questionsCompleted: true,
@@ -80,18 +85,18 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
   }
 
   if (!hasCompletedProfileStep(profile)) {
-    return "/onboarding/profile";
+    return ONBOARDING_PROFILE_ROUTE;
   }
 
   if (!hasCompletedQuestionsStep(profile)) {
-    return "/questions";
+    return QUESTIONS_CLIENTS_ROUTE;
   }
 
   if (!hasCompletedBenefitsStep(profile)) {
-    return "/benefits";
+    return BENEFITS_ROUTE;
   }
 
-  return "/questions";
+  return QUESTIONS_CLIENTS_ROUTE;
 }
 
 export async function getOnboardingStatusForUser(userId?: string | null) {
@@ -100,7 +105,7 @@ export async function getOnboardingStatusForUser(userId?: string | null) {
     completed: false,
     hasResume: false,
     hasProfileDetails: false,
-    nextPath: "/questions",
+    nextPath: QUESTIONS_CLIENTS_ROUTE,
   };
 
   if (!userId) {

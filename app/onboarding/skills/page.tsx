@@ -3,6 +3,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  MIN_SALARY_ROUTE,
+  SKILLS_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 type SkillApiResponse = { skills: string[] };
 
@@ -182,7 +188,9 @@ export default function SkillsOnboardingPage() {
         return;
       }
 
-      router.push("/onboarding/job-alerts");
+      router.push(
+        getNextOnboardingRoute(SKILLS_ROUTE) ?? "/onboarding/job-alerts"
+      );
     } catch {
       setError("Failed to save skills.");
     } finally {
@@ -334,7 +342,11 @@ export default function SkillsOnboardingPage() {
           <div className="mx-auto w-9/12 md:w-11/12 flex items-center justify-between">
             <button
               type="button"
-              onClick={() => router.back()}
+              onClick={() =>
+                router.push(
+                  getPreviousOnboardingRoute(SKILLS_ROUTE) ?? MIN_SALARY_ROUTE
+                )
+              }
               className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

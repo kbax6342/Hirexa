@@ -394,6 +394,11 @@ export async function mergeGuestProfileIntoUserProfile(
     data: { userProfileId: userProfile.id, guestId: null },
   });
 
+  await tx.emailLifecycleEvent.updateMany({
+    where: { userProfileId: guestProfile.id },
+    data: { userProfileId: userProfile.id },
+  });
+
   const guestJobInterests = await tx.jobInterest.findMany({
     where: { userProfileId: guestProfile.id },
     select: { uuid: true, title: true },

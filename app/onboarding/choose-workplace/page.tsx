@@ -3,6 +3,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  BENEFITS_ROUTE,
+  CHOOSE_WORKPLACE_ROUTE,
+  JOB_ALERTS_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 type LocationOption = {
   id: string; // stable id for list rendering
@@ -403,7 +410,12 @@ export default function ChooseWorkplacePage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <button
             type="button"
-            onClick={() => router.back()}
+            onClick={() =>
+              router.push(
+                getPreviousOnboardingRoute(CHOOSE_WORKPLACE_ROUTE) ??
+                  JOB_ALERTS_ROUTE
+              )
+            }
             className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -422,7 +434,10 @@ export default function ChooseWorkplacePage() {
             onClick={async () => {
               try {
                 await saveLocations();
-                window.location.href = "/onboarding/account";
+                router.push(
+                  getNextOnboardingRoute(CHOOSE_WORKPLACE_ROUTE) ??
+                    BENEFITS_ROUTE
+                );
               } catch (e: any) {
                 console.error("saveLocations failed:", e?.message ?? e);
                 setError(e?.message ?? "Failed to save locations");

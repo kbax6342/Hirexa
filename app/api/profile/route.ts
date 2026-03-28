@@ -18,6 +18,11 @@ import {
   readRawPrivateProfileFieldsByIds,
   sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
+import {
+  ensureGuestOnboardingProfile,
+  getGuestUserCookieOptions,
+  GUEST_USER_COOKIE,
+} from "@/app/lib/onboarding/start";
 import type Stripe from "stripe";
 import { syncLoopsContact } from "@/app/lib/email/loops";
 
@@ -256,11 +261,31 @@ export async function POST(req: Request) {
 
     const session = await auth();
     const userId = (session?.user as any)?.id ?? null;
-    const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
+    const cookieStore = await cookies();
+    let guestId = cookieStore.get(GUEST_USER_COOKIE)?.value ?? null;
+    const originalGuestId = guestId;
+    const shouldSetGuestCookie = !userId && !guestId;
+    let mergedGuestProfile = false;
 
-    if (!userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (userId && guestId) {
+      const existingGuestId = guestId;
+      const mergeResult = await prisma.$transaction((tx) =>
+        mergeGuestProfileIntoUserProfile(tx, {
+          userId,
+          guestId: existingGuestId,
+          email: (session?.user as any)?.email ?? null,
+        })
+      );
+
+      if (mergeResult.merged) {
+        mergedGuestProfile = true;
+        invalidateCachedProfile({ userId, guestId: existingGuestId });
+        guestId = null;
+      }
+    }
+
+    if (!userId && !guestId) {
+      guestId = await ensureGuestOnboardingProfile(null);
     }
 
     const normalizedEmail = normalizeText(body.email) ?? (session?.user as any)?.email ?? null;
@@ -271,8 +296,11 @@ export async function POST(req: Request) {
       postalCode: body.postalCode,
       state: body.state,
     });
+    const profileWhere = userId ? { userId } : { guestId: guestId as string };
+    const profileCreateScope = userId ? { userId } : { guestId: guestId as string };
+
     const existingProfile = await prisma.userProfile.findUnique({
-      where: { userId },
+      where: profileWhere,
       select: {
         workplaceLocations: true,
         registrationStatus: true,
@@ -289,9 +317,9 @@ export async function POST(req: Request) {
       : null;
 
     const profile = await prisma.userProfile.upsert({
-      where: { userId },
+      where: profileWhere,
       create: {
-        userId,
+        ...profileCreateScope,
         firstName,
         lastName,
         email: normalizedEmail,
@@ -363,19 +391,19 @@ export async function POST(req: Request) {
     if (profile.email) {
       await syncLoopsContact({
         email: profile.email,
-        userId,
+        userId: userId ?? guestId,
         firstName: profile.firstName,
         lastName: profile.lastName,
         source: profile.newsletterSource ?? "profile/update",
         subscribed:
           profile.newsletterOptIn && !profile.unsubscribedAt ? true : undefined,
-        userGroup: "hirexa_users",
+        userGroup: userId ? "hirexa_users" : "hirexa_guests",
       });
     }
 
-    invalidateCachedProfile({ userId, guestId });
+    invalidateCachedProfile({ userId, guestId: originalGuestId ?? guestId });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       ok: true,
       profile: serializeProfileResponse({
         ...profile,
@@ -386,6 +414,17 @@ export async function POST(req: Request) {
         dob: privateFields.dob,
       }),
     });
+
+    if (mergedGuestProfile) {
+      response.cookies.set(GUEST_USER_COOKIE, "", {
+        path: "/",
+        maxAge: 0,
+      });
+    } else if (shouldSetGuestCookie && guestId) {
+      response.cookies.set(GUEST_USER_COOKIE, guestId, getGuestUserCookieOptions());
+    }
+
+    return response;
   } catch (e: unknown) {
     if (e instanceof PrivateProfileFieldValidationError) {
       return NextResponse.json({ error: e.message }, { status: 400 });

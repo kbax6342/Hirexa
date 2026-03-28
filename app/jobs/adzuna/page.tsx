@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 
 type AdzunaJob = {
   source: "adzuna";
@@ -64,6 +65,7 @@ export default function AdzunaJobsPage() {
             <div className="font-medium">{job.title}</div>
             <div className="text-sm text-gray-600">{job.company} • {job.location}</div>
             <p className="mt-2 text-sm text-gray-700">{job.descriptionSnippet}</p>
+            <AdzunaAttribution className="mt-3" />
             <button className="mt-2 rounded border px-3 py-1 text-sm" onClick={() => openAudit(job)}>
               Open Audit
             </button>

@@ -23,7 +23,7 @@ export default async function Home() {
     }
   }
 
-  const href = session?.user ? "/dashboard" : "/resume";
+  const href = session?.user ? "/dashboard" : "/onboarding/profile";
 
   return (
     <>

@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 import StructuredJobDescription from "@/app/components/jobs/StructuredJobDescription";
 import { cleanJobText } from "@/app/lib/jobs/clean-job-text";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
@@ -516,6 +517,8 @@ export default function JobDetailsPage() {
                         Posted {postedPretty}
                       </div>
                     ) : null}
+
+                    {isAdzuna ? <AdzunaAttribution className="mt-4" /> : null}
                   </div>
                 </div>
               </section>

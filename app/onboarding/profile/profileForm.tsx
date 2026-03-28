@@ -6,6 +6,10 @@ import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
 } from "@heroicons/react/24/solid";
+import {
+  ONBOARDING_PROFILE_ROUTE,
+  getNextOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 type FormState = {
   firstName: string;
@@ -113,7 +117,21 @@ export default function ProfileForm() {
       try {
         setLoadingProfile(true);
 
-        const res = await fetch("/api/profile", { cache: "no-store" });
+        let res = await fetch("/api/profile", { cache: "no-store" });
+
+        if (res.status === 401) {
+          const startRes = await fetch("/api/onboarding/start", {
+            method: "POST",
+            cache: "no-store",
+          });
+
+          if (!startRes.ok) {
+            throw new Error("Failed to start onboarding.");
+          }
+
+          res = await fetch("/api/profile", { cache: "no-store" });
+        }
+
         const data = (await res.json()) as ExistingProfileResponse;
 
         if (!res.ok) {
@@ -222,7 +240,9 @@ export default function ProfileForm() {
     setSaving(false);
 
     // ✅ Only navigate when save succeeds
-    router.push("/questions");
+    router.push(
+      getNextOnboardingRoute(ONBOARDING_PROFILE_ROUTE) ?? "/questionsClients"
+    );
   }
 
   const inputBase =
@@ -245,6 +265,7 @@ export default function ProfileForm() {
               onChange={(e) => update("firstName", e.target.value)}
               placeholder="First name"
               autoComplete="given-name"
+              data-testid="profile-first-name"
             />
             {form.firstName.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -261,6 +282,7 @@ export default function ProfileForm() {
               onChange={(e) => update("lastName", e.target.value)}
               placeholder="Last name"
               autoComplete="family-name"
+              data-testid="profile-last-name"
             />
             {form.lastName.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -293,6 +315,7 @@ export default function ProfileForm() {
               onChange={(e) => update("address", e.target.value)}
               placeholder="e.g. 123 Main St,"
               autoComplete="street-address"
+              data-testid="profile-address"
             />
           </div>
         </div>
@@ -309,6 +332,7 @@ export default function ProfileForm() {
               onChange={(e) => update("city", e.target.value)}
               placeholder="City"
               autoComplete="address-level2"
+              data-testid="profile-city"
             />
             {form.city.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -325,6 +349,7 @@ export default function ProfileForm() {
               onChange={(e) => update("postalCode", e.target.value)}
               placeholder="Zip"
               autoComplete="postal-code"
+              data-testid="profile-postal-code"
             />
             {form.postalCode.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -340,6 +365,7 @@ export default function ProfileForm() {
               value={form.state}
               onChange={(e) => update("state", e.target.value)}
               autoComplete="address-level1"
+              data-testid="profile-state"
             >
               <option value="">Select…</option>
               {US_STATES.map((s) => (
@@ -360,6 +386,7 @@ export default function ProfileForm() {
               value={form.linkedinUrl}
               onChange={(e) => update("linkedinUrl", e.target.value)}
               placeholder="e.g. www.linkedin.com/in/"
+              data-testid="profile-linkedin"
             />
           </div>
         </div>
@@ -388,6 +415,7 @@ export default function ProfileForm() {
               onChange={(e) => update("phone", formatPhoneNumber(e.target.value))}
               placeholder="(###) ###-####"
               autoComplete="tel"
+              data-testid="profile-phone"
             />
             {form.phone.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -404,6 +432,7 @@ export default function ProfileForm() {
               onChange={(e) => update("email", e.target.value)}
               placeholder="you@email.com"
               autoComplete="email"
+              data-testid="profile-email"
             />
             {form.email.trim() ? (
               <CheckCircleIcon className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
@@ -432,6 +461,7 @@ export default function ProfileForm() {
         <button
           type="submit"
           disabled={saving === true || loadingProfile}
+          data-testid="profile-continue"
           className={[
             "inline-flex h-11 items-center justify-center rounded-md px-5 text-sm font-semibold text-white shadow-sm transition",
             saving || loadingProfile

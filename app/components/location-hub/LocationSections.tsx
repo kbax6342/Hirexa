@@ -4,6 +4,7 @@ import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 
 type JobCard = {
   id: string;
@@ -147,6 +148,8 @@ export default function LocationSections({
                   {job.posted ? (
                     <div className="mt-3 text-xs text-muted-foreground">{job.posted}</div>
                   ) : null}
+
+                  <AdzunaAttribution className="mt-3" />
                 </div>
 
                 <div className="mt-auto flex items-center gap-3 pt-4">

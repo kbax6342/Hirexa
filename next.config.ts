@@ -24,7 +24,8 @@ const contentSecurityPolicyDirectives = [
     .filter(Boolean)
     .join(" "),
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
+  // Meta Pixel uses a noscript image beacon against www.facebook.com/tr.
+  "img-src 'self' data: blob: https: https://www.facebook.com",
   "font-src 'self' data:",
   [
     "connect-src",
@@ -59,6 +60,7 @@ const contentSecurityPolicyDirectives = [
     "https://www.google.com",
     "https://recaptcha.google.com",
     "https://www.recaptcha.net",
+    "https://www.facebook.com",
   ].join(" "),
   "worker-src 'self' blob:",
   "child-src 'self' blob: https://docs.google.com https://drive.google.com https://checkout.stripe.com https://js.stripe.com",
@@ -66,7 +68,7 @@ const contentSecurityPolicyDirectives = [
   "object-src 'none'",
   "base-uri 'self'",
   "frame-ancestors 'none'",
-  "form-action 'self' https://checkout.stripe.com https://accounts.google.com https://www.linkedin.com https://www.google.com",
+  "form-action 'self' https://checkout.stripe.com https://accounts.google.com https://www.linkedin.com https://www.google.com https://www.facebook.com",
   ...(isProduction ? ["upgrade-insecure-requests"] : []),
 ].join("; ");
 

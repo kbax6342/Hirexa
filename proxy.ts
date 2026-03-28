@@ -5,9 +5,7 @@ import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
 
 const AUTH_REQUIRED_PREFIXES = [
   "/dashboard",
-  "/benefits",
   "/plans",
-  "/onboarding/profile",
   "/hirepilot",
   "/settings",
   "/profile",
@@ -17,6 +15,7 @@ const AUTH_REQUIRED_PREFIXES = [
 const ONBOARDING_REDIRECT_PREFIXES = [
   "/resume",
   "/questions",
+  "/benefits",
   "/questions/step2Resume",
   "/onboarding/job-interest",
   "/onboarding/time-saved",

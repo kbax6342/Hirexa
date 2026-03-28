@@ -12,6 +12,12 @@ import {
   SALARY_BOUNDS,
   type CompensationType,
 } from "@/app/lib/salary";
+import {
+  MIN_SALARY_ROUTE,
+  TIME_SAVED_ROUTE,
+  getNextOnboardingRoute,
+  getPreviousOnboardingRoute,
+} from "@/app/lib/onboarding-flow";
 
 
 function clamp(n: number, min: number, max: number) {
@@ -208,7 +214,9 @@ export default function MinSalaryPage() {
         }
       }
   
-      router.push("/onboarding/skills");
+      router.push(
+        getNextOnboardingRoute(MIN_SALARY_ROUTE) ?? "/onboarding/skills"
+      );
     } catch (err) {
       console.error("❌ min salary save failed:", err);
       // decide if you want to block or allow navigation
@@ -353,7 +361,11 @@ export default function MinSalaryPage() {
       {/* Bottom actions */}
       <footer className="px-6 py-6 flex justify-between items-center border-t border-gray-200 bg-white">
         <button
-          onClick={() => router.back()}
+          onClick={() =>
+            router.push(
+              getPreviousOnboardingRoute(MIN_SALARY_ROUTE) ?? TIME_SAVED_ROUTE
+            )
+          }
           className="inline-flex items-center gap-2 px-6 py-3 text-black font-medium rounded-full border border-gray-300 hover:bg-gray-50 transition-colors"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

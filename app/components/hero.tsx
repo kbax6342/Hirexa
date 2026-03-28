@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowRight, Check } from "lucide-react";
 
 import { Button } from "../components/ui/button";
@@ -37,6 +38,27 @@ const jobCards = [
 ];
 
 export function Hero({ href }: { href: string }) {
+  const router = useRouter();
+
+  async function handleGetStarted(event: React.MouseEvent<HTMLAnchorElement>) {
+    if (href === "/dashboard") {
+      return;
+    }
+
+    event.preventDefault();
+
+    try {
+      await fetch("/api/onboarding/start", {
+        method: "POST",
+        cache: "no-store",
+      });
+    } catch {
+      // The profile page will retry guest bootstrap if this request fails.
+    }
+
+    router.push(href);
+  }
+
   return (
     <section className="relative overflow-hidden pb-20 pt-28 md:pb-32 md:pt-40">
       <div className="pointer-events-none absolute inset-0">
@@ -56,23 +78,25 @@ export function Hero({ href }: { href: string }) {
 
             <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">
               Hirexa AI helps you find relevant jobs, improve your application
-              materials, and stay consistent in your search.
+              materials, and dominate your interview with invisible real-time
+              support.
             </p>
 
             <div className="mt-10">
               <Button
                 asChild
                 size="lg"
-                className="bg-sky-500 text-white hover:bg-sky-400 h-12 rounded-full px-8 text-base font-semibold shadow-lg shadow-sky-500/25 transition-all duration-200 active:scale-[0.97]"
+                className="h-12 w-full rounded-full bg-sky-500 px-8 text-base font-bold text-white shadow-lg shadow-sky-500/25 transition-all duration-200 active:scale-[0.97] motion-safe:animate-pulse hover:bg-sky-400 sm:w-auto sm:font-semibold sm:motion-safe:animate-none"
               >
-                <Link href={href}>
-                  Get Started
-                  <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                <Link href={href} onClick={handleGetStarted}>
+                  <span className="sm:hidden uppercase tracking-[0.08em]">Start Free Today</span>
+                  <span className="hidden sm:inline">Get Started</span>
+                  <ArrowRight className="ml-2 hidden h-4 w-4 transition-transform group-hover:translate-x-0.5 sm:inline-block" />
                 </Link>
               </Button>
             </div>
 
-            <div className="mt-12 flex flex-wrap items-center gap-8">
+            <div className="mt-12 hidden flex-wrap items-center gap-8 sm:flex">
               {[
                 { value: "10x", label: "More applications" },
                 { value: "85%", label: "Match accuracy" },

@@ -135,6 +135,8 @@ const EMPTY_HIREPILOT_BILLING_STATUS = {
   hirePilotCredits: 0,
   monthlyCredits: 0,
   rolloverCredits: 0,
+  starterCredits: 0,
+  starterCreditsGranted: false,
   purchasedCredits: 0,
   productKey: null,
   status: null,

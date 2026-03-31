@@ -66,22 +66,31 @@ export default function NewsletterSignupForm() {
   const isError = state === "error";
 
   return (
-    <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <div
+      id="newsletter-signup"
+      className="rounded-[2rem] border border-white/10 bg-[linear-gradient(145deg,rgba(15,23,42,0.96),rgba(2,6,23,0.92))] p-6 shadow-[0_24px_70px_-42px_rgba(14,165,233,0.55)] sm:p-8"
+    >
       <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-500/12 text-sky-200">
           <EnvelopeIcon className="h-6 w-6" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Subscribe to the Hirexa newsletter</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-600">
-            Product updates, hiring insights, job search tips, and new feature launches.
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+            Email Updates
+          </p>
+          <h2 className="mt-1 text-xl font-semibold text-white">
+            Subscribe to the Hirexa AI newsletter
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            Get practical product updates, hiring insights, application tips, and interview
+            guidance without the noise.
           </p>
         </div>
       </div>
 
       <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
         <label className="block">
-          <span className="mb-2 block text-sm font-medium text-slate-700">Email address</span>
+          <span className="mb-2 block text-sm font-medium text-slate-200">Email address</span>
           <Input
             type="email"
             inputMode="email"
@@ -90,7 +99,7 @@ export default function NewsletterSignupForm() {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             disabled={isLoading}
-            className="h-12 rounded-xl border-slate-300 bg-white text-slate-900 placeholder:text-slate-400"
+            className="h-12 rounded-xl border-white/10 bg-white/5 text-white placeholder:text-slate-400"
           />
         </label>
 
@@ -98,23 +107,30 @@ export default function NewsletterSignupForm() {
           <Button
             type="submit"
             disabled={isLoading}
-            className="h-12 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-700"
+            className="h-12 rounded-xl bg-sky-500 px-6 text-sm font-semibold text-white hover:bg-sky-400"
           >
             {isLoading ? "Subscribing..." : "Subscribe"}
           </Button>
-          <p className="text-sm text-slate-500">No spam. Just practical updates for job seekers.</p>
+          <p className="text-sm text-slate-400">
+            Practical updates only. Unsubscribe any time.
+          </p>
         </div>
       </form>
+
+      <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">
+        We&apos;ll use your email for the Hirexa AI newsletter and product updates. No fake urgency,
+        no overloaded send schedule.
+      </div>
 
       {message ? (
         <div
           className={[
             "mt-5 flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm",
             isSuccess
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              ? "border-emerald-300/20 bg-emerald-500/10 text-emerald-100"
               : isError
-                ? "border-red-200 bg-red-50 text-red-700"
-                : "border-slate-200 bg-slate-50 text-slate-700",
+                ? "border-red-300/20 bg-red-500/10 text-red-100"
+                : "border-white/10 bg-white/[0.04] text-slate-200",
           ].join(" ")}
           role={isError ? "alert" : "status"}
         >

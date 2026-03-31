@@ -17,6 +17,20 @@ import {
 
 type Result = {
   candidateName?: string | null;
+  savedResume?: {
+    id: string;
+    fileName?: string | null;
+  };
+  credits?: {
+    remaining: number;
+    starterRemaining: number;
+    starterGranted: boolean;
+    consumed: boolean;
+  };
+  profileSync?: {
+    updatedFields: string[];
+    skippedFields: string[];
+  };
   job: {
     title?: string;
     company?: string;
@@ -56,6 +70,17 @@ type PlanStatusResponse = {
   yearlyPlanStatus?: string | null;
 };
 
+type CreditStatusResponse = {
+  hasHirePilotAccess?: boolean;
+  hirePilotUnlimited?: boolean;
+  hirePilotCredits?: number;
+  monthlyCredits?: number;
+  rolloverCredits?: number;
+  starterCredits?: number;
+  starterCreditsGranted?: boolean;
+  purchasedCredits?: number;
+};
+
 const textEncoder = new TextEncoder();
 
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -91,6 +116,9 @@ function JobToolsGeneratePageContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
+  const [planStatus, setPlanStatus] = useState<PlanStatusResponse | null>(null);
+  const [creditStatus, setCreditStatus] = useState<CreditStatusResponse | null>(null);
+  const [accessStatusLoading, setAccessStatusLoading] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -99,6 +127,56 @@ function JobToolsGeneratePageContent() {
     if (!prefillUrl) return;
     if (!url) setUrl(prefillUrl);
   }, [searchParams, url]);
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    async function loadAccessStatus() {
+      try {
+        const [planRes, creditRes] = await Promise.all([
+          fetch("/api/billing/plan-status", {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+          fetch("/api/user/hirepilot-status", {
+            cache: "no-store",
+            signal: controller.signal,
+          }),
+        ]);
+
+        if (!active) return;
+
+        if (planRes.ok) {
+          setPlanStatus((await planRes.json()) as PlanStatusResponse);
+        } else if (planRes.status === 401) {
+          setPlanStatus(null);
+        }
+
+        if (creditRes.ok) {
+          setCreditStatus((await creditRes.json()) as CreditStatusResponse);
+        } else if (creditRes.status === 401) {
+          setCreditStatus(null);
+        }
+      } catch {
+        if (active) {
+          setPlanStatus(null);
+          setCreditStatus(null);
+        }
+      } finally {
+        if (active) {
+          setAccessStatusLoading(false);
+        }
+      }
+    }
+
+    void loadAccessStatus();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
 
   const canSubmit = useMemo(() => {
     try {
@@ -501,7 +579,28 @@ function JobToolsGeneratePageContent() {
           throw new Error("Unable to verify subscription status.");
         }
 
-        return (await planRes.json()) as PlanStatusResponse;
+        const nextPlanStatus = (await planRes.json()) as PlanStatusResponse;
+        setPlanStatus(nextPlanStatus);
+        return nextPlanStatus;
+      };
+
+      const readCreditStatus = async () => {
+        const creditRes = await fetch("/api/user/hirepilot-status", {
+          cache: "no-store",
+        });
+
+        if (creditRes.status === 401) {
+          window.location.href = `/login?next=${encodeURIComponent(nextUrl)}`;
+          return null;
+        }
+
+        if (!creditRes.ok) {
+          throw new Error("Unable to verify credit balance.");
+        }
+
+        const nextCreditStatus = (await creditRes.json()) as CreditStatusResponse;
+        setCreditStatus(nextCreditStatus);
+        return nextCreditStatus;
       };
 
       let planData = await readPlanStatus(false);
@@ -531,6 +630,7 @@ function JobToolsGeneratePageContent() {
 
       const hasPaidAccess = planData?.active === true;
       const pendingAccess = planData?.pending === true;
+      let currentCreditStatus = creditStatus;
 
       console.log("[GENERATE_GATE] initial access check", {
         userId: planData?.userId ?? null,
@@ -547,7 +647,14 @@ function JobToolsGeneratePageContent() {
         hasPaidAccess,
       });
 
-      if (pendingAccess) {
+      if (!hasPaidAccess) {
+        currentCreditStatus = await readCreditStatus();
+        if (!currentCreditStatus) return;
+      }
+
+      const remainingCredits = Number(currentCreditStatus?.hirePilotCredits ?? 0);
+
+      if (pendingAccess && !hasPaidAccess && remainingCredits <= 0) {
         console.warn("[GENERATE_GATE] payment sync still pending after forced recheck", {
           userId: planData?.userId ?? null,
           accessState: planData?.accessState ?? "pending",
@@ -560,15 +667,10 @@ function JobToolsGeneratePageContent() {
         return;
       }
 
-      if (!hasPaidAccess) {
-        const params = new URLSearchParams();
-        params.set("source", "job-tools-generate");
-        if (url.trim()) params.set("jobUrl", url.trim());
-        console.log("[GENERATE_GATE] redirecting unpaid user", {
-          userId: planData?.userId ?? null,
-          destination: `/plans?${params.toString()}`,
-        });
-        window.location.href = `/plans?${params.toString()}`;
+      if (!hasPaidAccess && remainingCredits <= 0) {
+        setError(
+          "You've used all 5 free credits. Upgrade to continue using HirePilot and AI Assistant Apply."
+        );
         return;
       }
 
@@ -591,6 +693,12 @@ function JobToolsGeneratePageContent() {
       formData.set("focusAreas", JSON.stringify(selectedFocus));
       formData.set("instructions", instructions.trim());
       formData.set("pastedJobText", pastedJobText.trim());
+      formData.set(
+        "usageKey",
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `ai-assistant-apply-${Date.now()}`
+      );
       if (resumeFile) {
         formData.set("resumeFile", resumeFile);
       }
@@ -601,9 +709,35 @@ function JobToolsGeneratePageContent() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Failed to generate");
+      if (!res.ok) {
+        if (data?.credits) {
+          setCreditStatus((current) => ({
+            ...(current ?? {}),
+            hirePilotCredits: Number(data.credits.remaining ?? current?.hirePilotCredits ?? 0),
+            starterCredits: Number(
+              data.credits.starterRemaining ?? current?.starterCredits ?? 0
+            ),
+            starterCreditsGranted: Boolean(
+              data.credits.starterGranted ?? current?.starterCreditsGranted
+            ),
+          }));
+        }
+        throw new Error(data?.error ?? "Failed to generate");
+      }
 
       setResult(data);
+      if (data?.credits) {
+        setCreditStatus((current) => ({
+          ...(current ?? {}),
+          hirePilotCredits: Number(data.credits.remaining ?? current?.hirePilotCredits ?? 0),
+          starterCredits: Number(
+            data.credits.starterRemaining ?? current?.starterCredits ?? 0
+          ),
+          starterCreditsGranted: Boolean(
+            data.credits.starterGranted ?? current?.starterCreditsGranted
+          ),
+        }));
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -627,6 +761,10 @@ function JobToolsGeneratePageContent() {
       : activeTab === "preInterview"
       ? "AI-Generated Pre-Interview Email"
       : "AI-Generated Post-Interview Email";
+  const shouldShowStarterCredits =
+    !accessStatusLoading &&
+    planStatus?.active !== true &&
+    Boolean(creditStatus?.starterCreditsGranted);
 
   return (
     <div className="min-h-screen ">
@@ -694,6 +832,21 @@ function JobToolsGeneratePageContent() {
               {error}
             </div>
           )}
+
+          {shouldShowStarterCredits ? (
+            <div
+              className={[
+                "mt-4 rounded-xl px-4 py-3 text-sm",
+                Number(creditStatus?.starterCredits ?? 0) > 0
+                  ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border border-amber-200 bg-amber-50 text-amber-800",
+              ].join(" ")}
+            >
+              {Number(creditStatus?.starterCredits ?? 0) > 0
+                ? `Free Credits Remaining: ${Number(creditStatus?.starterCredits ?? 0)}`
+                : "You've used all 5 free credits. Upgrade to continue using HirePilot and AI Assistant Apply."}
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -749,6 +902,17 @@ function JobToolsGeneratePageContent() {
               }}
             />
           </div>
+
+          {(result?.savedResume || result?.profileSync?.updatedFields?.length) && (
+            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+              {result?.savedResume
+                ? `Saved ${result.savedResume.fileName || "your uploaded resume"} to your profile.`
+                : "Synced your uploaded resume to your profile."}
+              {result?.profileSync?.updatedFields?.length
+                ? ` Filled missing profile fields: ${result.profileSync.updatedFields.join(", ")}.`
+                : ""}
+            </div>
+          )}
         </div>
 
         {/* Tabs */}

@@ -38,6 +38,8 @@ type JobDetailsPanelProps = {
   detailsError?: string | null;
   aiApplyLoading?: boolean;
   aiApplyDisabled?: boolean;
+  aiApplyLabel?: string;
+  aiApplyLoadingLabel?: string;
   onAiApply?: () => void;
   onCareerCoach?: () => void;
   onOutreach?: () => void;
@@ -165,6 +167,8 @@ export default function JobDetailsPanel({
   detailsError = null,
   aiApplyLoading = false,
   aiApplyDisabled = false,
+  aiApplyLabel = "AI Assistant Apply",
+  aiApplyLoadingLabel = "Opening...",
   onAiApply,
   onCareerCoach,
   onOutreach,
@@ -326,7 +330,7 @@ export default function JobDetailsPanel({
                   hideAiApplyOnDesktop ? "lg:hidden" : "",
                 ].join(" ")}
               >
-                {aiApplyLoading ? "Opening..." : "AI Assistant Apply"}
+                {aiApplyLoading ? aiApplyLoadingLabel : aiApplyLabel}
               </button>
             ) : null}
 

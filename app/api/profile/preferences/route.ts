@@ -86,7 +86,10 @@ export async function POST(req: Request) {
         })
       : null;
 
-    const existingKeyQuestions = readKeyQuestions(existingProfile?.keyQuestions);
+    const existingKeyQuestions = {
+      ...readKeyQuestions(existingProfile?.keyQuestions),
+    };
+    delete existingKeyQuestions.felony;
     const includeRemote = hasField("includeRemote")
       ? Boolean(body.includeRemote)
       : (existingProfile?.includeRemote ?? true);

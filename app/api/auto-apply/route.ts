@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
+import {
+  detectApplyProviderFromJob,
+  normalizeApplyProvider,
+} from "@/app/lib/apply/providerDetection";
 
 type AutoApplyBody = {
   sourceJobId?: string;
@@ -8,6 +12,8 @@ type AutoApplyBody = {
   company?: string;
   location?: string;
   jobUrl?: string;
+  source?: string;
+  applyProvider?: string;
 };
 
 function normalizeText(value: unknown) {
@@ -29,6 +35,14 @@ export async function POST(req: Request) {
     const company = normalizeText(body.company);
     const location = normalizeText(body.location) || null;
     const jobUrl = normalizeText(body.jobUrl) || null;
+    const requestedSource = normalizeText(body.source).toLowerCase();
+    const requestedApplyProvider = normalizeApplyProvider(body.applyProvider);
+    const detectedApplyProvider =
+      detectApplyProviderFromJob({
+        source: requestedSource || null,
+        jobUrl,
+      }) ?? requestedApplyProvider;
+    const source = requestedSource || detectedApplyProvider || null;
 
     if (!jobTitle || !company) {
       return NextResponse.json(
@@ -62,6 +76,7 @@ export async function POST(req: Request) {
             company,
             location,
             jobUrl,
+            source,
             status: "IN_PROGRESS",
           },
           update: {
@@ -69,6 +84,7 @@ export async function POST(req: Request) {
             company,
             location,
             jobUrl,
+            source,
             status: "IN_PROGRESS",
           },
           select: { id: true },
@@ -80,6 +96,7 @@ export async function POST(req: Request) {
             company,
             location,
             jobUrl,
+            source,
             status: "IN_PROGRESS",
           },
           select: { id: true },

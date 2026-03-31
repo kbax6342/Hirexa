@@ -1,8 +1,16 @@
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
 
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import Step2Client from "@/app/questions/step2/step2Client";
+
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 type PageProps = {
   searchParams?: Promise<{ resumeId?: string }>;

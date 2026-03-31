@@ -2,6 +2,10 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
+import type { JobSource } from "@/app/lib/jobs/types";
+import {
+  buildApplyProviderPayload,
+} from "@/app/lib/apply/providerDetection";
 
 const extensionUrl = process.env.NEXT_PUBLIC_AUTOFILL_EXTENSION_URL;
 
@@ -12,6 +16,7 @@ type AutofillButtonProps = {
     company: string;
     location?: string | null;
     jobUrl?: string | null;
+    source?: JobSource | null;
   };
 };
 
@@ -46,7 +51,16 @@ export default function AutofillButton({ job }: AutofillButtonProps) {
       const applyRes = await fetch("/api/applications/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(job),
+        body: JSON.stringify(
+          buildApplyProviderPayload({
+            id: job.sourceJobId ?? job.jobUrl ?? job.jobTitle,
+            title: job.jobTitle,
+            company: job.company,
+            location: job.location ?? "",
+            jobUrl: job.jobUrl ?? undefined,
+            source: job.source ?? "other",
+          })
+        ),
       });
       const applyData = await applyRes.json();
 

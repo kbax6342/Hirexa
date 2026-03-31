@@ -76,7 +76,7 @@ export function Hero({ href }: { href: string }) {
               Start applying smarter.
             </span>
 
-            <p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">
+            <p className="mt-6 max-w-lg text-lg leading-relaxed text-white text-muted-foreground">
               Hirexa AI helps you find relevant jobs, improve your application
               materials, and dominate your interview with invisible real-time
               support.
@@ -94,6 +94,10 @@ export function Hero({ href }: { href: string }) {
                   <ArrowRight className="ml-2 hidden h-4 w-4 transition-transform group-hover:translate-x-0.5 sm:inline-block" />
                 </Link>
               </Button>
+              <div className="w-full text-center mt-1">
+              {/* <span className="ml-4  text-white  text-sm text-muted-foreground">No credit card required 7-day Free Trial</span> */}
+              </div>
+             
             </div>
 
             <div className="mt-12 hidden flex-wrap items-center gap-8 sm:flex">

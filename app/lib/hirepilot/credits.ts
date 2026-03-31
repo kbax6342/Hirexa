@@ -14,9 +14,12 @@ const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
 export const HIREPILOT_CREDIT_SOURCE = {
   MONTHLY: "monthly",
   ROLLOVER: "rollover",
+  STARTER: "starter",
   PURCHASE: "purchase",
   ADMIN_ADJUSTMENT: "admin_adjustment",
 } as const;
+
+export const STARTER_FEATURE_CREDITS = 5;
 
 type DbClient = {
   hirePilotCreditGrant: Pick<
@@ -64,6 +67,8 @@ export type HirePilotCreditSummary = {
   totalAvailable: number;
   monthlyCredits: number;
   rolloverCredits: number;
+  starterCredits: number;
+  starterCreditsGranted: boolean;
   purchasedCredits: number;
   nextMonthlyResetAt: Date | null;
   earliestPurchasedExpiryAt: Date | null;
@@ -86,6 +91,8 @@ export const EMPTY_HIREPILOT_CREDIT_SUMMARY: HirePilotCreditSummary = {
   totalAvailable: 0,
   monthlyCredits: 0,
   rolloverCredits: 0,
+  starterCredits: 0,
+  starterCreditsGranted: false,
   purchasedCredits: 0,
   nextMonthlyResetAt: null,
   earliestPurchasedExpiryAt: null,
@@ -167,10 +174,12 @@ function getGrantPriority(sourceType: string) {
       return 0;
     case HIREPILOT_CREDIT_SOURCE.ROLLOVER:
       return 1;
-    case HIREPILOT_CREDIT_SOURCE.PURCHASE:
+    case HIREPILOT_CREDIT_SOURCE.STARTER:
       return 2;
-    case HIREPILOT_CREDIT_SOURCE.ADMIN_ADJUSTMENT:
+    case HIREPILOT_CREDIT_SOURCE.PURCHASE:
       return 3;
+    case HIREPILOT_CREDIT_SOURCE.ADMIN_ADJUSTMENT:
+      return 4;
     default:
       return 10;
   }
@@ -212,6 +221,10 @@ function buildPurchaseGrantKey(
     params.stripePaymentIntentId?.trim() ||
     `purchase:${userId}:${params.paidAt.toISOString()}`
   );
+}
+
+function buildStarterGrantKey(userId: string) {
+  return `starter:${userId}`;
 }
 
 async function backfillLegacyPurchasedCredits(userId: string) {
@@ -344,7 +357,7 @@ async function readUsableCreditGrants(
 
 async function summarizeCredits(db: DbClient, userId: string, at: Date) {
   const creditsDb = getCreditsDbClient(db, "summarizeCredits");
-  const [grants, recentUsage, activeMonthlyBilling] = await Promise.all([
+  const [grants, recentUsage, activeMonthlyBilling, starterGrant] = await Promise.all([
     readUsableCreditGrants(creditsDb, userId, at),
     creditsDb.hirePilotCreditUsage.findMany({
       where: { userId },
@@ -364,6 +377,13 @@ async function summarizeCredits(db: DbClient, userId: string, at: Date) {
         currentPeriodEnd: true,
       },
     }),
+    creditsDb.hirePilotCreditGrant.findFirst({
+      where: {
+        userId,
+        sourceType: HIREPILOT_CREDIT_SOURCE.STARTER,
+      },
+      select: { id: true },
+    }),
   ]);
 
   const monthlyCredits = grants
@@ -372,13 +392,16 @@ async function summarizeCredits(db: DbClient, userId: string, at: Date) {
   const rolloverCredits = grants
     .filter((grant) => grant.sourceType === HIREPILOT_CREDIT_SOURCE.ROLLOVER)
     .reduce((total, grant) => total + grant.remainingCredits, 0);
+  const starterCredits = grants
+    .filter((grant) => grant.sourceType === HIREPILOT_CREDIT_SOURCE.STARTER)
+    .reduce((total, grant) => total + grant.remainingCredits, 0);
   const purchasedCredits = grants
     .filter((grant) =>
       grant.sourceType === HIREPILOT_CREDIT_SOURCE.PURCHASE ||
       grant.sourceType === HIREPILOT_CREDIT_SOURCE.ADMIN_ADJUSTMENT
     )
     .reduce((total, grant) => total + grant.remainingCredits, 0);
-  const totalAvailable = monthlyCredits + rolloverCredits + purchasedCredits;
+  const totalAvailable = monthlyCredits + rolloverCredits + starterCredits + purchasedCredits;
   const expiringSoonCutoff = addDays(at, getExpiringSoonWindowDays());
   const expiringSoon = grants
     .filter((grant) => grant.expiresAt && grant.expiresAt <= expiringSoonCutoff)
@@ -402,6 +425,8 @@ async function summarizeCredits(db: DbClient, userId: string, at: Date) {
     totalAvailable,
     monthlyCredits,
     rolloverCredits,
+    starterCredits,
+    starterCreditsGranted: Boolean(starterGrant?.id),
     purchasedCredits,
     nextMonthlyResetAt:
       isActiveBillingStatus(activeMonthlyBilling?.status) ? activeMonthlyBilling?.currentPeriodEnd ?? null : null,
@@ -625,6 +650,50 @@ export async function grantPurchasedHirePilotCredits(params: {
   } catch (error) {
     if (isPrismaMissingHirePilotCreditTableError(error)) {
       logMissingHirePilotCreditTables("grantPurchasedHirePilotCredits", error);
+      return;
+    }
+
+    throw error;
+  }
+}
+
+export async function grantStarterHirePilotCredits(params: {
+  userId: string;
+  credits?: number;
+}) {
+  const now = new Date();
+  const totalCredits = Math.max(1, Math.floor(params.credits ?? STARTER_FEATURE_CREDITS));
+  const grantKey = buildStarterGrantKey(params.userId);
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const creditsDb = getCreditsDbClient(tx, "grantStarterHirePilotCredits");
+      const existingGrant = await creditsDb.hirePilotCreditGrant.findUnique({
+        where: { grantKey },
+        select: { id: true },
+      });
+
+      if (!existingGrant?.id) {
+        await creditsDb.hirePilotCreditGrant.create({
+          data: {
+            userId: params.userId,
+            sourceType: HIREPILOT_CREDIT_SOURCE.STARTER,
+            totalCredits,
+            remainingCredits: totalCredits,
+            grantKey,
+            grantedAt: now,
+            metadata: {
+              reason: "starter_feature_credits",
+            },
+          },
+        });
+      }
+
+      await syncLegacyCreditCounters(creditsDb, params.userId, now);
+    });
+  } catch (error) {
+    if (isPrismaMissingHirePilotCreditTableError(error)) {
+      logMissingHirePilotCreditTables("grantStarterHirePilotCredits", error);
       return;
     }
 

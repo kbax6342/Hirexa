@@ -42,6 +42,8 @@ export type HirePilotBillingStatus = {
   hirePilotCredits: number;
   monthlyCredits: number;
   rolloverCredits: number;
+  starterCredits: number;
+  starterCreditsGranted: boolean;
   purchasedCredits: number;
   productKey: string | null;
   status: string | null;
@@ -176,6 +178,8 @@ export async function getHirePilotBillingStatus(
     hirePilotCredits: totalCredits,
     monthlyCredits: creditSummary.monthlyCredits,
     rolloverCredits: creditSummary.rolloverCredits,
+    starterCredits: creditSummary.starterCredits,
+    starterCreditsGranted: creditSummary.starterCreditsGranted,
     purchasedCredits: creditSummary.purchasedCredits,
     productKey: resolvedProductKey,
     status: resolvedStatus,

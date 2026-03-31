@@ -15,12 +15,25 @@ import {
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
 import { sendApplicationActivityEmailForStatusChange } from "@/app/lib/email/lifecycle";
+import {
+  buildProfileFieldMap,
+  computeMissingFromFields,
+} from "@/app/lib/jobApplicationAudit";
+import { detectApplyProviderFromJob } from "@/app/lib/apply/providerDetection";
 
 export const runtime = "nodejs";
 
 type ApplyBody = {
   answers?: AnswersMap;
 };
+
+function toHostedAnswersMap(values: Record<string, unknown>): AnswersMap {
+  const entries = Object.entries(values)
+    .filter(([key]) => key !== "resumeUploaded")
+    .map(([key, value]) => [key, String(value ?? "").trim()] as const);
+
+  return Object.fromEntries(entries);
+}
 
 async function runHumanApply(args: {
   applicationId: string;
@@ -210,6 +223,53 @@ export async function POST(
         { ok: false, error: "Application missing jobUrl" },
         { status: 400 },
       );
+    }
+
+    const applyProvider = detectApplyProviderFromJob({
+      source: application.source,
+      jobUrl: application.jobUrl,
+    });
+
+    if (applyProvider === "ashby") {
+      const resume = await prisma.resumeFile.findFirst({
+        where: { profileId: application.userProfileId },
+        orderBy: { createdAt: "desc" },
+      });
+      const fields = buildProfileFieldMap(application.userProfile, resume);
+      const computed = computeMissingFromFields(
+        fields,
+        (body.answers as Record<string, unknown> | undefined) ?? {}
+      );
+      const answers = toHostedAnswersMap(computed.merged);
+
+      if (computed.missing.length > 0) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Missing required profile fields.",
+            missingRequired: computed.missing,
+          },
+          { status: 409 }
+        );
+      }
+
+      const applySession = createSession(application.id);
+
+      void runHumanApply({
+        applicationId: application.id,
+        sessionId: applySession.id,
+        jobUrl: application.jobUrl,
+        values: answers,
+        answers,
+        userProfileId: application.userProfileId,
+        previousStatus: application.status,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        applySessionId: applySession.id,
+        status: "WAITING_HUMAN",
+      });
     }
 
     const { answers, finalValuesToSubmit, greenhouseEmbedUrl } =

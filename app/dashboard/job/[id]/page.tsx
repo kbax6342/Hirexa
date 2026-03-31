@@ -10,6 +10,12 @@ import JobDetailsPanel, {
   type FormattedJob,
 } from "@/app/components/dashboard/JobDetailsPanel";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import {
+  buildApplyProviderPayload,
+  detectApplyProviderFromJob,
+  getApplyProviderButtonLabel,
+  getApplyProviderLoadingLabel,
+} from "@/app/lib/apply/providerDetection";
 
 type JobDetailsResponse = {
   job: JobDetail;
@@ -20,6 +26,10 @@ type JobDetailsResponse = {
 type PlanStatusResponse = {
   active?: boolean;
   pending?: boolean;
+};
+
+type CreditStatusResponse = {
+  hirePilotCredits?: number;
 };
 
 function getSourceLabel(source: JobDetail["source"] | undefined) {
@@ -64,6 +74,9 @@ export default function DashboardJobDetailsPage() {
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
+  const applyProvider = detectApplyProviderFromJob(job);
+  const aiApplyLabel = getApplyProviderButtonLabel(applyProvider);
+  const aiApplyLoadingLabel = getApplyProviderLoadingLabel(applyProvider);
 
   useEffect(() => {
     if (!jobId) {
@@ -149,7 +162,23 @@ export default function DashboardJobDetailsPage() {
     const jobUrl = job?.jobUrl?.trim();
     if (!jobUrl || aiApplyLoading) return;
 
-    const aiApplyHref = `/job-tools/ai-assistant/apply?jobUrl=${encodeURIComponent(jobUrl)}`;
+    if (applyProvider) {
+      const callbackHref =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : `/dashboard/job/${encodeURIComponent(jobId)}`;
+
+      if (authStatus === "loading") {
+        return;
+      }
+
+      if (authStatus !== "authenticated") {
+        router.push(`/login?callbackUrl=${encodeURIComponent(callbackHref)}`);
+        return;
+      }
+    }
+
+    const aiApplyHref = `/job-tools/generate?jobUrl=${encodeURIComponent(jobUrl)}`;
     setAiApplyLoading(true);
 
     const readPlanStatus = async (forceSync: boolean) => {
@@ -170,6 +199,23 @@ export default function DashboardJobDetailsPage() {
       return (await res.json()) as PlanStatusResponse;
     };
 
+    const readCreditStatus = async () => {
+      const res = await fetch("/api/user/hirepilot-status", {
+        cache: "no-store",
+      });
+
+      if (res.status === 401) {
+        router.push(`/login?callbackUrl=${encodeURIComponent(aiApplyHref)}`);
+        return null;
+      }
+
+      if (!res.ok) {
+        throw new Error("Unable to verify credit balance.");
+      }
+
+      return (await res.json()) as CreditStatusResponse;
+    };
+
     try {
       let planData = await readPlanStatus(false);
       if (!planData) return;
@@ -181,17 +227,54 @@ export default function DashboardJobDetailsPage() {
       }
 
       if (planData.pending === true || planData.active !== true) {
-        const params = new URLSearchParams();
-        params.set("source", "smart-matches-ai-apply");
-        params.set("jobUrl", jobUrl);
-        router.push(`/plans?${params.toString()}`);
+        if (applyProvider) {
+          const params = new URLSearchParams();
+          params.set(
+            "source",
+            applyProvider ? `${applyProvider}-auto-apply` : "smart-matches-ai-apply"
+          );
+          params.set("jobUrl", jobUrl);
+          router.push(`/plans?${params.toString()}`);
+          return;
+        }
+
+        const creditData = await readCreditStatus();
+        if (!creditData) return;
+
+        if (Number(creditData.hirePilotCredits ?? 0) <= 0) {
+          const params = new URLSearchParams();
+          params.set(
+            "source",
+            applyProvider ? `${applyProvider}-auto-apply` : "smart-matches-ai-apply"
+          );
+          params.set("jobUrl", jobUrl);
+          router.push(`/plans?${params.toString()}`);
+          return;
+        }
+      }
+
+      if (applyProvider && job) {
+        const res = await fetch("/api/applications/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildApplyProviderPayload(job)),
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data?.applicationId) {
+          throw new Error(data?.error ?? "Unable to start auto apply.");
+        }
+
+        router.push(`/dashboard/application/${data.applicationId}/audit`);
         return;
       }
 
       router.push(aiApplyHref);
     } catch (error) {
       console.error("[SMART_MATCHES] mobile AI apply access check failed", error);
-      router.push(aiApplyHref);
+      if (!applyProvider) {
+        router.push(aiApplyHref);
+      }
     } finally {
       setAiApplyLoading(false);
     }
@@ -216,6 +299,8 @@ export default function DashboardJobDetailsPage() {
           detailsError={detailsError}
           aiApplyLoading={aiApplyLoading}
           aiApplyDisabled={authStatus === "loading" || !job?.jobUrl}
+          aiApplyLabel={aiApplyLabel}
+          aiApplyLoadingLabel={aiApplyLoadingLabel}
           onAiApply={handleAiApply}
           onCareerCoach={() => router.push("/job-tools/agents/career-coach")}
           onOutreach={() => router.push("/job-tools/agents/linkedin-outreach")}

@@ -36,6 +36,8 @@ export async function POST(req: Request) {
           hasHirePilotAccess: status.hasHirePilotAccess,
           hirePilotUnlimited: status.hirePilotUnlimited,
           hirePilotCredits: status.hirePilotCredits,
+          starterCredits: status.starterCredits,
+          starterCreditsGranted: status.starterCreditsGranted,
         },
         { status: 403 }
       );
@@ -58,6 +60,8 @@ export async function POST(req: Request) {
           hasHirePilotAccess: status.hasHirePilotAccess,
           hirePilotUnlimited: status.hirePilotUnlimited,
           hirePilotCredits: status.hirePilotCredits,
+          starterCredits: status.starterCredits,
+          starterCreditsGranted: status.starterCreditsGranted,
         },
         { status: 403 }
       );

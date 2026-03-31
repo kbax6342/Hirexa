@@ -113,6 +113,16 @@ function preferDate(primary?: Date | null, secondary?: Date | null) {
   return primary ?? secondary ?? undefined;
 }
 
+function stripFelonyFromKeyQuestions(value: Prisma.JsonValue | null | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value ?? undefined;
+  }
+
+  const nextValue = { ...(value as Record<string, unknown>) };
+  delete nextValue.felony;
+  return nextValue as Prisma.InputJsonValue;
+}
+
 function dateFromDobString(value?: string | null) {
   const normalized = normalizeDobForStorage(value);
   return normalized ? new Date(`${normalized}T00:00:00.000Z`) : undefined;
@@ -313,7 +323,6 @@ export async function mergeGuestProfileIntoUserProfile(
     portfolioUrl: preferText(userProfile.portfolioUrl, guestProfile.portfolioUrl),
     authorizedUS: preferText(userProfile.authorizedUS, guestProfile.authorizedUS),
     sponsorship: preferText(userProfile.sponsorship, guestProfile.sponsorship),
-    felony: preferText(userProfile.felony, guestProfile.felony),
     startDate: preferText(userProfile.startDate, guestProfile.startDate),
     screening: preferText(userProfile.screening, guestProfile.screening),
     relocate: preferText(userProfile.relocate, guestProfile.relocate),
@@ -333,7 +342,9 @@ export async function mergeGuestProfileIntoUserProfile(
         ? userProfile.registrationStatus
         : guestProfile.registrationStatus ?? userProfile.registrationStatus ?? undefined,
     dob: dateFromDobString(mergedPrivateFields.dob) ?? null,
-    keyQuestions: userProfile.keyQuestions ?? guestProfile.keyQuestions ?? undefined,
+    keyQuestions: stripFelonyFromKeyQuestions(
+      userProfile.keyQuestions ?? guestProfile.keyQuestions ?? undefined
+    ),
     stripeCustomerId: preferText(userProfile.stripeCustomerId, guestProfile.stripeCustomerId),
     stripeSubscriptionId: preferText(
       userProfile.stripeSubscriptionId,

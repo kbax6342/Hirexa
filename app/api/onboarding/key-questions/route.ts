@@ -132,7 +132,6 @@ export async function POST(req: Request) {
     const payload = {
       authorizedUS: String(body.authorizedUS ?? "").trim(),
       sponsorship: String(body.sponsorship ?? "").trim(),
-      felony: String(body.felony ?? "").trim(),
       startDate: String(body.startDate ?? "").trim(),
       screening: String(body.screening ?? "").trim(),
       relocate: String(body.relocate ?? "").trim(),
@@ -143,7 +142,7 @@ export async function POST(req: Request) {
       veteran: String(body.veteran ?? "").trim(),
     };
 
-    if (!payload.authorizedUS || !payload.sponsorship || !payload.felony) {
+    if (!payload.authorizedUS || !payload.sponsorship) {
       return NextResponse.json(
         { error: "Please answer the required questions." },
         { status: 400 }

@@ -1,9 +1,9 @@
 // File: /Hirexa/my-app/app/location-hub/page.tsx
 
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Navbar } from "../components/navbar";
-import { Footer } from "../components/footer";
 
 import LocationSections from "../components/location-hub/LocationSections";
 import LoginFooter from "../components/loginFooter/LoginFooter";
@@ -11,6 +11,12 @@ import { Suspense } from "react";
 import AdzunaSpinner from "../components/spinner/Spinner";
 import ExpandableLocations from "../components/location-hub/ExpandableLocations";
 
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 const trending = [
   "New York",

@@ -66,6 +66,8 @@ type HirePilotStatusResponse = {
   hirePilotCredits: number;
   monthlyCredits?: number;
   rolloverCredits?: number;
+  starterCredits?: number;
+  starterCreditsGranted?: boolean;
   purchasedCredits?: number;
   productKey?: string | null;
   status?: string | null;
@@ -85,6 +87,8 @@ type StartInterviewResponse = {
   hirePilotCredits?: number;
   monthlyCredits?: number;
   rolloverCredits?: number;
+  starterCredits?: number;
+  starterCreditsGranted?: boolean;
   purchasedCredits?: number;
   productKey?: string | null;
   status?: string | null;
@@ -104,6 +108,8 @@ type HirePilotTranscriptionResponse = {
   hirePilotCredits?: number;
   monthlyCredits?: number;
   rolloverCredits?: number;
+  starterCredits?: number;
+  starterCreditsGranted?: boolean;
   purchasedCredits?: number;
   productKey?: string | null;
   status?: string | null;
@@ -250,6 +256,8 @@ function toBillingStatus(data?: HirePilotStatusResponse | StartInterviewResponse
     hirePilotCredits,
     monthlyCredits: Number(data?.monthlyCredits ?? 0),
     rolloverCredits: Number(data?.rolloverCredits ?? 0),
+    starterCredits: Number(data?.starterCredits ?? 0),
+    starterCreditsGranted: Boolean(data?.starterCreditsGranted),
     purchasedCredits: Number(data?.purchasedCredits ?? 0),
     productKey: data?.productKey ?? null,
     status: data?.status ?? null,
@@ -307,6 +315,8 @@ export default function HirePilotClient() {
     hirePilotCredits: 0,
     monthlyCredits: 0,
     rolloverCredits: 0,
+    starterCredits: 0,
+    starterCreditsGranted: false,
     purchasedCredits: 0,
     productKey: null,
     status: null,
@@ -1679,8 +1689,8 @@ export default function HirePilotClient() {
 
                     {hasPaidHirePilotAccess && !billingStatus.hirePilotUnlimited ? (
                       <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
-                        Each live interview session uses 1 HirePilot credit. Monthly credits are
-                        used first, then purchased credits.
+                        Each live interview session uses 1 credit. Monthly credits are used first,
+                        then starter credits, then purchased credits.
                       </div>
                     ) : null}
 
@@ -2140,6 +2150,11 @@ export default function HirePilotClient() {
                   ) : (
                     <>
                       <div>Monthly credits: {monthlyCreditBucket}</div>
+                      {billingStatus.starterCreditsGranted ? (
+                        <div className="mt-1">
+                          Starter credits: {billingStatus.starterCredits ?? 0}
+                        </div>
+                      ) : null}
                       <div className="mt-1">
                         Purchased credits: {billingStatus.purchasedCredits ?? 0}
                       </div>

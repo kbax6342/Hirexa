@@ -3,6 +3,7 @@
 
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import {
   ArrowUpTrayIcon,
   PencilSquareIcon,
@@ -17,6 +18,7 @@ import {
   normalizeLocationLabel,
   type LocationSuggestion,
 } from "@/app/lib/locationOptions";
+import { calculateProfileStrength } from "@/app/lib/profile/profileStrength";
 
 type ExperienceItem = {
   id: string;
@@ -184,6 +186,21 @@ const SENIORITY_LEVEL_OPTIONS = [
   "Manager",
 ];
 
+const PROFILE_SECTIONS = [
+  { id: "personal-info", label: "Personal Info" },
+  { id: "professional-links", label: "Professional Links" },
+  { id: "education", label: "Education" },
+  { id: "experience", label: "Experience" },
+  { id: "skills", label: "Skills" },
+  { id: "settings", label: "Settings" },
+  { id: "job-preferences", label: "Job Preferences" },
+  { id: "notifications", label: "Notifications" },
+  { id: "privacy-security", label: "Privacy & Security" },
+  { id: "ai-profile-sync", label: "AI Profile Sync" },
+] as const;
+
+type ProfileSectionId = (typeof PROFILE_SECTIONS)[number]["id"];
+
 function formatProfileDate(value?: string | null, options?: { includeTime?: boolean }) {
   if (!value) return "Not found";
 
@@ -254,6 +271,7 @@ export default function ProfilePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
   const personalDetailsCardRef = useRef<HTMLDivElement | null>(null);
+  const [activeSection, setActiveSection] = useState<ProfileSectionId>("personal-info");
 
   // ✅ show all experiences toggle
   const [showAllExperiences, setShowAllExperiences] = useState(false);
@@ -507,7 +525,56 @@ export default function ProfilePage() {
     profile?.state,
   ]);
 
+  const profileStrength = useMemo(() => calculateProfileStrength(profile ?? null), [profile]);
+  const topStrengthActions = useMemo(
+    () => profileStrength.missingItems.slice(0, 4),
+    [profileStrength.missingItems]
+  );
+  const combinedSkills = useMemo(
+    () => profileStrength.combinedSkills,
+    [profileStrength.combinedSkills]
+  );
+  const newsletterStatus = profile?.unsubscribedAt
+    ? "Unsubscribed"
+    : profile?.newsletterOptIn
+      ? "Subscribed"
+      : "Not subscribed";
+  const securityStatus = profile?.emailVerifiedAt ? "Verified" : "Pending";
+
+  useEffect(() => {
+    const sections = PROFILE_SECTIONS.map((section) =>
+      document.getElementById(section.id)
+    ).filter((section): section is HTMLElement => Boolean(section));
+
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+
+        const nextSection = visibleEntries[0]?.target.id as ProfileSectionId | undefined;
+        if (nextSection) {
+          setActiveSection(nextSection);
+        }
+      },
+      {
+        rootMargin: "-20% 0px -55% 0px",
+        threshold: [0.2, 0.45, 0.7],
+      }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, []);
+
   function openSmartMatchesLocationEditor() {
+    startEditPersonal();
+    personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function openPersonalDetailsEditor() {
     startEditPersonal();
     personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -1021,13 +1088,93 @@ function ToggleField({
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <main className="mx-auto w-full max-w-6xl px-4 py-12">
+      <main className="mx-auto w-full max-w-7xl px-4 py-12">
+        <div>
+          <p className="text-sm font-semibold text-sky-600">Profile</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
+            Build a stronger Hirexa profile
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            Keep your personal details, job preferences, resume history, and account
+            settings organized in one place so Hirexa can personalize matches and
+            application workflows with less guesswork.
+          </p>
+        </div>
         <div className="mt-6 grid gap-6 lg:grid-cols-12">
-          <section className="lg:col-span-5">
+          <section className="space-y-4 lg:col-span-5">
+            <div className="space-y-4 lg:sticky lg:top-24">
+              <Card className="p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+                      Profile Strength
+                    </p>
+                    <div className="mt-2 text-3xl font-semibold text-slate-900">
+                      {profileStrength.score}%
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      Calculated from the real profile data, resume, skills, and job
+                      preferences already saved to your account.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
+                    {topStrengthActions.length === 0
+                      ? "Complete"
+                      : `${topStrengthActions.length} next steps`}
+                  </div>
+                </div>
+
+                <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-sky-500 transition-all"
+                    style={{ width: `${profileStrength.score}%` }}
+                  />
+                </div>
+
+                <div className="mt-5 space-y-2">
+                  {topStrengthActions.length ? (
+                    topStrengthActions.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-start gap-3 rounded-2xl bg-slate-50 px-3 py-2"
+                      >
+                        <span
+                          className={[
+                            "mt-1 h-2.5 w-2.5 shrink-0 rounded-full",
+                            item.impact === "high" ? "bg-sky-500" : "bg-slate-300",
+                          ].join(" ")}
+                        />
+                        <span className="text-sm text-slate-700">{item.label}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl bg-emerald-50 px-3 py-3 text-sm font-medium text-emerald-700">
+                      Your core profile sections are in good shape.
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Sections
+                </div>
+                <div className="mt-3 flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+                  {PROFILE_SECTIONS.map((section) => (
+                    <SidebarSectionLink
+                      key={section.id}
+                      href={`#${section.id}`}
+                      label={section.label}
+                      active={activeSection === section.id}
+                    />
+                  ))}
+                </div>
+              </Card>
+            </div>
             {/* =======================
                 PERSONAL DETAILS
                ======================= */}
-            <div ref={personalDetailsCardRef}>
+            <div ref={personalDetailsCardRef} id="personal-info" className="scroll-mt-28">
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
@@ -1184,9 +1331,50 @@ function ToggleField({
             </Card>
             </div>
 
+            <section id="professional-links" className="scroll-mt-28">
+              <Card className="p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      Professional Links
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Add the links recruiters and application flows are most likely
+                      to use.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openPersonalDetailsEditor}
+                    className={SKY_BTN_SOFT_SM}
+                  >
+                    <PencilSquareIcon className="h-4 w-4" />
+                    Edit links
+                  </button>
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  <FieldRow
+                    label="LinkedIn"
+                    value={profile?.linkedinUrl ?? "Not provided in database"}
+                  />
+                  <FieldRow
+                    label="Personal website"
+                    value={profile?.portfolioUrl ?? "Not provided in database"}
+                  />
+                </div>
+
+                <p className="mt-3 text-xs text-slate-500">
+                  Additional link types like GitHub, Dribbble, Behance, and X are not
+                  wired into editable profile fields yet.
+                </p>
+              </Card>
+            </section>
+
             {/* =======================
                 PREFERENCES
                ======================= */}
+            <section id="job-preferences" className="scroll-mt-28">
             <Card className="p-6 mt-2">
               <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
               <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
@@ -1353,10 +1541,12 @@ function ToggleField({
                 </div>
               ) : null}
             </Card>
+            </section>
 
             {/* =======================
                 SUBSCRIPTION
                ======================= */}
+            <section id="settings" className="scroll-mt-28">
             <Card className="p-6 mt-2">
               <div className="text-sm font-semibold text-slate-900">Billing & Access</div>
               <p className="mt-2 text-sm text-slate-600">
@@ -1437,22 +1627,80 @@ function ToggleField({
                 </BillingStatusCard>
               </div>
             </Card>
+            </section>
 
-            <Card className="p-6 mt-2">
-              <div className="text-sm font-semibold text-slate-900">Profile Actions</div>
-              <p className="mt-2 text-sm text-slate-600">
-                Account deletion now lives in Settings with stronger confirmation and service
-                cancellation handling.
-              </p>
+            <section id="notifications" className="scroll-mt-28">
+              <Card className="p-6 mt-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">Notifications</div>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Track how Hirexa can reach you about product updates and job-search activity.
+                    </p>
+                  </div>
+                  <Link href="/settings/notifications" className={SKY_BTN_SOFT_SM}>
+                    Open Notifications
+                  </Link>
+                </div>
 
-              <a
-                href="/settings"
-                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
-              >
-                <TrashIcon className="h-4 w-4" />
-                Delete Profile
-              </a>
-            </Card>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FieldRow label="Marketing email status" value={newsletterStatus} />
+                  <FieldRow
+                    label="Primary contact email"
+                    value={profile?.email ?? "Not provided in database"}
+                  />
+                </div>
+
+                <p className="mt-3 text-xs text-slate-500">
+                  Notification toggles live in Settings so product emails and marketing
+                  preferences stay in one place.
+                </p>
+              </Card>
+            </section>
+
+            <section id="privacy-security" className="scroll-mt-28">
+              <Card className="p-6 mt-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">
+                      Privacy & Security
+                    </div>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Review verification status and jump to the account controls that already exist.
+                    </p>
+                  </div>
+                  <Link href="/settings/account/password" className={SKY_BTN_SOFT_SM}>
+                    Change Password
+                  </Link>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <FieldRow label="Email status" value={securityStatus} />
+                  <FieldRow
+                    label="Registration status"
+                    value={profile?.registrationStatus ?? "Not found"}
+                  />
+                  <FieldRow label="Created" value={formatProfileDate(profile?.createdAt)} />
+                  <FieldRow label="Updated" value={formatProfileDate(profile?.updatedAt)} />
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <Link
+                    href="/settings/account/password"
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Password & Security
+                  </Link>
+                  <Link
+                    href="/settings"
+                    className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    Delete Profile
+                  </Link>
+                </div>
+              </Card>
+            </section>
 
             {/* =======================
                 SNAPSHOT
@@ -1473,6 +1721,41 @@ function ToggleField({
              ======================= */}
           <section className="lg:col-span-7">
             <div className="space-y-6">
+              <section id="skills" className="scroll-mt-28">
+                <Card className="p-6">
+                  <div className="text-sm font-semibold text-slate-900">Skills</div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Hirexa uses saved skills from onboarding and resume parsing to
+                    personalize matching and AI output.
+                  </p>
+
+                  {combinedSkills.length ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {combinedSkills.map((skill) => (
+                        <span
+                          key={skill}
+                          className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"
+                        >
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>
+                      No skills found yet. Upload a resume or complete onboarding to
+                      populate your skill profile.
+                    </p>
+                  )}
+
+                  <p className="mt-3 text-xs text-slate-500">
+                    {combinedSkills.length
+                      ? `${combinedSkills.length} skill${combinedSkills.length === 1 ? "" : "s"} currently available across your saved profile and resume data.`
+                      : "Adding at least 3 skills will improve your profile strength and job matching."}
+                  </p>
+                </Card>
+              </section>
+
+              <section id="experience" className="scroll-mt-28">
               <Card className="p-6">
                 <div className="flex-col items-start justify-between gap-4">
                   <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
@@ -1740,6 +2023,65 @@ function ToggleField({
                   </div>
                 </div>
               </Card>
+              </section>
+
+              <section id="education" className="scroll-mt-28">
+                <Card className="p-6">
+                  <div className="text-sm font-semibold text-slate-900">Education</div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    School history, certifications, and training can live here as profile editing expands.
+                  </p>
+
+                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Standalone education editing is not connected yet.
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      For now, uploading your latest resume is the best way to keep
+                      education and certifications attached to your profile during
+                      generation and autofill workflows.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => resumeInputRef.current?.click()}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                    >
+                      <ArrowUpTrayIcon className="h-4 w-4" />
+                      Upload resume
+                    </button>
+                  </div>
+                </Card>
+              </section>
+
+              <section id="ai-profile-sync" className="scroll-mt-28">
+                <Card className="p-6">
+                  <div className="text-sm font-semibold text-slate-900">AI Profile Sync</div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Keep your profile aligned with the workflows you already use in Hirexa.
+                  </p>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <FieldRow
+                      label="Resume sync"
+                      value={
+                        profileStrength.hasResume
+                          ? "Active from uploaded resume"
+                          : "Waiting for a resume upload"
+                      }
+                    />
+                    <FieldRow
+                      label="Profile sync status"
+                      value="Onboarding and profile saves sync automatically"
+                    />
+                  </div>
+
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    Resume uploads, onboarding answers, and supported generate flows
+                    already feed your saved Hirexa profile. Dedicated external-platform
+                    sync controls can live here later without changing your current data.
+                  </p>
+                </Card>
+              </section>
             </div>
           </section>
         </div>
@@ -1815,6 +2157,30 @@ function BillingStatusCard({
       {!compact && children ? <div className="mt-4">{children}</div> : null}
       {actions ? <div className="mt-4 flex flex-wrap gap-3">{actions}</div> : null}
     </div>
+  );
+}
+
+function SidebarSectionLink({
+  href,
+  label,
+  active,
+}: {
+  href: string;
+  label: string;
+  active?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      className={[
+        "inline-flex items-center rounded-full border px-3 py-2 text-sm font-semibold transition-colors lg:w-full lg:rounded-2xl",
+        active
+          ? "border-sky-200 bg-sky-50 text-sky-700"
+          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900",
+      ].join(" ")}
+    >
+      {label}
+    </a>
   );
 }
 

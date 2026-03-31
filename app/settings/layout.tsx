@@ -8,12 +8,10 @@ export const metadata: Metadata = {
   },
 };
 
-export const dynamic = "force-dynamic";
-
-type BenefitsLayoutProps = {
+type SettingsLayoutProps = {
   children: ReactNode;
 };
 
-export default function BenefitsLayout({ children }: BenefitsLayoutProps) {
+export default function SettingsLayout({ children }: SettingsLayoutProps) {
   return children;
 }

@@ -14,7 +14,6 @@ import {
 type FormState = {
   authorizedUS: string;
   sponsorship: string;
-  felony: string;
   startDate: string;
   screening: string;
   relocate: string;
@@ -89,7 +88,6 @@ export default function QuestionsClient() {
   const [form, setForm] = useState<FormState>({
     authorizedUS: "",
     sponsorship: "",
-    felony: "Prefer not to say",
     startDate: "Immediately",
     screening: "",
     relocate: "No",
@@ -150,7 +148,6 @@ export default function QuestionsClient() {
           setForm((prev) => ({
             ...prev,
             ...data.data,
-            felony: String(data?.data?.felony ?? "").trim() || prev.felony,
           }));
         }
       } catch {
@@ -279,7 +276,7 @@ export default function QuestionsClient() {
             fieldRefs.current.sponsorship = element;
           }}
         />
-        <input type="hidden" value={form.felony} readOnly data-testid="question-felony" />
+        <input type="hidden" value="" readOnly data-testid="question-felony" />
        
         <Select
           label="When can you start a new job?"

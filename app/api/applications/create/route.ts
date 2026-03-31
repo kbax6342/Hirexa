@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { deriveSourceFromUrl, normalizeJobUrl } from "@/app/lib/jobSources";
+import {
+  detectApplyProviderFromJob,
+  normalizeApplyProvider,
+} from "@/app/lib/apply/providerDetection";
 
 export const runtime = "nodejs";
 
@@ -13,6 +17,7 @@ type CreateBody = {
   jobUrl?: string;
   sourceJobId?: string;
   source?: string;
+  applyProvider?: string;
 };
 
 const normalizeText = (value: unknown) => String(value ?? "").trim();
@@ -32,7 +37,17 @@ export async function POST(req: Request) {
     const location = normalizeText(body.location) || null;
     const jobUrl = normalizeJobUrl(normalizeText(body.jobUrl)) || null;
     const sourceJobId = normalizeText(body.sourceJobId) || null;
-    const source = normalizeText(body.source) || deriveSourceFromUrl(jobUrl ?? "");
+    const requestedSource = normalizeText(body.source).toLowerCase();
+    const requestedApplyProvider = normalizeApplyProvider(body.applyProvider);
+    const detectedApplyProvider =
+      detectApplyProviderFromJob({
+        source: requestedSource || null,
+        jobUrl,
+      }) ?? requestedApplyProvider;
+    const source =
+      requestedSource ||
+      detectedApplyProvider ||
+      deriveSourceFromUrl(jobUrl ?? "");
 
     if (!title || !company) {
       return NextResponse.json({ error: "jobTitle/title and company are required." }, { status: 400 });

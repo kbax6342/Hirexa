@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
-import mammoth from "mammoth";
 import type { Prisma } from "@prisma/client";
 
 import { auth } from "@/app/lib/auth";
-import { extractPdfText } from "@/app/lib/pdf/serverPdfParser";
+import { getHirexaAccessForUser } from "@/app/lib/billing/getHirexaAccess";
+import { consumeHirePilotCredits } from "@/app/lib/hirepilot/credits";
 import { prisma } from "@/app/lib/prisma";
 import {
   getSafePrivateProfileFields,
   readRawPrivateProfileFieldsByIds,
 } from "@/app/lib/profile/privateProfileFields";
+import {
+  extractResumeTextFromBuffer,
+  extractResumeTextFromStoredFile,
+  persistResumeToProfile,
+} from "@/app/lib/resume/persistResumeToProfile";
 
 export const runtime = "nodejs";
 
@@ -26,6 +31,7 @@ type GeneratePayload = {
   instructions: string | null;
   pastedJobText: string | null;
   resumeFile: File | null;
+  usageKey: string | null;
 };
 
 type GeneratedDocumentPayload = {
@@ -381,59 +387,6 @@ function extractReadableText(html: string) {
   return finalText;
 }
 
-async function extractResumeTextFromFile(file: File) {
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const type = (file.type || "").toLowerCase();
-  const name = file.name.toLowerCase();
-  return extractResumeTextFromBuffer(buffer, type, name);
-}
-
-async function extractResumeTextFromBuffer(
-  buffer: Buffer,
-  type: string,
-  name: string
-) {
-  if (type.includes("pdf") || name.endsWith(".pdf")) {
-    const { fullText } = await extractPdfText(buffer);
-    return cleanText(fullText);
-  }
-
-  if (
-    type.includes("officedocument.wordprocessingml.document") ||
-    name.endsWith(".docx") ||
-    type.includes("msword") ||
-    name.endsWith(".doc")
-  ) {
-    const parsed = await mammoth.extractRawText({ buffer });
-    return cleanText(parsed.value || "");
-  }
-
-  if (type.startsWith("text/") || name.endsWith(".txt")) {
-    return cleanText(buffer.toString("utf-8"));
-  }
-
-  return "";
-}
-
-async function extractResumeTextFromStoredFile(
-  file:
-    | {
-        blob: Uint8Array;
-        fileName: string;
-        mimeType: string;
-      }
-    | null
-    | undefined
-) {
-  if (!file?.blob) return "";
-
-  return extractResumeTextFromBuffer(
-    Buffer.from(file.blob),
-    String(file.mimeType ?? "").toLowerCase(),
-    String(file.fileName ?? "").toLowerCase()
-  );
-}
-
 function resolveCandidateName(input: {
   firstName?: string | null;
   lastName?: string | null;
@@ -656,6 +609,7 @@ async function readPayload(req: Request): Promise<GeneratePayload> {
       instructions: form.get("instructions") ? String(form.get("instructions")) : null,
       pastedJobText: form.get("pastedJobText") ? String(form.get("pastedJobText")) : null,
       resumeFile: resumeFile instanceof File ? resumeFile : null,
+      usageKey: form.get("usageKey") ? String(form.get("usageKey")).trim() : null,
     };
   }
 
@@ -668,6 +622,7 @@ async function readPayload(req: Request): Promise<GeneratePayload> {
     instructions: body?.instructions ? String(body.instructions) : null,
     pastedJobText: body?.pastedJobText ? String(body.pastedJobText) : null,
     resumeFile: null,
+    usageKey: body?.usageKey ? String(body.usageKey).trim() : null,
   };
 }
 
@@ -677,35 +632,109 @@ export async function POST(req: Request) {
     const tone = payload.tone ?? "professional";
     const session = await auth();
     const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
-    const profile = userId
+    let profile = userId
       ? await prisma.userProfile.findUnique({
           where: { userId },
           select: generateProfileSelect,
         })
       : null;
-    const rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
+    let rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
       prisma,
       profile?.id ? [profile.id] : []
     );
-    const rawPrivateFields =
+    let rawPrivateFields =
       profile?.id && rawPrivateFieldsById.get(profile.id)
         ? (rawPrivateFieldsById.get(profile.id) as Record<string, unknown>)
         : {};
-    const privateFields = getSafePrivateProfileFields({
+    let privateFields = getSafePrivateProfileFields({
       ...rawPrivateFields,
       ...(profile ?? {}),
     });
-    const candidateName = resolveCandidateName({
+    let candidateName = resolveCandidateName({
       firstName: profile?.firstName ?? null,
       lastName: profile?.lastName ?? null,
       fullName: session?.user?.name ?? null,
     });
 
     let uploadedResumeText = cleanText(payload.resumeText ?? "");
-    if (!uploadedResumeText && payload.resumeFile) {
-      uploadedResumeText = await extractResumeTextFromFile(payload.resumeFile);
+    let savedResume:
+      | {
+          id: string;
+          fileName: string | null;
+        }
+      | undefined;
+    let profileSync:
+      | {
+          updatedFields: string[];
+          skippedFields: string[];
+        }
+      | undefined;
+
+    if (payload.resumeFile) {
+      const resumeFileInput = {
+        buffer: Buffer.from(await payload.resumeFile.arrayBuffer()),
+        fileName: payload.resumeFile.name,
+        mimeType: payload.resumeFile.type || "application/pdf",
+        sizeBytes: payload.resumeFile.size,
+      };
+
+      if (userId && profile?.id) {
+        try {
+          const persistedResume = await persistResumeToProfile({
+            profileId: profile.id,
+            resumeFile: resumeFileInput,
+          });
+
+          uploadedResumeText = persistedResume.extractedResumeText;
+          savedResume = persistedResume.savedResume
+            ? {
+                id: persistedResume.savedResume.id,
+                fileName: persistedResume.savedResume.fileName,
+              }
+            : undefined;
+          profileSync = persistedResume.profileSync;
+
+          profile = await prisma.userProfile.findUnique({
+            where: { userId },
+            select: generateProfileSelect,
+          });
+          rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
+            prisma,
+            profile?.id ? [profile.id] : []
+          );
+          rawPrivateFields =
+            profile?.id && rawPrivateFieldsById.get(profile.id)
+              ? (rawPrivateFieldsById.get(profile.id) as Record<string, unknown>)
+              : {};
+          privateFields = getSafePrivateProfileFields({
+            ...rawPrivateFields,
+            ...(profile ?? {}),
+          });
+          candidateName = resolveCandidateName({
+            firstName: profile?.firstName ?? null,
+            lastName: profile?.lastName ?? null,
+            fullName: session?.user?.name ?? null,
+          });
+        } catch (persistError) {
+          console.warn("[job-tools/generate] resume persistence failed; using transient upload", {
+            userId,
+            profileId: profile?.id ?? null,
+            error: persistError instanceof Error ? persistError.message : String(persistError),
+          });
+        }
+      }
+
+      if (!uploadedResumeText) {
+        uploadedResumeText = await extractResumeTextFromBuffer(
+          resumeFileInput.buffer,
+          resumeFileInput.mimeType,
+          resumeFileInput.fileName
+        );
+      }
     }
-    const savedResumeText = profile?.resumeFiles?.[0]
+    const savedResumeText = savedResume
+      ? ""
+      : profile?.resumeFiles?.[0]
       ? await extractResumeTextFromStoredFile(profile.resumeFiles[0])
       : "";
     const candidateContext = buildCandidateContext({
@@ -755,6 +784,71 @@ export async function POST(req: Request) {
         { error: "Could not extract enough text from that page. Paste the job description in the fallback field and try again." },
         { status: 400 }
       );
+    }
+
+    let creditStatus:
+      | {
+          remaining: number;
+          starterRemaining: number;
+          starterGranted: boolean;
+          consumed: boolean;
+        }
+      | undefined;
+
+    if (userId) {
+      const hirexaAccess = await getHirexaAccessForUser({
+        userId,
+        sessionEmail: session?.user?.email ?? null,
+      });
+
+      if (!hirexaAccess.active) {
+        if (hirexaAccess.pending) {
+          return NextResponse.json(
+            {
+              error:
+                "We're still syncing your subscription. Refresh once or revisit your billing confirmation page, then try Generate again.",
+            },
+            { status: 403 }
+          );
+        }
+
+        const creditConsumption = await consumeHirePilotCredits({
+          userId,
+          amount: 1,
+          usageKey:
+            payload.usageKey?.trim() ||
+            `ai-assistant-apply:${userId}:${Date.now()}`,
+          sourceType: "ai_assistant_apply",
+          metadata: {
+            jobUrl: payload.url || null,
+            usedPastedJobText: Boolean(payload.pastedJobText?.trim()),
+            uploadedResumeFileName: payload.resumeFile?.name ?? null,
+          },
+        });
+
+        if (!creditConsumption.ok) {
+          return NextResponse.json(
+            {
+              error:
+                "You've used all 5 free credits. Upgrade to continue using HirePilot and AI Assistant Apply.",
+              credits: {
+                remaining: creditConsumption.summary.totalAvailable,
+                starterRemaining: creditConsumption.summary.starterCredits,
+                starterGranted: creditConsumption.summary.starterCreditsGranted,
+                consumed: false,
+              },
+            },
+            { status: 403 }
+          );
+        }
+
+        creditStatus = {
+          remaining: creditConsumption.summary.totalAvailable,
+          starterRemaining: creditConsumption.summary.starterCredits,
+          starterGranted: creditConsumption.summary.starterCreditsGranted,
+          consumed: true,
+        };
+      }
     }
 
     const selectedFocus = payload.focusAreas.length ? payload.focusAreas.join(", ") : "none provided";
@@ -899,6 +993,9 @@ ${JSON.stringify(schema, null, 2)}
         ...generated,
         candidateName,
         fullResumeText,
+        savedResume,
+        profileSync,
+        credits: creditStatus,
         coverLetter: ensureSignedDocument(
           generated.coverLetter ?? "",
           candidateName,

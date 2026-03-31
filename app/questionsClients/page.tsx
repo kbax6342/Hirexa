@@ -1,4 +1,12 @@
+import type { Metadata } from "next";
 import QuestionsClient from "@/app/questions/questionsClient";
+
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 export default function QuestionsClientsPage() {
   return (

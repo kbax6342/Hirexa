@@ -12,12 +12,26 @@ import {
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
 import { sendApplicationActivityEmailForStatusChange } from "@/app/lib/email/lifecycle";
+import {
+  buildProfileFieldMap,
+  computeMissingFromFields,
+} from "@/app/lib/jobApplicationAudit";
+import { runApplyMode } from "@/app/lib/playwright/applyRunner";
+import { detectApplyProviderFromJob } from "@/app/lib/apply/providerDetection";
 
 export const runtime = "nodejs";
 
 type ApplyBody = {
   answers?: AnswersMap;
 };
+
+function toHostedAnswersMap(values: Record<string, unknown>): AnswersMap {
+  const entries = Object.entries(values)
+    .filter(([key]) => key !== "resumeUploaded")
+    .map(([key, value]) => [key, String(value ?? "").trim()] as const);
+
+  return Object.fromEntries(entries);
+}
 
 export async function POST(
   req: Request,
@@ -64,6 +78,175 @@ export async function POST(
         { ok: false, error: "Application missing jobUrl" },
         { status: 400 },
       );
+    }
+
+    const applyProvider = detectApplyProviderFromJob({
+      source: application.source,
+      jobUrl: application.jobUrl,
+    });
+
+    if (applyProvider === "ashby") {
+      const resume = await prisma.resumeFile.findFirst({
+        where: { profileId: application.userProfileId },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const fields = buildProfileFieldMap(application.userProfile, resume);
+      const computed = computeMissingFromFields(
+        fields,
+        (body.answers as Record<string, unknown> | undefined) ?? {}
+      );
+      const answers = toHostedAnswersMap(computed.merged);
+
+      if (computed.missing.length > 0) {
+        await prisma.jobApplication.update({
+          where: { id: application.id },
+          data: {
+            status: "IN_PREPARATION",
+            answersJson: answers,
+            auditJson: {
+              provider: applyProvider,
+              finalValuesToSubmit: answers,
+              missing: computed.missing,
+            },
+          },
+        });
+
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Missing required profile fields.",
+            missingRequired: computed.missing,
+          },
+          { status: 409 }
+        );
+      }
+
+      const tempResume = await writeResumeToTemp(application.userProfileId);
+
+      try {
+        const result = await runApplyMode({
+          jobUrl: application.jobUrl,
+          values: answers,
+          resumePath: tempResume?.path ?? null,
+        });
+
+        if (result.ok) {
+          const updatedApplication = await prisma.jobApplication.update({
+            where: { id: application.id },
+            data: {
+              status: "SENT",
+              submittedAt: new Date(),
+              answersJson: answers,
+              auditJson: {
+                provider: applyProvider,
+                finalValuesToSubmit: answers,
+                submissionProof: result.submissionProof,
+              },
+            },
+            select: {
+              id: true,
+              status: true,
+            },
+          });
+          await sendApplicationActivityEmailForStatusChange({
+            applicationId: updatedApplication.id,
+            previousStatus: application.status,
+            nextStatus: updatedApplication.status,
+          }).catch((error) => {
+            console.warn("[applications/apply] status email failed", {
+              applicationId: application.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+
+          return NextResponse.json({
+            ok: true,
+            status: "SENT",
+            finalUrl: result.submissionProof.url,
+          });
+        }
+
+        if (result.verificationRequired) {
+          const updatedApplication = await prisma.jobApplication.update({
+            where: { id: application.id },
+            data: {
+              status: "READY_TO_SEND",
+              answersJson: answers,
+              auditJson: {
+                provider: applyProvider,
+                finalValuesToSubmit: answers,
+                verificationRequired: true,
+                reason: result.reason,
+              },
+            },
+            select: {
+              id: true,
+              status: true,
+            },
+          });
+          await sendApplicationActivityEmailForStatusChange({
+            applicationId: updatedApplication.id,
+            previousStatus: application.status,
+            nextStatus: updatedApplication.status,
+          }).catch((error) => {
+            console.warn("[applications/apply] status email failed", {
+              applicationId: application.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+
+          return NextResponse.json(
+            {
+              ok: false,
+              needsHuman: true,
+              openUrl: application.jobUrl,
+              message:
+                "Ashby requires manual verification in the hosted form. Open the application, complete verification, and finish submit there.",
+            },
+            { status: 409 }
+          );
+        }
+
+        const updatedApplication = await prisma.jobApplication.update({
+          where: { id: application.id },
+          data: {
+            status: "READY_TO_SEND",
+            answersJson: answers,
+            auditJson: {
+              provider: applyProvider,
+              finalValuesToSubmit: answers,
+              reason: result.reason,
+            },
+          },
+          select: {
+            id: true,
+            status: true,
+          },
+        });
+        await sendApplicationActivityEmailForStatusChange({
+          applicationId: updatedApplication.id,
+          previousStatus: application.status,
+          nextStatus: updatedApplication.status,
+        }).catch((error) => {
+          console.warn("[applications/apply] status email failed", {
+            applicationId: application.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+
+        return NextResponse.json(
+          {
+            ok: false,
+            error: result.reason ?? "Submission could not be confirmed.",
+          },
+          { status: 502 }
+        );
+      } finally {
+        if (tempResume?.path) {
+          await unlink(tempResume.path).catch(() => undefined);
+        }
+      }
     }
 
     const { answers, finalValuesToSubmit, greenhouseEmbedUrl } =

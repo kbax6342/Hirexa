@@ -7,6 +7,7 @@ import MetaPixelPageView from "./components/analytics/MetaPixelPageView";
 import { Navbar } from "./components/navbar";
 import PwaRegister from "./components/pwa/PwaRegister";
 import RecaptchaProvider from "./components/providers/RecaptchaProvider";
+import { getSiteUrl } from "./lib/site-url";
 import {
   getMetaPixelInitScript,
   getMetaPixelNoscriptUrl,
@@ -27,6 +28,8 @@ const spaceGrotesk = Space_Grotesk({
 
 export const dynamic = "force-dynamic";
 
+const socialPreviewImage = `${getSiteUrl()}/opengraph-image.png`;
+
 export const metadata: Metadata = {
   title: "Hirexa AI",
   description:
@@ -40,6 +43,13 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "default",
     title: "Hirexa AI",
+  },
+  openGraph: {
+    images: [socialPreviewImage],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: [socialPreviewImage],
   },
   icons: {
     icon: [

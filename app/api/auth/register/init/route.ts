@@ -5,6 +5,7 @@ import { verifyRecaptchaV3 } from "../../../../lib/security/recaptcha";
 import { validatePassword, hashPassword } from "../../../../lib/security/password";
 import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
 import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
+import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 
 function normalizeName(value: unknown) {
@@ -40,6 +41,12 @@ export async function POST(req: Request) {
     const pw = validatePassword(password);
     if (!pw.ok) {
       return NextResponse.json({ error: "Password not strong enough" }, { status: 400 });
+    }
+
+    try {
+      await cleanupExpiredPendingVerifications();
+    } catch (cleanupError) {
+      console.warn("pending verification cleanup failed before signup init:", cleanupError);
     }
 
     const existingUser = await prisma.user.findUnique({

@@ -4,6 +4,12 @@ import { prisma } from "@/app/lib/prisma";
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
 import { parseGreenhouseForm, type GhField, type GhParsedForm } from "@/app/lib/greenhouse/parseGreenhouseForm";
 import { detectCountryFieldKind } from "@/app/lib/greenhouse/countryFields";
+import {
+  buildProfileFieldMap,
+  computeMissingFromFields,
+} from "@/app/lib/jobApplicationAudit";
+import { detectApplyProviderFromJob } from "@/app/lib/apply/providerDetection";
+import { runAuditMode } from "@/app/lib/playwright/auditRunner";
 
 export const runtime = "nodejs";
 
@@ -52,6 +58,39 @@ function isMissingRequired(field: GhField, value: AnswerValue, hasResume: boolea
   return String(value ?? "").trim().length === 0;
 }
 
+const GENERIC_HOSTED_FIELDS = [
+  { path: "firstName", label: "First name", type: "text", required: true },
+  { path: "lastName", label: "Last name", type: "text", required: true },
+  { path: "email", label: "Email", type: "email", required: true },
+  { path: "phone", label: "Phone", type: "tel", required: true },
+  { path: "address", label: "Address", type: "text", required: false },
+  { path: "city", label: "City", type: "text", required: true },
+  { path: "state", label: "State", type: "text", required: true },
+  { path: "postalCode", label: "Postal code", type: "text", required: false },
+  { path: "linkedin", label: "LinkedIn URL", type: "url", required: false },
+  { path: "website", label: "Portfolio / website", type: "url", required: false },
+] as const;
+
+function buildGenericHostedFieldStates(
+  values: Record<string, unknown>,
+  missing: string[]
+) {
+  return GENERIC_HOSTED_FIELDS.map((field) => ({
+    path: field.path,
+    label: field.label,
+    placeholder: field.label,
+    type: field.type,
+    required: field.required,
+    options: [] as Array<{ value: string; label: string }>,
+    value: values[field.path] ?? "",
+    isMissing: missing.includes(field.path),
+    rawValue: values[field.path] ?? "",
+    submittedValue: values[field.path] ?? "",
+    countryFieldKind: null,
+    isCountryField: false,
+  }));
+}
+
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();
@@ -81,6 +120,97 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
 
     if (!application.jobUrl) {
       return NextResponse.json({ ok: false, error: "Application missing jobUrl" }, { status: 400 });
+    }
+
+    const applyProvider = detectApplyProviderFromJob({
+      source: application.source,
+      jobUrl: application.jobUrl,
+    });
+
+    if (applyProvider === "ashby") {
+      const resume = await prisma.resumeFile.findFirst({
+        where: {
+          profileId: application.userProfileId,
+          mimeType: "application/pdf",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const fields = buildProfileFieldMap(application.userProfile, resume);
+      const savedAnswers =
+        ((application.answersJson as Record<string, unknown> | null) ?? {}) as Record<
+          string,
+          unknown
+        >;
+      const computed = computeMissingFromFields(fields, savedAnswers);
+      const fieldStates = buildGenericHostedFieldStates(
+        computed.merged,
+        computed.missing
+      );
+
+      let auditItems: Awaited<ReturnType<typeof runAuditMode>>["auditItems"] = [];
+      let action: string | undefined;
+      let method: string | undefined;
+
+      try {
+        const scraped = await runAuditMode(application.jobUrl);
+        auditItems = scraped.auditItems;
+        action = scraped.action;
+        method = scraped.method;
+      } catch {
+        auditItems = [];
+      }
+
+      const status =
+        application.status === "SENT"
+          ? "SENT"
+          : computed.missing.length > 0
+            ? "IN_PREPARATION"
+            : "READY_TO_SEND";
+
+      await prisma.jobApplication.update({
+        where: { id: application.id },
+        data: {
+          status,
+          answersJson: computed.merged,
+          auditJson: {
+            provider: applyProvider,
+            fields,
+            fieldStates,
+            missing: computed.missing,
+            action,
+            method,
+            auditItems,
+          },
+        },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        status,
+        warning:
+          "Ashby applications use the hosted application form. Review your profile details, then continue with Apply Now.",
+        jobTitle: application.jobTitle,
+        company: application.company,
+        location: application.location ?? null,
+        jobUrl: application.jobUrl,
+        answers: computed.merged,
+        finalValuesToSubmit: computed.merged,
+        missingRequired: computed.missing,
+        meta: {
+          missing: computed.missing,
+          fieldStates,
+          action,
+          method,
+        },
+        auditItems,
+        resume: resume
+          ? {
+              fileName: resume.fileName,
+              mimeType: resume.mimeType,
+            }
+          : null,
+      });
     }
 
     let form: GhParsedForm;

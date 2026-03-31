@@ -1,7 +1,14 @@
 // app/signup/page.tsx
+import type { Metadata } from "next";
 import Link from "next/link";
 import SignupForm from "../components/signUp/SignUp";
-import LoginFooter from "../components/loginFooter/LoginFooter";
+
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 export default function SignupPage() {
   return (

@@ -5,8 +5,13 @@ import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
 import { hashOtp } from "@/app/lib/security/otp";
 import { sendRegistrationConfirmedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 import { syncLoopsContact } from "@/app/lib/email/loops";
+import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
+import {
+  grantStarterHirePilotCredits,
+  STARTER_FEATURE_CREDITS,
+} from "@/app/lib/hirepilot/credits";
 
 export async function POST(req: Request) {
   try {
@@ -25,6 +30,12 @@ export async function POST(req: Request) {
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_verify");
     if (!rc.ok) {
       return NextResponse.json({ error: rc.error }, { status: 403 });
+    }
+
+    try {
+      await cleanupExpiredPendingVerifications();
+    } catch (cleanupError) {
+      console.warn("pending verification cleanup failed before signup verify:", cleanupError);
     }
 
     const otp = await prisma.emailOtp.findUnique({
@@ -125,6 +136,15 @@ export async function POST(req: Request) {
       where: { userId },
       select: { id: true, firstName: true, welcomeEmailSentAt: true, userId: true },
     });
+
+    try {
+      await grantStarterHirePilotCredits({
+        userId,
+        credits: STARTER_FEATURE_CREDITS,
+      });
+    } catch (starterCreditError) {
+      console.warn("starter credit grant failed after verification:", starterCreditError);
+    }
 
     if (profile?.id) {
       await syncLoopsContact({

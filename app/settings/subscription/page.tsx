@@ -19,6 +19,8 @@ const EMPTY_CREDIT_SUMMARY: CreditSummary = {
   totalAvailable: 0,
   monthlyCredits: 0,
   rolloverCredits: 0,
+  starterCredits: 0,
+  starterCreditsGranted: false,
   purchasedCredits: 0,
   nextMonthlyResetAt: null,
   earliestPurchasedExpiryAt: null,
@@ -203,6 +205,7 @@ export default async function SubscriptionSettingsPage() {
     creditSummary.totalAvailable > 0 ||
     creditSummary.monthlyCredits > 0 ||
     creditSummary.rolloverCredits > 0 ||
+    creditSummary.starterCredits > 0 ||
     creditSummary.purchasedCredits > 0;
   const hirepilotCanCancel = cancelableKeys.has(BILLING_PRODUCT_KEYS.HIREPILOT_MONTHLY);
   const hirepilotPlanLabel = hirepilotSubscription
@@ -412,6 +415,7 @@ export default async function SubscriptionSettingsPage() {
                       <CreditStat label="Total available" value={String(creditSummary.totalAvailable)} />
                       <CreditStat label="Monthly credits" value={String(creditSummary.monthlyCredits)} />
                       <CreditStat label="Rollover credits" value={String(creditSummary.rolloverCredits)} />
+                      <CreditStat label="Starter credits" value={String(creditSummary.starterCredits)} />
                       <CreditStat label="Purchased credits" value={String(creditSummary.purchasedCredits)} />
                       <CreditStat
                         label="Next monthly reset"

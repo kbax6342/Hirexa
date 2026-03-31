@@ -12,6 +12,8 @@ export type HirePilotAccessResult = {
   unlimited: boolean;
   credits: number;
   monthlyCredits?: number;
+  starterCredits?: number;
+  starterCreditsGranted?: boolean;
   purchasedCredits?: number;
 };
 
@@ -34,6 +36,8 @@ export async function checkHirePilotAccess(
       unlimited: true,
       credits: status.hirePilotCredits,
       monthlyCredits: status.monthlyCredits + status.rolloverCredits,
+      starterCredits: status.starterCredits,
+      starterCreditsGranted: status.starterCreditsGranted,
       purchasedCredits: status.purchasedCredits,
     };
   }
@@ -45,6 +49,8 @@ export async function checkHirePilotAccess(
         unlimited: status.hirePilotUnlimited,
         credits: status.hirePilotCredits,
         monthlyCredits: status.monthlyCredits + status.rolloverCredits,
+        starterCredits: status.starterCredits,
+        starterCreditsGranted: status.starterCreditsGranted,
         purchasedCredits: status.purchasedCredits,
       };
     }
@@ -61,6 +67,8 @@ export async function checkHirePilotAccess(
       credits: consumption.summary.totalAvailable,
       monthlyCredits:
         consumption.summary.monthlyCredits + consumption.summary.rolloverCredits,
+      starterCredits: consumption.summary.starterCredits,
+      starterCreditsGranted: consumption.summary.starterCreditsGranted,
       purchasedCredits: consumption.summary.purchasedCredits,
     };
   }
@@ -70,6 +78,8 @@ export async function checkHirePilotAccess(
     unlimited: false,
     credits: 0,
     monthlyCredits: 0,
+    starterCredits: 0,
+    starterCreditsGranted: false,
     purchasedCredits: 0,
   };
 }

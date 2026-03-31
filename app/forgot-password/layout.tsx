@@ -8,12 +8,12 @@ export const metadata: Metadata = {
   },
 };
 
-export const dynamic = "force-dynamic";
-
-type BenefitsLayoutProps = {
+type ForgotPasswordLayoutProps = {
   children: ReactNode;
 };
 
-export default function BenefitsLayout({ children }: BenefitsLayoutProps) {
+export default function ForgotPasswordLayout({
+  children,
+}: ForgotPasswordLayoutProps) {
   return children;
 }

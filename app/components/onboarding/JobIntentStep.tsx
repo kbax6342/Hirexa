@@ -172,7 +172,7 @@ export default function JobIntentStep() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_28%),linear-gradient(180deg,#f8fbff_0%,#eef4fb_100%)]">
       <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6 sm:pb-8 sm:pt-6 lg:py-12">
-        <div className="w-full px-1">
+        <div className="w-full px-1 md:mt-10">
           <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
             <span>Your Target Job</span>
             <span>{progressPercent}% complete</span>
@@ -195,7 +195,7 @@ export default function JobIntentStep() {
         <div className="mx-auto mt-4 w-full max-w-2xl sm:mt-6 lg:mt-8">
           <section
             className={cn(
-              "flex flex-col rounded-[28px] mt-[60%] border  border-slate-200/80 bg-white p-4 shadow-[0_28px_90px_-48px_rgba(15,23,42,0.35)] sm:rounded-[32px] sm:p-8",
+              "flex flex-col rounded-[28px] max-sm:mt-[60%] border  border-slate-200/80 bg-white p-4 shadow-[0_28px_90px_-48px_rgba(15,23,42,0.35)] sm:rounded-[32px] sm:p-8",
               loadingSavedState && "opacity-90"
             )}
           >

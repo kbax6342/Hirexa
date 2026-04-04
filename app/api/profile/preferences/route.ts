@@ -8,6 +8,7 @@ import {
   deriveLocationLabel,
   normalizeLocationLabel,
 } from "@/app/lib/locationOptions";
+import { validateUsLocation } from "@/app/lib/location/validateUsLocation";
 import {
   getSafePrivateProfileFields,
   PrivateProfileFieldValidationError,
@@ -261,12 +262,41 @@ export async function POST(req: Request) {
 
     const hasLocationFields =
       hasField("city") || hasField("state") || hasField("postalCode");
-    const sanitizedLocationFields = hasLocationFields
-      ? sanitizePrivateProfileFields({
+    const locationCandidate = hasLocationFields
+      ? {
           city: hasField("city") ? body.city : existingSafePrivateFields.city,
           state: hasField("state") ? body.state : existingSafePrivateFields.state,
           postalCode: hasField("postalCode")
             ? body.postalCode
+            : existingSafePrivateFields.postalCode,
+        }
+      : null;
+    const validatedLocation = locationCandidate
+      ? await validateUsLocation(locationCandidate)
+      : null;
+
+    if (validatedLocation && !validatedLocation.ok) {
+      return NextResponse.json(
+        {
+          error: validatedLocation.message,
+          code: validatedLocation.code,
+          field: validatedLocation.field,
+          message: validatedLocation.message,
+        },
+        { status: 400 }
+      );
+    }
+
+    const sanitizedLocationFields = hasLocationFields
+      ? sanitizePrivateProfileFields({
+          city: validatedLocation?.ok
+            ? validatedLocation.normalized.city
+            : existingSafePrivateFields.city,
+          state: validatedLocation?.ok
+            ? validatedLocation.normalized.stateCode
+            : existingSafePrivateFields.state,
+          postalCode: validatedLocation?.ok
+            ? validatedLocation.normalized.postalCode
             : existingSafePrivateFields.postalCode,
         })
       : null;

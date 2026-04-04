@@ -11,6 +11,12 @@ const API_KEY_KEYS = [
   "GOOGLE_DRIVE_API_KEY",
 ] as const;
 
+const PROJECT_NUMBER_KEYS = [
+  "NEXT_PUBLIC_GOOGLE_DRIVE_PROJECT_NUMBER",
+  "GOOGLE_DRIVE_PROJECT_NUMBER",
+  "GOOGLE_CLOUD_PROJECT_NUMBER",
+] as const;
+
 function getFirstConfiguredEnv(keys: readonly string[]) {
   for (const key of keys) {
     const rawValue = process.env[key];
@@ -26,6 +32,7 @@ function getFirstConfiguredEnv(keys: readonly string[]) {
 export async function GET() {
   const clientId = getFirstConfiguredEnv(CLIENT_ID_KEYS);
   const apiKey = getFirstConfiguredEnv(API_KEY_KEYS);
+  const projectNumber = getFirstConfiguredEnv(PROJECT_NUMBER_KEYS);
 
   if (!clientId || !apiKey) {
     return NextResponse.json(
@@ -45,6 +52,7 @@ export async function GET() {
     config: {
       clientId,
       apiKey,
+      projectNumber,
     },
   });
 }

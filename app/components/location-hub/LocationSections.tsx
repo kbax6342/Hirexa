@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
+import ListSectionSkeleton from "@/app/components/loading/ListSectionSkeleton";
 
 type JobCard = {
   id: string;
@@ -102,7 +103,21 @@ export default function LocationSections({
   }, [effectiveStates, n]);
 
   if (loading) {
-    return <div className="mt-10 text-sm text-gray-500">Loading jobs...</div>;
+    return (
+      <ListSectionSkeleton
+        className="mt-10"
+        sectionCount={Math.max(effectiveStates.length, 1)}
+        cardsPerSection={Math.max(n, 1)}
+      />
+    );
+  }
+
+  if (sections.length === 0) {
+    return (
+      <div className="mt-10 rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+        Live jobs are taking longer than expected right now. Try again in a moment.
+      </div>
+    );
   }
 
   return (

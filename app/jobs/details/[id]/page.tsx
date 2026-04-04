@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
+import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
 import StructuredJobDescription from "@/app/components/jobs/StructuredJobDescription";
 import { cleanJobText } from "@/app/lib/jobs/clean-job-text";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
@@ -467,8 +468,8 @@ export default function JobDetailsPage() {
         </nav>
 
         {loading ? (
-          <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
-            Loading...
+          <div className="mt-8 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+            <JobDetailsSkeleton />
           </div>
         ) : null}
 

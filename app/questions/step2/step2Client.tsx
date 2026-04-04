@@ -6,6 +6,15 @@ import { useRouter } from "next/navigation";
 
 import ResumeParsingLoadingScreen from "@/app/components/loading/ResumeParsingLoadingScreen";
 import {
+  buildGooglePickerMimeTypes,
+  downloadGoogleDriveFile,
+  fetchGoogleDriveMetadata,
+  GOOGLE_DRIVE_DISCOVERY_DOC,
+  GOOGLE_DRIVE_SCOPE,
+  GoogleDriveImportError,
+  sanitizeGoogleConfigValue,
+} from "@/app/lib/googleDrive/client";
+import {
   JOB_INTEREST_ROUTE,
   RESUME_ROUTE,
   getNextOnboardingRoute,
@@ -43,23 +52,9 @@ declare global {
     google?: {
       picker?: {
         Action: { PICKED: string; CANCEL: string };
-        DocsView: new () => {
-          setIncludeFolders: (include: boolean) => unknown;
-          setSelectFolderEnabled: (enabled: boolean) => unknown;
-        };
-        PickerBuilder: new () => {
-          setDeveloperKey: (key: string) => unknown;
-          setOAuthToken: (token: string) => unknown;
-          setOrigin: (origin: string) => unknown;
-          addView: (view: unknown) => unknown;
-          setCallback: (
-            callback: (data: {
-              action: string;
-              docs?: Array<{ id: string; name: string; mimeType?: string }>;
-            }) => void
-          ) => unknown;
-          build: () => { setVisible: (visible: boolean) => void };
-        };
+        ViewId: { DOCS: string };
+        DocsView: new (viewId?: string) => GooglePickerView;
+        PickerBuilder: new () => GooglePickerBuilder;
       };
       accounts?: {
         oauth2?: {
@@ -97,23 +92,47 @@ type UploadProof = {
   };
 };
 
+type GooglePickerDoc = {
+  id: string;
+  name: string;
+  mimeType?: string;
+};
+
+type GooglePickerCallbackData = {
+  action: string;
+  docs?: GooglePickerDoc[];
+};
+
+type GooglePickerView = {
+  setIncludeFolders: (include: boolean) => GooglePickerView;
+  setSelectFolderEnabled: (enabled: boolean) => GooglePickerView;
+  setMimeTypes: (mimeTypes: string) => GooglePickerView;
+};
+
+type GooglePickerInstance = {
+  setVisible: (visible: boolean) => void;
+};
+
+type GooglePickerBuilder = {
+  setDeveloperKey: (key: string) => GooglePickerBuilder;
+  setOAuthToken: (token: string) => GooglePickerBuilder;
+  setAppId: (appId: string) => GooglePickerBuilder;
+  setOrigin: (origin: string) => GooglePickerBuilder;
+  addView: (view: GooglePickerView) => GooglePickerBuilder;
+  setCallback: (
+    callback: (data: GooglePickerCallbackData) => void
+  ) => GooglePickerBuilder;
+  build: () => GooglePickerInstance;
+};
+
 type GoogleDriveConfig = {
   clientId: string;
   apiKey: string;
+  projectNumber?: string | null;
 };
 
 type ResumeInputMode = "upload" | "paste";
-
-const GOOGLE_DRIVE_DISCOVERY_DOC =
-  "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest";
-const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const ONBOARDING_RESUME_SKIPPED_COOKIE = "onboarding_resume_skipped";
-
-function sanitizeGoogleConfigValue(value?: string | null) {
-  if (!value) return undefined;
-  const sanitized = value.trim().replace(/^['"]|['"]$/g, "");
-  return sanitized || undefined;
-}
 
 function loadScript(src: string) {
   return new Promise<void>((resolve, reject) => {
@@ -188,20 +207,15 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
     inputRef.current?.click();
   }
 
-  async function testGoogleApiKey(apiKey: string) {
-    const url = `https://www.googleapis.com/drive/v3/files?fields=files(id)&pageSize=1&key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(url);
-    const text = await res.text();
-    console.log("KEY TEST 2 status:", res.status);
-    console.log("KEY TEST 2 body:", text.slice(0, 500));
-  }
-
   async function pickFromGoogleDrive() {
     let clientId = sanitizeGoogleConfigValue(
       process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID
     );
     let apiKey = sanitizeGoogleConfigValue(
       process.env.NEXT_PUBLIC_GOOGLE_DRIVE_API_KEY
+    );
+    let projectNumber = sanitizeGoogleConfigValue(
+      process.env.NEXT_PUBLIC_GOOGLE_DRIVE_PROJECT_NUMBER
     );
 
     if (!clientId || !apiKey) {
@@ -216,15 +230,16 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
         };
         clientId = sanitizeGoogleConfigValue(config.config?.clientId);
         apiKey = sanitizeGoogleConfigValue(config.config?.apiKey);
+        projectNumber = sanitizeGoogleConfigValue(config.config?.projectNumber);
       }
     }
 
     if (!clientId || !apiKey) {
-      setSaveError("Google Drive import is not configured yet.");
+      setSaveError(
+        "Google Drive import is not configured yet. Missing Google client ID or API key."
+      );
       return;
     }
-
-    await testGoogleApiKey(apiKey);
 
     setIsGoogleDriveLoading(true);
     setSaveError(null);
@@ -242,10 +257,21 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
       await new Promise<void>((resolve, reject) => {
         window.gapi!.load("client:picker", {
           callback: () => resolve(),
-          onerror: () => reject(new Error("Failed to load Google Picker module.")),
+          onerror: () =>
+            reject(
+              new GoogleDriveImportError(
+                "picker_blocked",
+                "Google Drive tools were blocked before the picker could open."
+              )
+            ),
           timeout: 10000,
           ontimeout: () =>
-            reject(new Error("Google Picker module load timed out.")),
+            reject(
+              new GoogleDriveImportError(
+                "picker_timeout",
+                "Google Drive tools took too long to load. Please try again."
+              )
+            ),
         });
       });
 
@@ -286,27 +312,26 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
         tokenClient.requestAccessToken({ prompt: "consent" });
       });
 
-      const selectedDoc = await new Promise<{
-        id: string;
-        name: string;
-        mimeType?: string;
-      }>((resolve, reject) => {
-        const pickerAny = window.google!.picker as any;
-        const docsView = new pickerAny.DocsView(pickerAny.ViewId.DOCS)
+      const selectedDoc = await new Promise<GooglePickerDoc>((resolve, reject) => {
+        const pickerApi = window.google!.picker!;
+        const docsView = new pickerApi.DocsView(pickerApi.ViewId.DOCS)
           .setIncludeFolders(true)
           .setSelectFolderEnabled(false)
-          .setMimeTypes(
-            "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document"
-          );
+          .setMimeTypes(buildGooglePickerMimeTypes());
 
-        const picker = new pickerAny.PickerBuilder()
+        let pickerBuilder = new pickerApi.PickerBuilder()
           .setDeveloperKey(apiKey)
           .setOAuthToken(accessToken)
-          .setOrigin(window.location.origin as any)
+          .setOrigin(window.location.origin)
           .addView(docsView)
-          .setCallback((data: any) => {
+          .setCallback((data) => {
             if (data.action === window.google?.picker?.Action.CANCEL) {
-              reject(new Error("Google Drive selection was canceled."));
+              reject(
+                new GoogleDriveImportError(
+                  "selection_cancelled",
+                  "Google Drive selection was canceled."
+                )
+              );
               return;
             }
             if (data.action !== window.google?.picker?.Action.PICKED) return;
@@ -318,53 +343,45 @@ export default function Step2Client({ profileId, resumeId }: Step2ClientProps) {
             }
 
             resolve(pickedFile);
-          })
-          .build();
+          });
+
+        if (projectNumber) {
+          pickerBuilder = pickerBuilder.setAppId(projectNumber) as typeof pickerBuilder;
+        }
+
+        const picker = pickerBuilder.build();
 
         picker.setVisible(true);
       });
 
-      const isGoogleDoc =
-        selectedDoc.mimeType === "application/vnd.google-apps.document";
-      const downloadUrl = isGoogleDoc
-        ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
-            selectedDoc.id
-          )}/export?mimeType=application/pdf`
-        : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
-            selectedDoc.id
-          )}?alt=media&supportsAllDrives=true`;
-
-      const fileResponse = await fetch(downloadUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (!fileResponse.ok) {
-        throw new Error(
-          "Could not download the selected file from Google Drive."
-        );
-      }
-
-      const blob = await fileResponse.blob();
-      const pickedFile = new File([blob], selectedDoc.name, {
-        type:
-          isGoogleDoc
-            ? "application/pdf"
-            : selectedDoc.mimeType || blob.type || "application/octet-stream",
-      });
+      const metadata = await fetchGoogleDriveMetadata(selectedDoc.id, accessToken);
+      const pickedFile = await downloadGoogleDriveFile(metadata, accessToken);
 
       setSelectedSource("google-drive");
       handleFile(pickedFile);
     } catch (error: unknown) {
       const errorMessage =
-        error instanceof Error ? error.message : "Google Drive import failed.";
-      const maybeInvalidApiKey = /developer key|api key|invalid/i.test(
-        errorMessage
-      );
+        error instanceof GoogleDriveImportError
+          ? error.message
+          : error instanceof Error &&
+              /Failed to load script: https:\/\/(?:apis|accounts)\.google\.com/i.test(
+                error.message
+              )
+            ? "Google Drive tools were blocked before the picker could open."
+            : error instanceof Error
+              ? error.message
+              : "Google Drive import failed.";
+      const maybeInvalidApiKey = /developer key|api key|invalid/i.test(errorMessage);
+      const maybeCspBlocked =
+        error instanceof GoogleDriveImportError &&
+        (error.code === "picker_blocked" || error.code === "picker_timeout");
 
       setSaveError(
         maybeInvalidApiKey
           ? "Google Drive API key is invalid. Use a Browser key with Google Picker API and Drive API enabled."
-          : errorMessage
+          : maybeCspBlocked
+            ? "Google Drive tools were blocked by browser security settings before the picker could open."
+            : errorMessage
       );
     } finally {
       setIsGoogleDriveLoading(false);

@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import AdzunaAttribution from "../components/jobs/AdzunaAttribution";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import { Navbar } from "../components/navbar";
-import Spinner from "../components/spinner/Spinner";
+import MobileListLoadingScreen from "../components/loading/MobileListLoadingScreen";
 
 type JobCard = {
   id?: string;
@@ -489,7 +489,11 @@ export default function JobsPage() {
               </p>
             </div>
 
-            <section className="mt-8 rounded-2xl border border-border/60 bg-card/50 p-6 backdrop-blur-xl md:p-8">
+            <section
+              className={`mt-8 rounded-2xl border border-border/60 bg-card/50 p-6 backdrop-blur-xl md:p-8 ${
+                adzunaLoading ? "hidden md:block" : ""
+              }`}
+            >
               <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
                 <div>
                   <div className="text-sm font-semibold text-foreground">
@@ -542,7 +546,15 @@ export default function JobsPage() {
         <div className="mx-auto max-w-7xl px-6 py-12">
           <section>
             {adzunaLoading ? (
-              <Spinner label="Finding the best jobs for you..." />
+              <MobileListLoadingScreen
+                eyebrow="Job Categories"
+                title="Loading fresh job sections"
+                subtitle="Pulling live openings before we show you the trending categories."
+                sectionCount={2}
+                cardsPerSection={3}
+                minHeightClass="min-h-[60vh]"
+                className="rounded-3xl"
+              />
             ) : adzunaError ? (
               <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                 Adzuna feed error: {adzunaError}

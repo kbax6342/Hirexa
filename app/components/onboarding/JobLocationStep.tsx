@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 
@@ -30,6 +30,30 @@ type FieldErrors = {
   state?: string;
   postalCode?: string;
 };
+
+type LocationValidationResponse =
+  | {
+      ok: true;
+      normalized: {
+        city: string;
+        state: string;
+        stateCode: string;
+        postalCode: string;
+      };
+      matchedCities: string[];
+    }
+  | {
+      ok: false;
+      code:
+        | "invalid_zip_format"
+        | "zip_not_found"
+        | "state_mismatch"
+        | "city_mismatch"
+        | "location_mismatch"
+        | "service_unavailable";
+      field: "city" | "state" | "postalCode" | "form";
+      message: string;
+    };
 
 function normalizeText(value: string) {
   return value.trim().replace(/\s+/g, " ");
@@ -61,6 +85,8 @@ export default function JobLocationStep() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState<string | null>(null);
   const [loadingSavedState, setLoadingSavedState] = useState(true);
+  const [hasAttemptedValidation, setHasAttemptedValidation] = useState(false);
+  const [validatingLocation, setValidatingLocation] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const progressPercent = useMemo(() => getLocationProgressPercent(), []);
@@ -68,7 +94,12 @@ export default function JobLocationStep() {
   const canContinue =
     normalizeText(city).length > 0 &&
     normalizeText(state).length > 0 &&
-    normalizePostalCode(postalCode).length > 0;
+    normalizePostalCode(postalCode).length > 0 &&
+    !fieldErrors.city &&
+    !fieldErrors.state &&
+    !fieldErrors.postalCode &&
+    !message &&
+    !validatingLocation;
 
   useEffect(() => {
     let active = true;
@@ -110,7 +141,16 @@ export default function JobLocationStep() {
     router.push(WORK_STORY_ROUTE);
   }
 
-  function validateFields() {
+  function applyValidationFailure(result: Extract<LocationValidationResponse, { ok: false }>) {
+    setFieldErrors({
+      city: result.field === "city" ? result.message : undefined,
+      state: result.field === "state" ? result.message : undefined,
+      postalCode: result.field === "postalCode" ? result.message : undefined,
+    });
+    setMessage(result.field === "form" ? result.message : null);
+  }
+
+  function getBaseFieldErrors() {
     const nextErrors: FieldErrors = {};
 
     if (!normalizeText(city)) {
@@ -129,33 +169,120 @@ export default function JobLocationStep() {
       nextErrors.postalCode = "Enter a valid ZIP code.";
     }
 
+    return nextErrors;
+  }
+
+  async function validateLocationCombination() {
+    const nextErrors = getBaseFieldErrors();
     setFieldErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    setMessage(null);
+
+    if (Object.keys(nextErrors).length > 0) {
+      return false;
+    }
+
+    setValidatingLocation(true);
+
+    try {
+      const response = await fetch(
+        `/api/locations/validate?city=${encodeURIComponent(normalizeText(city))}&state=${encodeURIComponent(normalizeText(state))}&postalCode=${encodeURIComponent(normalizePostalCode(postalCode))}`,
+        {
+          cache: "no-store",
+          credentials: "include",
+        }
+      );
+      const data = (await response.json().catch(() => null)) as
+        | LocationValidationResponse
+        | null;
+
+      if (!response.ok || !data || !("ok" in data) || data.ok === false) {
+        applyValidationFailure(
+          (data as Extract<LocationValidationResponse, { ok: false }>) ?? {
+            ok: false,
+            code: "location_mismatch",
+            field: "form",
+            message: "Please enter a valid city, state, and ZIP combination.",
+          }
+        );
+        return false;
+      }
+
+      setFieldErrors({});
+      setMessage(null);
+      return true;
+    } catch {
+      applyValidationFailure({
+        ok: false,
+        code: "service_unavailable",
+        field: "form",
+        message: "We couldn't validate that location right now.",
+      });
+      return false;
+    } finally {
+      setValidatingLocation(false);
+    }
+  }
+
+  const handleLocationRevalidation = useEffectEvent(async () => {
+    await validateLocationCombination();
+  });
+
+  useEffect(() => {
+    if (!hasAttemptedValidation) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void handleLocationRevalidation();
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [city, state, postalCode, hasAttemptedValidation]);
+
+  async function handleZipBlur() {
+    const hasValidatedBefore = hasAttemptedValidation;
+    setHasAttemptedValidation(true);
+    if (hasValidatedBefore) {
+      await validateLocationCombination();
+    }
   }
 
   async function handleContinue() {
     setMessage(null);
-    if (!validateFields()) return;
+    setHasAttemptedValidation(true);
+    const isValid = await validateLocationCombination();
+    if (!isValid) return;
 
     setSaving(true);
 
     try {
-      const matchedState = normalizeStateInput(state);
       const response = await fetch("/api/profile/preferences", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           city: normalizeText(city),
-          state: matchedState?.code ?? normalizeText(state),
+          state: normalizeText(state),
           postalCode: normalizePostalCode(postalCode),
         }),
       });
       const data = (await response.json().catch(() => null)) as
-        | { error?: string }
+        | ({ error?: string } & Partial<Extract<LocationValidationResponse, { ok: false }>>)
         | null;
 
       if (!response.ok) {
+        if (data?.field && data?.message) {
+          applyValidationFailure({
+            ok: false,
+            code: data.code ?? "location_mismatch",
+            field: data.field,
+            message: data.message,
+          });
+          return;
+        }
+
         throw new Error(data?.error ?? "We could not save your location yet.");
       }
 
@@ -227,13 +354,16 @@ export default function JobLocationStep() {
                 >
                   City
                 </label>
-                <input
-                  id="job-location-city"
-                  autoComplete="address-level2"
-                  value={city}
-                  onChange={(event) => setCity(event.target.value)}
-                  className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
-                />
+                  <input
+                    id="job-location-city"
+                    autoComplete="address-level2"
+                    value={city}
+                    onChange={(event) => {
+                      setCity(event.target.value);
+                      setMessage(null);
+                    }}
+                    className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+                  />
                 {fieldErrors.city ? (
                   <p className="mt-2 text-sm text-red-600">{fieldErrors.city}</p>
                 ) : null}
@@ -253,7 +383,10 @@ export default function JobLocationStep() {
                     autoComplete="address-level1"
                     placeholder="Start typing a state"
                     value={state}
-                    onChange={(event) => setState(event.target.value)}
+                    onChange={(event) => {
+                      setState(event.target.value);
+                      setMessage(null);
+                    }}
                     className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
                   />
                   <datalist id="job-location-state-options">
@@ -282,7 +415,13 @@ export default function JobLocationStep() {
                     autoComplete="postal-code"
                     inputMode="numeric"
                     value={postalCode}
-                    onChange={(event) => setPostalCode(event.target.value)}
+                    onBlur={() => {
+                      void handleZipBlur();
+                    }}
+                    onChange={(event) => {
+                      setPostalCode(event.target.value);
+                      setMessage(null);
+                    }}
                     className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
                   />
                   {fieldErrors.postalCode ? (
@@ -311,7 +450,7 @@ export default function JobLocationStep() {
                 onClick={handleContinue}
                 className="h-[52px] w-full rounded-2xl bg-[#145efc] text-base font-semibold text-white shadow-[0_18px_42px_-22px_rgba(20,94,252,0.85)] hover:bg-[#0f4ed6]"
               >
-                {saving ? "Saving..." : "Continue"}
+                {saving ? "Saving..." : validatingLocation ? "Checking..." : "Continue"}
               </Button>
             </div>
           </section>

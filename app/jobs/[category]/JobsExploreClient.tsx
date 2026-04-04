@@ -12,6 +12,7 @@ import {
 } from "@heroicons/react/24/outline";
 
 import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
+import MobileListLoadingScreen from "@/app/components/loading/MobileListLoadingScreen";
 import { usePublicJobLocation } from "@/app/hooks/usePublicJobLocation";
 
 export type Job = {
@@ -364,6 +365,23 @@ export default function JobsExplorerClient({
     })();
   }, [selected, selectedAnalysis, selectedDescription]);
 
+  if (loading && visibleJobs.length === 0) {
+    return (
+      <MobileListLoadingScreen
+        eyebrow="Category Matches"
+        title={`Loading ${categoryLabel} jobs`}
+        subtitle={
+          publicLocation.locationLabel
+            ? `Pulling fresh ${categoryLabel.toLowerCase()} roles near ${publicLocation.locationLabel}.`
+            : `Pulling fresh ${categoryLabel.toLowerCase()} roles for this category.`
+        }
+        sectionCount={1}
+        cardsPerSection={4}
+        minHeightClass="min-h-[70vh]"
+      />
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-[90] lg:px-6">
       <div className="mb-4 max-w-4xl">
@@ -390,7 +408,12 @@ export default function JobsExplorerClient({
           <div className="flex h-[70vh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
               <div className="text-sm font-semibold text-slate-900">
-                {loading ? "Loading jobs..." : `${visibleJobs.length} jobs`}
+                {visibleJobs.length ? `${visibleJobs.length} jobs` : "Live job matches"}
+                {loading && visibleJobs.length > 0 ? (
+                  <span className="ml-2 text-xs font-medium text-slate-500">
+                    Refreshing...
+                  </span>
+                ) : null}
               </div>
               <Link
                 href="/dashboard"

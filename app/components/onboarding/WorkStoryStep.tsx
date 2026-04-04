@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, CheckIcon } from "@heroicons/react/24/outline";
 
 import { Button } from "@/app/components/ui/button";
+import { useIsMobile } from "@/app/components/ui/use-mobile";
 import { cn } from "@/app/lib/utils";
 import {
+  JOB_PRIORITIES_ROUTE,
   JOB_LOCATION_ROUTE,
   ONBOARDING_FLOW_ROUTES,
   RESUME_IMPORT_ROUTE,
@@ -37,6 +39,7 @@ function normalizeText(value: string) {
 
 export default function WorkStoryStep() {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [role, setRole] = useState("");
   const [options, setOptions] = useState<string[]>(
     getWorkStoryOptionsForRole(null)
@@ -223,8 +226,15 @@ export default function WorkStoryStep() {
   }
 
   function handleBack() {
+    const cameFromResumeImport =
+      typeof window !== "undefined"
+        ? window.matchMedia("(max-width: 767px)").matches
+        : isMobile;
+
     router.push(
-      getPreviousOnboardingRoute(WORK_STORY_ROUTE) ?? RESUME_IMPORT_ROUTE
+      cameFromResumeImport
+        ? getPreviousOnboardingRoute(WORK_STORY_ROUTE) ?? RESUME_IMPORT_ROUTE
+        : JOB_PRIORITIES_ROUTE
     );
   }
 

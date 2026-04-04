@@ -67,6 +67,13 @@ const US_STATES: StateOption[] = [
   { name: "District of Columbia", code: "DC" },
 ];
 
+export function getUSStateOptions(): Array<{ name: string; code: string }> {
+  return US_STATES.map((state) => ({
+    name: state.name,
+    code: state.code,
+  }));
+}
+
 const MAJOR_US_CITIES: CityOption[] = [
   { name: "Atlanta", stateCode: "GA" },
   { name: "Austin", stateCode: "TX" },

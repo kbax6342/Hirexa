@@ -1,6 +1,5 @@
 import { auth } from "../auth";
 import { redirect } from "next/navigation";
-import { Navbar } from "./components/navbar"
 import { Hero } from "./components/hero"
 import { WhyHirexa } from "./components/why-hirexa"
 import { Features } from "./components/features"
@@ -27,18 +26,24 @@ export default async function Home() {
 
   return (
     <>
-    <Navbar />
-    <main>
-      <Hero href={href} />
-      <WhyHirexa />
-      <Features />
-      <HirePilotWorksEverywhere />
-      <ComingSoon />
-      <Trust />
-      <Audience />
-      <CTA href={href} />
-    </main>
-    <Footer />
-  </>
+      <main className="relative isolate overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[38rem] bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.16),transparent_52%),radial-gradient(circle_at_20%_24%,rgba(59,130,246,0.12),transparent_34%),radial-gradient(circle_at_78%_10%,rgba(56,189,248,0.1),transparent_30%)]" />
+
+        <Hero href={href} />
+
+        <div className="hidden md:block">
+          <WhyHirexa />
+          <Features />
+          <HirePilotWorksEverywhere />
+          <ComingSoon />
+          <Trust />
+          <Audience />
+          <CTA href={href} />
+        </div>
+      </main>
+      <div className="hidden md:block">
+        <Footer />
+      </div>
+    </>
   );
 }

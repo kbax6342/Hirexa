@@ -569,6 +569,25 @@ export default function ProfilePage() {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const hash = window.location.hash.replace(/^#/, "");
+    const matchedSection = PROFILE_SECTIONS.find((section) => section.id === hash);
+    if (matchedSection) {
+      setActiveSection(matchedSection.id);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const nextHash = `#${activeSection}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", nextHash);
+    }
+  }, [activeSection]);
+
   function openSmartMatchesLocationEditor() {
     startEditPersonal();
     personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -577,6 +596,15 @@ export default function ProfilePage() {
   function openPersonalDetailsEditor() {
     startEditPersonal();
     personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function scrollToSection(sectionId: ProfileSectionId) {
+    const target = document.getElementById(sectionId);
+    if (!target) return;
+
+    setActiveSection(sectionId);
+    window.history.replaceState(null, "", `#${sectionId}`);
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function savePersonalDetails() {
@@ -1087,7 +1115,7 @@ function ToggleField({
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-white">
       <main className="mx-auto w-full max-w-7xl px-4 py-12">
         <div>
           <p className="text-sm font-semibold text-sky-600">Profile</p>
@@ -1100,9 +1128,9 @@ function ToggleField({
             application workflows with less guesswork.
           </p>
         </div>
-        <div className="mt-6 grid gap-6 lg:grid-cols-12">
-          <section className="space-y-4 lg:col-span-5">
-            <div className="space-y-4 lg:sticky lg:top-24">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="min-w-0">
+            <div className="space-y-4 rounded-3xl bg-white lg:sticky lg:top-24">
               <Card className="p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1166,15 +1194,25 @@ function ToggleField({
                       href={`#${section.id}`}
                       label={section.label}
                       active={activeSection === section.id}
+                      onClick={() => scrollToSection(section.id)}
                     />
                   ))}
                 </div>
               </Card>
             </div>
+          </aside>
+
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-col gap-6">
+          <section className="contents">
             {/* =======================
                 PERSONAL DETAILS
                ======================= */}
-            <div ref={personalDetailsCardRef} id="personal-info" className="scroll-mt-28">
+            <div
+              ref={personalDetailsCardRef}
+              id="personal-info"
+              className="order-1 scroll-mt-28"
+            >
             <Card className="p-6">
               <div className="flex items-center gap-4">
                 <div className="relative">
@@ -1331,7 +1369,7 @@ function ToggleField({
             </Card>
             </div>
 
-            <section id="professional-links" className="scroll-mt-28">
+            <section id="professional-links" className="order-2 scroll-mt-28">
               <Card className="p-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1374,7 +1412,7 @@ function ToggleField({
             {/* =======================
                 PREFERENCES
                ======================= */}
-            <section id="job-preferences" className="scroll-mt-28">
+            <section id="job-preferences" className="order-7 scroll-mt-28">
             <Card className="p-6 mt-2">
               <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
               <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
@@ -1546,7 +1584,7 @@ function ToggleField({
             {/* =======================
                 SUBSCRIPTION
                ======================= */}
-            <section id="settings" className="scroll-mt-28">
+            <section id="settings" className="order-6 scroll-mt-28">
             <Card className="p-6 mt-2">
               <div className="text-sm font-semibold text-slate-900">Billing & Access</div>
               <p className="mt-2 text-sm text-slate-600">
@@ -1629,7 +1667,7 @@ function ToggleField({
             </Card>
             </section>
 
-            <section id="notifications" className="scroll-mt-28">
+            <section id="notifications" className="order-8 scroll-mt-28">
               <Card className="p-6 mt-2">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1658,7 +1696,7 @@ function ToggleField({
               </Card>
             </section>
 
-            <section id="privacy-security" className="scroll-mt-28">
+            <section id="privacy-security" className="order-9 scroll-mt-28">
               <Card className="p-6 mt-2">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1719,9 +1757,9 @@ function ToggleField({
           {/* =======================
               RIGHT COLUMN
              ======================= */}
-          <section className="lg:col-span-7">
+          <section className="contents">
             <div className="space-y-6">
-              <section id="skills" className="scroll-mt-28">
+              <section id="skills" className="order-5 scroll-mt-28">
                 <Card className="p-6">
                   <div className="text-sm font-semibold text-slate-900">Skills</div>
                   <p className="mt-2 text-sm text-slate-600">
@@ -1755,7 +1793,7 @@ function ToggleField({
                 </Card>
               </section>
 
-              <section id="experience" className="scroll-mt-28">
+              <section id="experience" className="order-4 scroll-mt-28">
               <Card className="p-6">
                 <div className="flex-col items-start justify-between gap-4">
                   <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
@@ -2025,7 +2063,7 @@ function ToggleField({
               </Card>
               </section>
 
-              <section id="education" className="scroll-mt-28">
+              <section id="education" className="order-3 scroll-mt-28">
                 <Card className="p-6">
                   <div className="text-sm font-semibold text-slate-900">Education</div>
                   <p className="mt-2 text-sm text-slate-600">
@@ -2053,7 +2091,7 @@ function ToggleField({
                 </Card>
               </section>
 
-              <section id="ai-profile-sync" className="scroll-mt-28">
+              <section id="ai-profile-sync" className="order-10 scroll-mt-28">
                 <Card className="p-6">
                   <div className="text-sm font-semibold text-slate-900">AI Profile Sync</div>
                   <p className="mt-2 text-sm text-slate-600">
@@ -2084,6 +2122,8 @@ function ToggleField({
               </section>
             </div>
           </section>
+            </div>
+          </div>
         </div>
       </main>
     </div>
@@ -2164,14 +2204,22 @@ function SidebarSectionLink({
   href,
   label,
   active,
+  onClick,
 }: {
   href: string;
   label: string;
   active?: boolean;
+  onClick?: () => void;
 }) {
   return (
     <a
       href={href}
+      onClick={(event) => {
+        if (!onClick) return;
+        event.preventDefault();
+        onClick();
+      }}
+      aria-current={active ? "location" : undefined}
       className={[
         "inline-flex items-center rounded-full border px-3 py-2 text-sm font-semibold transition-colors lg:w-full lg:rounded-2xl",
         active

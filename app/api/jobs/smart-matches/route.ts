@@ -32,6 +32,13 @@ import {
   expandRoleQueryVariants,
   shuffleArray,
 } from "@/app/lib/jobs/sources/common";
+import {
+  buildRoleFamilyExpansionQueries,
+  classifyJobQueryFamily,
+  filterQueriesToRoleFamily,
+  hasRemoteIntent,
+  type JobQueryFamily,
+} from "@/app/lib/jobs/queryFamily";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,63 +65,6 @@ const FIRST_PAGE_BROADER_CAP = 2;
 const HOTFIX_FIRST_PAGE_MIN_LOCAL_RESULTS = 6;
 const LOCAL_FIRST_VARIANT_PAGE_DEPTH = 3;
 const MAX_CANDIDATE_POOL_SIZE = 60;
-const LOCAL_SERVICE_ROLE_REGEX =
-  /\b(barista|cashier|cafe|coffee|server|host|restaurant|retail|food service)\b/i;
-const ROLE_FAMILY_EXPANSIONS: Array<{
-  test: RegExp;
-  queries: string[];
-}> = [
-  {
-    test: /\b(qa|quality assurance|testing|test engineer|sdet|automation tester|software tester|cypress)\b/i,
-    queries: [
-      "Quality Assurance",
-      "QA Engineer",
-      "Test Engineer",
-      "SDET",
-      "Automation Engineer",
-    ],
-  },
-  {
-    test: /\b(registered nurse|rn|nurse|nursing|clinical|patient care)\b/i,
-    queries: [
-      "Registered Nurse",
-      "Nursing",
-      "Clinical Nurse",
-      "Patient Care",
-      "Care Coordinator",
-    ],
-  },
-  {
-    test: /\b(sales|account executive|business development|sdr|bdr)\b/i,
-    queries: [
-      "Sales",
-      "Account Executive",
-      "Business Development",
-      "Sales Representative",
-      "Customer Success",
-    ],
-  },
-  {
-    test: /\b(data analyst|data engineer|analytics|business intelligence|bi)\b/i,
-    queries: [
-      "Data Analyst",
-      "Analytics",
-      "Business Intelligence",
-      "Data Engineer",
-      "Reporting Analyst",
-    ],
-  },
-  {
-    test: /\b(product manager|product|program manager|project manager)\b/i,
-    queries: [
-      "Product Manager",
-      "Program Manager",
-      "Project Manager",
-      "Product Operations",
-      "Product Analyst",
-    ],
-  },
-];
 
 type Cursor = {
   variantIndex: number;
@@ -166,9 +116,15 @@ type RequestBehavior = {
   explicitLocationActive: boolean;
   firstRender: boolean;
   hotfixExplicitMode: boolean;
+  queryFamily: JobQueryFamily;
+  enforceSameFamilyFallbacks: boolean;
   suppressProfileFallback: boolean;
+  suppressSkillQueryFallbacks: boolean;
   suppressGenericFallback: boolean;
   suppressLocationWidening: boolean;
+  suppressBroaderFallback: boolean;
+  allowRemoteFallback: boolean;
+  strictLocalPrecisionMode: boolean;
   localPageBudget: number;
 };
 
@@ -287,20 +243,33 @@ function buildSearchVariants(
   activeLocation?: string | null,
   requestBehavior?: RequestBehavior
 ): SearchVariant[] {
+  const familyExpandedQueries = requestBehavior?.enforceSameFamilyFallbacks
+    ? buildRoleFamilyQueries(config, config.searchQuery, requestBehavior)
+    : [];
+  const sameFamilyTitles = requestBehavior?.enforceSameFamilyFallbacks
+    ? filterQueriesToRoleFamily(config.jobTitles, requestBehavior.queryFamily)
+    : config.jobTitles;
   const exactTitles = dedupeStrings(
     requestBehavior?.suppressProfileFallback
-      ? expandRoleQueryVariants(config.searchQuery)
+      ? [...expandRoleQueryVariants(config.searchQuery), ...familyExpandedQueries]
       : [
           ...expandRoleQueryVariants(config.searchQuery),
-          ...config.jobTitles.flatMap((title) => expandRoleQueryVariants(title)),
+          ...sameFamilyTitles.flatMap((title) => expandRoleQueryVariants(title)),
+          ...familyExpandedQueries,
         ]
   ).slice(0, requestBehavior?.firstRender ? 4 : 6);
   const titleKeywords = dedupeStrings(
     exactTitles.map((title) => simplifyTitle(title))
   ).slice(0, 3);
-  const skillQueries = requestBehavior?.suppressProfileFallback
+  const skillQueries =
+    requestBehavior?.suppressProfileFallback ||
+    requestBehavior?.suppressSkillQueryFallbacks
     ? []
-    : dedupeStrings(config.skillTerms).slice(0, 4);
+    : dedupeStrings(
+        requestBehavior?.enforceSameFamilyFallbacks
+          ? filterQueriesToRoleFamily(config.skillTerms, requestBehavior.queryFamily)
+          : config.skillTerms
+      ).slice(0, 4);
 
   const primaryLocations =
     typeof activeLocation !== "undefined"
@@ -308,7 +277,9 @@ function buildSearchVariants(
       : dedupeStrings([config.preferredLocation, ...config.locationOptions]).slice(0, 2);
 
   const focusedLocations = primaryLocations.length > 0 ? primaryLocations : [""];
-  const remoteAwareLocations = requestBehavior?.suppressLocationWidening
+  const remoteAwareLocations =
+    requestBehavior?.suppressLocationWidening ||
+    requestBehavior?.allowRemoteFallback === false
     ? dedupeStrings([focusedLocations[0]])
     : dedupeStrings([
         focusedLocations[0],
@@ -372,7 +343,7 @@ function buildSearchVariants(
     }
   }
 
-  if (config.includeRemote && !requestBehavior?.suppressGenericFallback) {
+  if (config.includeRemote && requestBehavior?.allowRemoteFallback !== false) {
     pushVariant({
       query: exactTitles[0] ?? titleKeywords[0] ?? skillQueries[0] ?? "jobs",
       location: "remote",
@@ -404,9 +375,18 @@ function buildSearchVariants(
     });
   }
 
-  return variants.length > 0
-    ? variants
-    : [{ query: "jobs", location: "", strategy: "fallback-broad" }];
+  if (variants.length > 0) {
+    return variants;
+  }
+
+  const fallbackQuery = (exactTitles[0] ?? config.searchQuery.trim()) || "jobs";
+  return [
+    {
+      query: fallbackQuery,
+      location: focusedLocations[0] ?? "",
+      strategy: fallbackQuery === "jobs" ? "fallback-broad" : "title",
+    },
+  ];
 }
 
 function buildProviderFallbackVariants(
@@ -431,27 +411,31 @@ function buildProviderFallbackVariants(
     });
   }
 
+  const allowLocationRelaxation = !requestBehavior?.suppressLocationWidening;
+  const allowGenericFallback = !requestBehavior?.suppressGenericFallback;
   const candidates: SearchVariant[] = [
     variant,
-    variant.location ? { ...variant, location: "" } : null,
+    variant.location && allowLocationRelaxation ? { ...variant, location: "" } : null,
     simplifiedQuery && simplifiedQuery !== variant.query
       ? { ...variant, query: simplifiedQuery }
       : null,
-    simplifiedQuery && simplifiedQuery !== variant.query
+    simplifiedQuery && simplifiedQuery !== variant.query && allowLocationRelaxation
       ? { ...variant, query: simplifiedQuery, location: "" }
       : null,
-    variant.query.toLowerCase() !== "jobs"
+    allowGenericFallback && variant.query.toLowerCase() !== "jobs"
       ? {
           query: "jobs",
           location: variant.location.toLowerCase() === "remote" ? "remote" : "",
           strategy: "fallback-broad",
         }
       : null,
-    {
+    allowGenericFallback
+      ? {
       query: "jobs",
       location: "",
       strategy: "fallback-broad",
-    },
+        }
+      : null,
   ].filter((value): value is SearchVariant => Boolean(value));
 
   const seen = new Set<string>();
@@ -468,11 +452,9 @@ function shouldUseTightLocalProviderBudget(
   requestBehavior: RequestBehavior
 ) {
   return (
-    requestBehavior.hotfixExplicitMode &&
-    requestBehavior.explicitLocationActive &&
+    requestBehavior.strictLocalPrecisionMode &&
     Boolean(variant.location) &&
-    variant.location.toLowerCase() !== "remote" &&
-    LOCAL_SERVICE_ROLE_REGEX.test(variant.query)
+    variant.location.toLowerCase() !== "remote"
   );
 }
 
@@ -482,57 +464,50 @@ function buildRoleFamilyQueries(
   requestBehavior?: RequestBehavior
 ) {
   const roleVariants = expandRoleQueryVariants(baseQuery);
+  const queryFamily =
+    requestBehavior?.enforceSameFamilyFallbacks && requestBehavior.queryFamily !== "general"
+      ? requestBehavior.queryFamily
+      : classifyJobQueryFamily(baseQuery);
+  const sameFamilyTitles =
+    queryFamily === "general"
+      ? config.jobTitles
+      : filterQueriesToRoleFamily(config.jobTitles, queryFamily);
+  const sameFamilySkillTerms =
+    requestBehavior?.suppressSkillQueryFallbacks
+      ? []
+      : queryFamily === "general"
+        ? config.skillTerms
+        : filterQueriesToRoleFamily(config.skillTerms, queryFamily);
+  const familyExpansionQueries = buildRoleFamilyExpansionQueries(baseQuery, queryFamily);
+
   if (requestBehavior?.hotfixExplicitMode) {
-    const normalizedBaseQuery = normalizeText(baseQuery);
-
-    if (
-      normalizedBaseQuery.includes("barista") ||
-      normalizedBaseQuery.includes("cashier")
-    ) {
-      return dedupeStrings([
-        normalizedBaseQuery.includes("barista") ? "barista" : null,
-        normalizedBaseQuery.includes("cashier") ? "cashier" : null,
-        normalizedBaseQuery.includes("barista") &&
-        normalizedBaseQuery.includes("cashier")
-          ? "barista cashier"
-          : null,
-        normalizedBaseQuery.includes("barista") ? "cafe barista" : null,
-      ]).slice(0, 4);
-    }
-
-    return dedupeStrings(
-      roleVariants.filter(
+    return dedupeStrings([
+      ...roleVariants.filter(
         (query) => query.toLowerCase() !== "jobs" && query.toLowerCase() !== "hiring"
-      )
-    ).slice(0, LATER_PAGE_EXPANSION_LIMIT);
+      ),
+      ...familyExpansionQueries,
+    ]).slice(0, LATER_PAGE_EXPANSION_LIMIT);
   }
 
-  if (requestBehavior?.suppressProfileFallback) {
-    return dedupeStrings(roleVariants).slice(0, LATER_PAGE_EXPANSION_LIMIT);
-  }
-
-  const normalizedSeed = normalizeText(
-    [
-      baseQuery,
+  if (requestBehavior?.suppressProfileFallback || queryFamily !== "general") {
+    return dedupeStrings([
       ...roleVariants,
-      config.searchQuery,
-      ...config.jobTitles,
-      ...config.skillTerms,
-    ].join(" ")
-  );
-  const matchedRoleFamily = ROLE_FAMILY_EXPANSIONS.find((entry) =>
-    entry.test.test(normalizedSeed)
-  );
+      ...familyExpansionQueries,
+      ...sameFamilyTitles.map((title) => simplifyTitle(title)),
+      ...sameFamilySkillTerms,
+    ]).slice(0, LATER_PAGE_EXPANSION_LIMIT);
+  }
+
   const fallbackQueries = dedupeStrings([
     ...roleVariants,
-    ...config.jobTitles.map((title) => simplifyTitle(title)),
-    ...config.skillTerms,
+    ...sameFamilyTitles.map((title) => simplifyTitle(title)),
+    ...sameFamilySkillTerms,
   ]);
 
   return dedupeStrings([
     ...roleVariants,
     baseQuery,
-    ...(matchedRoleFamily?.queries ?? []),
+    ...familyExpansionQueries,
     ...fallbackQueries,
   ]).slice(0, LATER_PAGE_EXPANSION_LIMIT);
 }
@@ -581,7 +556,7 @@ function buildQueryProviderPlans(
     (query) => query.toLowerCase() !== variant.query.toLowerCase()
   );
 
-  if (variant.location) {
+  if (variant.location && !requestBehavior?.suppressLocationWidening) {
     plans.push({
       query: variant.query,
       location: "",
@@ -598,10 +573,13 @@ function buildQueryProviderPlans(
   }
 
   for (const query of extraQueries.slice(1, 4)) {
+    const relaxedLocation = requestBehavior?.suppressLocationWidening
+      ? variant.location
+      : "";
     plans.push({
       query,
-      location: "",
-      reason: "role-family-broad",
+      location: relaxedLocation,
+      reason: relaxedLocation ? "role-family-strict" : "role-family-broad",
     });
   }
 
@@ -747,7 +725,7 @@ function rankJobsForFeed(
     ...nearbyJobs,
     ...sameStateJobs,
     ...remoteJobs,
-    ...broaderJobs,
+    ...(allowBroaderFallback ? broaderJobs : []),
   ];
 
   if (!firstPage) {
@@ -955,6 +933,9 @@ async function fetchProviderBatch(
   localPoolCount: number;
 }> {
   ensureSharedProviderRefreshStarted();
+  const effectiveIncludeRemote = requestBehavior.allowRemoteFallback
+    ? includeRemote
+    : false;
   const tightLocalProviderBudget = shouldUseTightLocalProviderBudget(
     variant,
     requestBehavior
@@ -976,7 +957,7 @@ async function fetchProviderBatch(
   console.info("[SMART_PROVIDER] Smart Matches batch request", {
     query: variant.query,
     location: variant.location || null,
-    includeRemote,
+    includeRemote: effectiveIncludeRemote,
     limit,
     page,
     expandedMode,
@@ -1022,7 +1003,7 @@ async function fetchProviderBatch(
         location: plan.location || null,
         page,
         limit,
-        includeRemote,
+        includeRemote: effectiveIncludeRemote,
         reason: plan.reason,
       });
 
@@ -1032,7 +1013,7 @@ async function fetchProviderBatch(
         plan.location,
         page,
         limit,
-        includeRemote,
+        effectiveIncludeRemote,
         cache
       );
 
@@ -1127,7 +1108,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const leverStages = summarizeProviderMatchStages(
     "lever",
@@ -1135,7 +1116,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const ashbyStages = summarizeProviderMatchStages(
     "ashby",
@@ -1143,7 +1124,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const workableStages = summarizeProviderMatchStages(
     "workable",
@@ -1151,7 +1132,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const remotiveStages = summarizeProviderMatchStages(
     "remotive",
@@ -1159,7 +1140,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const remoteokStages = summarizeProviderMatchStages(
     "remoteok",
@@ -1167,7 +1148,7 @@ async function fetchProviderBatch(
     variant,
     page,
     limit,
-    includeRemote
+    effectiveIncludeRemote
   );
   const greenhouseJobs = greenhouseStages.finalJobs;
   const leverJobs = leverStages.finalJobs;
@@ -1213,13 +1194,11 @@ async function fetchProviderBatch(
   const ranking = rankJobsForFeed(
     dedupedJobs,
     searchConfig.preferredLocation,
-    includeRemote,
+    effectiveIncludeRemote,
     {
       limit,
       firstPage: page === 1 && !expandedMode,
-      allowBroaderFallback: !(
-        requestBehavior.hotfixExplicitMode
-      ),
+      allowBroaderFallback: !requestBehavior.suppressBroaderFallback,
     }
   );
   const orderedJobs = ranking.rankedJobs.slice(0, MAX_CANDIDATE_POOL_SIZE);
@@ -1227,7 +1206,7 @@ async function fetchProviderBatch(
 
   console.info("[SMART_RANK] ranked Smart Matches batch", {
     preferredLocation: searchConfig.preferredLocation,
-    includeRemote,
+    includeRemote: effectiveIncludeRemote,
     beforeRanking: dedupedJobs.length,
     afterRanking: orderedJobs.length,
     returned: results.length,
@@ -1374,9 +1353,7 @@ async function fetchVariantJobs(
         {
           limit,
           firstPage: page === 1 && !expandedMode,
-          allowBroaderFallback: !(
-            requestBehavior.hotfixExplicitMode
-          ),
+          allowBroaderFallback: !requestBehavior.suppressBroaderFallback,
         }
       );
 
@@ -1500,9 +1477,7 @@ async function executeVariantSequence(params: {
       {
         limit: params.limit,
         firstPage: isFirstFeedPage,
-        allowBroaderFallback: !(
-          params.requestBehavior.hotfixExplicitMode
-        ),
+        allowBroaderFallback: !params.requestBehavior.suppressBroaderFallback,
       }
     );
     rankedJobs = aggregateRanking.pageJobs;
@@ -1720,6 +1695,14 @@ export async function GET(request: Request) {
     (firstRender && Boolean(requestedQuery || requestedLocation)) ||
     inferredResolvedExplicitSearch;
   const hotfixExplicitMode = explicitFiltersActive && firstRender;
+  const queryFamily = classifyJobQueryFamily(resolvedSearchQuery);
+  const enforceSameFamilyFallbacks =
+    queryFamily !== "general" && normalizeText(resolvedSearchQuery) !== "jobs";
+  const strictLocalPrecisionMode =
+    queryFamily === "service_frontline" &&
+    Boolean(resolvedPreferredLocation) &&
+    !hasRemoteIntent(resolvedSearchQuery, resolvedPreferredLocation);
+  const allowRemoteFallback = resolvedIncludeRemote && !strictLocalPrecisionMode;
   const requestBehavior: RequestBehavior = {
     explicitFiltersActive,
     explicitRoleActive:
@@ -1729,10 +1712,18 @@ export async function GET(request: Request) {
     explicitLocationActive: explicitFiltersActive && Boolean(resolvedPreferredLocation),
     firstRender,
     hotfixExplicitMode,
+    queryFamily,
+    enforceSameFamilyFallbacks,
     suppressProfileFallback:
       hotfixExplicitMode || (explicitFiltersActive && Boolean(requestedQuery)),
-    suppressGenericFallback: hotfixExplicitMode,
-    suppressLocationWidening: hotfixExplicitMode && Boolean(resolvedPreferredLocation),
+    suppressSkillQueryFallbacks: queryFamily === "service_frontline",
+    suppressGenericFallback: hotfixExplicitMode || enforceSameFamilyFallbacks,
+    suppressLocationWidening:
+      (hotfixExplicitMode || strictLocalPrecisionMode) &&
+      Boolean(resolvedPreferredLocation),
+    suppressBroaderFallback: strictLocalPrecisionMode,
+    allowRemoteFallback,
+    strictLocalPrecisionMode,
     localPageBudget: hotfixExplicitMode ? 1 : LOCAL_FIRST_VARIANT_PAGE_DEPTH,
   };
 
@@ -1780,6 +1771,7 @@ export async function GET(request: Request) {
     activeFilterLocation: searchConfig.preferredLocation,
     requestedLocation: requestedLocation || null,
     includeRemote: searchConfig.includeRemote,
+    queryFamily: requestBehavior.queryFamily,
     requestSource,
     activeFilterOverrideUsed,
   });
@@ -1792,6 +1784,7 @@ export async function GET(request: Request) {
     profilePreferredLocation: baseSearchConfig.preferredLocation,
     appliedLocation: resolvedPreferredLocation || searchConfig.preferredLocation,
     includeRemote: searchConfig.includeRemote,
+    queryFamily: requestBehavior.queryFamily,
     requestSource,
     activeFilterOverrideUsed,
     searchFingerprint,
@@ -1805,7 +1798,8 @@ export async function GET(request: Request) {
     genericFallbackBlocked: requestBehavior.suppressGenericFallback,
     nullLocationFallbackBlocked: requestBehavior.suppressLocationWidening,
     profileTitleFallbackBlocked: requestBehavior.suppressProfileFallback,
-    skillFallbackBlocked: requestBehavior.hotfixExplicitMode,
+    skillFallbackBlocked: requestBehavior.suppressSkillQueryFallbacks,
+    sameFamilyFallbacksOnly: requestBehavior.enforceSameFamilyFallbacks,
   });
   console.info("[SMART_HOTFIX] Smart Matches emergency explicit mode", {
     enabled: requestBehavior.hotfixExplicitMode,
@@ -1833,7 +1827,7 @@ export async function GET(request: Request) {
     profileTitlesSuppressed: requestBehavior.suppressProfileFallback,
     genericFallbackSuppressed: requestBehavior.suppressGenericFallback,
     locationWideningSuppressed: requestBehavior.suppressLocationWidening,
-    skillTermsSuppressed: requestBehavior.hotfixExplicitMode,
+    skillTermsSuppressed: requestBehavior.suppressSkillQueryFallbacks,
     localPageBudget: requestBehavior.localPageBudget,
   });
 
@@ -1910,6 +1904,10 @@ export async function GET(request: Request) {
       locationWideningSuppressed: requestBehavior.suppressLocationWidening,
     });
 
+    const effectiveIncludeRemote = requestBehavior.allowRemoteFallback
+      ? searchConfig.includeRemote
+      : false;
+
     async function loadJobsForLocation(activeLocation: string) {
       const locationScopedConfig: SmartMatchSearchConfig = {
         ...searchConfig,
@@ -1944,7 +1942,7 @@ export async function GET(request: Request) {
         startVariantIndex,
         startPage,
         limit,
-        includeRemote: searchConfig.includeRemote,
+        includeRemote: effectiveIncludeRemote,
         searchConfig: locationScopedConfig,
         expandedMode,
         requestBehavior,
@@ -1988,7 +1986,7 @@ export async function GET(request: Request) {
         requestBehavior.suppressLocationWidening || !preferredResolvedLocation
           ? []
           : [preferredResolvedLocation],
-      includeRemote: searchConfig.includeRemote,
+      includeRemote: effectiveIncludeRemote,
       maxAttempts: allowStateExpansionOnFirstPage
         ? 2
         : requestBehavior.suppressLocationWidening

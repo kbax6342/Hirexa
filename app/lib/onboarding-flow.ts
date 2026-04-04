@@ -3,6 +3,18 @@ export const QUESTIONS_CLIENTS_ROUTE = "/questionsClients";
 export const QUESTIONS_LEGACY_ROUTE = "/questions";
 export const RESUME_ROUTE = "/resume";
 export const JOB_INTEREST_ROUTE = "/onboarding/job-interest";
+export const JOB_GOAL_ROUTE = "/onboarding/job-goal";
+export const JOB_PRIORITIES_ROUTE = "/onboarding/job-priorities";
+export const RESUME_IMPORT_ROUTE = "/onboarding/resume-import";
+export const WORK_STORY_ROUTE = "/onboarding/work-story";
+export const JOB_LOCATION_ROUTE = "/onboarding/job-location";
+export const HIGHLIGHT_SKILLS_ROUTE = "/onboarding/highlight-skills";
+export const JOB_FILTERS_ROUTE = "/onboarding/job-filters";
+export const HIREXA_SUPPORT_ROUTE = "/onboarding/hirexa-support";
+export const HIREXA_SUPPORT_EXTRAS_ROUTE = "/onboarding/hirexa-support-extras";
+export const HIRING_SIGNAL_ROUTE = "/onboarding/hiring-signal";
+export const CREATE_ACCOUNT_ROUTE = "/onboarding/create-account";
+export const VERIFY_ACCOUNT_ROUTE = "/onboarding/verify-account";
 export const TIME_SAVED_ROUTE = "/onboarding/time-saved";
 export const MIN_SALARY_ROUTE = "/onboarding/min-salary";
 export const SKILLS_ROUTE = "/onboarding/skills";
@@ -17,6 +29,15 @@ export const ONBOARDING_FLOW_ROUTES = [
   QUESTIONS_CLIENTS_ROUTE,
   RESUME_ROUTE,
   JOB_INTEREST_ROUTE,
+  JOB_GOAL_ROUTE,
+  JOB_PRIORITIES_ROUTE,
+  RESUME_IMPORT_ROUTE,
+  WORK_STORY_ROUTE,
+  HIGHLIGHT_SKILLS_ROUTE,
+  JOB_FILTERS_ROUTE,
+  HIREXA_SUPPORT_ROUTE,
+  HIREXA_SUPPORT_EXTRAS_ROUTE,
+  HIRING_SIGNAL_ROUTE,
   TIME_SAVED_ROUTE,
   MIN_SALARY_ROUTE,
   SKILLS_ROUTE,

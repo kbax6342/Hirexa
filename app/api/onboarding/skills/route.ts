@@ -1,6 +1,7 @@
 // src/app/api/onboarding/skills/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { Prisma } from "@prisma/client";
 import OpenAI from "openai";
 import { getToken } from "next-auth/jwt";
 
@@ -29,6 +30,21 @@ function dedupe(list: string[]) {
     out.push(v);
   }
   return out;
+}
+
+function readKeyQuestions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function trimText(value: unknown, maxLength = 120) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
 }
 
 function extractJson(text: string) {
@@ -164,6 +180,11 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => null);
     const incoming = Array.isArray(body?.skills) ? body.skills.map(String) : [];
+    const allowShortlist = Boolean(body?.allowShortlist);
+    const highlightSkillsConfidence = trimText(
+      body?.highlightSkillsConfidence,
+      120
+    );
     const skills = incoming
       .map((s: string) => s.trim().replace(/\s+/g, " "))
       .filter(Boolean);
@@ -179,14 +200,51 @@ export async function POST(req: NextRequest) {
       if (finalSkills.length >= 50) break;
     }
 
-    if (finalSkills.length < 3) {
-      return NextResponse.json({ ok: false, error: "Select at least 3 skills." }, { status: 400 });
+    const minRequired = allowShortlist ? 1 : 3;
+
+    if (finalSkills.length < minRequired) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            minRequired === 1
+              ? "Select at least 1 skill."
+              : "Select at least 3 skills.",
+        },
+        { status: 400 }
+      );
     }
+
+    const existingProfile = await prisma.userProfile.findUnique({
+      where: userId ? { userId } : { guestId: guestId! },
+      select: { keyQuestions: true },
+    });
+
+    const existingKeyQuestions = readKeyQuestions(existingProfile?.keyQuestions);
+    const nextKeyQuestions = highlightSkillsConfidence
+      ? {
+          ...existingKeyQuestions,
+          highlightSkillsConfidence,
+        }
+      : existingKeyQuestions;
 
     const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId! },
-      create: userId ? { userId, skills: finalSkills } : { guestId: guestId!, skills: finalSkills },
-      update: { skills: finalSkills },
+      create: userId
+        ? {
+            userId,
+            skills: finalSkills,
+            keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+          }
+        : {
+            guestId: guestId!,
+            skills: finalSkills,
+            keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+          },
+      update: {
+        skills: finalSkills,
+        keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+      },
       select: {
         id: true,
         userId: true,
@@ -215,6 +273,20 @@ export async function POST(req: NextRequest) {
       maxAge: 60 * 60 * 24 * 30,
     });
 
+    if (highlightSkillsConfidence) {
+      cookieStore.set(
+        "onboarding_highlight_skills_confidence",
+        highlightSkillsConfidence,
+        {
+          httpOnly: true,
+          sameSite: "lax",
+          secure: process.env.NODE_ENV === "production",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 30,
+        }
+      );
+    }
+
     // ✅ return proof payload (what server can confirm immediately)
     const cookieProof = {
       guest_user_id: cookieStore.get("guest_user_id")?.value ?? null,
@@ -225,6 +297,8 @@ export async function POST(req: NextRequest) {
       min_comp_type: cookieStore.get("min_comp_type")?.value ?? null,
       min_comp_value: cookieStore.get("min_comp_value")?.value ?? null,
       skills_saved: cookieStore.get("skills_saved")?.value ?? null,
+      onboarding_highlight_skills_confidence:
+        cookieStore.get("onboarding_highlight_skills_confidence")?.value ?? null,
     };
 
     return NextResponse.json({

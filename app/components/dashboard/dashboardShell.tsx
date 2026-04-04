@@ -18,7 +18,9 @@ export default function DashboardShell({
       {/* Body */}
       <main className="mx-auto w-full max-w-6xl px-6 py-8">{children}</main>
 
-      <LoginFooter />
+      <div className="hidden md:block">
+        <LoginFooter />
+      </div>
     </div>
   );
 }

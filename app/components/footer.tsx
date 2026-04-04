@@ -16,29 +16,29 @@ const footerLinks = [
 
 export function Footer() {
   return (
-    <footer className="border-t border-border bg-card">
-      <div className="mx-auto max-w-7xl px-6 py-12">
+    <footer className="border-t border-white/8 bg-[#050a14]/85">
+      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-6 md:py-12">
         <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
-          <div>
-            <Link href="/" className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-                <span className="text-xs font-bold text-primary-foreground">H</span>
+          <div className="text-center md:text-left">
+            <Link href="/" className="inline-flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-sky-500/90 shadow-[0_12px_28px_-18px_rgba(14,165,233,0.85)]">
+                <span className="text-xs font-bold text-white">H</span>
               </div>
-              <span className="font-heading text-lg font-bold tracking-tight text-foreground">
-                Hirexa <span className="text-accent">AI</span>
+              <span className="font-heading text-lg font-bold tracking-tight text-white">
+                Hirexa <span className="text-sky-400">AI</span>
               </span>
             </Link>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Intelligent job search automation.
+            <p className="mt-2 text-sm text-slate-400">
+              Smarter job matching, applications, and career support in one place.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-6">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-center sm:flex sm:flex-wrap sm:items-center sm:justify-center md:justify-end">
             {footerLinks.map((link) => (
               <Link
                 key={link.label}
                 href={link.href}
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                className="text-xs text-slate-400 transition-colors hover:text-white sm:text-sm"
               >
                 {link.label}
               </Link>
@@ -46,11 +46,9 @@ export function Footer() {
           </div>
         </div>
 
-       
-
-        <div className="mt-3  pt-8 text-center">
-        <FooterTrustRow />
-          <p className="text-sm text-muted-foreground">
+        <div className="mt-4 pt-6 text-center">
+          <FooterTrustRow />
+          <p className="mt-4 text-xs text-slate-500 sm:text-sm">
             &copy; {new Date().getFullYear()} Hirexa AI. All rights reserved.
           </p>
         </div>

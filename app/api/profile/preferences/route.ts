@@ -4,7 +4,15 @@ import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
-import { normalizeLocationLabel } from "@/app/lib/locationOptions";
+import {
+  deriveLocationLabel,
+  normalizeLocationLabel,
+} from "@/app/lib/locationOptions";
+import {
+  getSafePrivateProfileFields,
+  PrivateProfileFieldValidationError,
+  sanitizePrivateProfileFields,
+} from "@/app/lib/profile/privateProfileFields";
 import {
   parseSalaryInputToNumber,
   SALARY_BOUNDS,
@@ -22,6 +30,17 @@ type PreferencesBody = {
   availability?: string;
   employmentType?: string;
   seniorityLevel?: string;
+  workSetup?: string;
+  commutePreference?: string;
+  schedulePreferences?: string[];
+  jobFilterPaySelection?: string;
+  hirexaSupportLevel?: string;
+  hirexaSupportExtras?: string[];
+  hiringSignalTraits?: string[];
+  hiringSignalEmphasis?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
 };
 
 function normalizeList(value: unknown) {
@@ -44,6 +63,114 @@ function readKeyQuestions(value: unknown) {
   }
 
   return value as Record<string, unknown>;
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function normalizeTextArray(value: unknown, maxItems = 8) {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const item of value) {
+    const text = normalizeText(item);
+    if (!text) continue;
+
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(text);
+
+    if (normalized.length >= maxItems) break;
+  }
+
+  return normalized;
+}
+
+export async function GET() {
+  try {
+    const session = await auth();
+    const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
+
+    const c = await cookies();
+    const guestId = c.get("guest_user_id")?.value ?? null;
+
+    if (!userId && !guestId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const profile = await prisma.userProfile.findUnique({
+      where: userId ? { userId } : { guestId: guestId as string },
+      select: {
+        minCompensation: true,
+        compensationType: true,
+        workplaceLocations: true,
+        includeRemote: true,
+        keyQuestions: true,
+        city: true,
+        cityEncrypted: true,
+        citySearch: true,
+        state: true,
+        stateEncrypted: true,
+        stateSearch: true,
+        postalCode: true,
+        postalCodeEncrypted: true,
+        postalCodeSearch: true,
+      },
+    });
+
+    const keyQuestions = readKeyQuestions(profile?.keyQuestions);
+    const workplaceLocations = Array.isArray(profile?.workplaceLocations)
+      ? normalizeList(profile.workplaceLocations)
+      : [];
+    const safePrivateFields = profile
+      ? getSafePrivateProfileFields(profile)
+      : { city: null, state: null, postalCode: null };
+
+    return NextResponse.json({
+      ok: true,
+      preferences: {
+        minCompensation:
+          typeof profile?.minCompensation === "number"
+            ? profile.minCompensation
+            : null,
+        compensationType:
+          profile?.compensationType === "hourly" ? "hourly" : "yearly",
+        workplaceLocations,
+        includeRemote: profile?.includeRemote ?? true,
+        roleFocus: normalizeText(keyQuestions.roleFocus),
+        availability: normalizeText(keyQuestions.availability),
+        employmentType: normalizeText(keyQuestions.employmentType),
+        seniorityLevel: normalizeText(keyQuestions.seniorityLevel),
+        workSetup: normalizeText(keyQuestions.workSetup),
+        commutePreference: normalizeText(keyQuestions.commutePreference),
+        schedulePreferences: normalizeTextArray(
+          keyQuestions.schedulePreferences,
+          7
+        ),
+        jobFilterPaySelection: normalizeText(keyQuestions.jobFilterPaySelection),
+        hirexaSupportLevel: normalizeText(keyQuestions.hirexaSupportLevel),
+        hirexaSupportExtras: normalizeTextArray(
+          keyQuestions.hirexaSupportExtras,
+          6
+        ),
+        hiringSignalTraits: normalizeTextArray(
+          keyQuestions.hiringSignalTraits,
+          10
+        ),
+        hiringSignalEmphasis: normalizeText(keyQuestions.hiringSignalEmphasis),
+        city: safePrivateFields.city,
+        state: safePrivateFields.state,
+        postalCode: safePrivateFields.postalCode,
+      },
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
 
 export async function POST(req: Request) {
@@ -71,6 +198,15 @@ export async function POST(req: Request) {
         workplaceLocations: true,
         includeRemote: true,
         keyQuestions: true,
+        city: true,
+        cityEncrypted: true,
+        citySearch: true,
+        state: true,
+        stateEncrypted: true,
+        stateSearch: true,
+        postalCode: true,
+        postalCodeEncrypted: true,
+        postalCodeSearch: true,
       },
     });
 
@@ -89,6 +225,9 @@ export async function POST(req: Request) {
     const existingKeyQuestions = {
       ...readKeyQuestions(existingProfile?.keyQuestions),
     };
+    const existingSafePrivateFields = existingProfile
+      ? getSafePrivateProfileFields(existingProfile)
+      : { city: null, state: null, postalCode: null };
     delete existingKeyQuestions.felony;
     const includeRemote = hasField("includeRemote")
       ? Boolean(body.includeRemote)
@@ -120,10 +259,31 @@ export async function POST(req: Request) {
       }
     }
 
+    const hasLocationFields =
+      hasField("city") || hasField("state") || hasField("postalCode");
+    const sanitizedLocationFields = hasLocationFields
+      ? sanitizePrivateProfileFields({
+          city: hasField("city") ? body.city : existingSafePrivateFields.city,
+          state: hasField("state") ? body.state : existingSafePrivateFields.state,
+          postalCode: hasField("postalCode")
+            ? body.postalCode
+            : existingSafePrivateFields.postalCode,
+        })
+      : null;
+    const derivedWorkplaceLocation = sanitizedLocationFields
+      ? deriveLocationLabel(
+          sanitizedLocationFields.city,
+          sanitizedLocationFields.state
+        )
+      : null;
     const normalizedWorkplaceLocations = hasField("workplaceLocations")
       ? body.workplaceLocations === null
         ? null
         : normalizeList(body.workplaceLocations).slice(0, 1)
+      : sanitizedLocationFields
+      ? derivedWorkplaceLocation
+        ? [{ label: derivedWorkplaceLocation }]
+        : null
       : Array.isArray(existingProfile?.workplaceLocations)
       ? normalizeList(existingProfile.workplaceLocations)
       : null;
@@ -138,23 +298,55 @@ export async function POST(req: Request) {
       : existingBenefit?.benefits ?? [];
 
     const roleFocus = hasField("roleFocus")
-      ? String(body.roleFocus ?? "").trim()
-      : String(existingKeyQuestions.roleFocus ?? "").trim();
+      ? normalizeText(body.roleFocus)
+      : normalizeText(existingKeyQuestions.roleFocus);
     const availability = hasField("availability")
-      ? String(body.availability ?? "").trim()
-      : String(existingKeyQuestions.availability ?? "").trim();
+      ? normalizeText(body.availability)
+      : normalizeText(existingKeyQuestions.availability);
     const employmentType = hasField("employmentType")
-      ? String(body.employmentType ?? "").trim()
-      : String(existingKeyQuestions.employmentType ?? "").trim();
+      ? normalizeText(body.employmentType)
+      : normalizeText(existingKeyQuestions.employmentType);
     const seniorityLevel = hasField("seniorityLevel")
-      ? String(body.seniorityLevel ?? "").trim()
-      : String(existingKeyQuestions.seniorityLevel ?? "").trim();
+      ? normalizeText(body.seniorityLevel)
+      : normalizeText(existingKeyQuestions.seniorityLevel);
+    const workSetup = hasField("workSetup")
+      ? normalizeText(body.workSetup)
+      : normalizeText(existingKeyQuestions.workSetup);
+    const commutePreference = hasField("commutePreference")
+      ? normalizeText(body.commutePreference)
+      : normalizeText(existingKeyQuestions.commutePreference);
+    const schedulePreferences = hasField("schedulePreferences")
+      ? normalizeTextArray(body.schedulePreferences, 7)
+      : normalizeTextArray(existingKeyQuestions.schedulePreferences, 7);
+    const jobFilterPaySelection = hasField("jobFilterPaySelection")
+      ? normalizeText(body.jobFilterPaySelection)
+      : normalizeText(existingKeyQuestions.jobFilterPaySelection);
+    const hirexaSupportLevel = hasField("hirexaSupportLevel")
+      ? normalizeText(body.hirexaSupportLevel)
+      : normalizeText(existingKeyQuestions.hirexaSupportLevel);
+    const hirexaSupportExtras = hasField("hirexaSupportExtras")
+      ? normalizeTextArray(body.hirexaSupportExtras, 6)
+      : normalizeTextArray(existingKeyQuestions.hirexaSupportExtras, 6);
+    const hiringSignalTraits = hasField("hiringSignalTraits")
+      ? normalizeTextArray(body.hiringSignalTraits, 10)
+      : normalizeTextArray(existingKeyQuestions.hiringSignalTraits, 10);
+    const hiringSignalEmphasis = hasField("hiringSignalEmphasis")
+      ? normalizeText(body.hiringSignalEmphasis)
+      : normalizeText(existingKeyQuestions.hiringSignalEmphasis);
     const nextKeyQuestions = {
       ...existingKeyQuestions,
       roleFocus,
       availability,
       employmentType,
       seniorityLevel,
+      workSetup,
+      commutePreference,
+      schedulePreferences,
+      jobFilterPaySelection,
+      hirexaSupportLevel,
+      hirexaSupportExtras,
+      hiringSignalTraits,
+      hiringSignalEmphasis,
     };
 
     const profile = await prisma.userProfile.upsert({
@@ -166,6 +358,19 @@ export async function POST(req: Request) {
         workplaceLocations: workplaceLocationsJson ?? Prisma.JsonNull,
         includeRemote,
         keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+        ...(sanitizedLocationFields
+          ? {
+              city: null,
+              cityEncrypted: sanitizedLocationFields.cityEncrypted,
+              citySearch: sanitizedLocationFields.citySearch,
+              state: null,
+              stateEncrypted: sanitizedLocationFields.stateEncrypted,
+              stateSearch: sanitizedLocationFields.stateSearch,
+              postalCode: null,
+              postalCodeEncrypted: sanitizedLocationFields.postalCodeEncrypted,
+              postalCodeSearch: sanitizedLocationFields.postalCodeSearch,
+            }
+          : {}),
       },
       update: {
         minCompensation,
@@ -173,6 +378,19 @@ export async function POST(req: Request) {
         workplaceLocations: workplaceLocationsJson ?? Prisma.JsonNull,
         includeRemote,
         keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+        ...(sanitizedLocationFields
+          ? {
+              city: null,
+              cityEncrypted: sanitizedLocationFields.cityEncrypted,
+              citySearch: sanitizedLocationFields.citySearch,
+              state: null,
+              stateEncrypted: sanitizedLocationFields.stateEncrypted,
+              stateSearch: sanitizedLocationFields.stateSearch,
+              postalCode: null,
+              postalCodeEncrypted: sanitizedLocationFields.postalCodeEncrypted,
+              postalCodeSearch: sanitizedLocationFields.postalCodeSearch,
+            }
+          : {}),
       },
       select: { id: true },
     });
@@ -208,9 +426,25 @@ export async function POST(req: Request) {
         availability,
         employmentType,
         seniorityLevel,
+        workSetup,
+        commutePreference,
+        schedulePreferences,
+        jobFilterPaySelection,
+        hirexaSupportLevel,
+        hirexaSupportExtras,
+        hiringSignalTraits,
+        hiringSignalEmphasis,
+        city: sanitizedLocationFields?.city ?? existingSafePrivateFields.city,
+        state: sanitizedLocationFields?.state ?? existingSafePrivateFields.state,
+        postalCode:
+          sanitizedLocationFields?.postalCode ?? existingSafePrivateFields.postalCode,
       },
     });
   } catch (e) {
+    if (e instanceof PrivateProfileFieldValidationError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
+
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });
   }

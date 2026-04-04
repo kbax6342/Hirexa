@@ -9,9 +9,9 @@ import { clearAppliedJobsSession } from "@/app/lib/appliedJobsSession";
 import { Button } from "../components/ui/button";
 import {
   Bars3Icon,
-  XMarkIcon,
   ChevronDownIcon,
   UserCircleIcon,
+  XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { PaperAirplaneIcon } from "@heroicons/react/24/solid";
 
@@ -44,29 +44,21 @@ const guestNav: NavItem[] = [
   { label: "How It Works", href: "/how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
-  // { label: "Job Resources", href: "/resources", dropdown: true },
 ];
 
 const authedNav: NavItem[] = [
   { label: "Smart Matches", href: "/dashboard" },
   { label: "AI Application Assistant", href: "/job-tools/generate" },
-  //{ label: "Applications", href: "/applications" },
   { label: "Profile", href: "/profile" },
-
-  // ✅ Dropdown-only parent (no /agents navigation to avoid 404)
   {
     label: "Agents",
     href: "#",
     dropdown: true,
     children: [
-      // {
-      //   label: "Job Auto Apply Agent",
-      //   description: "Applies to jobs for you",
-      //   href: "/agents/auto-apply",
-      // },
       {
         label: "Career Coach",
-        description: "Practical AI guidance for your next role, positioning, and search strategy",
+        description:
+          "Practical AI guidance for your next role, positioning, and search strategy",
         href: "/agents/career-coach",
       },
       {
@@ -74,11 +66,6 @@ const authedNav: NavItem[] = [
         description: "AI-assisted recruiter outreach for your best-fit job matches",
         href: "/job-tools/agents/linkedin-outreach",
       },
-      // {
-      //   label: "Resume Optimizer Agent",
-      //   description: "Improves resumes",
-      //   href: "/agents/resume-optimizer",
-      // },
       {
         label: "HirePilot",
         description: "Real-time interview answers powered by your Hirexa profile",
@@ -121,7 +108,6 @@ function NavDropdown({ item }: { item: NavItem }) {
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
-      {/* Parent: NOT a Link (prevents navigating to /agents 404) */}
       <button
         type="button"
         className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -133,10 +119,8 @@ function NavDropdown({ item }: { item: NavItem }) {
         <ChevronDownIcon className="h-4 w-4" />
       </button>
 
-      {/* Hover buffer (prevents flicker) */}
       <div className="absolute left-0 top-full h-3 w-44" />
 
-      {/* Dropdown */}
       {open && (
         <div
           className="absolute left-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-2xl border border-border/60 bg-background shadow-xl"
@@ -187,11 +171,25 @@ export function Navbar() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
+  const hideOnMobile =
+    pathname === "/" ||
+    pathname === "/onboarding/job-interest" ||
+    pathname === "/onboarding/job-goal" ||
+    pathname === "/onboarding/job-priorities" ||
+    pathname === "/onboarding/resume-import" ||
+    pathname === "/onboarding/work-story" ||
+    pathname === "/onboarding/job-location" ||
+    pathname === "/onboarding/highlight-skills" ||
+    pathname === "/onboarding/job-filters" ||
+    pathname === "/onboarding/hirexa-support" ||
+    pathname === "/onboarding/hirexa-support-extras" ||
+    pathname === "/onboarding/hiring-signal" ||
+    pathname === "/onboarding/create-account" ||
+    pathname === "/onboarding/verify-account";
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [hirePilotStatus, setHirePilotStatus] = useState<HirePilotNavStatus | null>(null);
+  const [hirePilotStatus, setHirePilotStatus] =
+    useState<HirePilotNavStatus | null>(null);
   const [hirePilotLoading, setHirePilotLoading] = useState(false);
-
-  // ✅ NEW: control collapse/expand for mobile "Agents"
   const [mobileAgentsOpen, setMobileAgentsOpen] = useState(false);
 
   const signInHref = `/api/auth/signin?callbackUrl=${encodeURIComponent(
@@ -230,7 +228,9 @@ export function Navbar() {
           return;
         }
 
-        const data = (await response.json().catch(() => null)) as HirePilotNavStatus | null;
+        const data = (await response.json().catch(() => null)) as
+          | HirePilotNavStatus
+          | null;
         if (active) {
           setHirePilotStatus(data);
         }
@@ -261,28 +261,34 @@ export function Navbar() {
   const hirePilotTooltip = hirePilotStatus
     ? hirePilotStatus.hirePilotUnlimited
       ? "Legacy unlimited HirePilot access is active."
-      : `Monthly credits: ${Number(hirePilotStatus.monthlyCredits ?? 0)} • Purchased credits: ${Number(
-          hirePilotStatus.purchasedCredits ?? 0
-        )}`
+      : `Monthly credits: ${Number(
+          hirePilotStatus.monthlyCredits ?? 0
+        )} • Purchased credits: ${Number(hirePilotStatus.purchasedCredits ?? 0)}`
     : "HirePilot credit status";
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background backdrop-blur-xl">
-      <nav className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-        {/* LEFT: BRAND (no image) */}
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-            <span className="text-sm font-bold text-primary-foreground">H</span>
+    <header
+      className={`fixed left-0 right-0 top-0 z-50 border-b border-white/8 bg-[#151c29] ${
+        hideOnMobile ? "hidden md:block" : ""
+      }`}
+    >
+      <nav className="relative mx-auto flex min-h-[76px] max-w-7xl items-center justify-between px-5 py-4 lg:px-6">
+        <div aria-hidden="true" className="h-10 w-10 shrink-0 lg:hidden" />
+
+        <Link
+          href="/"
+          className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 lg:static lg:z-auto lg:translate-x-0"
+        >
+          <div className="flex h-9 w-9 items-center justify-center rounded-2xl border border-white/10 bg-sky-500/90 shadow-[0_12px_30px_-18px_rgba(14,165,233,0.85)]">
+            <span className="text-sm font-bold text-white">H</span>
           </div>
-          <span className="text-xl font-bold tracking-tight text-foreground">
-            Hirexa <span className="text-accent">AI</span>
+          <span className="text-lg font-bold tracking-tight text-white sm:text-xl">
+            Hirexa <span className="text-sky-400">AI</span>
           </span>
         </Link>
 
-        {/* CENTER: NAV LINKS (desktop) */}
         <DesktopNav items={navLinks} />
 
-        {/* RIGHT: AUTH / ACCOUNT (desktop) */}
         <div className="hidden items-center gap-3 lg:flex">
           {status === "loading" ? (
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
@@ -301,7 +307,6 @@ export function Navbar() {
               </Link>
 
               <div className="relative group">
-                {/* Trigger */}
                 <div className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
                   <UserCircleIcon className="h-5 w-5 text-muted-foreground" />
                   <span className="max-w-[180px] truncate">
@@ -310,19 +315,9 @@ export function Navbar() {
                   <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
                 </div>
 
-                {/* Hover buffer (prevents flicker) */}
                 <div className="absolute right-0 top-full h-3 w-44" />
 
-                {/* Dropdown */}
-                <div
-                  className="
-                    absolute right-0 top-full mt-2 w-44 rounded-xl border border-border/60 bg-background shadow-lg
-                    opacity-0 scale-95 pointer-events-none
-                    group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto
-                    transition-all duration-200
-                    z-50
-                  "
-                >
+                <div className="absolute right-0 top-full z-50 mt-2 w-44 rounded-xl border border-border/60 bg-background shadow-lg opacity-0 scale-95 pointer-events-none transition-all duration-200 group-hover:pointer-events-auto group-hover:scale-100 group-hover:opacity-100">
                   <div className="py-1 text-sm">
                     <Link
                       href="/settings"
@@ -333,7 +328,7 @@ export function Navbar() {
                     <button
                       type="button"
                       onClick={handleSignOut}
-                      className="w-full text-left px-4 py-2 text-red-600 hover:bg-secondary"
+                      className="w-full px-4 py-2 text-left text-red-600 hover:bg-secondary"
                     >
                       Log out
                     </button>
@@ -344,16 +339,16 @@ export function Navbar() {
           )}
         </div>
 
-        {/* Mobile menu button */}
         <button
           type="button"
-          className="text-foreground lg:hidden"
+          className="relative z-20 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white transition hover:bg-white/[0.08] lg:hidden"
           onClick={() => {
-            // ✅ when toggling entire mobile menu closed, also collapse agents
-            setMobileOpen((v) => {
-              const next = !v;
-              if (!next) setMobileAgentsOpen(false);
-              return next;
+            setMobileOpen((value) => {
+              const nextValue = !value;
+              if (!nextValue) {
+                setMobileAgentsOpen(false);
+              }
+              return nextValue;
             });
           }}
           aria-label={mobileOpen ? "Close menu" : "Open menu"}
@@ -366,12 +361,10 @@ export function Navbar() {
         </button>
       </nav>
 
-      {/* MOBILE PANEL */}
       {mobileOpen && (
-        <div className="border-t border-border/40 bg-background/95 backdrop-blur-xl lg:hidden">
-          <div className="flex flex-col gap-1 px-6 py-6">
+        <div className="border-t border-white/8 bg-[#151c29] lg:hidden">
+          <div className="flex flex-col gap-1 px-5 py-6">
             {navLinks.map((item) => {
-              // ✅ On mobile, allow dropdown sections to collapse/expand (Agents)
               if (item.dropdown && item.children?.length) {
                 const isAgents = item.label === "Agents";
                 const expanded = isAgents ? mobileAgentsOpen : true;
@@ -380,16 +373,16 @@ export function Navbar() {
                   <div key={item.label} className="flex flex-col">
                     <button
                       type="button"
-                      className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium text-foreground hover:bg-secondary"
+                      className="flex w-full items-center justify-between rounded-2xl px-3 py-3 text-sm font-medium text-white hover:bg-white/[0.05]"
                       onClick={() => {
-                        if (isAgents) setMobileAgentsOpen((v) => !v);
+                        if (isAgents) {
+                          setMobileAgentsOpen((value) => !value);
+                        }
                       }}
                       aria-expanded={expanded}
                       aria-controls={isAgents ? "mobile-agents-panel" : undefined}
                     >
-                      <span className="flex items-center gap-1">
-                        {item.label}
-                      </span>
+                      <span className="flex items-center gap-1">{item.label}</span>
                       <ChevronDownIcon
                         className={`h-4 w-4 transition-transform ${
                           expanded ? "rotate-180" : ""
@@ -400,20 +393,20 @@ export function Navbar() {
                     {expanded && (
                       <div
                         id={isAgents ? "mobile-agents-panel" : undefined}
-                        className="ml-3 flex flex-col gap-1 border-l border-border/50 pl-3"
+                        className="ml-3 mt-1 flex flex-col gap-1 border-l border-white/8 pl-3"
                       >
                         {item.children.map((child) => (
                           <Link
                             key={child.href}
                             href={child.href}
-                            className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            className="rounded-2xl px-3 py-2.5 text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
                             onClick={() => {
                               setMobileOpen(false);
                               setMobileAgentsOpen(false);
                             }}
                           >
                             <span className="flex items-center justify-between gap-3">
-                            <span className="flex items-center gap-2">
+                              <span className="flex items-center gap-2">
                                 {child.icon ? (
                                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-sky-500 text-white">
                                     <child.icon className="h-4 w-4" />
@@ -439,7 +432,7 @@ export function Navbar() {
                 <Link
                   key={item.label}
                   href={item.href || "#"}
-                  className="flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  className="flex items-center gap-1 rounded-2xl px-3 py-3 text-sm text-slate-300 transition-colors hover:bg-white/[0.05] hover:text-white"
                   onClick={() => {
                     setMobileOpen(false);
                     setMobileAgentsOpen(false);
@@ -450,7 +443,7 @@ export function Navbar() {
               );
             })}
 
-            <div className="mt-4 flex flex-col gap-3 border-t border-border/40 pt-4">
+            <div className="mt-4 flex flex-col gap-3 border-t border-white/8 pt-4">
               {status === "loading" ? (
                 <div className="h-10 w-full animate-pulse rounded-xl bg-secondary" />
               ) : !isAuthed ? (
@@ -458,7 +451,7 @@ export function Navbar() {
                   <Button
                     asChild
                     variant="ghost"
-                    className="justify-start text-sm text-muted-foreground hover:bg-secondary"
+                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
                   >
                     <Link
                       href={signInHref}
@@ -471,7 +464,10 @@ export function Navbar() {
                     </Link>
                   </Button>
 
-                  <Button asChild className="rounded-full text-sm font-medium">
+                  <Button
+                    asChild
+                    className="rounded-2xl bg-sky-500 text-sm font-medium text-white hover:bg-sky-400"
+                  >
                     <Link
                       href={signInHref}
                       onClick={() => {
@@ -487,7 +483,7 @@ export function Navbar() {
                 <>
                   <Link
                     href="/settings/subscription"
-                    className="inline-flex items-center justify-center rounded-full border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800"
+                    className="inline-flex items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-100"
                     onClick={() => {
                       setMobileOpen(false);
                       setMobileAgentsOpen(false);
@@ -499,7 +495,7 @@ export function Navbar() {
                   <Button
                     asChild
                     variant="ghost"
-                    className="justify-start text-sm text-muted-foreground hover:bg-secondary"
+                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
                   >
                     <Link
                       href="/settings"
@@ -514,7 +510,7 @@ export function Navbar() {
 
                   <Button
                     variant="destructive"
-                    className="rounded-full text-sm font-medium"
+                    className="rounded-2xl text-sm font-medium"
                     onClick={() => {
                       setMobileOpen(false);
                       setMobileAgentsOpen(false);

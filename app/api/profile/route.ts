@@ -6,16 +6,11 @@ import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 import { getStripeClient } from "@/app/lib/stripeClient";
 import { deriveLocationLabel } from "@/app/lib/locationOptions";
-import {
-  getCachedProfile,
-  invalidateCachedProfile,
-  setCachedProfile,
-} from "@/app/lib/profile-cache";
+import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 import {
   getSafePrivateProfileFields,
   PrivateProfileFieldValidationError,
-  readRawPrivateProfileFieldsByIds,
   sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
 import {
@@ -23,8 +18,9 @@ import {
   getGuestUserCookieOptions,
   GUEST_USER_COOKIE,
 } from "@/app/lib/onboarding/start";
-import type Stripe from "stripe";
 import { syncLoopsContact } from "@/app/lib/email/loops";
+import type Stripe from "stripe";
+import { getCurrentViewerProfile } from "@/app/lib/profile-server";
 
 export const runtime = "nodejs";
 
@@ -49,17 +45,6 @@ function normalizeText(value: unknown) {
 
 function dateFromDobString(value?: string | null) {
   return value ? new Date(`${value}T00:00:00.000Z`) : null;
-}
-
-function previewProfileValue(value: unknown) {
-  if (typeof value !== "string") {
-    return value ?? null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  return trimmed.length > 48 ? `${trimmed.slice(0, 48)}...` : trimmed;
 }
 
 function readFirstWorkplaceLocation(value: unknown) {
@@ -437,164 +422,20 @@ export async function POST(req: Request) {
 
 export async function GET() {
   try {
-    const session = await auth();
-    const userId = (session?.user as any)?.id ?? null;
-
-    const c = await cookies();
-    const guestId = c.get("guest_user_id")?.value ?? null;
+    const { userId, guestId, mergedGuestProfile, responseData } =
+      await getCurrentViewerProfile({
+        useCache: true,
+        syncStripe: true,
+      });
 
     if (!userId && !guestId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    let mergedGuestProfile = false;
-    if (userId && guestId) {
-      const mergeResult = await prisma.$transaction((tx) =>
-        mergeGuestProfileIntoUserProfile(tx, {
-          userId,
-          guestId,
-          email: (session?.user as any)?.email ?? null,
-        })
-      );
-
-      if (mergeResult.merged) {
-        mergedGuestProfile = true;
-        invalidateCachedProfile({ userId, guestId });
-      }
-    }
-
-    const cachedProfile = getCachedProfile<{ ok: boolean; profile: unknown }>({
-      userId,
-      guestId,
-    });
-    if (cachedProfile) {
-      return NextResponse.json(cachedProfile);
-    }
-
-    // If logged in, sync Stripe status (never let it kill the profile response)
-    if (userId) {
-      const currentProfile = await prisma.userProfile.findUnique({
-        where: { userId },
-        select: { email: true },
-      });
-
-      try {
-        await syncStripeSubscriptionStatus({
-          userId,
-          sessionEmail: (session?.user as any)?.email ?? null,
-          profileEmail: currentProfile?.email ?? null,
-        });
-      } catch {
-        // Best-effort mark checkedAt; ignore if DB isn’t ready
-        try {
-          await upsertUserProfileByUserId(userId, { subscriptionCheckedAt: new Date() });
-        } catch {
-          // swallow
-        }
-      }
-    }
-
-    // Fetch the profile (unique queries where possible)
-    const profile = userId
-      ? await prisma.userProfile.findUnique({
-          where: { userId },
-          select: buildProfileSelect(),
-        })
-      : await prisma.userProfile.findUnique({
-          where: { guestId: guestId as string },
-          select: buildProfileSelect(),
-        });
-
-    const rawPrivateFieldsById = await readRawPrivateProfileFieldsByIds(
-      prisma,
-      profile ? [profile.id] : []
-    );
-    const serializedProfile = serializeProfileResponse(profile, rawPrivateFieldsById);
-    if (process.env.NODE_ENV !== "production" && profile) {
-      const rawPrivateFields = rawPrivateFieldsById.get(profile.id);
-      const rawPrivateFieldRecord =
-        rawPrivateFields && typeof rawPrivateFields === "object"
-          ? (rawPrivateFields as Record<string, unknown>)
-          : null;
-
-      console.info("[profile raw db]", {
-        profileId: profile.id,
-        address: previewProfileValue(rawPrivateFieldRecord?.address),
-        addressEncrypted: previewProfileValue(rawPrivateFieldRecord?.addressEncrypted),
-        addressLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.addressLegacyDecrypted),
-        city: previewProfileValue(rawPrivateFieldRecord?.city),
-        cityEncrypted: previewProfileValue(rawPrivateFieldRecord?.cityEncrypted),
-        cityLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.cityLegacyDecrypted),
-        state: previewProfileValue(rawPrivateFieldRecord?.state),
-        stateEncrypted: previewProfileValue(rawPrivateFieldRecord?.stateEncrypted),
-        stateLegacyDecrypted: previewProfileValue(rawPrivateFieldRecord?.stateLegacyDecrypted),
-        postalCode: previewProfileValue(rawPrivateFieldRecord?.postalCode),
-        postalCodeEncrypted: previewProfileValue(rawPrivateFieldRecord?.postalCodeEncrypted),
-        postalCodeLegacyDecrypted: previewProfileValue(
-          rawPrivateFieldRecord?.postalCodeLegacyDecrypted
-        ),
-      });
-      console.info("[profile mapped view]", {
-        profileId: profile.id,
-        address: serializedProfile?.displayAddress ?? null,
-        city: serializedProfile?.displayCity ?? null,
-        state: serializedProfile?.displayState ?? null,
-        postalCode: serializedProfile?.displayPostalCode ?? null,
-      });
-      console.info("[profile] resolved private display fields", {
-        profileId: profile.id,
-        addressResolved: Boolean(serializedProfile?.displayAddress),
-        cityResolved: Boolean(serializedProfile?.displayCity),
-        stateResolved: Boolean(serializedProfile?.displayState),
-        postalCodeResolved: Boolean(serializedProfile?.displayPostalCode),
-        usedPrimaryEncryptedColumns: Boolean(
-          rawPrivateFields &&
-            typeof rawPrivateFields === "object" &&
-            ((rawPrivateFields as Record<string, unknown>).addressEncrypted ||
-              (rawPrivateFields as Record<string, unknown>).cityEncrypted ||
-              (rawPrivateFields as Record<string, unknown>).stateEncrypted ||
-              (rawPrivateFields as Record<string, unknown>).postalCodeEncrypted)
-        ),
-        usedLegacyColumns: Boolean(
-          rawPrivateFields &&
-            typeof rawPrivateFields === "object" &&
-            ((rawPrivateFields as Record<string, unknown>).address ||
-              (rawPrivateFields as Record<string, unknown>).city ||
-              (rawPrivateFields as Record<string, unknown>).state ||
-              (rawPrivateFields as Record<string, unknown>).postalCode)
-        ),
-      });
-    }
-    const responseProfile = serializedProfile
-      ? {
-          ...serializedProfile,
-          expertise: (() => {
-            if (
-              serializedProfile.keyQuestions &&
-              typeof serializedProfile.keyQuestions === "object" &&
-              !Array.isArray(serializedProfile.keyQuestions)
-            ) {
-              const rawExpertise = (serializedProfile.keyQuestions as Record<string, unknown>).expertise;
-              if (Array.isArray(rawExpertise)) {
-                return rawExpertise.map((item) => String(item ?? ""));
-              }
-            }
-            return [];
-          })(),
-          profileImageUrl:
-            serializedProfile.profileImage && serializedProfile.profileImageMimeType
-              ? `data:${serializedProfile.profileImageMimeType};base64,${Buffer.from(
-                  serializedProfile.profileImage
-                ).toString("base64")}`
-              : null,
-        }
-      : null;
-
-    const responseData = { ok: true, profile: responseProfile };
     if (process.env.NODE_ENV !== "production") {
       const responseProfileRecord =
-        responseProfile && typeof responseProfile === "object"
-          ? (responseProfile as Record<string, unknown>)
+        responseData.profile && typeof responseData.profile === "object"
+          ? (responseData.profile as Record<string, unknown>)
           : null;
 
       console.info("[api/profile] final payload", {
@@ -609,7 +450,6 @@ export async function GET() {
           null,
       });
     }
-    setCachedProfile({ userId, guestId, data: responseData });
 
     const response = NextResponse.json(responseData);
     if (mergedGuestProfile) {
@@ -770,3 +610,4 @@ function buildProfileSelect() {
     },
   };
 }
+

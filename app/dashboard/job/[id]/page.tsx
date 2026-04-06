@@ -9,13 +9,14 @@ import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 import JobDetailsPanel, {
   type FormattedJob,
 } from "@/app/components/dashboard/JobDetailsPanel";
-import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import {
   buildApplyProviderPayload,
   detectApplyProviderFromJob,
   getApplyProviderButtonLabel,
   getApplyProviderLoadingLabel,
 } from "@/app/lib/apply/providerDetection";
+import { readJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 
 type JobDetailsResponse = {
   job: JobDetail;
@@ -31,6 +32,19 @@ type PlanStatusResponse = {
 type CreditStatusResponse = {
   hirePilotCredits?: number;
 };
+
+function isJobSummary(value: unknown): value is Job {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Job>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.source === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.company === "string" &&
+    typeof candidate.location === "string" &&
+    typeof candidate.posted === "string"
+  );
+}
 
 function getSourceLabel(source: JobDetail["source"] | undefined) {
   switch (source) {
@@ -93,9 +107,24 @@ export default function DashboardJobDetailsPage() {
       setFormatted(null);
 
       try {
-        const res = await fetch(`/api/jobs/details?id=${encodeURIComponent(jobId)}`, {
-          cache: "no-store",
-        });
+        const storedSummary = readJobDetailSummary("dashboard", jobId);
+        const requestInit = isJobSummary(storedSummary)
+          ? {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ job: storedSummary }),
+            }
+          : undefined;
+
+        const res = await fetch(
+          requestInit
+            ? "/api/jobs/details"
+            : `/api/jobs/details?id=${encodeURIComponent(jobId)}`,
+          {
+            cache: "no-store",
+            ...(requestInit ?? {}),
+          }
+        );
 
         const data = (await res.json()) as Partial<JobDetailsResponse> & {
           error?: string;
@@ -302,7 +331,7 @@ export default function DashboardJobDetailsPage() {
           aiApplyLabel={aiApplyLabel}
           aiApplyLoadingLabel={aiApplyLoadingLabel}
           onAiApply={handleAiApply}
-          onCareerCoach={() => router.push("/job-tools/agents/career-coach")}
+          onCareerCoach={() => router.push("/job-tools/career-coach")}
           onOutreach={() => router.push("/job-tools/agents/linkedin-outreach")}
           hideAiApplyOnDesktop
           hideAdzunaAttribution

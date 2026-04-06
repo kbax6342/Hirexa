@@ -18,6 +18,7 @@ import JobDetailsSkeleton from "@/app/components/skeletons/JobDetailsSkeleton";
 import StructuredJobDescription from "@/app/components/jobs/StructuredJobDescription";
 import { cleanJobText } from "@/app/lib/jobs/clean-job-text";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
+import { readJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 
 type JobDetailsResponse = {
   job: JobDetail;
@@ -241,9 +242,24 @@ export default function JobDetailsPage() {
         setErr(null);
         setAdzunaPretty(null);
 
-        const res = await fetch(`/api/jobs/details?id=${encodeURIComponent(id)}`, {
-          cache: "no-store",
-        });
+        const storedSummary = readJobDetailSummary("public", id);
+        const requestInit = storedSummary
+          ? {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ job: storedSummary }),
+            }
+          : undefined;
+
+        const res = await fetch(
+          requestInit
+            ? "/api/jobs/details"
+            : `/api/jobs/details?id=${encodeURIComponent(id)}`,
+          {
+            cache: "no-store",
+            ...(requestInit ?? {}),
+          }
+        );
 
         const json = (await res.json()) as Partial<JobDetailsResponse> & {
           error?: string;

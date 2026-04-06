@@ -7,6 +7,11 @@ import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
 import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
+import {
+  getActiveOnboardingDraftForCookies,
+  pickDraftGuestId,
+  updateOnboardingDraftPayload,
+} from "@/app/lib/onboarding/draft-session";
 
 function normalizeName(value: unknown) {
   const name = String(value ?? "").trim();
@@ -64,6 +69,7 @@ export async function POST(req: Request) {
     const passwordHash = await hashPassword(password);
     const cookieStore = await cookies();
     const guestId = cookieStore.get("guest_user_id")?.value ?? null;
+    const draft = await getActiveOnboardingDraftForCookies(cookieStore);
 
     await prisma.user.upsert({
       where: { email },
@@ -82,17 +88,27 @@ export async function POST(req: Request) {
       },
     });
 
-    if (guestId) {
-      await prisma.userProfile.updateMany({
-        where: { guestId },
-        data: {
-          firstName,
-          lastName,
-          email,
-          subscriptionEmail: email,
+    if (draft) {
+      await updateOnboardingDraftPayload({
+        draftToken: draft.draftToken,
+        payloadPatch: {
+          signup: {
+            firstName,
+            lastName,
+            email,
+          },
+          profile: {
+            firstName,
+            lastName,
+            email,
+          },
+          onboardingEmail: {
+            email,
+          },
         },
+        guestId: pickDraftGuestId({ cookieStore, draft }) ?? guestId,
       });
-
+    } else if (guestId) {
       invalidateCachedProfile({ userId: null, guestId });
     }
 

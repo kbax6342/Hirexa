@@ -11,6 +11,7 @@ import {
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import {
+  CREATE_ACCOUNT_ROUTE,
   HIRING_SIGNAL_ROUTE,
   ONBOARDING_FLOW_ROUTES,
   VERIFY_ACCOUNT_ROUTE,
@@ -20,12 +21,16 @@ import {
   writePendingOnboardingSignup,
 } from "@/app/lib/auth/onboardingPendingSignup";
 
-type ProfileResponse = {
-  profile?: {
-    firstName?: string | null;
-    lastName?: string | null;
-    email?: string | null;
-  };
+type DraftResponse = {
+  draft?: {
+    payload?: {
+      profile?: {
+        firstName?: string | null;
+        lastName?: string | null;
+        email?: string | null;
+      } | null;
+    } | null;
+  } | null;
 };
 
 type FieldErrors = {
@@ -84,6 +89,7 @@ export default function CreateAccountStep() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingDefaults, setLoadingDefaults] = useState(true);
+  const [draftHydrated, setDraftHydrated] = useState(false);
 
   const passwordScore = useMemo(() => scorePassword(password), [password]);
   const progressPercent = useMemo(() => getCreateAccountProgressPercent(), []);
@@ -99,6 +105,7 @@ export default function CreateAccountStep() {
       setPassword(pending.password);
       setConfirmPassword(pending.password);
       setLoadingDefaults(false);
+      setDraftHydrated(true);
       return () => {
         active = false;
       };
@@ -106,21 +113,29 @@ export default function CreateAccountStep() {
 
     async function loadProfileDefaults() {
       try {
-        const response = await fetch("/api/profile", { cache: "no-store" });
-        const data = (await response.json().catch(() => null)) as
-          | ProfileResponse
-          | null;
+        const response = await fetch("/api/onboarding/draft", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = (await response.json().catch(() => null)) as DraftResponse | null;
 
-        if (!active || !response.ok || !data?.profile) {
+        if (!active || !response.ok || !data?.draft?.payload?.profile) {
           return;
         }
 
-        setFirstName((current) => current || String(data.profile?.firstName ?? "").trim());
-        setLastName((current) => current || String(data.profile?.lastName ?? "").trim());
-        setEmail((current) => current || String(data.profile?.email ?? "").trim());
+        setFirstName((current) =>
+          current || String(data.draft?.payload?.profile?.firstName ?? "").trim()
+        );
+        setLastName((current) =>
+          current || String(data.draft?.payload?.profile?.lastName ?? "").trim()
+        );
+        setEmail((current) =>
+          current || String(data.draft?.payload?.profile?.email ?? "").trim()
+        );
       } finally {
         if (active) {
           setLoadingDefaults(false);
+          setDraftHydrated(true);
         }
       }
     }
@@ -131,6 +146,39 @@ export default function CreateAccountStep() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!draftHydrated) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void fetch("/api/onboarding/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          lastStep: CREATE_ACCOUNT_ROUTE,
+          payload: {
+            profile: {
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              email: email.trim(),
+            },
+            signup: {
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              email: email.trim().toLowerCase(),
+            },
+          },
+        }),
+      }).catch(() => {});
+    }, 400);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [draftHydrated, email, firstName, lastName]);
 
   function handleBack() {
     router.push(HIRING_SIGNAL_ROUTE);

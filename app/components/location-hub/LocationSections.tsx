@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 import ListSectionSkeleton from "@/app/components/loading/ListSectionSkeleton";
+import { storeJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 
 type JobCard = {
   id: string;
@@ -146,6 +147,18 @@ export default function LocationSections({
                   <Link
                     href={`/jobs/details/${job.id}`}
                     className="block font-semibold text-foreground text-gray-700 hover:underline"
+                    onClick={() =>
+                      storeJobDetailSummary("public", {
+                        id: job.id,
+                        source: "adzuna",
+                        title: job.title,
+                        company: job.company,
+                        location: job.location,
+                        posted: job.posted,
+                        description: job.description,
+                        jobUrl: job.jobUrl,
+                      })
+                    }
                   >
                     {job.title}
                   </Link>

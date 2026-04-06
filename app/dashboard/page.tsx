@@ -20,7 +20,7 @@ export default async function Dashboard() {
     : null;
   const initialProfileFilters = smartMatchDefaults
     ? {
-        query: smartMatchDefaults.searchQuery,
+        query: smartMatchDefaults.jobTitles[0] ?? "",
         location: smartMatchDefaults.preferredLocation ?? "",
         includeRemote: smartMatchDefaults.includeRemote,
       }
@@ -36,7 +36,7 @@ export default async function Dashboard() {
       smartMatchDefaults?.debug?.legacySmartMatchesPreferenceLocation ?? null,
     finalDefaultLocationSource:
       smartMatchDefaults?.debug?.finalDefaultLocationSource ?? "fallback-empty",
-    profileTargetRole: smartMatchDefaults?.searchQuery ?? null,
+    profileTargetRole: smartMatchDefaults?.jobTitles[0] ?? null,
   });
 
   return (

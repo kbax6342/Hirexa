@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircleIcon,
@@ -25,24 +25,11 @@ type FormState = {
   email: string;
 };
 
-
-type ExistingProfileResponse = {
-  profile?: {
-    firstName?: string | null;
-    lastName?: string | null;
-    dob?: string | null;
-    address?: string | null;
-    displayAddress?: string | null;
-    city?: string | null;
-    displayCity?: string | null;
-    postalCode?: string | null;
-    displayPostalCode?: string | null;
-    state?: string | null;
-    displayState?: string | null;
-    linkedinUrl?: string | null;
-    portfolioUrl?: string | null;
-    phone?: string | null;
-    email?: string | null;
+type DraftResponse = {
+  draft?: {
+    payload?: {
+      profile?: Partial<FormState>;
+    } | null;
   } | null;
   error?: string;
 };
@@ -109,36 +96,36 @@ export default function ProfileForm() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [draftHydrated, setDraftHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadProfile() {
+    async function loadProfileDraft() {
       try {
         setLoadingProfile(true);
 
-        let res = await fetch("/api/profile", { cache: "no-store" });
+        const startRes = await fetch("/api/onboarding/start", {
+          method: "POST",
+          cache: "no-store",
+          credentials: "include",
+        });
 
-        if (res.status === 401) {
-          const startRes = await fetch("/api/onboarding/start", {
-            method: "POST",
-            cache: "no-store",
-          });
-
-          if (!startRes.ok) {
-            throw new Error("Failed to start onboarding.");
-          }
-
-          res = await fetch("/api/profile", { cache: "no-store" });
+        if (!startRes.ok) {
+          throw new Error("Failed to start onboarding.");
         }
 
-        const data = (await res.json()) as ExistingProfileResponse;
+        const res = await fetch("/api/onboarding/draft", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = (await res.json()) as DraftResponse;
 
         if (!res.ok) {
-          throw new Error(data?.error || "Failed to load existing profile.");
+          throw new Error(data?.error || "Failed to load onboarding draft.");
         }
 
-        const profile = data?.profile;
+        const profile = data?.draft?.payload?.profile;
         if (!profile || cancelled) return;
 
         setForm((prev) => ({
@@ -146,10 +133,10 @@ export default function ProfileForm() {
           firstName: profile.firstName ?? prev.firstName,
           lastName: profile.lastName ?? prev.lastName,
           dob: profile.dob ? formatDobForInput(profile.dob) : prev.dob,
-          address: profile.displayAddress ?? profile.address ?? prev.address,
-          city: profile.displayCity ?? profile.city ?? prev.city,
-          postalCode: profile.displayPostalCode ?? profile.postalCode ?? prev.postalCode,
-          state: profile.displayState ?? profile.state ?? prev.state,
+          address: profile.address ?? prev.address,
+          city: profile.city ?? prev.city,
+          postalCode: profile.postalCode ?? prev.postalCode,
+          state: profile.state ?? prev.state,
           linkedinUrl: profile.linkedinUrl ?? prev.linkedinUrl,
           portfolioUrl: profile.portfolioUrl ?? prev.portfolioUrl,
           phone: formatPhoneNumber(profile.phone) || prev.phone,
@@ -163,11 +150,12 @@ export default function ProfileForm() {
       } finally {
         if (!cancelled) {
           setLoadingProfile(false);
+          setDraftHydrated(true);
         }
       }
     }
 
-    loadProfile();
+    void loadProfileDraft();
 
     return () => {
       cancelled = true;
@@ -188,19 +176,27 @@ export default function ProfileForm() {
     setForm((p) => ({ ...p, [key]: value }));
   }
 
-  async function saveProfile(): Promise<{ ok: true } | { ok: false; message: string }> {
-    if (!requiredOk) {
-      return { ok: false, message: "Please fill in First name, Last name, and Email." };
+  async function saveProfile(options?: { requireRequiredFields?: boolean }) {
+    if (options?.requireRequiredFields && !requiredOk) {
+      return {
+        ok: false as const,
+        message: "Please fill in First name, Last name, and Email.",
+      };
     }
 
     try {
-      const res = await fetch("/api/profile", {
+      const res = await fetch("/api/onboarding/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        credentials: "include",
+        body: JSON.stringify({
+          lastStep: ONBOARDING_PROFILE_ROUTE,
+          payload: {
+            profile: form,
+          },
+        }),
       });
 
-      // Be defensive: some errors return empty body
       let data: { error?: string } | null = null;
       try {
         data = await res.json();
@@ -209,15 +205,42 @@ export default function ProfileForm() {
       }
 
       if (!res.ok) {
-        return { ok: false, message: data?.error || "Failed to save profile." };
+        return {
+          ok: false as const,
+          message: data?.error || "Failed to save profile.",
+        };
       }
 
-      return { ok: true };
+      return { ok: true as const };
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Network error. Please try again.";
-      return { ok: false, message };
+      return { ok: false as const, message };
     }
   }
+
+  const autosaveProfileDraft = useEffectEvent(async () => {
+    const result = await saveProfile();
+    if (result.ok) {
+      setSaved(true);
+      return;
+    }
+
+    setError(result.message);
+  });
+
+  useEffect(() => {
+    if (!draftHydrated) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void autosaveProfileDraft();
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [draftHydrated, form]);
 
   // This replaces formAction. It's client-safe and handles errors.
   async function handleNext(e: React.FormEvent<HTMLFormElement>) {
@@ -228,7 +251,7 @@ export default function ProfileForm() {
     setSaved(false);
     setSaving(true);
 
-    const result = await saveProfile();
+    const result = await saveProfile({ requireRequiredFields: true });
 
     if (!result.ok) {
       setError(result.message);

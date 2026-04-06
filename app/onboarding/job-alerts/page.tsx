@@ -12,9 +12,7 @@ import {
 } from "@/app/lib/onboarding-flow";
 
 type ProfileResponse = {
-  profile?: {
-    email?: string | null;
-  } | null;
+  email?: string | null;
 };
 
 function Bullet({ children }: { children: ReactNode }) {
@@ -56,7 +54,7 @@ export default function JobAlertsOnboardingPage() {
           fetch("/api/onboarding/selected-jobs", {
             cache: "no-store",
           }),
-          fetch("/api/profile", {
+          fetch("/api/onboarding/email", {
             cache: "no-store",
             credentials: "include",
           }),
@@ -79,7 +77,7 @@ export default function JobAlertsOnboardingPage() {
           const profileData = (await profileRes.value.json().catch(() => null)) as
             | ProfileResponse
             | null;
-          const profileEmail = String(profileData?.profile?.email ?? "").trim();
+          const profileEmail = String(profileData?.email ?? "").trim();
 
           if (!cancelled && profileEmail) {
             setEmail((prev) => prev || profileEmail);

@@ -104,25 +104,23 @@ function readRoleFocus(value: unknown) {
   return trimOrNull((value as { roleFocus?: string | null }).roleFocus ?? null);
 }
 
-function buildSearchTitles(profile: ProfileSnapshot | null) {
-  const roleFocus = readRoleFocus(profile?.keyQuestions);
-  const selectedTitles = dedupeValues(
-    (profile?.jobInterests ?? [])
-      .map((item) => trimOrNull(item?.title ?? null))
-      .filter((value): value is string => Boolean(value))
-  );
+function readActiveTargetRole(profile: ProfileSnapshot | null) {
+  const selectedTitle = trimOrNull(profile?.jobInterests?.[0]?.title ?? null);
+  if (selectedTitle) {
+    return selectedTitle;
+  }
 
-  const experienceTitles = dedupeValues(
-    (profile?.resume?.experiences ?? [])
-      .map((item) => trimOrNull(item?.title ?? null))
-      .filter((value): value is string => Boolean(value))
-  );
-
-  return dedupeValues([roleFocus ?? "", ...selectedTitles, ...experienceTitles]).slice(0, 5);
+  return readRoleFocus(profile?.keyQuestions);
 }
 
-function buildSkillTerms(profile: ProfileSnapshot | null) {
-  return dedupeValues([...(profile?.skills ?? []), ...(profile?.resumeSkills ?? [])]).slice(0, 8);
+function buildSearchTitles(profile: ProfileSnapshot | null) {
+  // The live feed must stay anchored to the single user-selected target role.
+  const activeTargetRole = readActiveTargetRole(profile);
+  return activeTargetRole ? [activeTargetRole] : [];
+}
+
+function buildSkillTerms() {
+  return [];
 }
 
 function resolveDefaultLocation(profile: ProfileSnapshot | null): ResolvedDefaultLocation {
@@ -183,11 +181,11 @@ export function buildSmartMatchSearchConfig(
   profile: ProfileSnapshot | null
 ): SmartMatchSearchConfig {
   const jobTitles = buildSearchTitles(profile);
-  const skillTerms = buildSkillTerms(profile);
+  const skillTerms = buildSkillTerms();
   const resolvedDefaultLocation = resolveDefaultLocation(profile);
 
   return {
-    searchQuery: jobTitles[0] ?? skillTerms[0] ?? "jobs",
+    searchQuery: jobTitles[0] ?? "jobs",
     jobTitles,
     skillTerms,
     preferredLocation: resolvedDefaultLocation.resolvedProfileDefaultLocation,
@@ -222,7 +220,7 @@ export async function getSmartMatchSearchConfigForUser(
         resumeSkills: true,
         jobInterests: {
           orderBy: { id: "asc" },
-          take: 5,
+          take: 1,
           select: {
             title: true,
           },

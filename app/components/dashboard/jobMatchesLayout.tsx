@@ -21,10 +21,11 @@ import {
   getApplyProviderButtonLabel,
   getApplyProviderLoadingLabel,
 } from "@/app/lib/apply/providerDetection";
+import { storeJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 
 type SmartMatchesResponse = {
   jobs: Job[];
-  nextCursor: string;
+  nextCursor: string | null;
   meta?: {
     query?: string;
     preferredLocation?: string | null;
@@ -88,6 +89,34 @@ function getJobIdentity(job: Pick<Job, "id" | "source">) {
     : `${sourcePrefix}${normalizedId}`;
 }
 
+function normalizeJobUrl(url: string | undefined) {
+  if (!url) return "";
+
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.search = "";
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return url.trim().replace(/\/+$/, "");
+  }
+}
+
+function getJobDedupeKey(
+  job: Pick<Job, "id" | "source" | "jobUrl" | "title" | "company" | "location">
+) {
+  const normalizedUrl = normalizeJobUrl(job.jobUrl);
+  if (normalizedUrl) return normalizedUrl;
+
+  const identity = getJobIdentity(job);
+  if (identity) return identity;
+
+  return [job.title, job.company, job.location]
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean)
+    .join("|");
+}
+
 function getSourceLabel(source: Job["source"]) {
   switch (source) {
     case "greenhouse":
@@ -117,10 +146,10 @@ function dedupeJobs(jobList: Job[]) {
   return jobList.filter((job) => {
     if (!job?.id || !job?.source) return false;
 
-    const identity = getJobIdentity(job);
-    if (unique.has(identity)) return false;
+    const dedupeKey = getJobDedupeKey(job);
+    if (!dedupeKey || unique.has(dedupeKey)) return false;
 
-    unique.add(identity);
+    unique.add(dedupeKey);
     return true;
   });
 }
@@ -182,6 +211,7 @@ export default function JobMatchesLayout({
   const [resolutionMeta, setResolutionMeta] = useState<SmartMatchesResolutionMeta | null>(
     null
   );
+  const [filterError, setFilterError] = useState<string | null>(null);
 
   type ActionState = {
     loading?: boolean;
@@ -267,12 +297,17 @@ export default function JobMatchesLayout({
     window.history.replaceState(window.history.state, "", nextUrl);
   }, [pathname, searchParams]);
 
-  function applyFilters() {
+  async function applyFilters() {
     const nextFilters = {
       query: filters.query.trim(),
       location: filters.location.trim(),
       includeRemote: filters.includeRemote,
     };
+
+    if (!nextFilters.query) {
+      setFilterError("Choose one saved target role to power your job feed.");
+      return;
+    }
 
     console.info("[SMART_FILTERS] applying dashboard filters", {
       profileTargetRole: profileDefaultFilters?.query || null,
@@ -283,8 +318,56 @@ export default function JobMatchesLayout({
       requestSource: "apply-filters",
     });
 
-    requestSourceRef.current = "apply-filters";
     setSavingFilters(true);
+    setFilterError(null);
+
+    try {
+      const currentSavedRole = profileDefaultFilters?.query?.trim() || "";
+      if (nextFilters.query !== currentSavedRole) {
+        const response = await fetch("/api/job-interests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            jobs: [{ title: nextFilters.query }],
+            roleFocus: nextFilters.query,
+          }),
+        });
+
+        const data = (await response.json().catch(() => null)) as
+          | { error?: string; roleFocus?: string | null }
+          | null;
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ?? "We could not update your saved target role."
+          );
+        }
+
+        const savedRole = data?.roleFocus?.trim() || nextFilters.query;
+        nextFilters.query = savedRole;
+        setFilters((current) => ({ ...current, query: savedRole }));
+        setProfileDefaultFilters((current) =>
+          current
+            ? { ...current, query: savedRole }
+            : {
+                query: savedRole,
+                location: nextFilters.location,
+                includeRemote: nextFilters.includeRemote,
+              }
+        );
+      }
+    } catch (error) {
+      setSavingFilters(false);
+      setFilterError(
+        error instanceof Error
+          ? error.message
+          : "We could not update your saved target role."
+      );
+      return;
+    }
+
+    requestSourceRef.current = "apply-filters";
     explicitFiltersRequestedRef.current = true;
     setExplicitFiltersActive(true);
     setAppliedFilters(nextFilters);
@@ -295,7 +378,7 @@ export default function JobMatchesLayout({
       activeFilterLocation: nextFilters.location || null,
       includeRemote: nextFilters.includeRemote,
       requestSource: "apply-filters",
-      persistedToProfile: false,
+      persistedTargetRole: true,
       persistedAcrossRefresh: false,
     });
   }
@@ -305,16 +388,17 @@ export default function JobMatchesLayout({
     replaceSelectedJobParam(jobId);
   }
 
-  function handleOpenJob(jobId: string) {
+  function handleOpenJob(job: Job) {
     if (
       typeof window !== "undefined" &&
       !window.matchMedia("(min-width: 1024px)").matches
     ) {
-      router.push(`/dashboard/job/${encodeURIComponent(jobId)}`);
+      storeJobDetailSummary("dashboard", job);
+      router.push(`/dashboard/job/${encodeURIComponent(job.id)}`);
       return;
     }
 
-    handleSelectJob(jobId);
+    handleSelectJob(job.id);
   }
 
   useEffect(() => {
@@ -449,7 +533,7 @@ export default function JobMatchesLayout({
       });
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const url = new URL("/api/jobs/smart-matches", window.location.origin);
+        const url = new URL("/api/jobs", window.location.origin);
         url.searchParams.set("limit", String(LIMIT));
         url.searchParams.set(
           "includeRemote",
@@ -485,17 +569,22 @@ export default function JobMatchesLayout({
           signal: controller.signal,
         });
         if (!res.ok) {
-          throw new Error("Failed to load smart matches");
+          throw new Error("Failed to load jobs");
         }
 
         const data = (await res.json()) as SmartMatchesResponse;
         const incoming = Array.isArray(data?.jobs) ? data.jobs : [];
+        const shouldInitializeFromResponse = !initializedFiltersRef.current;
+
+        if (shouldInitializeFromResponse) {
+          initializedFiltersRef.current = true;
+        }
 
         if (data?.meta) {
           setResolutionMeta(data.meta);
         }
 
-        if (!initializedFiltersRef.current && data?.meta) {
+        if (shouldInitializeFromResponse && data?.meta) {
           const resolvedProfileDefaults = {
             query: data.meta.profileQuery || data.meta.query || "",
             location:
@@ -517,13 +606,16 @@ export default function JobMatchesLayout({
 
         filtered = incoming.filter((job) => {
           if (!job?.id) return false;
-          const jobIdentity = getJobIdentity(job);
-          if (seen.current.has(jobIdentity)) return false;
-          seen.current.add(jobIdentity);
+          const dedupeKey = getJobDedupeKey(job);
+          if (!dedupeKey || seen.current.has(dedupeKey)) return false;
+          seen.current.add(dedupeKey);
           return true;
         });
 
-        responseCursor = data?.nextCursor ?? requestCursor;
+        responseCursor =
+          typeof data?.nextCursor === "string" && data.nextCursor.trim()
+            ? data.nextCursor
+            : null;
 
         if (
           filtered.length > 0 ||
@@ -583,7 +675,7 @@ export default function JobMatchesLayout({
         });
         return;
       }
-      console.error("Smart matches feed failed:", error);
+      console.error("Jobs feed failed:", error);
     } finally {
       if (activeFeedRequestRef.current === controller) {
         activeFeedRequestRef.current = null;
@@ -602,6 +694,10 @@ export default function JobMatchesLayout({
   }
 
   async function loadMore() {
+    if (!nextCursor) {
+      return;
+    }
+
     requestSourceRef.current = "load-more";
     console.info("[SMART_LOAD_MORE] continuing Smart Matches session", {
       profileTargetRole: profileDefaultFilters?.query || null,
@@ -1074,7 +1170,7 @@ export default function JobMatchesLayout({
   };
 
   const handleCareerCoachFromDetails = () => {
-    router.push("/agents/career-coach");
+    router.push("/job-tools/career-coach");
   };
 
   const handleAiApplyFromCard = async (job: Job) => {
@@ -1160,7 +1256,7 @@ export default function JobMatchesLayout({
                   <div>
                     <div className="text-sm font-semibold text-gray-900">Filters</div>
                     <p className="mt-1 text-xs text-gray-500">
-                      Applying filters also updates your saved Smart Matches preferences.
+                      Your saved target role drives this feed. Update it here after login.
                     </p>
                   </div>
                   <button
@@ -1186,10 +1282,16 @@ export default function JobMatchesLayout({
                     className="mt-3 rounded-2xl border border-gray-200 bg-white p-4"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      applyFilters();
+                      void applyFilters();
                     }}
                   >
                     <div className="flex flex-col gap-3">
+                      {filterError ? (
+                        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {filterError}
+                        </div>
+                      ) : null}
+
                       <div className="flex items-center">
                         <div className="ml-auto flex shrink-0 items-center gap-3 rounded-xl px-3 py-2">
                           <span className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-gray-600">
@@ -1234,12 +1336,15 @@ export default function JobMatchesLayout({
                           <input
                             value={filters.query}
                             onChange={(event) =>
-                              setFilters((current) => ({
-                                ...current,
-                                query: event.target.value,
-                              }))
+                              {
+                                setFilterError(null);
+                                setFilters((current) => ({
+                                  ...current,
+                                  query: event.target.value,
+                                }));
+                              }
                             }
-                            placeholder="Software Engineer"
+                            placeholder="Target role"
                             className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                           />
                         </label>
@@ -1251,10 +1356,13 @@ export default function JobMatchesLayout({
                           <input
                             value={filters.location}
                             onChange={(event) =>
-                              setFilters((current) => ({
-                                ...current,
-                                location: event.target.value,
-                              }))
+                              {
+                                setFilterError(null);
+                                setFilters((current) => ({
+                                  ...current,
+                                  location: event.target.value,
+                                }));
+                              }
                             }
                             placeholder="Detroit, MI"
                             className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
@@ -1265,7 +1373,7 @@ export default function JobMatchesLayout({
                       <div className="flex">
                         <button
                           type="submit"
-                          disabled={savingFilters}
+                          disabled={savingFilters || !filters.query.trim()}
                           className="ml-auto shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {savingFilters ? "Applying..." : "Apply filters"}
@@ -1308,7 +1416,7 @@ export default function JobMatchesLayout({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => handleOpenJob(job.id)}
+                          onClick={() => handleOpenJob(job)}
                           className="truncate text-sm font-semibold text-blue-700 underline underline-offset-2 hover:text-blue-800"
                         >
                           {job.title}
@@ -1379,7 +1487,7 @@ export default function JobMatchesLayout({
 
                           <button
                             type="button"
-                            onClick={() => handleOpenJob(job.id)}
+                            onClick={() => handleOpenJob(job)}
                             className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-center text-[11px] font-medium text-[#374151] hover:bg-gray-50 lg:hidden xl:w-auto xl:min-w-[110px]"
                           >
                             View Posting
@@ -1486,10 +1594,14 @@ export default function JobMatchesLayout({
             <button
               type="button"
               onClick={loadMore}
-              disabled={loadingMore}
+              disabled={loadingMore || !nextCursor}
               className="w-full rounded-lg bg-blue-600 py-2 font-medium text-white disabled:opacity-60"
             >
-              {loadingMore ? "Loading..." : "Find More Jobs"}
+              {loadingMore
+                ? "Loading..."
+                : nextCursor
+                  ? "Find More Jobs"
+                  : "No More Jobs"}
             </button>
           </div>
         </aside>

@@ -6,6 +6,14 @@ import OpenAI from "openai";
 import { getToken } from "next-auth/jwt";
 
 import { auth } from "@/auth";
+import {
+  getActiveOnboardingDraftForCookies,
+  pickDraftGuestId,
+  readDraftSection,
+  readOnboardingDraftPayload,
+  updateOnboardingDraftPayload,
+  type DraftJobInterestsPayload,
+} from "@/app/lib/onboarding/draft-session";
 import { prisma } from "@/app/lib/prisma";
 
 
@@ -170,8 +178,11 @@ export async function POST(req: NextRequest) {
 
     const cookieStore = await cookies();
     const guestId = cookieStore.get("guest_user_id")?.value;
+    const draft = !userId
+      ? await getActiveOnboardingDraftForCookies(cookieStore)
+      : null;
 
-    if (!userId && !guestId) {
+    if (!userId && !guestId && !draft) {
       return NextResponse.json(
         { ok: false, error: "Unauthorized (no session/token or guest id)" },
         { status: 401 }
@@ -213,6 +224,42 @@ export async function POST(req: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    if (!userId && draft) {
+      const draftPayload = readOnboardingDraftPayload(draft.payload);
+      const existingDraftJobInterests = readDraftSection<DraftJobInterestsPayload>(
+        draftPayload.jobInterests
+      );
+      const nextJobInterests: DraftJobInterestsPayload = {
+        ...existingDraftJobInterests,
+        skills: finalSkills,
+        ...(highlightSkillsConfidence
+          ? { highlightSkillsConfidence }
+          : {}),
+      };
+
+      await updateOnboardingDraftPayload({
+        draftToken: draft.draftToken,
+        payloadPatch: {
+          jobInterests: nextJobInterests,
+        },
+        guestId: pickDraftGuestId({ cookieStore, draft }),
+      });
+
+      return NextResponse.json({
+        ok: true,
+        session: {
+          userId: null,
+          guestId: pickDraftGuestId({ cookieStore, draft }),
+        },
+        savedSkillsCount: finalSkills.length,
+        profile: null,
+        cookieProof: {
+          guest_user_id: pickDraftGuestId({ cookieStore, draft }),
+          onboarding_highlight_skills_confidence: highlightSkillsConfidence,
+        },
+      });
     }
 
     const existingProfile = await prisma.userProfile.findUnique({

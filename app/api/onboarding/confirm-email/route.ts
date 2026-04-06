@@ -4,6 +4,11 @@ import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { sendRegistrationConfirmedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 import { syncLoopsContact } from "@/app/lib/email/loops";
+import {
+  getActiveOnboardingDraftForCookies,
+  pickDraftGuestId,
+  updateOnboardingDraftPayload,
+} from "@/app/lib/onboarding/draft-session";
 
 function normalizeEmail(v: unknown) {
   return String(v ?? "").trim().toLowerCase();
@@ -16,8 +21,9 @@ export async function POST(req: Request) {
 
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
+    const draft = !userId ? await getActiveOnboardingDraftForCookies(c) : null;
 
-    if (!userId && !guestId) {
+    if (!userId && !guestId && !draft) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
@@ -26,6 +32,45 @@ export async function POST(req: Request) {
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json({ ok: false, error: "Invalid email" }, { status: 400 });
+    }
+
+    if (!userId && draft) {
+      await updateOnboardingDraftPayload({
+        draftToken: draft.draftToken,
+        payloadPatch: {
+          onboardingEmail: {
+            email,
+            confirmed: true,
+          },
+          profile: {
+            email,
+          },
+          signup: {
+            email,
+          },
+        },
+        guestId: pickDraftGuestId({ cookieStore: c, draft }),
+      });
+
+      const res = NextResponse.json({
+        ok: true,
+        proof: {
+          userId: null,
+          guestId: pickDraftGuestId({ cookieStore: c, draft }),
+          email,
+          savedToDraft: true,
+        },
+      });
+
+      res.cookies.set("onboarding_email", email, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 14,
+      });
+
+      return res;
     }
 
     /* -----------------------------------------------------

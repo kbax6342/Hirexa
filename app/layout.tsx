@@ -4,6 +4,7 @@ import Script from "next/script";
 
 import "./globals.css";
 import MetaPixelPageView from "./components/analytics/MetaPixelPageView";
+import TikTokPixel from "./components/analytics/TikTokPixel";
 import { Navbar } from "./components/navbar";
 import PwaRegister from "./components/pwa/PwaRegister";
 import RecaptchaProvider from "./components/providers/RecaptchaProvider";
@@ -93,6 +94,7 @@ export default function RootLayout({
           />
         </noscript>
         <MetaPixelPageView />
+        <TikTokPixel />
         <StyledJsxRegistry>
           <RecaptchaProvider>
             <Providers>

@@ -179,6 +179,13 @@ export async function fetchAdzunaJobDetails(
 
   if (!res.ok) {
     const body = await res.text();
+    console.warn("[ADZUNA_DETAILS] provider detail request failed", {
+      providerId,
+      route: "/api/adzuna/details",
+      status: res.status,
+      fallbackPath: "detail-resolver",
+      bodySnippet: body.slice(0, 160),
+    });
     throw new Error(`Adzuna details failed: ${res.status} :: ${body}`);
   }
 
@@ -221,9 +228,10 @@ export async function fetchAdzunaJobDetails(
         : typeof data.metadata?.category === "string"
           ? data.metadata.category
           : null,
-    jobUrl: data.jobUrl ?? data.url,
-    applyUrl: data.applyUrl ?? data.jobUrl ?? data.url ?? null,
-    externalUrl: data.externalUrl ?? data.jobUrl ?? data.url ?? null,
+    jobUrl: data.jobUrl ?? data.detailsUrl ?? data.url,
+    applyUrl: data.applyUrl ?? data.jobUrl ?? data.detailsUrl ?? data.url ?? null,
+    externalUrl:
+      data.externalUrl ?? data.jobUrl ?? data.detailsUrl ?? data.url ?? null,
     description: data.descriptionText ?? data.description ?? rawDescription ?? "",
     descriptionIntro: Array.isArray(data.descriptionIntro)
       ? data.descriptionIntro.filter((value: unknown) => typeof value === "string")

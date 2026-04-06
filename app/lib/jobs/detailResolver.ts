@@ -14,7 +14,6 @@ import {
   fetchJson,
   formatPostedLabel,
   humanizeSlug,
-  type SourceFetchArgs,
 } from "./sources/common";
 
 type ResolveJobDetailArgs = {
@@ -429,6 +428,50 @@ function normalizeSummaryJob(summary: Job): JobDetail {
     providerHasFullDetails: false,
     metadata: {
       source: summary.source,
+    },
+  };
+}
+
+function decodeAdzunaProviderId(id: string) {
+  const [, providerId] = id.split(":", 2);
+  return providerId?.trim() || "";
+}
+
+function buildAdzunaExternalUrl(id: string) {
+  const providerId = decodeAdzunaProviderId(id);
+  return providerId
+    ? `https://www.adzuna.com/details/${encodeURIComponent(providerId)}`
+    : null;
+}
+
+function createAdzunaFallbackDetail(id: string, summary?: Job | null): JobDetail {
+  if (summary) {
+    return normalizeSummaryJob(summary);
+  }
+
+  const externalUrl = buildAdzunaExternalUrl(id);
+  const fallbackDescription =
+    "Full job details are unavailable right now. You can still view the posting externally.";
+
+  return {
+    id,
+    source: "adzuna",
+    title: "Adzuna job listing",
+    company: "Unknown company",
+    location: "Unknown location",
+    posted: "Recently",
+    jobUrl: externalUrl ?? undefined,
+    applyUrl: externalUrl,
+    externalUrl,
+    description: fallbackDescription,
+    descriptionPlain: fallbackDescription,
+    summary: fallbackDescription,
+    snippet: fallbackDescription,
+    detailLevel: "partial",
+    providerHasFullDetails: false,
+    metadata: {
+      source: "Adzuna",
+      fallback: "detail-unavailable",
     },
   };
 }
@@ -1056,9 +1099,21 @@ async function fetchAdzunaDetail(id: string, origin: string, summary?: Job | nul
     }, {
       fullDetailsUnavailable: !job.descriptionHtml && !job.description,
     });
-  } catch {
-    if (!summary) throw new Error("Failed to load Adzuna details");
-    return finalizeDetail(normalizeSummaryJob(summary), { fullDetailsUnavailable: true });
+  } catch (error) {
+    const providerId = decodeAdzunaProviderId(id);
+    const message =
+      error instanceof Error ? error.message : "Failed to load Adzuna details";
+
+    console.warn("[ADZUNA_DETAILS] detail resolution fallback", {
+      providerId,
+      route: "/api/adzuna/details",
+      error: message,
+      fallbackPath: summary ? "summary-job" : "minimal-partial-detail",
+    });
+
+    return finalizeDetail(createAdzunaFallbackDetail(id, summary), {
+      fullDetailsUnavailable: true,
+    });
   }
 }
 

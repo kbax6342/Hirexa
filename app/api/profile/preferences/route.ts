@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { auth } from "@/app/lib/auth";
+import {
+  getActiveOnboardingDraftForCookies,
+  pickDraftGuestId,
+  readDraftSection,
+  readOnboardingDraftPayload,
+  updateOnboardingDraftPayload,
+  type DraftPreferencesPayload,
+} from "@/app/lib/onboarding/draft-session";
 import { prisma } from "@/app/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
@@ -98,9 +106,74 @@ export async function GET() {
 
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
+    const draft = !userId ? await getActiveOnboardingDraftForCookies(c) : null;
 
-    if (!userId && !guestId) {
+    if (!userId && !guestId && !draft) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!userId && draft) {
+      const draftPayload = readOnboardingDraftPayload(draft.payload);
+      const draftPreferences = readDraftSection<DraftPreferencesPayload>(
+        draftPayload.preferences
+      );
+      const draftJobInterests = readDraftSection<Record<string, unknown>>(
+        draftPayload.jobInterests
+      );
+      const workplaceLocations = Array.isArray(draftPreferences.workplaceLocations)
+        ? normalizeList(draftPreferences.workplaceLocations)
+        : [];
+
+      return NextResponse.json({
+        ok: true,
+        preferences: {
+          minCompensation:
+            typeof draftPreferences.minCompensation === "number"
+              ? draftPreferences.minCompensation
+              : null,
+          compensationType:
+            draftPreferences.compensationType === "hourly" ? "hourly" : "yearly",
+          workplaceLocations,
+          includeRemote: draftPreferences.includeRemote ?? true,
+          selectedPlan: normalizeText(draftPreferences.selectedPlan),
+          benefits: normalizeTextArray(draftPreferences.benefits, 12),
+          roleFocus: normalizeText(
+            draftPreferences.roleFocus ?? draftJobInterests.roleFocus
+          ),
+          availability: normalizeText(draftPreferences.availability),
+          employmentType: normalizeText(draftPreferences.employmentType),
+          seniorityLevel: normalizeText(draftPreferences.seniorityLevel),
+          workSetup: normalizeText(draftPreferences.workSetup),
+          commutePreference: normalizeText(draftPreferences.commutePreference),
+          schedulePreferences: normalizeTextArray(
+            draftPreferences.schedulePreferences,
+            7
+          ),
+          jobFilterPaySelection: normalizeText(
+            draftPreferences.jobFilterPaySelection
+          ),
+          hirexaSupportLevel: normalizeText(draftPreferences.hirexaSupportLevel),
+          hirexaSupportExtras: normalizeTextArray(
+            draftPreferences.hirexaSupportExtras,
+            6
+          ),
+          hiringSignalTraits: normalizeTextArray(
+            draftPreferences.hiringSignalTraits,
+            10
+          ),
+          hiringSignalEmphasis: normalizeText(
+            draftPreferences.hiringSignalEmphasis
+          ),
+          city:
+            typeof draftPreferences.city === "string" ? draftPreferences.city : null,
+          state:
+            typeof draftPreferences.state === "string" ? draftPreferences.state : null,
+          postalCode:
+            typeof draftPreferences.postalCode === "string"
+              ? draftPreferences.postalCode
+              : null,
+        },
+      });
     }
 
     const profile = await prisma.userProfile.findUnique({
@@ -181,14 +254,202 @@ export async function POST(req: Request) {
 
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
+    const draft = !userId ? await getActiveOnboardingDraftForCookies(c) : null;
 
-    if (!userId && !guestId) {
+    if (!userId && !guestId && !draft) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = (await req.json()) as PreferencesBody;
     const hasField = <K extends keyof PreferencesBody>(key: K) =>
       Object.prototype.hasOwnProperty.call(body, key);
+
+    if (!userId && draft) {
+      const draftPayload = readOnboardingDraftPayload(draft.payload);
+      const existingDraftPreferences = readDraftSection<DraftPreferencesPayload>(
+        draftPayload.preferences
+      );
+      const draftGuestId = pickDraftGuestId({ cookieStore: c, draft });
+
+      const includeRemote = hasField("includeRemote")
+        ? Boolean(body.includeRemote)
+        : (existingDraftPreferences.includeRemote ?? true);
+      const compensationType: CompensationType = hasField("compensationType")
+        ? body.compensationType === "hourly"
+          ? "hourly"
+          : "yearly"
+        : existingDraftPreferences.compensationType === "hourly"
+          ? "hourly"
+          : "yearly";
+
+      let minCompensation =
+        typeof existingDraftPreferences.minCompensation === "number"
+          ? existingDraftPreferences.minCompensation
+          : null;
+
+      if (hasField("minCompensation")) {
+        if (body.minCompensation === null) {
+          minCompensation = null;
+        } else if (body.minCompensation !== undefined) {
+          const parsed = parseSalaryInputToNumber(body.minCompensation);
+          if (parsed === null) {
+            return NextResponse.json(
+              { error: "Invalid min compensation." },
+              { status: 400 }
+            );
+          }
+
+          const max = SALARY_BOUNDS[compensationType].max;
+          minCompensation = Math.min(max, Math.max(0, parsed));
+        }
+      }
+
+      const hasLocationFields =
+        hasField("city") || hasField("state") || hasField("postalCode");
+      const locationCandidate = hasLocationFields
+        ? {
+            city: hasField("city") ? body.city : existingDraftPreferences.city,
+            state: hasField("state") ? body.state : existingDraftPreferences.state,
+            postalCode: hasField("postalCode")
+              ? body.postalCode
+              : existingDraftPreferences.postalCode,
+          }
+        : null;
+      const validatedLocation = locationCandidate
+        ? await validateUsLocation(locationCandidate)
+        : null;
+
+      if (validatedLocation && !validatedLocation.ok) {
+        return NextResponse.json(
+          {
+            error: validatedLocation.message,
+            code: validatedLocation.code,
+            field: validatedLocation.field,
+            message: validatedLocation.message,
+          },
+          { status: 400 }
+        );
+      }
+
+      const sanitizedLocationFields = hasLocationFields
+        ? sanitizePrivateProfileFields({
+            city: validatedLocation?.ok
+              ? validatedLocation.normalized.city
+              : existingDraftPreferences.city,
+            state: validatedLocation?.ok
+              ? validatedLocation.normalized.stateCode
+              : existingDraftPreferences.state,
+            postalCode: validatedLocation?.ok
+              ? validatedLocation.normalized.postalCode
+              : existingDraftPreferences.postalCode,
+          })
+        : null;
+      const derivedWorkplaceLocation = sanitizedLocationFields
+        ? deriveLocationLabel(
+            sanitizedLocationFields.city,
+            sanitizedLocationFields.state
+          )
+        : null;
+      const normalizedWorkplaceLocations = hasField("workplaceLocations")
+        ? body.workplaceLocations === null
+          ? null
+          : normalizeList(body.workplaceLocations).slice(0, 1)
+        : sanitizedLocationFields
+          ? derivedWorkplaceLocation
+            ? [{ label: derivedWorkplaceLocation }]
+            : null
+          : Array.isArray(existingDraftPreferences.workplaceLocations)
+            ? normalizeList(existingDraftPreferences.workplaceLocations)
+            : null;
+      const selectedPlan = hasField("selectedPlan")
+        ? String(body.selectedPlan ?? "").trim() ||
+          existingDraftPreferences.selectedPlan ||
+          "trial"
+        : existingDraftPreferences.selectedPlan || "trial";
+      const benefits = hasField("benefits")
+        ? Array.isArray(body.benefits)
+          ? body.benefits.map((item) => String(item).trim()).filter(Boolean)
+          : []
+        : normalizeTextArray(existingDraftPreferences.benefits, 12);
+      const roleFocus = hasField("roleFocus")
+        ? normalizeText(body.roleFocus)
+        : normalizeText(existingDraftPreferences.roleFocus);
+      const availability = hasField("availability")
+        ? normalizeText(body.availability)
+        : normalizeText(existingDraftPreferences.availability);
+      const employmentType = hasField("employmentType")
+        ? normalizeText(body.employmentType)
+        : normalizeText(existingDraftPreferences.employmentType);
+      const seniorityLevel = hasField("seniorityLevel")
+        ? normalizeText(body.seniorityLevel)
+        : normalizeText(existingDraftPreferences.seniorityLevel);
+      const workSetup = hasField("workSetup")
+        ? normalizeText(body.workSetup)
+        : normalizeText(existingDraftPreferences.workSetup);
+      const commutePreference = hasField("commutePreference")
+        ? normalizeText(body.commutePreference)
+        : normalizeText(existingDraftPreferences.commutePreference);
+      const schedulePreferences = hasField("schedulePreferences")
+        ? normalizeTextArray(body.schedulePreferences, 7)
+        : normalizeTextArray(existingDraftPreferences.schedulePreferences, 7);
+      const jobFilterPaySelection = hasField("jobFilterPaySelection")
+        ? normalizeText(body.jobFilterPaySelection)
+        : normalizeText(existingDraftPreferences.jobFilterPaySelection);
+      const hirexaSupportLevel = hasField("hirexaSupportLevel")
+        ? normalizeText(body.hirexaSupportLevel)
+        : normalizeText(existingDraftPreferences.hirexaSupportLevel);
+      const hirexaSupportExtras = hasField("hirexaSupportExtras")
+        ? normalizeTextArray(body.hirexaSupportExtras, 6)
+        : normalizeTextArray(existingDraftPreferences.hirexaSupportExtras, 6);
+      const hiringSignalTraits = hasField("hiringSignalTraits")
+        ? normalizeTextArray(body.hiringSignalTraits, 10)
+        : normalizeTextArray(existingDraftPreferences.hiringSignalTraits, 10);
+      const hiringSignalEmphasis = hasField("hiringSignalEmphasis")
+        ? normalizeText(body.hiringSignalEmphasis)
+        : normalizeText(existingDraftPreferences.hiringSignalEmphasis);
+
+      const nextPreferences: DraftPreferencesPayload = {
+        ...existingDraftPreferences,
+        minCompensation,
+        compensationType,
+        workplaceLocations: normalizedWorkplaceLocations,
+        includeRemote,
+        selectedPlan,
+        benefits,
+        roleFocus,
+        availability,
+        employmentType,
+        seniorityLevel,
+        workSetup,
+        commutePreference,
+        schedulePreferences,
+        jobFilterPaySelection,
+        hirexaSupportLevel,
+        hirexaSupportExtras,
+        hiringSignalTraits,
+        hiringSignalEmphasis,
+        city: sanitizedLocationFields?.city ?? existingDraftPreferences.city ?? null,
+        state:
+          sanitizedLocationFields?.state ?? existingDraftPreferences.state ?? null,
+        postalCode:
+          sanitizedLocationFields?.postalCode ??
+          existingDraftPreferences.postalCode ??
+          null,
+      };
+
+      await updateOnboardingDraftPayload({
+        draftToken: draft.draftToken,
+        payloadPatch: {
+          preferences: nextPreferences,
+        },
+        guestId: draftGuestId,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        preferences: nextPreferences,
+      });
+    }
 
     const existingProfile = await prisma.userProfile.findUnique({
       where: userId ? { userId } : { guestId: guestId as string },

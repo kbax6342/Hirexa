@@ -215,6 +215,21 @@ model UserProfile {
   @@index([postalCodeSearch])
 }
 
+model OnboardingDraft {
+  id         String   @id @default(cuid())
+  draftToken String   @unique
+  guestId    String?
+  status     String   @default("active")
+  lastStep   String?
+  payload    Json?
+  expiresAt  DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([guestId])
+  @@index([status, expiresAt])
+}
+
 model EmailLifecycleEvent {
   id            String       @id @default(cuid())
   userProfileId String?

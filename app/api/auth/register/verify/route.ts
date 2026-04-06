@@ -8,6 +8,12 @@ import { syncLoopsContact } from "@/app/lib/email/loops";
 import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
+import { commitOnboardingDraftToUserProfile } from "@/app/lib/onboarding/commit-draft";
+import {
+  clearOnboardingCookies,
+  getActiveOnboardingDraftForCookies,
+  markOnboardingDraftStatus,
+} from "@/app/lib/onboarding/draft-session";
 import {
   grantStarterHirePilotCredits,
   STARTER_FEATURE_CREDITS,
@@ -17,6 +23,7 @@ export async function POST(req: Request) {
   try {
     const cookieStore = await cookies();
     const guestId = cookieStore.get("guest_user_id")?.value ?? null;
+    const draft = await getActiveOnboardingDraftForCookies(cookieStore);
 
     const body = await req.json();
     const email = String(body.email ?? "").trim().toLowerCase();
@@ -126,6 +133,15 @@ export async function POST(req: Request) {
         });
       }
 
+      if (draft) {
+        await commitOnboardingDraftToUserProfile({
+          tx,
+          userId: user.id,
+          draftPayload: draft.payload,
+          guestId,
+        });
+      }
+
       await tx.emailOtp.deleteMany({ where: { email } });
       await tx.emailVerificationCode.deleteMany({ where: { email } });
 
@@ -165,13 +181,15 @@ export async function POST(req: Request) {
       guestId,
     });
 
-    const response = NextResponse.json({ ok: true });
-    if (guestId) {
-      response.cookies.set("guest_user_id", "", {
-        path: "/",
-        maxAge: 0,
+    if (draft) {
+      await markOnboardingDraftStatus({
+        draftToken: draft.draftToken,
+        status: "completed",
       });
     }
+
+    const response = NextResponse.json({ ok: true });
+    clearOnboardingCookies(response.cookies, { includeGuestCookie: true });
 
     return response;
   } catch (error) {

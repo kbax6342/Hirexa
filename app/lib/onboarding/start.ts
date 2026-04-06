@@ -16,8 +16,12 @@ export function getGuestUserCookieOptions() {
   };
 }
 
+export function getOrCreateGuestOnboardingId(guestId?: string | null) {
+  return guestId?.trim() || `guest_${randomUUID()}`;
+}
+
 export async function ensureGuestOnboardingProfile(guestId?: string | null) {
-  const resolvedGuestId = guestId?.trim() || `guest_${randomUUID()}`;
+  const resolvedGuestId = getOrCreateGuestOnboardingId(guestId);
 
   await prisma.userProfile.upsert({
     where: { guestId: resolvedGuestId },

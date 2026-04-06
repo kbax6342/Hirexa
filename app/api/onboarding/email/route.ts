@@ -4,6 +4,14 @@ import { prisma } from "@/app/lib/prisma";
 import { auth } from "@/app/lib/auth";
 import { cookies } from "next/headers";
 import { syncLoopsContact } from "@/app/lib/email/loops";
+import {
+  getActiveOnboardingDraftForCookies,
+  pickDraftGuestId,
+  readDraftSection,
+  readOnboardingDraftPayload,
+  updateOnboardingDraftPayload,
+  type DraftOnboardingEmailPayload,
+} from "@/app/lib/onboarding/draft-session";
 
 // Canonical source of truth: UserProfile.email (subscriptionEmail mirrors email for billing use).
 function normalizeEmail(value: unknown) {
@@ -18,6 +26,17 @@ export async function GET() {
     const c = await cookies();
     const guestId = c.get("guest_user_id")?.value ?? null;
     const cookieEmail = normalizeEmail(c.get("onboarding_email")?.value ?? "");
+    const draft = !userId ? await getActiveOnboardingDraftForCookies(c) : null;
+
+    if (!userId && draft) {
+      const draftPayload = readOnboardingDraftPayload(draft.payload);
+      const draftEmail = readDraftSection<DraftOnboardingEmailPayload>(
+        draftPayload.onboardingEmail
+      );
+      const payloadEmail = normalizeEmail(draftEmail.email ?? cookieEmail);
+
+      return NextResponse.json({ ok: true, email: payloadEmail || null });
+    }
 
     if (!userId && !guestId) {
       return NextResponse.json({ ok: true, email: cookieEmail || null });
@@ -47,6 +66,7 @@ export async function POST(req: Request) {
     const c = await cookies();
     let guestId = c.get("guest_user_id")?.value ?? null;
     const shouldSetGuestCookie = !guestId;
+    const draft = !userId ? await getActiveOnboardingDraftForCookies(c) : null;
 
     if (!guestId) {
       guestId = `guest_${crypto.randomUUID()}`;
@@ -63,6 +83,47 @@ export async function POST(req: Request) {
     // ✅ Treat hitting this page as explicit opt-in
     const newsletterOptIn = true;
     const newsletterSource = "onboarding/job-alerts";
+
+    if (!userId && draft) {
+      const nextOnboardingEmail: DraftOnboardingEmailPayload = {
+        email,
+        newsletterOptIn,
+        newsletterSource,
+      };
+
+      await updateOnboardingDraftPayload({
+        draftToken: draft.draftToken,
+        payloadPatch: {
+          onboardingEmail: nextOnboardingEmail,
+          profile: {
+            email,
+          },
+        },
+        guestId: pickDraftGuestId({ cookieStore: c, draft }) ?? guestId,
+      });
+
+      const res = NextResponse.json({
+        ok: true,
+        email,
+        proof: {
+          session: {
+            userId: null,
+            guestId: pickDraftGuestId({ cookieStore: c, draft }) ?? guestId,
+          },
+          savedToDraft: nextOnboardingEmail,
+        },
+      });
+
+      res.cookies.set("onboarding_email", email, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 14,
+      });
+
+      return res;
+    }
 
     const profile = await prisma.userProfile.upsert({
       where: userId ? { userId } : { guestId: guestId! },

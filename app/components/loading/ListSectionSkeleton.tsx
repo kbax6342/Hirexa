@@ -1,3 +1,5 @@
+"use client";
+
 type ListSectionSkeletonProps = {
   sectionCount?: number;
   cardsPerSection?: number;

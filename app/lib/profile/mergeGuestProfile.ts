@@ -113,14 +113,41 @@ function preferDate(primary?: Date | null, secondary?: Date | null) {
   return primary ?? secondary ?? undefined;
 }
 
-function stripFelonyFromKeyQuestions(value: Prisma.JsonValue | null | undefined) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value ?? undefined;
+function trimText(value: unknown) {
+  const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
+  return normalized || null;
+}
+
+function mergeKeyQuestions(
+  primary: Prisma.JsonValue | null | undefined,
+  secondary: Prisma.JsonValue | null | undefined
+) {
+  const primaryRecord =
+    primary && typeof primary === "object" && !Array.isArray(primary)
+      ? ({ ...(primary as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const secondaryRecord =
+    secondary && typeof secondary === "object" && !Array.isArray(secondary)
+      ? ({ ...(secondary as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const primaryRoleFocus = trimText(primaryRecord.roleFocus);
+  const secondaryRoleFocus = trimText(secondaryRecord.roleFocus);
+  const merged = {
+    ...secondaryRecord,
+    ...primaryRecord,
+  };
+
+  delete merged.felony;
+
+  if (primaryRoleFocus) {
+    merged.roleFocus = primaryRoleFocus;
+  } else if (secondaryRoleFocus) {
+    merged.roleFocus = secondaryRoleFocus;
   }
 
-  const nextValue = { ...(value as Record<string, unknown>) };
-  delete nextValue.felony;
-  return nextValue as Prisma.InputJsonValue;
+  return Object.keys(merged).length > 0
+    ? (merged as Prisma.InputJsonValue)
+    : undefined;
 }
 
 function dateFromDobString(value?: string | null) {
@@ -342,9 +369,7 @@ export async function mergeGuestProfileIntoUserProfile(
         ? userProfile.registrationStatus
         : guestProfile.registrationStatus ?? userProfile.registrationStatus ?? undefined,
     dob: dateFromDobString(mergedPrivateFields.dob) ?? null,
-    keyQuestions: stripFelonyFromKeyQuestions(
-      userProfile.keyQuestions ?? guestProfile.keyQuestions ?? undefined
-    ),
+    keyQuestions: mergeKeyQuestions(userProfile.keyQuestions, guestProfile.keyQuestions),
     stripeCustomerId: preferText(userProfile.stripeCustomerId, guestProfile.stripeCustomerId),
     stripeSubscriptionId: preferText(
       userProfile.stripeSubscriptionId,
@@ -410,21 +435,37 @@ export async function mergeGuestProfileIntoUserProfile(
     data: { userProfileId: userProfile.id },
   });
 
+  const userJobInterests = await tx.jobInterest.findMany({
+    where: { userProfileId: userProfile.id },
+    select: { uuid: true, title: true },
+    orderBy: { id: "asc" },
+  });
+
   const guestJobInterests = await tx.jobInterest.findMany({
     where: { userProfileId: guestProfile.id },
     select: { uuid: true, title: true },
+    orderBy: { id: "asc" },
   });
 
-  if (guestJobInterests.length > 0) {
-    await tx.jobInterest.createMany({
-      data: guestJobInterests.map((interest) => ({
-        userProfileId: userProfile.id,
-        uuid: interest.uuid,
-        title: interest.title,
-      })),
-      skipDuplicates: true,
+  const canonicalJobInterest = userJobInterests[0] ?? guestJobInterests[0] ?? null;
+
+  if (canonicalJobInterest) {
+    await tx.jobInterest.deleteMany({
+      where: {
+        userProfileId: {
+          in: [userProfile.id, guestProfile.id],
+        },
+      },
     });
 
+    await tx.jobInterest.create({
+      data: {
+        userProfileId: userProfile.id,
+        uuid: canonicalJobInterest.uuid,
+        title: canonicalJobInterest.title,
+      },
+    });
+  } else {
     await tx.jobInterest.deleteMany({
       where: { userProfileId: guestProfile.id },
     });

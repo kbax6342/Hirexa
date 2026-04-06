@@ -227,14 +227,6 @@ function trimOrNull(value?: string | null) {
   return trimmed ? trimmed : null;
 }
 
-function readKeyQuestions(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  return value as Record<string, unknown>;
-}
-
 function readFirstWorkplaceLocation(value: unknown) {
   if (!Array.isArray(value)) return null;
 
@@ -245,30 +237,6 @@ function readFirstWorkplaceLocation(value: unknown) {
   }
 
   return null;
-}
-
-function normalizeRoleTitle(value?: string | null) {
-  return trimOrNull(value?.replace(/\s+/g, " "));
-}
-
-function deriveTargetRole(experiences: ParsedResumeExperience[]) {
-  const primaryTitle = normalizeRoleTitle(experiences[0]?.title);
-  if (primaryTitle) return primaryTitle;
-
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const experience of experiences) {
-    const title = normalizeRoleTitle(experience.title);
-    if (!title) continue;
-
-    const key = title.toLowerCase();
-    const current = counts.get(key);
-    counts.set(key, {
-      label: current?.label ?? title,
-      count: (current?.count ?? 0) + 1,
-    });
-  }
-
-  return [...counts.values()].sort((left, right) => right.count - left.count)[0]?.label ?? null;
 }
 
 export async function extractResumeTextFromBuffer(
@@ -721,20 +689,9 @@ function buildProfileSyncUpdate(args: {
     }
   }
 
-  const existingKeyQuestions = readKeyQuestions(args.profile.keyQuestions);
-  const existingRoleFocus = trimOrNull(
-    typeof existingKeyQuestions.roleFocus === "string"
-      ? existingKeyQuestions.roleFocus
-      : null
-  );
-  const derivedRoleFocus = deriveTargetRole(args.parsedExperiences);
-  if (!existingRoleFocus && derivedRoleFocus) {
-    profileUpdate.keyQuestions = {
-      ...existingKeyQuestions,
-      roleFocus: derivedRoleFocus,
-    } as Prisma.InputJsonValue;
-    updatedFields.add("roleFocus");
-  }
+  // Target role is intentionally user-selected during onboarding or later
+  // authenticated editing. Resume parsing can enrich profile fields, but it
+  // must never infer or overwrite the feed-driving target role.
 
   const existingWorkplaceLocation = readFirstWorkplaceLocation(args.profile.workplaceLocations);
   const nextCity = privateFieldInput.city ?? args.privateFields.city ?? null;

@@ -59,7 +59,7 @@ const authedNav: NavItem[] = [
         label: "Career Coach",
         description:
           "Practical AI guidance for your next role, positioning, and search strategy",
-        href: "/agents/career-coach",
+        href: "/job-tools/career-coach",
       },
       {
         label: "Outreach Copilot",

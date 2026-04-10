@@ -13,8 +13,6 @@ import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import {
   buildApplyProviderPayload,
   detectApplyProviderFromJob,
-  getApplyProviderButtonLabel,
-  getApplyProviderLoadingLabel,
 } from "@/app/lib/apply/providerDetection";
 import { readJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 
@@ -89,8 +87,8 @@ export default function DashboardJobDetailsPage() {
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
   const applyProvider = detectApplyProviderFromJob(job);
-  const aiApplyLabel = getApplyProviderButtonLabel(applyProvider);
-  const aiApplyLoadingLabel = getApplyProviderLoadingLabel(applyProvider);
+  const aiApplyLabel = "Auto apply Now";
+  const aiApplyLoadingLabel = "Starting auto apply...";
 
   useEffect(() => {
     if (!jobId) {

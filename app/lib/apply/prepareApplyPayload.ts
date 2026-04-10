@@ -53,6 +53,23 @@ function mergeValue(
   return Array.isArray(prefill) ? (prefill[0] ?? "") : prefill;
 }
 
+function buildGenericPrefill(
+  profile: Parameters<typeof mapProfileToForm>[1],
+): AnswersMap {
+  return {
+    firstName: toText(profile.firstName),
+    lastName: toText(profile.lastName),
+    email: toText(profile.email),
+    phone: toText(profile.phone),
+    address: toText(profile.address),
+    city: toText(profile.city),
+    state: toText(profile.state),
+    postalCode: toText(profile.postalCode),
+    linkedin: toText(profile.linkedinUrl),
+    website: toText(profile.portfolioUrl),
+  };
+}
+
 export async function prepareApplyPayload(args: {
   jobUrl: string;
   profile: Parameters<typeof mapProfileToForm>[1];
@@ -95,6 +112,11 @@ export async function prepareApplyPayload(args: {
         },
       );
     }
+  } else {
+    finalValuesToSubmit = {
+      ...buildGenericPrefill(args.profile),
+      ...answers,
+    };
   }
 
   return { answers, finalValuesToSubmit, greenhouseEmbedUrl };

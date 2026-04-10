@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowPathIcon,
@@ -28,17 +28,20 @@ export default function ApplicationAuditPage() {
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
 
-  async function loadAudit() {
+  const loadAudit = useCallback(async () => {
     const res = await fetch(`/api/job-applications/${applicationId}/audit`, { cache: "no-store" });
     const payload = (await res.json()) as AuditResponse;
     setData(payload);
     setOverrides(payload.payload.fields ?? {});
-  }
+  }, [applicationId]);
 
   useEffect(() => {
     if (!applicationId) return;
-    loadAudit();
-  }, [applicationId]);
+    const timeoutId = window.setTimeout(() => {
+      void loadAudit();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [applicationId, loadAudit]);
 
   const missing = useMemo(() => data?.payload?.missing ?? [], [data]);
 
@@ -123,7 +126,7 @@ export default function ApplicationAuditPage() {
             <iframe src={data.job.jobUrl} className="h-[75vh] w-full rounded border" />
           </>
         ) : (
-          <div className="p-4 text-sm text-gray-600">Adzuna/external ATS application is handled by Playwright when you click Apply Now.</div>
+          <div className="p-4 text-sm text-gray-600">Adzuna and external ATS applications are handled by Hirexa automation when you click Apply Now.</div>
         )}
       </section>
     </div>

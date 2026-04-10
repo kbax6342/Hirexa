@@ -5,6 +5,7 @@ import {
   detectApplyProviderFromJob,
   normalizeApplyProvider,
 } from "@/app/lib/apply/providerDetection";
+import { deriveSourceFromUrl, normalizeJobUrl } from "@/app/lib/jobSources";
 
 type AutoApplyBody = {
   sourceJobId?: string;
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
     const jobTitle = normalizeText(body.jobTitle);
     const company = normalizeText(body.company);
     const location = normalizeText(body.location) || null;
-    const jobUrl = normalizeText(body.jobUrl) || null;
+    const jobUrl = normalizeJobUrl(normalizeText(body.jobUrl)) || null;
     const requestedSource = normalizeText(body.source).toLowerCase();
     const requestedApplyProvider = normalizeApplyProvider(body.applyProvider);
     const detectedApplyProvider =
@@ -42,7 +43,10 @@ export async function POST(req: Request) {
         source: requestedSource || null,
         jobUrl,
       }) ?? requestedApplyProvider;
-    const source = requestedSource || detectedApplyProvider || null;
+    const source =
+      requestedSource ||
+      detectedApplyProvider ||
+      deriveSourceFromUrl(jobUrl ?? "");
 
     if (!jobTitle || !company) {
       return NextResponse.json(
@@ -73,6 +77,7 @@ export async function POST(req: Request) {
             userProfileId: profile.id,
             sourceJobId,
             jobTitle,
+            title: jobTitle,
             company,
             location,
             jobUrl,
@@ -81,6 +86,7 @@ export async function POST(req: Request) {
           },
           update: {
             jobTitle,
+            title: jobTitle,
             company,
             location,
             jobUrl,
@@ -93,6 +99,7 @@ export async function POST(req: Request) {
           data: {
             userProfileId: profile.id,
             jobTitle,
+            title: jobTitle,
             company,
             location,
             jobUrl,

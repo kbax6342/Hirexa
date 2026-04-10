@@ -11,6 +11,8 @@ import { CTA } from "./components/cta"
 import { Footer } from "./components/footer"
 import { getOnboardingStatusForUser } from "./lib/onboarding/status";
 
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const session = await auth();
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
@@ -20,6 +22,8 @@ export default async function Home() {
     if (!onboarding.completed && onboarding.nextPath) {
       redirect(onboarding.nextPath);
     }
+
+    redirect("/dashboard");
   }
 
   const href = session?.user ? "/dashboard" : "/onboarding/profile";

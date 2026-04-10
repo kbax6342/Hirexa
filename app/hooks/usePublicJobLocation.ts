@@ -15,8 +15,8 @@ type ReverseLocationResponse = {
   stateName?: string;
 };
 
-type CachedPublicJobLocation = {
-  expiresAt: number;
+type StoredPublicJobLocation = {
+  consent: "accepted" | "declined" | null;
   locationLabel: string;
   permissionDenied: boolean;
   resolved: boolean;
@@ -34,8 +34,10 @@ type PublicJobLocationState = {
 };
 
 const STORAGE_KEY = "hirexa:public-job-location:v1";
-const SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
-const DENIED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CONSENT_KEY = "hirexa.jobs.locationConsent";
+const LABEL_KEY = "hirexa.jobs.locationLabel";
+const STATE_CODE_KEY = "hirexa.jobs.locationStateCode";
+const STATE_NAME_KEY = "hirexa.jobs.locationStateName";
 
 function emptyState(overrides?: Partial<PublicJobLocationState>) {
   return {
@@ -49,41 +51,126 @@ function emptyState(overrides?: Partial<PublicJobLocationState>) {
   };
 }
 
-function readCachedLocation(): CachedPublicJobLocation | null {
+function writeAcceptedLocation(args: {
+  locationLabel: string;
+  stateCode: string;
+  stateName: string;
+}) {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw) as Partial<CachedPublicJobLocation>;
-    if (!parsed || typeof parsed.expiresAt !== "number") {
-      window.localStorage.removeItem(STORAGE_KEY);
-      return null;
-    }
-
-    if (Date.now() >= parsed.expiresAt) {
-      window.localStorage.removeItem(STORAGE_KEY);
-      return null;
-    }
-
-    return {
-      expiresAt: parsed.expiresAt,
-      locationLabel: typeof parsed.locationLabel === "string" ? parsed.locationLabel : "",
-      permissionDenied: parsed.permissionDenied === true,
-      resolved: parsed.resolved !== false,
-      stateCode: typeof parsed.stateCode === "string" ? parsed.stateCode : "",
-      stateName: typeof parsed.stateName === "string" ? parsed.stateName : "",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedLocation(cache: CachedPublicJobLocation) {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
+    window.localStorage.setItem(CONSENT_KEY, "accepted");
+    window.localStorage.setItem(LABEL_KEY, args.locationLabel);
+    window.localStorage.setItem(STATE_CODE_KEY, args.stateCode);
+    window.localStorage.setItem(STATE_NAME_KEY, args.stateName);
   } catch {
     // Ignore storage write failures and fall back to in-memory state.
   }
+}
+
+function writeDeclinedLocation() {
+  try {
+    window.localStorage.setItem(CONSENT_KEY, "declined");
+    window.localStorage.removeItem(LABEL_KEY);
+    window.localStorage.removeItem(STATE_CODE_KEY);
+    window.localStorage.removeItem(STATE_NAME_KEY);
+  } catch {
+    // Ignore storage write failures and fall back to in-memory state.
+  }
+}
+
+function readSavedLocation(): StoredPublicJobLocation {
+  try {
+    const consentValue = window.localStorage.getItem(CONSENT_KEY);
+    const consent =
+      consentValue === "accepted" || consentValue === "declined"
+        ? consentValue
+        : null;
+
+    if (consent === "accepted") {
+      return {
+        consent,
+        locationLabel: window.localStorage.getItem(LABEL_KEY) ?? "",
+        permissionDenied: false,
+        resolved: true,
+        stateCode: window.localStorage.getItem(STATE_CODE_KEY) ?? "",
+        stateName: window.localStorage.getItem(STATE_NAME_KEY) ?? "",
+      };
+    }
+
+    if (consent === "declined") {
+      return {
+        consent,
+        locationLabel: "",
+        permissionDenied: true,
+        resolved: true,
+        stateCode: "",
+        stateName: "",
+      };
+    }
+
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return {
+        consent: null,
+        locationLabel: "",
+        permissionDenied: false,
+        resolved: true,
+        stateCode: "",
+        stateName: "",
+      };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<{
+      locationLabel: string;
+      permissionDenied: boolean;
+      resolved: boolean;
+      stateCode: string;
+      stateName: string;
+    }>;
+    const locationLabel =
+      typeof parsed.locationLabel === "string" ? parsed.locationLabel : "";
+    const permissionDenied = parsed.permissionDenied === true;
+    const stateCode = typeof parsed.stateCode === "string" ? parsed.stateCode : "";
+    const stateName = typeof parsed.stateName === "string" ? parsed.stateName : "";
+
+    if (permissionDenied) {
+      writeDeclinedLocation();
+      return {
+        consent: "declined",
+        locationLabel: "",
+        permissionDenied: true,
+        resolved: true,
+        stateCode: "",
+        stateName: "",
+      };
+    }
+
+    if (locationLabel) {
+      writeAcceptedLocation({
+        locationLabel,
+        stateCode,
+        stateName,
+      });
+      return {
+        consent: "accepted",
+        locationLabel,
+        permissionDenied: false,
+        resolved: parsed.resolved !== false,
+        stateCode,
+        stateName,
+      };
+    }
+  } catch {
+    // Ignore malformed storage and fall back to the default public feed.
+  }
+
+  return {
+    consent: null,
+    locationLabel: "",
+    permissionDenied: false,
+    resolved: true,
+    stateCode: "",
+    stateName: "",
+  };
 }
 
 function resolveLocationParts(data: ReverseLocationResponse) {
@@ -123,16 +210,30 @@ export function usePublicJobLocation() {
       return;
     }
 
-    const cached = readCachedLocation();
-    if (cached) {
+    const saved = readSavedLocation();
+    if (saved.consent !== "accepted") {
       setState(
         emptyState({
           loading: false,
-          locationLabel: cached.locationLabel,
-          permissionDenied: cached.permissionDenied,
-          resolved: cached.resolved,
-          stateCode: cached.stateCode,
-          stateName: cached.stateName,
+          locationLabel: saved.locationLabel,
+          permissionDenied: saved.permissionDenied,
+          resolved: saved.resolved,
+          stateCode: saved.stateCode,
+          stateName: saved.stateName,
+        })
+      );
+      return;
+    }
+
+    if (saved.locationLabel || saved.stateName || saved.stateCode) {
+      setState(
+        emptyState({
+          loading: false,
+          locationLabel: saved.locationLabel,
+          permissionDenied: false,
+          resolved: true,
+          stateCode: saved.stateCode,
+          stateName: saved.stateName,
         })
       );
       return;
@@ -167,11 +268,8 @@ export function usePublicJobLocation() {
         }
 
         const resolved = resolveLocationParts(data);
-        writeCachedLocation({
-          expiresAt: Date.now() + SUCCESS_TTL_MS,
+        writeAcceptedLocation({
           locationLabel: resolved.locationLabel,
-          permissionDenied: false,
-          resolved: true,
           stateCode: resolved.stateCode,
           stateName: resolved.stateName,
         });
@@ -195,14 +293,7 @@ export function usePublicJobLocation() {
           Number((error as { code?: number }).code) === 1;
 
         if (permissionDenied) {
-          writeCachedLocation({
-            expiresAt: Date.now() + DENIED_TTL_MS,
-            locationLabel: "",
-            permissionDenied: true,
-            resolved: true,
-            stateCode: "",
-            stateName: "",
-          });
+          writeDeclinedLocation();
         }
 
         if (!cancelled) {

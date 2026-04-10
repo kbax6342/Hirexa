@@ -41,11 +41,18 @@ type JobCacheValue = {
 
 type JobSearchSource = {
   name: string;
-  searchJobs: (args: { term: string; page: number; perPage: number }) => Promise<Job[]>;
+  searchJobs: (args: {
+    term: string;
+    page: number;
+    perPage: number;
+    location?: string;
+  }) => Promise<Job[]>;
 };
 
 type GlobalCached = {
   expiresAt: number;
+  key: string;
+  version: string;
   body: Payload;
 };
 
@@ -61,17 +68,23 @@ const DEFAULT_JOBS_PER_SECTION = 3;
 const MAX_PAGES_PER_SOURCE = 4;
 const GLOBAL_CACHE_TTL_MS = 5 * 60 * 1000;
 const JOB_CACHE_TTL_MS = 5 * 60 * 1000;
+const RECENT_POSTING_DAYS = 7;
+const ADZUNA_CACHE_VERSION = `recent-${RECENT_POSTING_DAYS}d`;
 
-function getGlobalCache() {
+function getGlobalCache(key: string) {
   const cached = globalThis.__adzunaCache;
   if (!cached) return null;
   if (Date.now() > cached.expiresAt) return null;
+  if (cached.version !== ADZUNA_CACHE_VERSION) return null;
+  if (cached.key !== key) return null;
   return cached.body;
 }
 
-function setGlobalCache(body: Payload) {
+function setGlobalCache(key: string, body: Payload) {
   globalThis.__adzunaCache = {
     expiresAt: Date.now() + GLOBAL_CACHE_TTL_MS,
+    key,
+    version: ADZUNA_CACHE_VERSION,
     body,
   };
 }
@@ -80,11 +93,19 @@ function cacheKeyFromUrl(url: URL) {
   const health = (url.searchParams.get("health") ?? "healthcare").trim();
   const tech = (url.searchParams.get("tech") ?? "software engineer").trim();
   const finance = (url.searchParams.get("finance") ?? "finance").trim();
-  return `homeSections|${health}|${tech}|${finance}`;
+  const location = (url.searchParams.get("location") ?? "").trim().toLowerCase();
+  return `${ADZUNA_CACHE_VERSION}|homeSections|${health}|${tech}|${finance}|${location}`;
 }
 
-function jobCacheKey(args: { term: string; page: number; perPage: number }) {
-  return `${args.term.trim().toLowerCase()}|${args.page}|${args.perPage}`;
+function jobCacheKey(args: {
+  term: string;
+  page: number;
+  perPage: number;
+  location?: string;
+}) {
+  return `${ADZUNA_CACHE_VERSION}|${args.term
+    .trim()
+    .toLowerCase()}|${(args.location ?? "").trim().toLowerCase()}|${args.page}|${args.perPage}`;
 }
 
 function getCachedJobs(cacheKey: string) {
@@ -178,13 +199,30 @@ function titleKey(title: string) {
   return title.trim().toLowerCase();
 }
 
+function isRecentPosting(iso?: string, maxAgeDays = RECENT_POSTING_DAYS) {
+  if (!iso) return false;
+
+  const postedAt = new Date(iso);
+  if (Number.isNaN(postedAt.getTime())) return false;
+
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  return Date.now() - postedAt.getTime() <= maxAgeMs;
+}
+
 async function getJobsFromAdzuna(args: {
   term: string;
   page?: number;
   perPage?: number;
+  location?: string;
 }): Promise<Job[]> {
-  const { term, page = 1, perPage = DEFAULT_JOBS_PER_SECTION } = args;
-  const key = jobCacheKey({ term, page, perPage });
+  const {
+    term,
+    page = 1,
+    perPage = DEFAULT_JOBS_PER_SECTION,
+    location = "",
+  } = args;
+  const normalizedLocation = location.trim();
+  const key = jobCacheKey({ term, page, perPage, location: normalizedLocation });
   const cachedJobs = getCachedJobs(key);
   if (cachedJobs) {
     return cachedJobs;
@@ -204,6 +242,10 @@ async function getJobsFromAdzuna(args: {
     url.searchParams.set("app_key", appKey);
     url.searchParams.set("results_per_page", String(perPage));
     url.searchParams.set("what", term);
+    url.searchParams.set("sort_by", "date");
+    if (normalizedLocation) {
+      url.searchParams.set("where", normalizedLocation);
+    }
 
     const res = await fetchWithRetry(url.toString(), 2);
     if (!res.ok) {
@@ -211,21 +253,24 @@ async function getJobsFromAdzuna(args: {
     }
 
     const data = await res.json();
-    const jobs: Job[] = (data.results ?? []).slice(0, perPage).map((item: any, index: number) => {
-      const id = String(item.id ?? `fallback-${term}-${index}`);
+    const jobs: Job[] = (data.results ?? [])
+      .filter((item: any) => isRecentPosting(item.created))
+      .slice(0, perPage)
+      .map((item: any, index: number) => {
+        const id = String(item.id ?? `fallback-${term}-${index}`);
 
-      return {
-        id,
-        title: cleanText(item.title) || "Untitled role",
-        company: cleanText(item.company?.display_name) || "Unknown company",
-        location: cleanText(item.location?.display_name) || "Unknown location",
-        posted: String(item.created ?? ""),
-        jobUrl: cleanText(item.redirect_url),
-        salary: formatSalary(item),
-        description: cleanText(item.description, 240) || undefined,
-        detailsHref: `/jobs/details/${id}`,
-      };
-    });
+        return {
+          id,
+          title: cleanText(item.title) || "Untitled role",
+          company: cleanText(item.company?.display_name) || "Unknown company",
+          location: cleanText(item.location?.display_name) || "Unknown location",
+          posted: String(item.created ?? ""),
+          jobUrl: cleanText(item.redirect_url),
+          salary: formatSalary(item),
+          description: cleanText(item.description, 240) || undefined,
+          detailsHref: `/jobs/details/${id}`,
+        };
+      });
 
     JOB_CACHE.set(key, {
       data: jobs,
@@ -242,7 +287,8 @@ async function getJobsFromAdzuna(args: {
 const ATS_JOB_SOURCES: JobSearchSource[] = [
   {
     name: "adzuna",
-    searchJobs: ({ term, page, perPage }) => getJobsFromAdzuna({ term, page, perPage }),
+    searchJobs: ({ term, page, perPage, location }) =>
+      getJobsFromAdzuna({ term, page, perPage, location }),
   },
 ];
 
@@ -251,12 +297,14 @@ async function getUniqueJobsForTerm(args: {
   targetCount?: number;
   sources?: JobSearchSource[];
   excludedKeys?: Set<string>;
+  location?: string;
 }) {
   const {
     term,
     targetCount = DEFAULT_JOBS_PER_SECTION,
     sources = ATS_JOB_SOURCES,
     excludedKeys = new Set<string>(),
+    location = "",
   } = args;
 
   const uniqueJobs: Job[] = [];
@@ -269,6 +317,7 @@ async function getUniqueJobsForTerm(args: {
         term,
         page,
         perPage: targetCount * 2,
+        location,
       });
 
       if (!jobs.length) break;
@@ -296,8 +345,9 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const key = cacheKeyFromUrl(url);
   const now = Date.now();
+  const location = (url.searchParams.get("location") ?? "").trim();
 
-  const globalCached = getGlobalCache();
+  const globalCached = getGlobalCache(key);
   if (globalCached) {
     return NextResponse.json({ ...globalCached, cached: true }, { status: 200 });
   }
@@ -333,6 +383,7 @@ export async function GET(req: Request) {
       term: healthTerm,
       targetCount: DEFAULT_JOBS_PER_SECTION,
       excludedKeys: allSeenKeys,
+      location,
     });
     healthcareJobs.forEach((job) => allSeenKeys.add(dedupeKey(job)));
 
@@ -340,6 +391,7 @@ export async function GET(req: Request) {
       term: techTerm,
       targetCount: DEFAULT_JOBS_PER_SECTION,
       excludedKeys: allSeenKeys,
+      location,
     });
     technologyJobs.forEach((job) => allSeenKeys.add(dedupeKey(job)));
 
@@ -347,12 +399,14 @@ export async function GET(req: Request) {
       term: tradeTerm,
       targetCount: DEFAULT_JOBS_PER_SECTION,
       excludedKeys: allSeenKeys,
+      location,
     });
 
     const financeJobs = await getUniqueJobsForTerm({
       term: financeTerm,
       targetCount: DEFAULT_JOBS_PER_SECTION,
       excludedKeys: allSeenKeys,
+      location,
     });
 
     return {
@@ -394,7 +448,7 @@ export async function GET(req: Request) {
         staleUntil: now + 5 * 60_000,
         payload,
       });
-      setGlobalCache(payload);
+      setGlobalCache(key, payload);
     }
 
     return NextResponse.json(payload, {

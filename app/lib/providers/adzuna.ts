@@ -21,6 +21,7 @@ type CacheEntry<T> = {
 };
 
 const CACHE_TTL = 5 * 60 * 1000;
+const RECENT_POSTING_DAYS = 7;
 const jobCache = new Map<string, CacheEntry<Job[]>>();
 
 function getCachedJobs(cacheKey: string) {
@@ -77,6 +78,16 @@ function formatPosted(iso?: string) {
   return "Posted 30+ days ago";
 }
 
+function isRecentPosting(iso?: string, maxAgeDays = RECENT_POSTING_DAYS) {
+  if (!iso) return false;
+
+  const postedAt = new Date(iso);
+  if (Number.isNaN(postedAt.getTime())) return false;
+
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  return Date.now() - postedAt.getTime() <= maxAgeMs;
+}
+
 export async function fetchAdzunaJobs(args: {
   query: string;
   page: number;
@@ -85,7 +96,9 @@ export async function fetchAdzunaJobs(args: {
 }): Promise<Job[]> {
   const { query, page, limit, location } = args;
   const normalizedLocation = location?.trim() ?? "";
-  const cacheKey = `${query.trim().toLowerCase()}|${normalizedLocation.toLowerCase()}|${page}|${limit}`;
+  const cacheKey = `recent-${RECENT_POSTING_DAYS}|${query
+    .trim()
+    .toLowerCase()}|${normalizedLocation.toLowerCase()}|${page}|${limit}`;
   const cachedJobs = getCachedJobs(cacheKey);
   if (cachedJobs) {
     return cachedJobs;
@@ -105,6 +118,7 @@ export async function fetchAdzunaJobs(args: {
       app_key: appKey,
       results_per_page: String(limit),
       what: query,
+      sort_by: "date",
       "content-type": "application/json",
     });
     if (normalizedLocation) {
@@ -124,22 +138,24 @@ export async function fetchAdzunaJobs(args: {
     }
 
     const data = (await res.json()) as AdzunaSearchResponse;
-    const jobs: Job[] = (data.results ?? []).map((result) => ({
-      id: `adzuna:${result.id}`,
-      source: "adzuna",
-      title: cleanText(result.title) || "Untitled role",
-      company: cleanText(result.company?.display_name) || "Unknown",
-      location: cleanText(result.location?.display_name) || "Unknown",
-      posted: formatPosted(result.created),
-      salary: moneyRange(
-        result.salary_min,
-        result.salary_max,
-        result.salary_is_predicted
-      ),
-      salaryIsEstimated: isPredictedSalary(result.salary_is_predicted),
-      description: cleanText(result.description) || undefined,
-      jobUrl: cleanText(result.redirect_url) || undefined,
-    }));
+    const jobs: Job[] = (data.results ?? [])
+      .filter((result) => isRecentPosting(result.created))
+      .map((result) => ({
+        id: `adzuna:${result.id}`,
+        source: "adzuna",
+        title: cleanText(result.title) || "Untitled role",
+        company: cleanText(result.company?.display_name) || "Unknown",
+        location: cleanText(result.location?.display_name) || "Unknown",
+        posted: formatPosted(result.created),
+        salary: moneyRange(
+          result.salary_min,
+          result.salary_max,
+          result.salary_is_predicted
+        ),
+        salaryIsEstimated: isPredictedSalary(result.salary_is_predicted),
+        description: cleanText(result.description) || undefined,
+        jobUrl: cleanText(result.redirect_url) || undefined,
+      }));
 
     jobCache.set(cacheKey, {
       data: jobs,

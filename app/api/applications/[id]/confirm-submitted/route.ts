@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@/app/lib/auth";
 import { prisma } from "@/app/lib/prisma";
 import { sendApplicationActivityEmailForStatusChange } from "@/app/lib/email/lifecycle";
+import { getSession } from "@/app/lib/apply/applySessionStore";
 import {
-  getSession,
-  getSessionRuntime,
-  updateSession,
-} from "@/app/lib/apply/applySessionStore";
+  isApplySessionSuccessStatus,
+  isApplySessionTerminalStatus,
+} from "@/app/lib/apply/sessionStatus";
 
 export const runtime = "nodejs";
 
@@ -59,74 +59,55 @@ export async function POST(
       );
     }
 
-    if (applySession.status === "DONE") {
+    if (isApplySessionSuccessStatus(applySession.status)) {
+      if (application.status !== "SENT") {
+        const updatedApplication = await prisma.jobApplication.update({
+          where: { id: application.id },
+          data: {
+            status: "SENT",
+            submittedAt: new Date(),
+          },
+          select: {
+            id: true,
+            status: true,
+          },
+        });
+
+        await sendApplicationActivityEmailForStatusChange({
+          applicationId: updatedApplication.id,
+          previousStatus: application.status,
+          nextStatus: updatedApplication.status,
+        }).catch((error) => {
+          console.warn("[applications/confirm-submitted] status email failed", {
+            applicationId: application.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+
       return NextResponse.json({ ok: true, status: "SENT" });
     }
 
-    if (applySession.status === "FAILED") {
+    if (isApplySessionTerminalStatus(applySession.status)) {
       return NextResponse.json(
         {
           ok: false,
-          status: "FAILED",
-          error: applySession.error ?? "Apply failed",
+          status: applySession.status,
+          error:
+            applySession.error ??
+            applySession.message ??
+            "Apply could not be completed",
         },
         { status: 409 },
       );
     }
 
-    if (
-      applySession.status === "WAITING_HUMAN" ||
-      applySession.status === "RUNNING"
-    ) {
-      const runtime = getSessionRuntime(applySession.id);
-      const page = runtime?.page;
-      const currentUrl = page?.url() ?? applySession.lastUrl ?? "";
-      const html = page ? await page.content().catch(() => "") : "";
-      const text = page ? await page.innerText("body").catch(() => "") : "";
-      const isConfirmed =
-        currentUrl.toLowerCase().includes("/confirmation") ||
-        /thank you|application submitted/i.test(html) ||
-        /thank you|application submitted/i.test(text);
-
-      updateSession(applySession.id, {
-        lastUrl: currentUrl,
-        status: isConfirmed ? "DONE" : applySession.status,
-      });
-
-      if (!isConfirmed) {
-        return NextResponse.json(
-          { ok: false, status: "NOT_CONFIRMED_YET" },
-          { status: 409 },
-        );
-      }
-
-      const updatedApplication = await prisma.jobApplication.update({
-        where: { id: application.id },
-        data: {
-          status: "SENT",
-          submittedAt: new Date(),
-        },
-        select: {
-          id: true,
-          status: true,
-        },
-      });
-      await sendApplicationActivityEmailForStatusChange({
-        applicationId: updatedApplication.id,
-        previousStatus: application.status,
-        nextStatus: updatedApplication.status,
-      }).catch((error) => {
-        console.warn("[applications/confirm-submitted] status email failed", {
-          applicationId: application.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-
-      return NextResponse.json({ ok: true, status: "SENT" });
-    }
-
     return NextResponse.json(
-      { ok: false, status: applySession.status },
+      {
+        ok: false,
+        status: applySession.status,
+        error: applySession.message ?? "Apply is still in progress",
+      },
       { status: 409 },
     );
   } catch (error: unknown) {

@@ -31,11 +31,13 @@ export async function GET(req: Request) {
     if (!result) return NextResponse.json({ label: "" });
 
     let city = "";
+    let county = "";
     let stateCode = "";
     let stateName = "";
 
     for (const c of result.address_components) {
       if (c.types.includes("locality")) city = c.long_name;
+      if (c.types.includes("administrative_area_level_2")) county = c.long_name;
       if (c.types.includes("administrative_area_level_1")) {
         stateCode = c.short_name;
         stateName = c.long_name;
@@ -44,7 +46,7 @@ export async function GET(req: Request) {
 
     const label = [city, stateCode].filter(Boolean).join(", ");
 
-    return NextResponse.json({ label, city, stateCode, stateName });
+    return NextResponse.json({ label, city, county, stateCode, stateName });
   } catch {
     return NextResponse.json({ error: "Reverse geocode error" }, { status: 500 });
   }

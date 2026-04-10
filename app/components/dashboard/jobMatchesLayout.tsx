@@ -1,15 +1,10 @@
 // File: /Hirexa/my-app/app/components/JobMatchesLayout.tsx
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 import { useSession } from "next-auth/react";
-import {
-  loadAppliedJobsSession,
-  saveAppliedJobsSession,
-} from "@/app/lib/appliedJobsSession";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
@@ -18,10 +13,22 @@ import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
 import {
   buildApplyProviderPayload,
   detectApplyProviderFromJob,
-  getApplyProviderButtonLabel,
-  getApplyProviderLoadingLabel,
 } from "@/app/lib/apply/providerDetection";
 import { storeJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
+import {
+  clearAutoApplyPopupState,
+  createEmptyAutoApplyPopupState,
+  isAutoApplyPopupStateExpired,
+  loadAutoApplyPopupState,
+  saveAutoApplyPopupState,
+  type AutoApplyPopupItem,
+  type AutoApplyPopupState,
+} from "@/app/lib/apply/autoApplyPopupSession";
+import {
+  isApplySessionTerminalStatus,
+  isApplySessionSuccessStatus,
+  toApplySessionDisplayStatus,
+} from "@/app/lib/apply/sessionStatus";
 
 type SmartMatchesResponse = {
   jobs: Job[];
@@ -71,6 +78,46 @@ type SupportedAutoApplyJob = Pick<
   Job,
   "id" | "source" | "title" | "company" | "location" | "jobUrl"
 >;
+
+type AutoApplyStartResponse = {
+  ok?: boolean;
+  applicationId?: string;
+  applySessionId?: string;
+  status?: string;
+  error?: string;
+  missingRequired?: string[];
+};
+
+type ApplySessionPollResponse = {
+  ok?: boolean;
+  session?: {
+    status?: string;
+    lastUrl?: string;
+    error?: string;
+    message?: string;
+  };
+  error?: string;
+};
+
+const AUTO_APPLY_CTA_LABEL = "Auto apply Now";
+const AUTO_APPLY_LOADING_LABEL = "Starting auto apply...";
+
+function formatAutoApplyStatusLabel(status: string | null | undefined) {
+  const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
+
+  switch (normalized) {
+    case "AUTO_APPLY_UNAVAILABLE":
+      return "Not available";
+    case "SUBMITTED":
+      return "Submitted";
+    default:
+      return normalized
+        .toLowerCase()
+        .split("_")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+  }
+}
 
 function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
   return (
@@ -213,20 +260,12 @@ export default function JobMatchesLayout({
   );
   const [filterError, setFilterError] = useState<string | null>(null);
 
-  type ActionState = {
-    loading?: boolean;
-    success?: string | null;
-    error?: string | null;
-  };
-
-  const [outreachActions, setOutreachActions] = useState<Record<string, ActionState>>({});
-  const [applyOutreachActions, setApplyOutreachActions] = useState<Record<string, ActionState>>({});
-
-  const [appliedJobs, setAppliedJobs] = useState<Job[]>([]);
+  const [autoApplyPopupState, setAutoApplyPopupState] = useState<AutoApplyPopupState>(
+    () => createEmptyAutoApplyPopupState()
+  );
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
   const [cardAiApplyLoadingId, setCardAiApplyLoadingId] = useState<string | null>(null);
-  const [appliedJobsSessionReady, setAppliedJobsSessionReady] = useState(false);
 
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -250,6 +289,7 @@ export default function JobMatchesLayout({
     "initial-load"
   );
   const selectedJobParam = searchParams.get("job")?.trim() || "";
+  const autoApplyPollInFlightRef = useRef(false);
   const visibleJobs = useMemo(
     () =>
       appliedFilters.includeRemote
@@ -266,13 +306,19 @@ export default function JobMatchesLayout({
     () => toJobDetailSummary(selectedSummary),
     [selectedSummary]
   );
+  const autoApplyItems = useMemo(
+    () =>
+      Object.values(autoApplyPopupState.items).sort(
+        (left, right) => right.updatedAt - left.updatedAt
+      ),
+    [autoApplyPopupState.items]
+  );
 
   const right = selectedDetails ?? selectedSummaryDetail;
-  const rightApplyProvider = detectApplyProviderFromJob(right);
-  const rightAiApplyLabel = getApplyProviderButtonLabel(rightApplyProvider);
-  const rightAiApplyLoadingLabel = getApplyProviderLoadingLabel(rightApplyProvider);
+  const rightAiApplyLabel = AUTO_APPLY_CTA_LABEL;
+  const rightAiApplyLoadingLabel = AUTO_APPLY_LOADING_LABEL;
 
-  function replaceSelectedJobParam(jobId: string | null) {
+  const replaceSelectedJobParam = useCallback((jobId: string | null) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     if (jobId) {
       nextParams.set("job", jobId);
@@ -283,7 +329,7 @@ export default function JobMatchesLayout({
     const nextQuery = nextParams.toString();
     const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
     window.history.replaceState(window.history.state, "", nextUrl);
-  }
+  }, [pathname, searchParams]);
 
   const clearTransientFilterParams = useCallback(() => {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -401,6 +447,101 @@ export default function JobMatchesLayout({
     handleSelectJob(job.id);
   }
 
+  const updateAutoApplyPopupState = useCallback(
+    (
+      updater: (current: AutoApplyPopupState, now: number) => AutoApplyPopupState
+    ) => {
+      setAutoApplyPopupState((current) => {
+        const now = Date.now();
+        const base = isAutoApplyPopupStateExpired(current, now)
+          ? createEmptyAutoApplyPopupState(now)
+          : current;
+        const next = updater(base, now);
+        saveAutoApplyPopupState(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const markAutoApplyActivity = useCallback(() => {
+    updateAutoApplyPopupState((current, now) => ({
+      ...current,
+      lastActivityAt: now,
+    }));
+  }, [updateAutoApplyPopupState]);
+
+  const dismissAutoApplyPopup = useCallback(() => {
+    updateAutoApplyPopupState((current, now) => {
+      console.info("[AUTO_APPLY_POPUP] dismissed popup", {
+        sessionKey: current.currentSessionKey,
+      });
+
+      return {
+        ...current,
+        dismissedAt: now,
+        isOpen: false,
+        lastActivityAt: now,
+      };
+    });
+  }, [updateAutoApplyPopupState]);
+
+  const toggleAutoApplyPopup = useCallback(() => {
+    updateAutoApplyPopupState((current, now) => {
+      const nextOpen = !current.isOpen;
+
+      return {
+        ...current,
+        dismissedAt: nextOpen ? current.dismissedAt : now,
+        isOpen: nextOpen,
+        lastActivityAt: now,
+      };
+    });
+  }, [updateAutoApplyPopupState]);
+
+  const upsertAutoApplyPopupItem = useCallback(
+    (
+      item: Omit<AutoApplyPopupItem, "updatedAt"> & { updatedAt?: number },
+      options?: { autoOpen?: boolean }
+    ) => {
+      updateAutoApplyPopupState((current, now) => {
+        const hadItems = Object.keys(current.items).length > 0;
+        const shouldAutoOpen =
+          options?.autoOpen === true &&
+          !hadItems &&
+          current.dismissedAt === null;
+
+        const next: AutoApplyPopupState = {
+          ...current,
+          firstShownAt:
+            shouldAutoOpen && current.firstShownAt === null
+              ? now
+              : current.firstShownAt,
+          isOpen: shouldAutoOpen ? true : current.isOpen,
+          lastActivityAt: now,
+          items: {
+            ...current.items,
+            [item.applicationId]: {
+              ...(current.items[item.applicationId] ?? {}),
+              ...item,
+              updatedAt: item.updatedAt ?? now,
+            },
+          },
+        };
+
+        if (shouldAutoOpen) {
+          console.info("[AUTO_APPLY_POPUP] auto-opened popup", {
+            sessionKey: next.currentSessionKey,
+            applicationId: item.applicationId,
+          });
+        }
+
+        return next;
+      });
+    },
+    [updateAutoApplyPopupState]
+  );
+
   useEffect(() => {
     const nextFilters = profileDefaultFilters ?? profileBackedFilters;
     const temporarySessionActive = explicitFiltersRequestedRef.current;
@@ -447,14 +588,147 @@ export default function JobMatchesLayout({
   ]);
 
   useEffect(() => {
-    setAppliedJobs(dedupeJobs(loadAppliedJobsSession<Job>()));
-    setAppliedJobsSessionReady(true);
+    const now = Date.now();
+    const stored = loadAutoApplyPopupState();
+
+    if (!stored || isAutoApplyPopupStateExpired(stored, now)) {
+      if (stored) {
+        console.info("[AUTO_APPLY_POPUP] cleared expired popup session", {
+          sessionKey: stored.currentSessionKey,
+        });
+      }
+
+      clearAutoApplyPopupState();
+      const fresh = createEmptyAutoApplyPopupState(now);
+      setAutoApplyPopupState(fresh);
+      setShowAppliedPanel(false);
+      return;
+    }
+
+    setAutoApplyPopupState(stored);
+    setShowAppliedPanel(stored.isOpen && Object.keys(stored.items).length > 0);
+    console.info("[AUTO_APPLY_POPUP] restored popup session", {
+      sessionKey: stored.currentSessionKey,
+      itemCount: Object.keys(stored.items).length,
+    });
   }, []);
 
   useEffect(() => {
-    if (!appliedJobsSessionReady) return;
-    saveAppliedJobsSession(appliedJobs);
-  }, [appliedJobs, appliedJobsSessionReady]);
+    setShowAppliedPanel(
+      autoApplyPopupState.isOpen &&
+        Object.keys(autoApplyPopupState.items).length > 0
+    );
+  }, [autoApplyPopupState.isOpen, autoApplyPopupState.items]);
+
+  useEffect(() => {
+    const handleActivity = () => {
+      markAutoApplyActivity();
+    };
+
+    window.addEventListener("click", handleActivity);
+    window.addEventListener("focus", handleActivity);
+    window.addEventListener("keydown", handleActivity);
+
+    return () => {
+      window.removeEventListener("click", handleActivity);
+      window.removeEventListener("focus", handleActivity);
+      window.removeEventListener("keydown", handleActivity);
+    };
+  }, [markAutoApplyActivity]);
+
+  useEffect(() => {
+    markAutoApplyActivity();
+  }, [pathname, searchParams, markAutoApplyActivity]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setAutoApplyPopupState((current) => {
+        if (!isAutoApplyPopupStateExpired(current)) {
+          return current;
+        }
+
+        console.info("[AUTO_APPLY_POPUP] expired popup session after inactivity", {
+          sessionKey: current.currentSessionKey,
+        });
+        clearAutoApplyPopupState();
+        setShowAppliedPanel(false);
+        return createEmptyAutoApplyPopupState();
+      });
+    }, 60_000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const pendingItems = autoApplyItems.filter(
+      (item) =>
+        item.applySessionId && !isApplySessionTerminalStatus(item.status)
+    );
+
+    if (pendingItems.length === 0) {
+      return;
+    }
+
+    const poll = async () => {
+      if (autoApplyPollInFlightRef.current) return;
+      autoApplyPollInFlightRef.current = true;
+
+      try {
+        const results = await Promise.all(
+          pendingItems.map(async (item) => {
+            const res = await fetch(`/api/apply-sessions/${item.applySessionId}`, {
+              cache: "no-store",
+            });
+            const payload = (await res.json()) as ApplySessionPollResponse;
+            return { item, res, payload };
+          })
+        );
+
+        updateAutoApplyPopupState((current, now) => {
+          const nextItems = { ...current.items };
+
+          for (const { item, res, payload } of results) {
+            if (!res.ok || !payload.ok || !payload.session) continue;
+
+            const displayStatus =
+              toApplySessionDisplayStatus(payload.session.status) ??
+              payload.session.status ??
+              item.status;
+
+            nextItems[item.applicationId] = {
+              ...nextItems[item.applicationId],
+              status: displayStatus,
+              message: payload.session.message ?? payload.session.error ?? null,
+              lastUrl: payload.session.lastUrl ?? item.lastUrl ?? null,
+              updatedAt: now,
+            };
+          }
+
+          console.info("[AUTO_APPLY_POPUP] polled active sessions", {
+            sessionKey: current.currentSessionKey,
+            itemCount: results.length,
+          });
+
+          return {
+            ...current,
+            items: nextItems,
+            lastActivityAt: now,
+          };
+        });
+      } catch (error) {
+        console.error("[AUTO_APPLY_POPUP] polling failed", error);
+      } finally {
+        autoApplyPollInFlightRef.current = false;
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [autoApplyItems, updateAutoApplyPopupState]);
 
   async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
     const requestExplicit =
@@ -761,7 +1035,7 @@ export default function JobMatchesLayout({
 
     setSelectedId(nextSelectedId);
     replaceSelectedJobParam(nextSelectedId);
-  }, [selectedId, selectedJobParam, visibleJobs]);
+  }, [replaceSelectedJobParam, selectedId, selectedJobParam, visibleJobs]);
 
   useEffect(() => {
     console.log("[SMART_MATCHES] selected job changed", {
@@ -945,110 +1219,7 @@ export default function JobMatchesLayout({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, visibleJobs]);
-
-  const setActionState = (
-    setter: Dispatch<SetStateAction<Record<string, ActionState>>>,
-    jobId: string,
-    patch: ActionState
-  ) => {
-    setter((prev) => ({
-      ...prev,
-      [jobId]: { ...prev[jobId], ...patch },
-    }));
-  };
-
-  const clearActionFeedback = (
-    setter: Dispatch<SetStateAction<Record<string, ActionState>>>,
-    jobId: string
-  ) => {
-    setTimeout(() => {
-      setter((prev) => {
-        if (!prev[jobId]) return prev;
-        return { ...prev, [jobId]: { ...prev[jobId], success: null, error: null } };
-      });
-    }, 2500);
-  };
-
-  const addOutreachJob = async (
-    job: Job,
-    setter: Dispatch<SetStateAction<Record<string, ActionState>>>,
-    successText: string
-  ) => {
-    if (!job?.id) return false;
-
-    setActionState(setter, job.id, { loading: true, success: null, error: null });
-
-    try {
-      const res = await fetch("/api/agents/linkedin/job-targets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId: job.id }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error ?? "Failed to add outreach target");
-      }
-
-      setActionState(setter, job.id, { success: successText });
-      clearActionFeedback(setter, job.id);
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Outreach action failed";
-      setActionState(setter, job.id, { error: message });
-      clearActionFeedback(setter, job.id);
-      return false;
-    } finally {
-      setActionState(setter, job.id, { loading: false });
-    }
-  };
-
-  const addAppliedJob = async (job: Job, options?: { navigate?: boolean }) => {
-    try {
-      const res = await fetch("/api/job-applications/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: job.source,
-          sourceJobId: job.id,
-          title: job.title,
-          company: job.company,
-          location: job.location,
-          jobUrl: job.jobUrl ?? null,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data?.applicationId) {
-        throw new Error("Could not create application.");
-      }
-
-      setAppliedJobs((prev) => {
-        if (
-          prev.some(
-            (appliedJob) => getJobIdentity(appliedJob) === getJobIdentity(job)
-          )
-        ) {
-          return prev;
-        }
-        return dedupeJobs([job, ...prev]);
-      });
-
-      setShowAppliedPanel(true);
-      if (options?.navigate !== false) {
-        const jobUrl = job.jobUrl ? encodeURIComponent(job.jobUrl) : "";
-        router.push(`/job-tools/generate${jobUrl ? `?jobUrl=${jobUrl}` : ""}`);
-      }
-      return true;
-    } catch (error) {
-      console.error(error);
-      return false;
-    }
-  };
 
   const handleOutreachFromDetails = () => {
     router.push("/job-tools/agents/linkedin-outreach");
@@ -1095,12 +1266,11 @@ export default function JobMatchesLayout({
     [router]
   );
 
-  const startProviderAutoApply = useCallback(
+  const startDashboardAutoApply = useCallback(
     async (job: SupportedAutoApplyJob) => {
       const applyProvider = detectApplyProviderFromJob(job);
       const jobUrl = job.jobUrl?.trim() ?? "";
-
-      if (!applyProvider || !jobUrl) {
+      if (!jobUrl) {
         return false;
       }
 
@@ -1128,42 +1298,119 @@ export default function JobMatchesLayout({
       }
 
       if (planData.pending === true || planData.active !== true) {
-        const params = new URLSearchParams();
-        params.set("source", `${applyProvider}-auto-apply`);
-        params.set("jobUrl", jobUrl);
-        router.push(`/plans?${params.toString()}`);
-        return false;
+        if (applyProvider) {
+          const params = new URLSearchParams();
+          params.set("source", `${applyProvider}-auto-apply`);
+          params.set("jobUrl", jobUrl);
+          router.push(`/plans?${params.toString()}`);
+          return false;
+        }
+
+        const creditData = await readCreditStatus(callbackHref);
+        if (!creditData) return false;
+
+        if (Number(creditData.hirePilotCredits ?? 0) <= 0) {
+          const params = new URLSearchParams();
+          params.set("source", "smart-matches-ai-apply");
+          params.set("jobUrl", jobUrl);
+          router.push(`/plans?${params.toString()}`);
+          return false;
+        }
       }
 
-      const res = await fetch("/api/applications/create", {
+      const createRes = await fetch("/api/auto-apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildApplyProviderPayload(job)),
       });
 
-      const data = await res.json();
-
-      if (!res.ok || !data?.applicationId) {
-        throw new Error(data?.error ?? "Unable to start auto apply.");
+      const createData = (await createRes.json()) as AutoApplyStartResponse;
+      if (!createRes.ok || !createData?.applicationId) {
+        throw new Error(createData?.error ?? "Unable to start auto apply.");
       }
 
-      router.push(`/dashboard/application/${data.applicationId}/audit`);
+      const applicationId = createData.applicationId;
+      upsertAutoApplyPopupItem(
+        {
+          applicationId,
+          jobId: job.id,
+          jobTitle: job.title,
+          company: job.company,
+          location: job.location,
+          status: "STARTING",
+        },
+        { autoOpen: true }
+      );
+
+      console.info("[AUTO_APPLY_DASHBOARD] created auto-apply application", {
+        applicationId,
+        jobId: job.id,
+        source: job.source,
+        applyProvider,
+      });
+
+      const startRes = await fetch(`/api/applications/${applicationId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ background: true }),
+      });
+
+      const startData = (await startRes.json()) as AutoApplyStartResponse;
+      if (!startRes.ok || !startData?.ok || !startData.applySessionId) {
+        const message = startData?.error ?? "Unable to start auto apply.";
+        const status =
+          startData?.status === "AUTO_APPLY_UNAVAILABLE"
+            ? "AUTO_APPLY_UNAVAILABLE"
+            : "FAILED";
+
+        upsertAutoApplyPopupItem({
+          applicationId,
+          jobId: job.id,
+          jobTitle: job.title,
+          company: job.company,
+          location: job.location,
+          status,
+          message,
+        });
+
+        throw new Error(message);
+      }
+
+      upsertAutoApplyPopupItem({
+        applicationId,
+        applySessionId: startData.applySessionId,
+        jobId: job.id,
+        jobTitle: job.title,
+        company: job.company,
+        location: job.location,
+        status:
+          toApplySessionDisplayStatus(startData.status) ??
+          startData.status ??
+          "STARTING",
+      });
+
+      console.info("[AUTO_APPLY_DASHBOARD] started background auto-apply", {
+        applicationId,
+        applySessionId: startData.applySessionId,
+        status: startData.status ?? "STARTING",
+      });
+
       return true;
     },
-    [authStatus, readPlanStatus, router]
+    [
+      authStatus,
+      readCreditStatus,
+      readPlanStatus,
+      router,
+      upsertAutoApplyPopupItem,
+    ]
   );
 
   const handleAiApplyFromDetails = async () => {
     if (!right?.id) return;
     setAiApplyLoading(true);
     try {
-      const applyProvider = detectApplyProviderFromJob(right);
-      if (applyProvider) {
-        await startProviderAutoApply(right);
-        return;
-      }
-
-      await addAppliedJob(right);
+      await startDashboardAutoApply(right);
     } finally {
       setAiApplyLoading(false);
     }
@@ -1174,65 +1421,13 @@ export default function JobMatchesLayout({
   };
 
   const handleAiApplyFromCard = async (job: Job) => {
-    const applyProvider = detectApplyProviderFromJob(job);
-    if (applyProvider) {
-      const loadingId = getJobIdentity(job);
-      setCardAiApplyLoadingId(loadingId);
-
-      try {
-        await startProviderAutoApply(job);
-      } catch (error) {
-        console.error(`[SMART_MATCHES] ${applyProvider} auto apply failed`, error);
-      } finally {
-        setCardAiApplyLoadingId((current) => (current === loadingId ? null : current));
-      }
-      return;
-    }
-
-    const jobUrl = job.jobUrl?.trim() ?? "";
-    if (!jobUrl) return;
-
-    const aiApplyHref = `/job-tools/generate?jobUrl=${encodeURIComponent(jobUrl)}`;
     const loadingId = getJobIdentity(job);
-
-    if (authStatus === "loading") {
-      return;
-    }
-
-    if (authStatus !== "authenticated") {
-      router.push(`/login?callbackUrl=${encodeURIComponent(aiApplyHref)}`);
-      return;
-    }
-
     setCardAiApplyLoadingId(loadingId);
 
     try {
-      let planData = await readPlanStatus(false, aiApplyHref);
-      if (!planData) return;
-
-      if (planData.pending === true || planData.active !== true) {
-        const refreshedPlanData = await readPlanStatus(true, aiApplyHref);
-        if (!refreshedPlanData) return;
-        planData = refreshedPlanData;
-      }
-
-      if (planData.pending === true || planData.active !== true) {
-        const creditData = await readCreditStatus(aiApplyHref);
-        if (!creditData) return;
-
-        if (Number(creditData.hirePilotCredits ?? 0) <= 0) {
-          const params = new URLSearchParams();
-          params.set("source", "smart-matches-ai-apply");
-          params.set("jobUrl", jobUrl);
-          router.push(`/plans?${params.toString()}`);
-          return;
-        }
-      }
-
-      router.push(aiApplyHref);
+      await startDashboardAutoApply(job);
     } catch (error) {
-      console.error("[SMART_MATCHES] AI apply access check failed", error);
-      router.push(aiApplyHref);
+      console.error("[AUTO_APPLY_DASHBOARD] Smart Matches auto apply failed", error);
     } finally {
       setCardAiApplyLoadingId((current) => (current === loadingId ? null : current));
     }
@@ -1397,9 +1592,8 @@ export default function JobMatchesLayout({
               const active = job.id === selectedId;
               const jobIdentity = getJobIdentity(job);
               const isCardAiApplyLoading = cardAiApplyLoadingId === jobIdentity;
-              const cardApplyProvider = detectApplyProviderFromJob(job);
-              const cardAiApplyLabel = getApplyProviderButtonLabel(cardApplyProvider);
-              const cardAiApplyLoadingLabel = getApplyProviderLoadingLabel(cardApplyProvider);
+              const cardAiApplyLabel = AUTO_APPLY_CTA_LABEL;
+              const cardAiApplyLoadingLabel = AUTO_APPLY_LOADING_LABEL;
 
               return (
                 <div
@@ -1625,7 +1819,7 @@ export default function JobMatchesLayout({
       </div>
 
       {/* APPLIED JOBS FLOAT */}
-      {appliedJobs.length > 0 ? (
+      {autoApplyItems.length > 0 ? (
         <>
           {showAppliedPanel ? (
             <div className="fixed inset-x-4 bottom-24 z-40 rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl sm:inset-x-auto sm:right-4 sm:w-[min(420px,calc(100vw-2rem))]">
@@ -1633,7 +1827,7 @@ export default function JobMatchesLayout({
                 <h3 className="text-sm font-semibold text-gray-900">Applied jobs</h3>
                 <button
                   type="button"
-                  onClick={() => setShowAppliedPanel(false)}
+                  onClick={dismissAutoApplyPopup}
                   className="rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
                 >
                   Close
@@ -1641,31 +1835,67 @@ export default function JobMatchesLayout({
               </div>
 
               <div className="max-h-[45vh] space-y-2 overflow-y-auto pr-1 sm:max-h-56">
-                {appliedJobs.map((job) => (
-                  <div
-                    key={getJobIdentity(job)}
-                    className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
-                  >
-                    <p className="text-xs font-semibold text-gray-800">{job.title}</p>
-                    <p className="text-[11px] text-gray-600">
-                      {job.company} • {job.location}
-                    </p>
-                  </div>
-                ))}
+                {autoApplyItems.map((item) => {
+                  const terminal = isApplySessionTerminalStatus(item.status);
+                  const submitted = isApplySessionSuccessStatus(item.status);
+                  const statusLabel = formatAutoApplyStatusLabel(item.status);
+
+                  return (
+                    <div
+                      key={item.applicationId}
+                      className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-gray-800">
+                            {item.jobTitle}
+                          </p>
+                          <p className="text-[11px] text-gray-600">
+                            {item.company} • {item.location}
+                          </p>
+                        </div>
+
+                        {terminal ? (
+                          <span
+                            className={[
+                              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                              submitted
+                                ? "bg-emerald-100 text-emerald-700"
+                                : item.status === "AUTO_APPLY_UNAVAILABLE"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-red-100 text-red-700",
+                            ].join(" ")}
+                          >
+                            {submitted ? "Submitted" : statusLabel}
+                          </span>
+                        ) : (
+                          <span className="inline-flex shrink-0 items-center gap-2 text-[10px] font-semibold text-blue-700">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+                            {statusLabel}
+                          </span>
+                        )}
+                      </div>
+
+                      {item.message ? (
+                        <p className="mt-2 text-[11px] text-gray-600">{item.message}</p>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}
 
           <button
             type="button"
-            onClick={() => setShowAppliedPanel((prev) => !prev)}
+            onClick={toggleAutoApplyPopup}
             className="fixed bottom-4 right-4 z-50 inline-flex min-w-[110px] flex-col items-center rounded-full bg-blue-600 px-4 py-3 text-white shadow-lg transition hover:bg-blue-700 sm:bottom-5 sm:px-5"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wide">
               Applied Jobs
             </span>
             <span className="text-xl font-bold leading-none">
-              {appliedJobs.length}
+              {autoApplyItems.length}
             </span>
           </button>
         </>

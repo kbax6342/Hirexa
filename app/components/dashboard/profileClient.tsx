@@ -85,7 +85,7 @@ export default function AutofillButton({ job }: AutofillButtonProps) {
         disabled={loading}
         className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {loading ? "...applying" : "+ Auto-fill application"}
+        {loading ? "Starting auto apply..." : "Auto apply Now"}
       </button>
       {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
     </div>

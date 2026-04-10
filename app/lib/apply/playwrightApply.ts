@@ -1,14 +1,32 @@
-import { chromium } from "playwright-core";
-import { cssEscape } from "@/app/lib/apply/cssEscape";
+import { chromium, type BrowserContext, type Page } from "playwright-core";
 import {
   closeRemoteSession,
   createRemoteSession,
+  shouldUseRemoteBrowser,
 } from "@/app/lib/apply/remoteBrowser";
+import {
+  findMatchingLocator,
+  extractLocatorText,
+} from "@/app/lib/apply/formFieldLocators";
+import {
+  chaseApplyPath,
+  type CtaChaseResult,
+} from "@/app/lib/apply/playwrightCrawl";
+import {
+  detectPageSignals,
+  waitForDomAndSettle,
+} from "@/app/lib/apply/playwrightSignals";
+import type {
+  ApplySessionClickRecord,
+  ApplySessionDebug,
+} from "@/app/lib/apply/applySessionStore";
+import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
 export type PlaywrightApplyResult = {
   ok: boolean;
   finalUrl?: string;
   needsHuman?: boolean;
+  unavailable?: boolean;
   openUrl?: string;
   viewerUrl?: string;
   message?: string;
@@ -18,6 +36,7 @@ export type PlaywrightApplyResult = {
     finalUrl?: string;
     submitSelectorUsed?: string | null;
     verificationSignals: string[];
+    confirmationSignals: string[];
     pageText?: string;
     pageHtml?: string;
     sessionId?: string;
@@ -25,10 +44,27 @@ export type PlaywrightApplyResult = {
     targetUrl?: string;
     success: boolean;
     needsHuman: boolean;
+    unavailable: boolean;
+    hopCount: number;
+    urlsVisited: string[];
+    clicks: ApplySessionClickRecord[];
+    formDetected: boolean;
+    confirmationDetected: boolean;
+    verificationDetected: boolean;
+    finalReason?: string;
   };
 };
 
 type AnswerValue = string | string[];
+type ApplyStatusUpdate = {
+  status: ApplySessionStatus;
+  lastUrl?: string;
+  error?: string;
+  message?: string;
+  viewerUrl?: string;
+  openUrl?: string;
+  remoteSessionId?: string;
+};
 
 function asArray(value: AnswerValue) {
   return Array.isArray(value)
@@ -36,54 +72,55 @@ function asArray(value: AnswerValue) {
     : [String(value ?? "")];
 }
 
-function containsSignal(text: string, checks: string[]) {
-  const lower = text.toLowerCase();
-  return checks.filter((check) => lower.includes(check));
+function shouldUseCdp(connectUrl: string) {
+  return connectUrl.startsWith("http://") || connectUrl.startsWith("https://");
 }
 
-function shouldUseRemoteBrowser() {
-  return process.env.REMOTE_BROWSER_PROVIDER?.toLowerCase() === "browserbase";
-}
-
-function isGreenhouseUrl(jobUrl: string) {
-  try {
-    const host = new URL(jobUrl).hostname.toLowerCase();
-    return host.includes("greenhouse.io");
-  } catch {
-    return false;
-  }
-}
-
-function buildEmbedJobAppUrl(jobUrl: string) {
-  try {
-    const u = new URL(jobUrl);
-    const parts = u.pathname.split("/").filter(Boolean);
-    const board = parts[0] || "";
-    const jobsIdx = parts.findIndex((p) => p === "jobs");
-    const token = jobsIdx >= 0 ? parts[jobsIdx + 1] || "" : "";
-    if (!board || !token) return null;
-    return `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(token)}`;
-  } catch {
-    return null;
-  }
-}
-
-async function detectHumanVerification(page: import("playwright-core").Page) {
-  const checks = ["verify you are human", "captcha", "turnstile", "cloudflare"];
-  const html = await page.content().catch(() => "");
-  const pageText = await page.innerText("body").catch(() => "");
-  const verificationSignals = [
-    ...new Set([
-      ...containsSignal(html, checks),
-      ...containsSignal(pageText, checks),
-    ]),
-  ];
-
+function buildDebugPayload(args: {
+  attemptedSelectors: string[];
+  missingNames: string[];
+  finalUrl?: string;
+  submitSelectorUsed?: string | null;
+  verificationSignals?: string[];
+  confirmationSignals?: string[];
+  pageText?: string;
+  pageHtml?: string;
+  sessionId?: string;
+  viewerUrl?: string;
+  targetUrl?: string;
+  success: boolean;
+  needsHuman: boolean;
+  unavailable: boolean;
+  hopCount: number;
+  urlsVisited: string[];
+  clicks: ApplySessionClickRecord[];
+  formDetected: boolean;
+  confirmationDetected: boolean;
+  verificationDetected: boolean;
+  finalReason?: string;
+}) {
   return {
-    html,
-    pageText,
-    verificationSignals,
-    needsHuman: verificationSignals.length > 0,
+    attemptedSelectors: args.attemptedSelectors,
+    missingNames: args.missingNames,
+    finalUrl: args.finalUrl,
+    submitSelectorUsed: args.submitSelectorUsed ?? null,
+    verificationSignals: args.verificationSignals ?? [],
+    confirmationSignals: args.confirmationSignals ?? [],
+    pageText: args.pageText,
+    pageHtml: args.pageHtml,
+    sessionId: args.sessionId,
+    viewerUrl: args.viewerUrl,
+    targetUrl: args.targetUrl,
+    success: args.success,
+    needsHuman: args.needsHuman,
+    unavailable: args.unavailable,
+    hopCount: args.hopCount,
+    urlsVisited: args.urlsVisited,
+    clicks: args.clicks,
+    formDetected: args.formDetected,
+    confirmationDetected: args.confirmationDetected,
+    verificationDetected: args.verificationDetected,
+    finalReason: args.finalReason,
   };
 }
 
@@ -96,118 +133,224 @@ export async function applyWithPlaywright(args: {
   resumePath?: string | null;
   mode?: "AUTO" | "HUMAN_ASSIST";
   onPageReady?: (
-    page: import("playwright-core").Page,
-    context: import("playwright-core").BrowserContext,
+    page: Page,
+    context: BrowserContext,
   ) => Promise<void> | void;
-  onStatus?: (update: {
-    status: "RUNNING" | "WAITING_HUMAN" | "DONE" | "FAILED";
-    lastUrl?: string;
-    error?: string;
-  }) => Promise<void> | void;
+  onStatus?: (update: ApplyStatusUpdate) => Promise<void> | void;
 }): Promise<PlaywrightApplyResult> {
   let browser;
-  let context;
+  let context: BrowserContext | undefined;
   let remoteSession: Awaited<ReturnType<typeof createRemoteSession>> | null =
     null;
-  let keepRemoteAlive = false;
+  let keepBrowserOpen = false;
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
-  const greenhouseEmbedUrl = isGreenhouseUrl(args.jobUrl)
-    ? buildEmbedJobAppUrl(args.jobUrl)
-    : null;
-  const targetUrl = args.form?.embedUrl ?? greenhouseEmbedUrl ?? args.jobUrl;
+  const targetUrl = args.form?.embedUrl ?? args.jobUrl;
 
   try {
+    await args.onStatus?.({
+      status: "STARTING",
+      openUrl: targetUrl,
+    });
+
     if (shouldUseRemoteBrowser()) {
       remoteSession = await createRemoteSession();
-      const useCdp =
-        remoteSession.connectUrl.startsWith("http://") ||
-        remoteSession.connectUrl.startsWith("https://");
+      const useCdp = shouldUseCdp(remoteSession.connectUrl);
       browser = useCdp
         ? await chromium.connectOverCDP(remoteSession.connectUrl)
         : await chromium.connect(remoteSession.connectUrl);
-      console.log("[REMOTE_APPLY] connected to remote browser", {
+      console.log("[AUTO_APPLY_REMOTE] connected to remote browser", {
+        provider: remoteSession.provider,
         sessionId: remoteSession.sessionId,
-        transport: useCdp ? "cdp" : "ws",
       });
     } else {
       browser = await chromium.launch({
         headless: args.mode === "HUMAN_ASSIST" ? false : true,
       });
-      console.log("[REMOTE_APPLY] using local browser");
+      console.log("[AUTO_APPLY_REMOTE] using local browser");
     }
 
     context = await browser.newContext();
-    const page = await context.newPage();
+    let page = await context.newPage();
     await args.onPageReady?.(page, context);
 
-    console.log("[REMOTE_APPLY] goto", targetUrl);
+    console.log("[AUTO_APPLY_REMOTE] goto", targetUrl);
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-    console.log("[REMOTE_APPLY] landed", page.url());
+    await waitForDomAndSettle(page);
 
-    const preSubmitVerification = await detectHumanVerification(page);
-    if (preSubmitVerification.needsHuman) {
-      await args.onStatus?.({ status: "WAITING_HUMAN", lastUrl: page.url() });
+    const chase: CtaChaseResult = await chaseApplyPath({
+      page,
+      context,
+      onPageReady: args.onPageReady,
+      onStatus: args.onStatus,
+      viewerUrl: remoteSession?.viewerUrl,
+      remoteSessionId: remoteSession?.sessionId,
+      openUrl: targetUrl,
+    });
 
-      if (args.mode === "HUMAN_ASSIST") {
-        const startedAt = Date.now();
-        const timeoutAt = startedAt + 10 * 60_000;
-        while (Date.now() < timeoutAt) {
-          const currentUrl = page.url();
-          await args.onStatus?.({
-            status: "WAITING_HUMAN",
-            lastUrl: currentUrl,
-          });
-          if (currentUrl.toLowerCase().includes("/confirmation")) {
-            await args.onStatus?.({ status: "DONE", lastUrl: currentUrl });
-            return { ok: true, finalUrl: currentUrl, needsHuman: false };
-          }
-          await page.waitForTimeout(1000);
-        }
-        await args.onStatus?.({
-          status: "FAILED",
-          lastUrl: page.url(),
-          error: "Timed out waiting for human verification.",
-        });
-      } else {
-        keepRemoteAlive = true;
-      }
+    page = chase.page;
+
+    if (chase.signals.confirmationDetected) {
+      const finalUrl = page.url();
+      await args.onStatus?.({
+        status: "SUBMITTED",
+        lastUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      return {
+        ok: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          finalUrl,
+          verificationSignals: chase.signals.verificationSignals,
+          confirmationSignals: chase.signals.confirmationSignals,
+          pageText: chase.signals.pageText,
+          pageHtml: chase.signals.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          success: true,
+          needsHuman: false,
+          unavailable: false,
+          hopCount: chase.hopCount,
+          urlsVisited: chase.urlsVisited,
+          clicks: chase.clicks,
+          formDetected: chase.signals.formDetected,
+          confirmationDetected: true,
+          verificationDetected: chase.signals.needsHuman,
+          finalReason: chase.finalReason,
+        }),
+      };
+    }
+
+    if (chase.signals.needsHuman) {
+      keepBrowserOpen = true;
+      const finalUrl = page.url();
+      const message = chase.signals.accountSignals.length
+        ? "Account creation or verification needs human completion."
+        : "Human verification required";
+
+      await args.onStatus?.({
+        status: "WAITING_HUMAN",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
 
       return {
         ok: false,
         needsHuman: true,
-        openUrl: targetUrl,
+        finalUrl,
+        openUrl: finalUrl,
         viewerUrl: remoteSession?.viewerUrl,
-        message: "Human verification required",
-        debug: {
+        message,
+        debug: buildDebugPayload({
           attemptedSelectors,
           missingNames,
-          finalUrl: page.url(),
-          submitSelectorUsed: null,
-          verificationSignals: preSubmitVerification.verificationSignals,
-          pageText: preSubmitVerification.pageText,
-          pageHtml: preSubmitVerification.html,
+          finalUrl,
+          verificationSignals: [
+            ...chase.signals.verificationSignals,
+            ...chase.signals.accountSignals,
+          ],
+          confirmationSignals: chase.signals.confirmationSignals,
+          pageText: chase.signals.pageText,
+          pageHtml: chase.signals.html,
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
           success: false,
           needsHuman: true,
-        },
+          unavailable: false,
+          hopCount: chase.hopCount,
+          urlsVisited: chase.urlsVisited,
+          clicks: chase.clicks,
+          formDetected: chase.signals.formDetected,
+          confirmationDetected: chase.signals.confirmationDetected,
+          verificationDetected: true,
+          finalReason: chase.finalReason,
+        }),
       };
     }
 
-    await page.waitForSelector("form input, form textarea, form select", {
+    if ("unavailable" in chase && chase.unavailable) {
+      const finalUrl = page.url();
+      const message =
+        "Auto apply is not available for this job application because no usable apply path was found.";
+
+      await args.onStatus?.({
+        status: "AUTO_APPLY_UNAVAILABLE",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      return {
+        ok: false,
+        unavailable: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          finalUrl,
+          verificationSignals: chase.signals.verificationSignals,
+          confirmationSignals: chase.signals.confirmationSignals,
+          pageText: chase.signals.pageText,
+          pageHtml: chase.signals.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          success: false,
+          needsHuman: false,
+          unavailable: true,
+          hopCount: chase.hopCount,
+          urlsVisited: chase.urlsVisited,
+          clicks: chase.clicks,
+          formDetected: chase.signals.formDetected,
+          confirmationDetected: chase.signals.confirmationDetected,
+          verificationDetected: chase.signals.needsHuman,
+          finalReason: chase.finalReason,
+        }),
+      };
+    }
+
+    await args.onStatus?.({
+      status: "OPENING_FORM",
+      lastUrl: page.url(),
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: page.url(),
+      remoteSessionId: remoteSession?.sessionId,
+    });
+
+    await page.waitForSelector("input, textarea, select", {
       timeout: 15_000,
     });
 
-    for (const [name, rawValue] of Object.entries(args.values)) {
-      const selector = `[name="${cssEscape(name)}"]`;
-      attemptedSelectors.push(selector);
-      const locator = page.locator(selector);
-      const count = await locator.count();
+    await args.onStatus?.({
+      status: "FILLING_FORM",
+      lastUrl: page.url(),
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: page.url(),
+      remoteSessionId: remoteSession?.sessionId,
+    });
 
-      if (count === 0) {
+    for (const [name, rawValue] of Object.entries(args.values)) {
+      const locator = await findMatchingLocator(page, name, attemptedSelectors);
+      if (!locator) {
         missingNames.push(name);
         continue;
       }
@@ -224,6 +367,7 @@ export async function applyWithPlaywright(args: {
               )
               .catch(() => "text")
           : "";
+      const count = await locator.count();
 
       if (tagName === "select") {
         const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
@@ -238,19 +382,7 @@ export async function applyWithPlaywright(args: {
         for (let i = 0; i < count; i += 1) {
           const checkbox = locator.nth(i);
           const elementValue = await checkbox.getAttribute("value");
-          const labelText = (
-            await checkbox.evaluate((el) => {
-              const input = el as HTMLInputElement;
-              const id = input.id;
-              if (id) {
-                const explicit = document.querySelector(`label[for="${id}"]`);
-                if (explicit?.textContent) return explicit.textContent;
-              }
-              return input.closest("label")?.textContent ?? "";
-            })
-          )
-            .toLowerCase()
-            .trim();
+          const labelText = (await extractLocatorText(checkbox)).toLowerCase().trim();
 
           const shouldCheck = values.some((target) => {
             const normalized = target.toLowerCase().trim();
@@ -268,11 +400,19 @@ export async function applyWithPlaywright(args: {
 
       if (inputType === "radio") {
         const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
-        const option = page
-          .locator(`${selector}[value="${cssEscape(String(value))}"]`)
-          .first();
-        if ((await option.count()) > 0) {
-          await option.check().catch(() => option.click());
+        for (let i = 0; i < count; i += 1) {
+          const option = locator.nth(i);
+          const optionValue = await option.getAttribute("value");
+          const optionText = (await extractLocatorText(option)).toLowerCase().trim();
+          const normalizedValue = String(value).toLowerCase().trim();
+
+          if (
+            optionValue?.toLowerCase() === normalizedValue ||
+            optionText.includes(normalizedValue)
+          ) {
+            await option.check().catch(() => option.click().catch(() => undefined));
+            break;
+          }
         }
         continue;
       }
@@ -292,9 +432,69 @@ export async function applyWithPlaywright(args: {
       const fileInput = page.locator('input[type="file"]:visible').first();
       if ((await fileInput.count()) > 0) {
         await fileInput.setInputFiles(args.resumePath);
-        console.log("[REMOTE_APPLY] resume uploaded", args.resumePath);
+        console.log("[AUTO_APPLY_CRAWL] resume uploaded", args.resumePath);
       }
     }
+
+    const preSubmitSignals = await detectPageSignals(page);
+    if (preSubmitSignals.needsHuman) {
+      keepBrowserOpen = true;
+      const finalUrl = page.url();
+      const message = preSubmitSignals.accountSignals.length
+        ? "Account creation or verification needs human completion."
+        : "Human verification required";
+
+      await args.onStatus?.({
+        status: "WAITING_HUMAN",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      return {
+        ok: false,
+        needsHuman: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          finalUrl,
+          verificationSignals: [
+            ...preSubmitSignals.verificationSignals,
+            ...preSubmitSignals.accountSignals,
+          ],
+          confirmationSignals: preSubmitSignals.confirmationSignals,
+          pageText: preSubmitSignals.pageText,
+          pageHtml: preSubmitSignals.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          success: false,
+          needsHuman: true,
+          unavailable: false,
+          hopCount: chase.hopCount,
+          urlsVisited: chase.urlsVisited,
+          clicks: chase.clicks,
+          formDetected: true,
+          confirmationDetected: preSubmitSignals.confirmationDetected,
+          verificationDetected: true,
+          finalReason: "Verification detected before submission.",
+        }),
+      };
+    }
+
+    await args.onStatus?.({
+      status: "SUBMITTING",
+      lastUrl: page.url(),
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: page.url(),
+      remoteSessionId: remoteSession?.sessionId,
+    });
 
     const submitSelectors = [
       'button[type="submit"]',
@@ -313,7 +513,7 @@ export async function applyWithPlaywright(args: {
       if (!(await button.isEnabled().catch(() => false))) continue;
 
       submitUsed = submitSelector;
-      console.log("[REMOTE_APPLY] clicking submit", submitSelector);
+      console.log("[AUTO_APPLY_CRAWL] clicking submit", submitSelector);
       await Promise.all([
         page
           .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
@@ -325,130 +525,222 @@ export async function applyWithPlaywright(args: {
 
     if (!submitUsed) {
       const finalUrl = page.url();
+      const message = "Submit button not found.";
+
+      await args.onStatus?.({
+        status: "FAILED",
+        lastUrl: finalUrl,
+        error: message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
       return {
         ok: false,
-        message: "Submit button not found.",
-        debug: {
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
           attemptedSelectors,
           missingNames,
           finalUrl,
-          submitSelectorUsed: null,
-          verificationSignals: [],
-          pageText: "",
           pageHtml: await page.content().catch(() => ""),
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
           success: false,
           needsHuman: false,
-        },
+          unavailable: false,
+          hopCount: chase.hopCount,
+          urlsVisited: chase.urlsVisited,
+          clicks: chase.clicks,
+          formDetected: true,
+          confirmationDetected: false,
+          verificationDetected: false,
+          finalReason: message,
+        }),
       };
     }
 
-    await page.waitForTimeout(1500);
+    await args.onStatus?.({
+      status: "WAITING_CONFIRMATION",
+      lastUrl: page.url(),
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: page.url(),
+      remoteSessionId: remoteSession?.sessionId,
+    });
+
+    await waitForDomAndSettle(page);
 
     const finalUrl = page.url();
-    const { html, pageText, verificationSignals, needsHuman } =
-      await detectHumanVerification(page);
-    const success =
-      finalUrl.toLowerCase().includes("/confirmation") ||
-      /thank you|application submitted/i.test(html) ||
-      /thank you|application submitted/i.test(pageText);
+    const finalSignals = await detectPageSignals(page);
+    const success = finalSignals.confirmationDetected;
 
-    console.log("[REMOTE_APPLY] final url", finalUrl);
+    console.log("[AUTO_APPLY_CRAWL] final page state", {
+      finalUrl,
+      success,
+      verificationDetected: finalSignals.needsHuman,
+      confirmationDetected: finalSignals.confirmationDetected,
+      hopCount: chase.hopCount,
+    });
 
-    if (needsHuman) {
-      await args.onStatus?.({ status: "WAITING_HUMAN", lastUrl: finalUrl });
-      if (args.mode === "HUMAN_ASSIST") {
-        const timeoutAt = Date.now() + 10 * 60_000;
-        while (Date.now() < timeoutAt) {
-          const currentUrl = page.url();
-          const content = await page.content().catch(() => "");
-          const text = await page.innerText("body").catch(() => "");
-          const confirmed =
-            currentUrl.toLowerCase().includes("/confirmation") ||
-            /thank you|application submitted/i.test(content) ||
-            /thank you|application submitted/i.test(text);
+    if (finalSignals.needsHuman) {
+      keepBrowserOpen = true;
+      const message = finalSignals.accountSignals.length
+        ? "Account creation or verification needs human completion."
+        : "Human verification required";
 
-          await args.onStatus?.({
-            status: confirmed ? "DONE" : "WAITING_HUMAN",
-            lastUrl: currentUrl,
-          });
-          if (confirmed) {
-            return { ok: true, finalUrl: currentUrl, needsHuman: false };
-          }
-          await page.waitForTimeout(1000);
-        }
+      await args.onStatus?.({
+        status: "WAITING_HUMAN",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
 
-        await args.onStatus?.({
-          status: "FAILED",
-          lastUrl: page.url(),
-          error: "Timed out waiting for human verification.",
-        });
-      } else {
-        keepRemoteAlive = true;
-      }
+      return {
+        ok: false,
+        needsHuman: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          finalUrl,
+          submitSelectorUsed: submitUsed,
+          verificationSignals: [
+            ...finalSignals.verificationSignals,
+            ...finalSignals.accountSignals,
+          ],
+          confirmationSignals: finalSignals.confirmationSignals,
+          pageText: finalSignals.pageText,
+          pageHtml: finalSignals.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          success: false,
+          needsHuman: true,
+          unavailable: false,
+          hopCount: chase.hopCount,
+          urlsVisited: [...chase.urlsVisited, finalUrl],
+          clicks: chase.clicks,
+          formDetected: true,
+          confirmationDetected: finalSignals.confirmationDetected,
+          verificationDetected: true,
+          finalReason: "Verification detected after submit.",
+        }),
+      };
     }
 
     await args.onStatus?.({
-      status: success ? "DONE" : needsHuman ? "WAITING_HUMAN" : "FAILED",
+      status: success ? "SUBMITTED" : "FAILED",
       lastUrl: finalUrl,
+      error: success ? undefined : "Submission could not be confirmed.",
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: finalUrl,
+      remoteSessionId: remoteSession?.sessionId,
     });
 
     return {
       ok: success,
       finalUrl,
-      needsHuman,
-      openUrl: targetUrl,
+      openUrl: finalUrl,
       viewerUrl: remoteSession?.viewerUrl,
-      message: success
-        ? undefined
-        : needsHuman
-          ? "Human verification required"
-          : "Submission could not be confirmed.",
-      debug: {
+      message: success ? undefined : "Submission could not be confirmed.",
+      debug: buildDebugPayload({
         attemptedSelectors,
         missingNames,
         finalUrl,
         submitSelectorUsed: submitUsed,
-        verificationSignals,
-        pageText,
-        pageHtml: html,
+        verificationSignals: finalSignals.verificationSignals,
+        confirmationSignals: finalSignals.confirmationSignals,
+        pageText: finalSignals.pageText,
+        pageHtml: finalSignals.html,
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
         targetUrl,
         success,
-        needsHuman,
-      },
+        needsHuman: false,
+        unavailable: false,
+        hopCount: chase.hopCount,
+        urlsVisited: [...chase.urlsVisited, finalUrl],
+        clicks: chase.clicks,
+        formDetected: true,
+        confirmationDetected: finalSignals.confirmationDetected,
+        verificationDetected: false,
+        finalReason: success
+          ? "Submission confirmed."
+          : "Submission could not be confirmed.",
+      }),
     };
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Playwright submit failed.";
-    console.log("[REMOTE_APPLY] error", message);
+    console.log("[AUTO_APPLY_CRAWL] error", message);
 
-    await args.onStatus?.({ status: "FAILED", error: message });
+    await args.onStatus?.({
+      status: "FAILED",
+      error: message,
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: targetUrl,
+      remoteSessionId: remoteSession?.sessionId,
+    });
 
     return {
       ok: false,
       message,
-      debug: {
+      openUrl: targetUrl,
+      viewerUrl: remoteSession?.viewerUrl,
+      debug: buildDebugPayload({
         attemptedSelectors,
         missingNames,
-        submitSelectorUsed: null,
-        verificationSignals: [],
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
         targetUrl,
         success: false,
         needsHuman: false,
-      },
+        unavailable: false,
+        hopCount: 0,
+        urlsVisited: [],
+        clicks: [],
+        formDetected: false,
+        confirmationDetected: false,
+        verificationDetected: false,
+        finalReason: message,
+      }),
     };
   } finally {
-    await context?.close().catch(() => undefined);
-    await browser?.close().catch(() => undefined);
+    if (!keepBrowserOpen) {
+      await context?.close().catch(() => undefined);
+      await browser?.close().catch(() => undefined);
+    }
 
-    if (remoteSession && !keepRemoteAlive) {
-      await closeRemoteSession(remoteSession.sessionId).catch(() => undefined);
+    if (remoteSession && !keepBrowserOpen) {
+      await closeRemoteSession(
+        remoteSession.provider,
+        remoteSession.sessionId,
+      ).catch(() => undefined);
     }
   }
+}
+
+export function toApplySessionDebug(
+  result: PlaywrightApplyResult["debug"] | undefined,
+): ApplySessionDebug | undefined {
+  if (!result) return undefined;
+
+  return {
+    hopCount: result.hopCount,
+    urlsVisited: result.urlsVisited,
+    clicks: result.clicks,
+    formDetected: result.formDetected,
+    confirmationDetected: result.confirmationDetected,
+    verificationDetected: result.verificationDetected,
+    finalReason: result.finalReason,
+  };
 }

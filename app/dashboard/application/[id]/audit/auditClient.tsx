@@ -1,7 +1,10 @@
-// my-app/app/dashboard/application/[id]/audit/auditClient.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  isApplySessionSuccessStatus,
+  toApplySessionDisplayStatus,
+} from "@/app/lib/apply/sessionStatus";
 
 type Option = { value: string; label: string };
 
@@ -49,7 +52,6 @@ type AuditResponse = {
   jobTitle?: string;
   company?: string;
   location?: string | null;
-
   meta?: {
     missing?: string[];
     fieldStates?: AuditFieldState[];
@@ -57,7 +59,6 @@ type AuditResponse = {
     action?: string;
     method?: string;
   };
-
   warning?: string;
   error?: string;
   debug?: GhParseDebug;
@@ -69,18 +70,20 @@ function isTextValueLabel(label: string) {
 
 function toDisplayText(v: unknown) {
   if (v === null || v === undefined) return "";
-  if (Array.isArray(v))
+  if (Array.isArray(v)) {
     return v
       .map((item) => String(item))
       .filter(Boolean)
       .join(", ");
+  }
   return String(v);
 }
 
 function toInitialValue(field: AuditFieldState): string | string[] {
   if (field.type === "checkbox") {
-    if (Array.isArray(field.value))
+    if (Array.isArray(field.value)) {
       return field.value.map((v) => String(v)).filter(Boolean);
+    }
     if (typeof field.value === "string" && field.value.trim()) {
       return field.value
         .split(",")
@@ -103,17 +106,18 @@ function fieldLabel(field: AuditFieldState) {
 }
 
 function inputTypeFor(type: string) {
-  if (["text", "email", "tel", "url", "number", "date"].includes(type))
+  if (["text", "email", "tel", "url", "number", "date"].includes(type)) {
     return type;
+  }
   return "text";
 }
 
 function isFieldMissingNow(field: AuditFieldState, current: string | string[]) {
   if (!field.required) return false;
 
-  // Never block UI for bot/human checks
-  if (field.path === "security_code" || /security_code/i.test(field.path))
+  if (field.path === "security_code" || /security_code/i.test(field.path)) {
     return false;
+  }
 
   if (field.type === "checkbox") {
     return !Array.isArray(current) || current.length === 0;
@@ -137,18 +141,11 @@ export default function AuditClient({
   const [applyLoading, setApplyLoading] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [appliedFinalUrl, setAppliedFinalUrl] = useState<string | null>(null);
-  const [manualOpenUrl, setManualOpenUrl] = useState<string | null>(null);
-  const [needsHuman, setNeedsHuman] = useState(false);
-  const [humanReady, setHumanReady] = useState(false);
-  const [helpMeVerify, setHelpMeVerify] = useState(false);
   const [applySessionId, setApplySessionId] = useState<string | null>(null);
   const [applySessionStatus, setApplySessionStatus] = useState<string | null>(
     null,
   );
-  const [liveViewerUrl, setLiveViewerUrl] = useState<string | null>(null);
-  const [liveSessionId, setLiveSessionId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
   const [applyDebug, setApplyDebug] = useState<{
     reason?: string;
     hints?: string[];
@@ -186,7 +183,7 @@ export default function AuditClient({
 
   const fieldStates = useMemo(
     () =>
-      Array.isArray(data?.meta?.fieldStates) ? data!.meta!.fieldStates! : [],
+      Array.isArray(data?.meta?.fieldStates) ? data.meta.fieldStates : [],
     [data],
   );
 
@@ -203,7 +200,6 @@ export default function AuditClient({
     [overrides],
   );
 
-  // ✅ New helper (used by the snippet you requested)
   const handleChange = useCallback((path: string, value: string) => {
     setOverrides((prev) => ({ ...prev, [path]: value }));
   }, []);
@@ -231,7 +227,6 @@ export default function AuditClient({
     [fieldStates, getCurrentValue],
   );
   const missingCountNow = missingNow.length;
-  const shouldShowHumanAssist = needsHuman || helpMeVerify;
 
   useEffect(() => {
     if (!applySessionId) return;
@@ -244,31 +239,56 @@ export default function AuditClient({
           });
           const payload = (await res.json()) as {
             ok?: boolean;
-            session?: { status?: string; lastUrl?: string; error?: string };
-            error?: string;
+            session?: {
+              status?: string;
+              lastUrl?: string;
+              error?: string;
+              message?: string;
+            };
           };
 
           if (!res.ok || !payload.ok || !payload.session) return;
 
-          setApplySessionStatus(payload.session.status ?? null);
-          if (payload.session.lastUrl) {
-            setManualOpenUrl(payload.session.lastUrl);
-          }
+          const sessionStatus = toApplySessionDisplayStatus(
+            payload.session.status,
+          );
+          setApplySessionStatus(sessionStatus ?? payload.session.status ?? null);
 
-          if (payload.session.status === "DONE") {
-            setNeedsHuman(false);
+          if (isApplySessionSuccessStatus(payload.session.status)) {
             setApplyMessage("Application submitted successfully.");
+            setAppliedFinalUrl(payload.session.lastUrl ?? null);
             setStatusMessage("Status updated: SENT");
             await loadAudit();
+            return;
+          }
+
+          if (
+            sessionStatus === "AUTO_APPLY_UNAVAILABLE" ||
+            sessionStatus === "WAITING_HUMAN"
+          ) {
+            setApplyMessage(
+              payload.session.message ??
+                "Auto apply is not available for this job application.",
+            );
+            setStatusMessage(
+              payload.session.message ??
+                "Auto apply is not available for this job application.",
+            );
+            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            return;
           }
 
           if (payload.session.status === "FAILED") {
-            setStatusMessage(
-              payload.session.error ?? "Human verification session failed.",
+            setApplyMessage(
+              payload.session.error ?? "OpenClaw automation failed.",
             );
+            setStatusMessage(
+              payload.session.error ?? "OpenClaw automation failed.",
+            );
+            setAppliedFinalUrl(payload.session.lastUrl ?? null);
           }
         } catch {
-          // polling best effort
+          // Polling is best effort.
         }
       })();
     }, 2000);
@@ -281,17 +301,18 @@ export default function AuditClient({
       setApplyLoading(true);
       setApplyMessage(null);
       setAppliedFinalUrl(null);
-      setManualOpenUrl(null);
       setApplyDebug(null);
-      setNeedsHuman(false);
-      setLiveViewerUrl(null);
-      setLiveSessionId(null);
+      setApplySessionId(null);
+      setApplySessionStatus(null);
       setStatusMessage(null);
 
       const res = await fetch(`/api/applications/${applicationId}/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers: buildAnswersPayload() }),
+        body: JSON.stringify({
+          answers: buildAnswersPayload(),
+          background: true,
+        }),
       });
 
       const payload = (await res.json()) as {
@@ -303,25 +324,12 @@ export default function AuditClient({
         finalUrl?: string;
         screenshotPath?: string;
         htmlSnippet?: string;
-        needsHuman?: boolean;
-        openUrl?: string;
-        viewerUrl?: string;
-        sessionId?: string;
         message?: string;
+        status?: string;
+        applySessionId?: string;
       };
 
-      if (res.status === 409 && payload.needsHuman) {
-        setNeedsHuman(true);
-        setApplyMessage(
-          payload.message ?? "Almost done — verification required.",
-        );
-        setLiveViewerUrl(payload.viewerUrl ?? null);
-        setLiveSessionId(payload.sessionId ?? null);
-        setManualOpenUrl(payload.openUrl ?? payload.viewerUrl ?? null);
-        return;
-      }
-
-      if (!res.ok || !payload.ok) {
+      if (!res.ok || !payload.ok || !payload.applySessionId) {
         const missing = Array.isArray(payload.missingRequired)
           ? ` Missing required: ${payload.missingRequired.join(", ")}`
           : "";
@@ -337,152 +345,20 @@ export default function AuditClient({
         );
       }
 
-      setNeedsHuman(false);
-      setApplyMessage("You applied");
-      setAppliedFinalUrl(payload.finalUrl ?? null);
-      setApplyDebug(null);
-      setNeedsHuman(false);
-      setLiveViewerUrl(null);
-      setLiveSessionId(null);
-      setStatusMessage(null);
-      await loadAudit();
+      setApplySessionId(payload.applySessionId);
+      setApplySessionStatus(
+        toApplySessionDisplayStatus(payload.status) ??
+          payload.status ??
+          "STARTING",
+      );
+      setApplyMessage("OpenClaw auto apply started.");
+      setStatusMessage("OpenClaw automation is running.");
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
     } finally {
       setApplyLoading(false);
     }
   };
-
-  const handleStartHumanVerification = useCallback(async () => {
-    try {
-      setApplyLoading(true);
-      setStatusMessage(null);
-      setApplyMessage(null);
-      setApplySessionStatus("RUNNING");
-
-      const res = await fetch(
-        `/api/applications/${applicationId}/apply-human`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answers: buildAnswersPayload() }),
-        },
-      );
-
-      const payload = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        applySessionId?: string;
-        status?: string;
-      };
-
-      if (!res.ok || !payload.ok || !payload.applySessionId) {
-        throw new Error(payload.error ?? "Failed to start human verification");
-      }
-
-      setNeedsHuman(true);
-      setApplySessionId(payload.applySessionId);
-      setLiveSessionId(payload.applySessionId);
-      setApplySessionStatus(payload.status ?? "WAITING_HUMAN");
-      setApplyMessage(
-        "A browser window opened. Complete verification and click Submit there, then come back and click I Submitted.",
-      );
-    } catch (e: unknown) {
-      setStatusMessage(
-        e instanceof Error ? e.message : "Failed to start human verification",
-      );
-    } finally {
-      setApplyLoading(false);
-    }
-  }, [applicationId, buildAnswersPayload]);
-
-  const refreshStatus = useCallback(async () => {
-    try {
-      setStatusLoading(true);
-      const res = await fetch(`/api/applications/${applicationId}/status`, {
-        cache: "no-store",
-      });
-      const payload = (await res.json()) as {
-        ok?: boolean;
-        status?: string;
-        submittedAt?: string;
-        finalUrl?: string;
-      };
-
-      if (!res.ok || !payload.ok) {
-        throw new Error("Unable to refresh status");
-      }
-
-      if (payload.status === "SENT") {
-        setNeedsHuman(false);
-        setApplyMessage("Application submitted successfully.");
-        setAppliedFinalUrl(payload.finalUrl ?? null);
-        setStatusMessage("Status updated: SENT");
-      } else {
-        setStatusMessage(`Current status: ${payload.status ?? "UNKNOWN"}`);
-      }
-
-      await loadAudit();
-    } catch (e: unknown) {
-      setStatusMessage(
-        e instanceof Error ? e.message : "Unable to refresh status",
-      );
-    } finally {
-      setStatusLoading(false);
-    }
-  }, [applicationId, loadAudit]);
-
-  const handleSubmittedCheck = useCallback(async () => {
-    if (!applySessionId) {
-      setStatusMessage("No human verification session found.");
-      return;
-    }
-
-    try {
-      setStatusLoading(true);
-      const res = await fetch(
-        `/api/applications/${applicationId}/confirm-submitted`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ applySessionId }),
-        },
-      );
-
-      const payload = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        status?: string;
-      };
-
-      if (res.ok && payload.ok && payload.status === "SENT") {
-        setNeedsHuman(false);
-        setApplySessionStatus("DONE");
-        setApplyMessage("Application submitted successfully.");
-        await loadAudit();
-        return;
-      }
-
-      if (payload.status === "NOT_CONFIRMED_YET") {
-        setStatusMessage(
-          "Not confirmed yet — finish submit in the browser window.",
-        );
-        return;
-      }
-
-      if (payload.status === "FAILED") {
-        setApplySessionStatus("FAILED");
-      }
-
-      throw new Error(payload.error ?? "Unable to confirm submission");
-    } catch (e: unknown) {
-      setStatusMessage(
-        e instanceof Error ? e.message : "Unable to confirm submission",
-      );
-    } finally {
-      setStatusLoading(false);
-    }
-  }, [applicationId, applySessionId, loadAudit]);
 
   if (loading) {
     return (
@@ -578,8 +454,8 @@ export default function AuditClient({
       <div className="mt-6 space-y-4">
         {fieldStates.length === 0 ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            No fields were parsed yet. Ensure /api/applications/:id/audit
-            returns meta.fieldStates.
+            No fields were parsed yet. Ensure `/api/applications/:id/audit`
+            returns `meta.fieldStates`.
           </div>
         ) : null}
 
@@ -587,8 +463,6 @@ export default function AuditClient({
           const label = fieldLabel(field);
           const type = field.type || "text";
           const required = Boolean(field.required);
-
-          // ✅ The snippet you requested needs a simple "value" string
           const valueRaw = getCurrentValue(field);
           const value = Array.isArray(valueRaw)
             ? valueRaw.join(", ")
@@ -685,15 +559,12 @@ export default function AuditClient({
                             checked={checked}
                             onChange={(e) => {
                               setOverrides((prev) => {
-                                const list = Array.isArray(
-                                  getCurrentValue(field),
-                                )
+                                const list = Array.isArray(getCurrentValue(field))
                                   ? [...(getCurrentValue(field) as string[])]
                                   : [];
 
                                 if (e.target.checked) {
-                                  if (!list.includes(o.value))
-                                    list.push(o.value);
+                                  if (!list.includes(o.value)) list.push(o.value);
                                 } else {
                                   const idx = list.indexOf(o.value);
                                   if (idx >= 0) list.splice(idx, 1);
@@ -709,7 +580,6 @@ export default function AuditClient({
                     })}
                   </div>
                 ) : (
-                  // ✅ Requested snippet (select if options exist, else input)
                   <>
                     {field.options?.length ? (
                       <select
@@ -751,7 +621,7 @@ export default function AuditClient({
                   {asText.trim().length ? (
                     asText
                   ) : (
-                    <span className="text-gray-500">—</span>
+                    <span className="text-gray-500">-</span>
                   )}
                 </p>
               </div>
@@ -760,127 +630,51 @@ export default function AuditClient({
         })}
       </div>
 
-      <div className="mt-6 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={handleApplyNow}
-          disabled={
-            applyLoading ||
-            missingCountNow > 0 ||
-            Boolean(data?.meta?.actionSuspicious)
-          }
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {applyLoading ? "Applying..." : "Apply Now"}
-        </button>
-        {applyMessage ? (
-          <p className="text-sm text-gray-700">
-            {applyMessage}
-            {appliedFinalUrl ? (
-              <>
-                {" "}
-                <a
-                  className="underline"
-                  href={appliedFinalUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {appliedFinalUrl}
-                </a>
-              </>
-            ) : null}
-            {manualOpenUrl ? (
-              <>
-                {" "}
-                <a
-                  className="underline"
-                  href={manualOpenUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open application
-                </a>
-              </>
-            ) : null}
+      <div className="mt-6 flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleApplyNow}
+            disabled={
+              applyLoading ||
+              missingCountNow > 0 ||
+              Boolean(data?.meta?.actionSuspicious)
+            }
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {applyLoading ? "Applying..." : "Apply Now"}
+          </button>
+
+          {applyMessage ? (
+            <p className="text-sm text-gray-700">
+              {applyMessage}
+              {appliedFinalUrl ? (
+                <>
+                  {" "}
+                  <a
+                    className="underline"
+                    href={appliedFinalUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {appliedFinalUrl}
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
+        </div>
+
+        {applySessionStatus ? (
+          <p className="text-sm text-gray-600">
+            Automation status: {applySessionStatus}
           </p>
         ) : null}
-      </div>
 
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={() => setHelpMeVerify((prev) => !prev)}
-          className="text-sm font-medium text-amber-700 underline"
-        >
-          {helpMeVerify ? "Hide verification help" : "Help me verify"}
-        </button>
+        {statusMessage ? (
+          <p className="text-sm text-gray-600">{statusMessage}</p>
+        ) : null}
       </div>
-
-      {shouldShowHumanAssist ? (
-        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-          <p className="font-semibold">Human verification assisted mode</p>
-          <label className="mt-3 flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={humanReady}
-              onChange={(e) => setHumanReady(e.target.checked)}
-            />
-            <span>I&apos;m ready to verify</span>
-          </label>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleStartHumanVerification}
-              disabled={
-                !humanReady ||
-                applyLoading ||
-                missingCountNow > 0 ||
-                Boolean(data?.meta?.actionSuspicious)
-              }
-              className="rounded-md bg-amber-600 px-3 py-2 font-semibold text-white disabled:opacity-60"
-            >
-              {applyLoading ? "Starting..." : "Start Human Verification"}
-            </button>
-            <button
-              type="button"
-              onClick={handleSubmittedCheck}
-              disabled={statusLoading || !applySessionId}
-              className="rounded-md border border-amber-400 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
-            >
-              {statusLoading ? "Checking..." : "I Submitted"}
-            </button>
-            <button
-              type="button"
-              onClick={refreshStatus}
-              disabled={statusLoading}
-              className="rounded-md border border-amber-300 bg-white px-3 py-2 font-semibold text-amber-900 disabled:opacity-60"
-            >
-              Refresh status
-            </button>
-          </div>
-          {applySessionStatus ? (
-            <p className="mt-2">Session status: {applySessionStatus}</p>
-          ) : null}
-          {liveViewerUrl ? (
-            <a
-              className="mt-1 inline-block underline"
-              href={liveViewerUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open live browser viewer
-            </a>
-          ) : null}
-          {liveSessionId ? (
-            <p className="mt-1 text-xs">Session: {liveSessionId}</p>
-          ) : null}
-          {statusMessage ? <p className="mt-1">{statusMessage}</p> : null}
-          <p className="mt-2 text-xs">
-            A browser window opened. Complete verification and click Submit
-            there, then come back and click I Submitted.
-          </p>
-        </div>
-      ) : null}
 
       {missingCountNow > 0 ? (
         <p className="mt-2 text-sm text-amber-800">

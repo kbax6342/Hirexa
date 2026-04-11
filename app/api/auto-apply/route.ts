@@ -48,6 +48,14 @@ export async function POST(req: Request) {
       detectedApplyProvider ||
       deriveSourceFromUrl(jobUrl ?? "");
 
+    console.log("[AUTO_APPLY_ROUTE] POST /api/auto-apply", {
+      userId,
+      sourceJobId,
+      source,
+      applyProvider: detectedApplyProvider,
+      jobUrl,
+    });
+
     if (!jobTitle || !company) {
       return NextResponse.json(
         { error: "Job title and company are required." },
@@ -108,6 +116,17 @@ export async function POST(req: Request) {
           },
           select: { id: true },
         });
+
+    console.log("[AUTO_APPLY_ROUTE] created application for auto-apply", {
+      userId,
+      applicationId: application.id,
+      sourceJobId,
+      source,
+      applyProvider: detectedApplyProvider,
+      sessionCreated: false,
+      caller: "POST /api/auto-apply",
+      sourcePath: "app/api/auto-apply/route.ts",
+    });
 
     return NextResponse.json({ ok: true, applicationId: application.id });
   } catch (e: unknown) {

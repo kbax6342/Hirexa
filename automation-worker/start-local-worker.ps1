@@ -22,7 +22,14 @@ Get-Content -LiteralPath $appEnvPath | ForEach-Object {
   }
 }
 
-$serviceUrl = [uri]$envMap["AUTOMATION_SERVICE_URL"]
+$serviceUrlRaw = $envMap["AUTOMATION_WORKER_URL"]
+if (-not $serviceUrlRaw) {
+  $serviceUrlRaw = $envMap["AUTOMATION_SERVICE_URL"]
+}
+if (-not $serviceUrlRaw) {
+  throw "Missing AUTOMATION_WORKER_URL (or AUTOMATION_SERVICE_URL) in app env."
+}
+$serviceUrl = [uri]$serviceUrlRaw
 $env:PORT = [string]$serviceUrl.Port
 $env:AUTOMATION_SERVICE_TOKEN = $envMap["AUTOMATION_SERVICE_TOKEN"]
 $env:OPENCLAW_GATEWAY_URL = $envMap["OPENCLAW_API_URL"]

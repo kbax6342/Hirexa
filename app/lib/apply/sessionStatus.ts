@@ -6,6 +6,8 @@ export const APPLY_SESSION_STATUSES = [
   "SUBMITTING",
   "WAITING_CONFIRMATION",
   "WAITING_HUMAN",
+  "APPLY_NOT_STARTED",
+  "UNCONFIRMED",
   "SUBMITTED",
   "AUTO_APPLY_UNAVAILABLE",
   "FAILED",
@@ -16,6 +18,8 @@ export const APPLY_SESSION_STATUSES = [
 export type ApplySessionStatus = (typeof APPLY_SESSION_STATUSES)[number];
 
 const TERMINAL_STATUSES = new Set<ApplySessionStatus>([
+  "APPLY_NOT_STARTED",
+  "UNCONFIRMED",
   "SUBMITTED",
   "AUTO_APPLY_UNAVAILABLE",
   "FAILED",

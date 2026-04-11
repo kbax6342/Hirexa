@@ -4,6 +4,22 @@ import crypto from "node:crypto";
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.locals.matchedRoute = null;
+
+  res.on("finish", () => {
+    console.log("[AUTOMATION_WORKER] request", {
+      method: req.method,
+      path: req.path,
+      matchedRoute: res.locals.matchedRoute ?? "UNMATCHED",
+      status: res.statusCode,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  return next();
+});
 
 const PORT = Number(process.env.PORT || 4010);
 const AUTOMATION_SERVICE_TOKEN = String(
@@ -68,6 +84,13 @@ function authMiddleware(req, res, next) {
   }
 
   return next();
+}
+
+function markMatchedRoute(route) {
+  return (_req, res, next) => {
+    res.locals.matchedRoute = route;
+    return next();
+  };
 }
 
 function normalizeStatus(value) {
@@ -518,7 +541,7 @@ async function processRun(runId) {
   }
 }
 
-app.get("/health", (_req, res) => {
+app.get("/health", markMatchedRoute("GET /health"), (_req, res) => {
   res.json({
     ok: true,
     port: PORT,
@@ -526,13 +549,13 @@ app.get("/health", (_req, res) => {
   });
 });
 
-app.post("/apply", authMiddleware, (req, res) => {
+app.post("/apply", markMatchedRoute("POST /apply"), authMiddleware, (req, res) => {
   const run = createRun(req.body ?? {});
   res.status(202).json(toRunResponse(run));
   void processRun(run.runId);
 });
 
-app.get("/runs/:id", authMiddleware, (req, res) => {
+app.get("/runs/:id", markMatchedRoute("GET /runs/:id"), authMiddleware, (req, res) => {
   const run = runs.get(req.params.id);
 
   if (!run) {
@@ -543,6 +566,33 @@ app.get("/runs/:id", authMiddleware, (req, res) => {
   }
 
   return res.json(toRunResponse(run));
+});
+
+app.get(
+  "/apply/:id",
+  markMatchedRoute("GET /apply/:id (alias)"),
+  authMiddleware,
+  (req, res) => {
+    const run = runs.get(req.params.id);
+
+    if (!run) {
+      return res.status(404).json({
+        ok: false,
+        error: "Automation run not found.",
+      });
+    }
+
+    return res.json(toRunResponse(run));
+  }
+);
+
+app.use((req, res) => {
+  res.locals.matchedRoute = "UNMATCHED";
+  console.warn("[AUTOMATION_WORKER] route not found", {
+    method: req.method,
+    path: req.path,
+  });
+  return res.status(404).json({ ok: false, error: "Not Found" });
 });
 
 app.listen(PORT, () => {

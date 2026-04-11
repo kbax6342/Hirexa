@@ -87,6 +87,15 @@ export async function POST(req: Request) {
       select: { id: true, guestId: true },
     });
 
+    console.log("[AUTO_APPLY_RESUME_UPLOAD] request", {
+      sessionUserId: userId,
+      sessionEmail: session?.user?.email ?? null,
+      guestId,
+      originalGuestId,
+      profileId: profile.id,
+      profileGuestId: profile.guestId,
+    });
+
     const formData = await req.formData();
     const file = formData.get("resume");
     const rawResumeText = formData.get("resumeText");
@@ -117,6 +126,65 @@ export async function POST(req: Request) {
       profileId: profile.id,
       resumeFile,
       resumeText: pastedResumeText || null,
+    });
+
+    const resumeLinkage = await prisma.userProfile.findUnique({
+      where: { id: profile.id },
+      select: {
+        id: true,
+        userId: true,
+        email: true,
+        resume: {
+          select: {
+            id: true,
+            filename: true,
+            mimeType: true,
+            updatedAt: true,
+            experiences: { select: { id: true } },
+          },
+        },
+        resumeFiles: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            fileName: true,
+            mimeType: true,
+            sizeBytes: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    console.log("[AUTO_APPLY_RESUME_UPLOAD] persisted linkage", {
+      sessionUserId: userId,
+      sessionEmail: session?.user?.email ?? null,
+      profileId: profile.id,
+      profileUserId: resumeLinkage?.userId ?? null,
+      profileEmail: resumeLinkage?.email ?? null,
+      resumeRecordFound: Boolean(resumeLinkage?.resume),
+      resumeFilesRecordExists: (resumeLinkage?.resumeFiles.length ?? 0) > 0,
+      storedResumeMetadata: resumeLinkage?.resume
+        ? {
+            id: resumeLinkage.resume.id,
+            filename: resumeLinkage.resume.filename,
+            mimeType: resumeLinkage.resume.mimeType,
+            updatedAt: resumeLinkage.resume.updatedAt.toISOString(),
+            experienceCount: resumeLinkage.resume.experiences.length,
+          }
+        : null,
+      latestResumeFileMetadata: resumeLinkage?.resumeFiles[0]
+        ? {
+            id: resumeLinkage.resumeFiles[0].id,
+            fileName: resumeLinkage.resumeFiles[0].fileName,
+            mimeType: resumeLinkage.resumeFiles[0].mimeType,
+            sizeBytes: resumeLinkage.resumeFiles[0].sizeBytes,
+            createdAt: resumeLinkage.resumeFiles[0].createdAt.toISOString(),
+          }
+        : null,
+      persistedResume: persisted.resume,
+      persistedResumeFile: persisted.savedResume,
     });
 
     invalidateCachedProfile({ userId, guestId: originalGuestId ?? guestId });

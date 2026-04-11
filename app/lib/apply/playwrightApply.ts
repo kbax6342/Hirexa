@@ -24,6 +24,7 @@ import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
 export type PlaywrightApplyResult = {
   ok: boolean;
+  status: ApplySessionStatus;
   finalUrl?: string;
   needsHuman?: boolean;
   unavailable?: boolean;
@@ -42,6 +43,18 @@ export type PlaywrightApplyResult = {
     sessionId?: string;
     viewerUrl?: string;
     targetUrl?: string;
+    applyCtaFound: boolean;
+    applyCtaClicked: boolean;
+    urlBeforeClick?: string;
+    urlAfterClick?: string;
+    currentUrl?: string;
+    submitButtonFound: boolean;
+    submitButtonClicked: boolean;
+    confirmationTextFound: boolean;
+    confirmationTextSnippet?: string | null;
+    successUrlPatternMatched: boolean;
+    submissionConfirmed: boolean;
+    finalStatus: ApplySessionStatus;
     success: boolean;
     needsHuman: boolean;
     unavailable: boolean;
@@ -72,9 +85,53 @@ function asArray(value: AnswerValue) {
     : [String(value ?? "")];
 }
 
+function parseBooleanEnv(value: string | undefined) {
+  if (!value) return null;
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+
+  return null;
+}
+
+function resolveLocalHeadless(mode: "AUTO" | "HUMAN_ASSIST" | undefined) {
+  const requested = parseBooleanEnv(process.env.PLAYWRIGHT_HEADLESS);
+
+  if (requested === false && process.env.NODE_ENV === "production") {
+    console.warn(
+      "[AUTO_APPLY_PLAYWRIGHT] ignoring PLAYWRIGHT_HEADLESS=false in production; forcing headless mode",
+    );
+    return true;
+  }
+
+  if (requested !== null) {
+    return requested;
+  }
+
+  return mode === "HUMAN_ASSIST" ? false : true;
+}
+
 function shouldUseCdp(connectUrl: string) {
   return connectUrl.startsWith("http://") || connectUrl.startsWith("https://");
 }
+
+type PlaywrightEvidence = {
+  attemptedSelectors: string[];
+  applyCtaFound: boolean;
+  applyCtaClicked: boolean;
+  urlBeforeClick?: string;
+  urlAfterClick?: string;
+  currentUrl: string;
+  hopCount: number;
+  submitButtonFound: boolean;
+  submitButtonClicked: boolean;
+  confirmationTextFound: boolean;
+  confirmationTextSnippet?: string | null;
+  successUrlPatternMatched: boolean;
+  finalStatus: ApplySessionStatus;
+  submissionConfirmed: boolean;
+};
 
 function buildDebugPayload(args: {
   attemptedSelectors: string[];
@@ -88,6 +145,18 @@ function buildDebugPayload(args: {
   sessionId?: string;
   viewerUrl?: string;
   targetUrl?: string;
+  applyCtaFound: boolean;
+  applyCtaClicked: boolean;
+  urlBeforeClick?: string;
+  urlAfterClick?: string;
+  currentUrl?: string;
+  submitButtonFound: boolean;
+  submitButtonClicked: boolean;
+  confirmationTextFound: boolean;
+  confirmationTextSnippet?: string | null;
+  successUrlPatternMatched: boolean;
+  submissionConfirmed: boolean;
+  finalStatus: ApplySessionStatus;
   success: boolean;
   needsHuman: boolean;
   unavailable: boolean;
@@ -111,6 +180,18 @@ function buildDebugPayload(args: {
     sessionId: args.sessionId,
     viewerUrl: args.viewerUrl,
     targetUrl: args.targetUrl,
+    applyCtaFound: args.applyCtaFound,
+    applyCtaClicked: args.applyCtaClicked,
+    urlBeforeClick: args.urlBeforeClick,
+    urlAfterClick: args.urlAfterClick,
+    currentUrl: args.currentUrl,
+    submitButtonFound: args.submitButtonFound,
+    submitButtonClicked: args.submitButtonClicked,
+    confirmationTextFound: args.confirmationTextFound,
+    confirmationTextSnippet: args.confirmationTextSnippet ?? null,
+    successUrlPatternMatched: args.successUrlPatternMatched,
+    submissionConfirmed: args.submissionConfirmed,
+    finalStatus: args.finalStatus,
     success: args.success,
     needsHuman: args.needsHuman,
     unavailable: args.unavailable,
@@ -122,6 +203,66 @@ function buildDebugPayload(args: {
     verificationDetected: args.verificationDetected,
     finalReason: args.finalReason,
   };
+}
+
+function buildCtaEvidence(chase: CtaChaseResult, currentUrl: string) {
+  return {
+    applyCtaFound: chase.clicks.length > 0,
+    applyCtaClicked: chase.clicks.length > 0,
+    urlBeforeClick: chase.clicks[0]?.fromUrl,
+    urlAfterClick: chase.clicks.at(-1)?.toUrl ?? currentUrl,
+    currentUrl,
+    hopCount: chase.hopCount,
+  };
+}
+
+function isNoInteractionOnTarget(args: {
+  applyCtaClicked: boolean;
+  hopCount: number;
+  currentUrl: string;
+  targetUrl: string;
+}) {
+  return (
+    !args.applyCtaClicked &&
+    args.hopCount === 0 &&
+    args.currentUrl === args.targetUrl
+  );
+}
+
+function resolveSubmissionConfirmed(args: {
+  confirmationTextFound: boolean;
+  successUrlPatternMatched: boolean;
+  submitButtonClicked: boolean;
+  applyCtaClicked: boolean;
+  hopCount: number;
+  currentUrl: string;
+  targetUrl: string;
+}) {
+  if (
+    !args.submitButtonClicked &&
+    isNoInteractionOnTarget({
+      applyCtaClicked: args.applyCtaClicked,
+      hopCount: args.hopCount,
+      currentUrl: args.currentUrl,
+      targetUrl: args.targetUrl,
+    })
+  ) {
+    return false;
+  }
+
+  if (args.confirmationTextFound) {
+    return true;
+  }
+
+  if (args.submitButtonClicked && args.successUrlPatternMatched) {
+    return true;
+  }
+
+  return false;
+}
+
+function logPlaywrightEvidence(evidence: PlaywrightEvidence) {
+  console.log("[AUTO_APPLY_PLAYWRIGHT] evidence", evidence);
 }
 
 export async function applyWithPlaywright(args: {
@@ -143,6 +284,7 @@ export async function applyWithPlaywright(args: {
   let remoteSession: Awaited<ReturnType<typeof createRemoteSession>> | null =
     null;
   let keepBrowserOpen = false;
+  let headless: boolean | null = null;
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
@@ -165,17 +307,26 @@ export async function applyWithPlaywright(args: {
         sessionId: remoteSession.sessionId,
       });
     } else {
+      headless = resolveLocalHeadless(args.mode);
       browser = await chromium.launch({
-        headless: args.mode === "HUMAN_ASSIST" ? false : true,
+        headless,
       });
-      console.log("[AUTO_APPLY_REMOTE] using local browser");
     }
+
+    console.log("[AUTO_APPLY_PLAYWRIGHT] browser ready", {
+      targetUrl,
+      mode: args.mode ?? "AUTO",
+      usingRemoteBrowser: Boolean(remoteSession),
+      remoteProvider: remoteSession?.provider ?? null,
+      headless: remoteSession ? true : headless,
+      requestedHeadless: process.env.PLAYWRIGHT_HEADLESS ?? null,
+    });
 
     context = await browser.newContext();
     let page = await context.newPage();
     await args.onPageReady?.(page, context);
 
-    console.log("[AUTO_APPLY_REMOTE] goto", targetUrl);
+    console.log("[AUTO_APPLY_PLAYWRIGHT] navigating", { targetUrl });
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
     await waitForDomAndSettle(page);
 
@@ -190,19 +341,132 @@ export async function applyWithPlaywright(args: {
     });
 
     page = chase.page;
+    const chaseEvidence = buildCtaEvidence(chase, page.url());
+    const landedWithoutStarting = isNoInteractionOnTarget({
+      applyCtaClicked: chaseEvidence.applyCtaClicked,
+      hopCount: chaseEvidence.hopCount,
+      currentUrl: chaseEvidence.currentUrl,
+      targetUrl,
+    });
+
+    console.log("[AUTO_APPLY_PLAYWRIGHT] CTA chase result", {
+      targetUrl,
+      applyCtaFound: chaseEvidence.applyCtaFound,
+      applyCtaClicked: chaseEvidence.applyCtaClicked,
+      urlBeforeClick: chaseEvidence.urlBeforeClick ?? null,
+      urlAfterClick: chaseEvidence.urlAfterClick ?? null,
+      currentUrl: chaseEvidence.currentUrl,
+      hopCount: chaseEvidence.hopCount,
+      confirmationTextFound: chase.signals.confirmationTextFound,
+      confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+      successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+    });
 
     if (chase.signals.confirmationDetected) {
       const finalUrl = page.url();
+      const submissionConfirmed = resolveSubmissionConfirmed({
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        submitButtonClicked: false,
+        applyCtaClicked: chaseEvidence.applyCtaClicked,
+        hopCount: chaseEvidence.hopCount,
+        currentUrl: finalUrl,
+        targetUrl,
+      });
+      const finalStatus = submissionConfirmed ? "SUBMITTED" : "APPLY_NOT_STARTED";
+
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        finalStatus,
+        submissionConfirmed,
+      });
+
+      if (!submissionConfirmed) {
+        const message = landedWithoutStarting
+          ? "Opened job page but could not start application."
+          : "Application submission not confirmed.";
+
+        await args.onStatus?.({
+          status: finalStatus,
+          lastUrl: finalUrl,
+          error: message,
+          message,
+          viewerUrl: remoteSession?.viewerUrl,
+          openUrl: finalUrl,
+          remoteSessionId: remoteSession?.sessionId,
+        });
+
+        return {
+          ok: false,
+          status: finalStatus,
+          finalUrl,
+          openUrl: finalUrl,
+          viewerUrl: remoteSession?.viewerUrl,
+          message,
+          debug: buildDebugPayload({
+            attemptedSelectors,
+            missingNames,
+            finalUrl,
+            verificationSignals: chase.signals.verificationSignals,
+            confirmationSignals: chase.signals.confirmationSignals,
+            pageText: chase.signals.pageText,
+            pageHtml: chase.signals.html,
+            sessionId: remoteSession?.sessionId,
+            viewerUrl: remoteSession?.viewerUrl,
+            targetUrl,
+            ...chaseEvidence,
+            submitButtonFound: false,
+            submitButtonClicked: false,
+            confirmationTextFound: chase.signals.confirmationTextFound,
+            confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+            successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+            submissionConfirmed,
+            finalStatus,
+            success: false,
+            needsHuman: false,
+            unavailable: landedWithoutStarting,
+            hopCount: chase.hopCount,
+            urlsVisited: chase.urlsVisited,
+            clicks: chase.clicks,
+            formDetected: chase.signals.formDetected,
+            confirmationDetected: chase.signals.confirmationDetected,
+            verificationDetected: chase.signals.needsHuman,
+            finalReason:
+              chase.finalReason ??
+              "Confirmation-like content was detected without any confirmed application action.",
+          }),
+        };
+      }
+
       await args.onStatus?.({
-        status: "SUBMITTED",
+        status: finalStatus,
         lastUrl: finalUrl,
         viewerUrl: remoteSession?.viewerUrl,
         openUrl: finalUrl,
         remoteSessionId: remoteSession?.sessionId,
       });
 
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        finalStatus,
+        submissionConfirmed,
+      });
+
       return {
         ok: true,
+        status: finalStatus,
         finalUrl,
         openUrl: finalUrl,
         viewerUrl: remoteSession?.viewerUrl,
@@ -217,6 +481,14 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: chase.signals.confirmationTextFound,
+          confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+          submissionConfirmed,
+          finalStatus,
           success: true,
           needsHuman: false,
           unavailable: false,
@@ -247,8 +519,21 @@ export async function applyWithPlaywright(args: {
         remoteSessionId: remoteSession?.sessionId,
       });
 
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        finalStatus: "WAITING_HUMAN",
+        submissionConfirmed: false,
+      });
+
       return {
         ok: false,
+        status: "WAITING_HUMAN",
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -268,6 +553,14 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: chase.signals.confirmationTextFound,
+          confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+          submissionConfirmed: false,
+          finalStatus: "WAITING_HUMAN",
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -284,11 +577,15 @@ export async function applyWithPlaywright(args: {
 
     if ("unavailable" in chase && chase.unavailable) {
       const finalUrl = page.url();
-      const message =
-        "Auto apply is not available for this job application because no usable apply path was found.";
+      const finalStatus = landedWithoutStarting
+        ? "APPLY_NOT_STARTED"
+        : "AUTO_APPLY_UNAVAILABLE";
+      const message = landedWithoutStarting
+        ? "Opened job page but could not start application."
+        : "Auto apply is not available for this job application because no usable apply path was found.";
 
       await args.onStatus?.({
-        status: "AUTO_APPLY_UNAVAILABLE",
+        status: finalStatus,
         lastUrl: finalUrl,
         message,
         viewerUrl: remoteSession?.viewerUrl,
@@ -296,8 +593,21 @@ export async function applyWithPlaywright(args: {
         remoteSessionId: remoteSession?.sessionId,
       });
 
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        finalStatus,
+        submissionConfirmed: false,
+      });
+
       return {
         ok: false,
+        status: finalStatus,
         unavailable: true,
         finalUrl,
         openUrl: finalUrl,
@@ -314,6 +624,14 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: chase.signals.confirmationTextFound,
+          confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+          submissionConfirmed: false,
+          finalStatus,
           success: false,
           needsHuman: false,
           unavailable: true,
@@ -327,6 +645,11 @@ export async function applyWithPlaywright(args: {
         }),
       };
     }
+
+    console.log("[AUTO_APPLY_PLAYWRIGHT] resume availability", {
+      targetUrl,
+      hasResumePath: Boolean(args.resumePath),
+    });
 
     await args.onStatus?.({
       status: "OPENING_FORM",
@@ -453,8 +776,22 @@ export async function applyWithPlaywright(args: {
         remoteSessionId: remoteSession?.sessionId,
       });
 
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        currentUrl: finalUrl,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: preSubmitSignals.confirmationTextFound,
+        confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
+        finalStatus: "WAITING_HUMAN",
+        submissionConfirmed: false,
+      });
+
       return {
         ok: false,
+        status: "WAITING_HUMAN",
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -474,6 +811,15 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          currentUrl: finalUrl,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: preSubmitSignals.confirmationTextFound,
+          confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
+          submissionConfirmed: false,
+          finalStatus: "WAITING_HUMAN",
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -506,12 +852,15 @@ export async function applyWithPlaywright(args: {
     ];
 
     let submitUsed: string | null = null;
+    let submitButtonFound = false;
+    let submitButtonClicked = false;
     for (const submitSelector of submitSelectors) {
       const button = page.locator(submitSelector).first();
       if ((await button.count()) === 0) continue;
       if (!(await button.isVisible().catch(() => false))) continue;
       if (!(await button.isEnabled().catch(() => false))) continue;
 
+      submitButtonFound = true;
       submitUsed = submitSelector;
       console.log("[AUTO_APPLY_CRAWL] clicking submit", submitSelector);
       await Promise.all([
@@ -520,24 +869,41 @@ export async function applyWithPlaywright(args: {
           .catch(() => null),
         button.click(),
       ]);
+      submitButtonClicked = true;
       break;
     }
 
     if (!submitUsed) {
       const finalUrl = page.url();
-      const message = "Submit button not found.";
+      const finalStatus = "UNCONFIRMED";
+      const message = "Opened application form but could not find a submit button.";
 
       await args.onStatus?.({
-        status: "FAILED",
+        status: finalStatus,
         lastUrl: finalUrl,
         error: message,
+        message,
         viewerUrl: remoteSession?.viewerUrl,
         openUrl: finalUrl,
         remoteSessionId: remoteSession?.sessionId,
       });
 
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        currentUrl: finalUrl,
+        submitButtonFound,
+        submitButtonClicked,
+        confirmationTextFound: false,
+        confirmationTextSnippet: null,
+        successUrlPatternMatched: false,
+        finalStatus,
+        submissionConfirmed: false,
+      });
+
       return {
         ok: false,
+        status: finalStatus,
         finalUrl,
         openUrl: finalUrl,
         viewerUrl: remoteSession?.viewerUrl,
@@ -550,6 +916,15 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          currentUrl: finalUrl,
+          submitButtonFound,
+          submitButtonClicked,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          finalStatus,
           success: false,
           needsHuman: false,
           unavailable: false,
@@ -576,14 +951,28 @@ export async function applyWithPlaywright(args: {
 
     const finalUrl = page.url();
     const finalSignals = await detectPageSignals(page);
-    const success = finalSignals.confirmationDetected;
+    const success = resolveSubmissionConfirmed({
+      confirmationTextFound: finalSignals.confirmationTextFound,
+      successUrlPatternMatched: finalSignals.successUrlPatternMatched,
+      submitButtonClicked,
+      applyCtaClicked: chaseEvidence.applyCtaClicked,
+      hopCount: chaseEvidence.hopCount,
+      currentUrl: finalUrl,
+      targetUrl,
+    });
+    const finalStatus = success ? "SUBMITTED" : "UNCONFIRMED";
 
-    console.log("[AUTO_APPLY_CRAWL] final page state", {
-      finalUrl,
-      success,
-      verificationDetected: finalSignals.needsHuman,
-      confirmationDetected: finalSignals.confirmationDetected,
-      hopCount: chase.hopCount,
+    logPlaywrightEvidence({
+      attemptedSelectors,
+      ...chaseEvidence,
+      currentUrl: finalUrl,
+      submitButtonFound,
+      submitButtonClicked,
+      confirmationTextFound: finalSignals.confirmationTextFound,
+      confirmationTextSnippet: finalSignals.confirmationTextSnippet ?? null,
+      successUrlPatternMatched: finalSignals.successUrlPatternMatched,
+      finalStatus,
+      submissionConfirmed: success,
     });
 
     if (finalSignals.needsHuman) {
@@ -603,6 +992,7 @@ export async function applyWithPlaywright(args: {
 
       return {
         ok: false,
+        status: "WAITING_HUMAN",
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -623,6 +1013,15 @@ export async function applyWithPlaywright(args: {
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...chaseEvidence,
+          currentUrl: finalUrl,
+          submitButtonFound,
+          submitButtonClicked,
+          confirmationTextFound: finalSignals.confirmationTextFound,
+          confirmationTextSnippet: finalSignals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: finalSignals.successUrlPatternMatched,
+          submissionConfirmed: false,
+          finalStatus: "WAITING_HUMAN",
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -630,7 +1029,7 @@ export async function applyWithPlaywright(args: {
           urlsVisited: [...chase.urlsVisited, finalUrl],
           clicks: chase.clicks,
           formDetected: true,
-          confirmationDetected: finalSignals.confirmationDetected,
+          confirmationDetected: success,
           verificationDetected: true,
           finalReason: "Verification detected after submit.",
         }),
@@ -638,9 +1037,10 @@ export async function applyWithPlaywright(args: {
     }
 
     await args.onStatus?.({
-      status: success ? "SUBMITTED" : "FAILED",
+      status: finalStatus,
       lastUrl: finalUrl,
-      error: success ? undefined : "Submission could not be confirmed.",
+      error: success ? undefined : "Application submission not confirmed.",
+      message: success ? undefined : "Application submission not confirmed.",
       viewerUrl: remoteSession?.viewerUrl,
       openUrl: finalUrl,
       remoteSessionId: remoteSession?.sessionId,
@@ -648,10 +1048,11 @@ export async function applyWithPlaywright(args: {
 
     return {
       ok: success,
+      status: finalStatus,
       finalUrl,
       openUrl: finalUrl,
       viewerUrl: remoteSession?.viewerUrl,
-      message: success ? undefined : "Submission could not be confirmed.",
+      message: success ? undefined : "Application submission not confirmed.",
       debug: buildDebugPayload({
         attemptedSelectors,
         missingNames,
@@ -664,6 +1065,15 @@ export async function applyWithPlaywright(args: {
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
         targetUrl,
+        ...chaseEvidence,
+        currentUrl: finalUrl,
+        submitButtonFound,
+        submitButtonClicked,
+        confirmationTextFound: finalSignals.confirmationTextFound,
+        confirmationTextSnippet: finalSignals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: finalSignals.successUrlPatternMatched,
+        submissionConfirmed: success,
+        finalStatus,
         success,
         needsHuman: false,
         unavailable: false,
@@ -671,11 +1081,11 @@ export async function applyWithPlaywright(args: {
         urlsVisited: [...chase.urlsVisited, finalUrl],
         clicks: chase.clicks,
         formDetected: true,
-        confirmationDetected: finalSignals.confirmationDetected,
+        confirmationDetected: success,
         verificationDetected: false,
         finalReason: success
           ? "Submission confirmed."
-          : "Submission could not be confirmed.",
+          : "Application submission not confirmed.",
       }),
     };
   } catch (error: unknown) {
@@ -691,8 +1101,24 @@ export async function applyWithPlaywright(args: {
       remoteSessionId: remoteSession?.sessionId,
     });
 
+    logPlaywrightEvidence({
+      attemptedSelectors,
+      applyCtaFound: false,
+      applyCtaClicked: false,
+      currentUrl: targetUrl,
+      hopCount: 0,
+      submitButtonFound: false,
+      submitButtonClicked: false,
+      confirmationTextFound: false,
+      confirmationTextSnippet: null,
+      successUrlPatternMatched: false,
+      finalStatus: "FAILED",
+      submissionConfirmed: false,
+    });
+
     return {
       ok: false,
+      status: "FAILED",
       message,
       openUrl: targetUrl,
       viewerUrl: remoteSession?.viewerUrl,
@@ -702,6 +1128,16 @@ export async function applyWithPlaywright(args: {
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
         targetUrl,
+        applyCtaFound: false,
+        applyCtaClicked: false,
+        currentUrl: targetUrl,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: false,
+        confirmationTextSnippet: null,
+        successUrlPatternMatched: false,
+        submissionConfirmed: false,
+        finalStatus: "FAILED",
         success: false,
         needsHuman: false,
         unavailable: false,
@@ -738,9 +1174,22 @@ export function toApplySessionDebug(
     hopCount: result.hopCount,
     urlsVisited: result.urlsVisited,
     clicks: result.clicks,
+    attemptedSelectors: result.attemptedSelectors,
+    applyCtaFound: result.applyCtaFound,
+    applyCtaClicked: result.applyCtaClicked,
+    targetUrl: result.targetUrl,
+    urlBeforeClick: result.urlBeforeClick,
+    urlAfterClick: result.urlAfterClick,
+    currentUrl: result.currentUrl,
     formDetected: result.formDetected,
+    submitButtonFound: result.submitButtonFound,
+    submitButtonClicked: result.submitButtonClicked,
     confirmationDetected: result.confirmationDetected,
+    confirmationTextFound: result.confirmationTextFound,
+    confirmationTextSnippet: result.confirmationTextSnippet ?? null,
+    successUrlPatternMatched: result.successUrlPatternMatched,
     verificationDetected: result.verificationDetected,
+    submissionConfirmed: result.submissionConfirmed,
     finalReason: result.finalReason,
   };
 }

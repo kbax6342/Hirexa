@@ -239,13 +239,28 @@ export default function AuditClient({
           });
           const payload = (await res.json()) as {
             ok?: boolean;
+            found?: boolean;
             session?: {
               status?: string;
+              submissionStatus?: string;
+              emailStatus?: string;
               lastUrl?: string;
               error?: string;
               message?: string;
             };
+            error?: string;
           };
+
+          if (res.status === 404 || payload.found === false) {
+            const message =
+              payload.error ??
+              "Auto apply session could not be found. Please restart auto apply.";
+            setApplySessionStatus("FAILED");
+            setApplyMessage(message);
+            setStatusMessage(message);
+            setApplySessionId(null);
+            return;
+          }
 
           if (!res.ok || !payload.ok || !payload.session) return;
 
@@ -255,7 +270,9 @@ export default function AuditClient({
           setApplySessionStatus(sessionStatus ?? payload.session.status ?? null);
 
           if (isApplySessionSuccessStatus(payload.session.status)) {
-            setApplyMessage("Application submitted successfully.");
+            setApplyMessage(
+              payload.session.message ?? "Application submitted successfully.",
+            );
             setAppliedFinalUrl(payload.session.lastUrl ?? null);
             setStatusMessage("Status updated: SENT");
             await loadAudit();
@@ -263,16 +280,32 @@ export default function AuditClient({
           }
 
           if (
+            sessionStatus === "APPLY_NOT_STARTED" ||
             sessionStatus === "AUTO_APPLY_UNAVAILABLE" ||
             sessionStatus === "WAITING_HUMAN"
           ) {
             setApplyMessage(
               payload.session.message ??
-                "Auto apply is not available for this job application.",
+                (sessionStatus === "APPLY_NOT_STARTED"
+                  ? "Opened job page but could not start application."
+                  : "Auto apply is not available for this job application."),
             );
             setStatusMessage(
               payload.session.message ??
-                "Auto apply is not available for this job application.",
+                (sessionStatus === "APPLY_NOT_STARTED"
+                  ? "Opened job page but could not start application."
+                  : "Auto apply is not available for this job application."),
+            );
+            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            return;
+          }
+
+          if (payload.session.status === "UNCONFIRMED") {
+            setApplyMessage(
+              payload.session.message ?? "Application submission not confirmed.",
+            );
+            setStatusMessage(
+              payload.session.message ?? "Application submission not confirmed.",
             );
             setAppliedFinalUrl(payload.session.lastUrl ?? null);
             return;
@@ -280,10 +313,10 @@ export default function AuditClient({
 
           if (payload.session.status === "FAILED") {
             setApplyMessage(
-              payload.session.error ?? "OpenClaw automation failed.",
+              payload.session.error ?? "Auto apply automation failed.",
             );
             setStatusMessage(
-              payload.session.error ?? "OpenClaw automation failed.",
+              payload.session.error ?? "Auto apply automation failed.",
             );
             setAppliedFinalUrl(payload.session.lastUrl ?? null);
           }
@@ -351,8 +384,8 @@ export default function AuditClient({
           payload.status ??
           "STARTING",
       );
-      setApplyMessage("OpenClaw auto apply started.");
-      setStatusMessage("OpenClaw automation is running.");
+      setApplyMessage("Playwright auto apply started.");
+      setStatusMessage("Playwright automation is running.");
     } catch (e: unknown) {
       setApplyMessage(e instanceof Error ? e.message : "Failed to apply");
     } finally {

@@ -1,4 +1,8 @@
 import {
+  closeBrowserbaseSession,
+  createBrowserbaseSession,
+} from "@/app/lib/apply/providers/browserbase";
+import {
   getOpenClawConfig,
   hasOpenClawConfig,
   type OpenClawConfig,
@@ -20,8 +24,26 @@ export type RemoteBrowserRuntime = {
   serverSideOnly: true;
 };
 
+function getConfiguredRemoteBrowserProvider() {
+  return process.env.REMOTE_BROWSER_PROVIDER?.trim().toLowerCase() ?? "";
+}
+
+function hasBrowserbaseConfig() {
+  return Boolean(process.env.BROWSERBASE_API_KEY?.trim());
+}
+
 export function getRemoteBrowserProvider(): RemoteBrowserProvider | null {
-  return hasOpenClawConfig() ? "openclaw" : null;
+  const provider = getConfiguredRemoteBrowserProvider();
+
+  if (provider === "browserbase") {
+    return hasBrowserbaseConfig() ? "browserbase" : null;
+  }
+
+  if (provider === "openclaw") {
+    return hasOpenClawConfig() ? "openclaw" : null;
+  }
+
+  return null;
 }
 
 export function requireRemoteBrowserConfig(): OpenClawConfig {
@@ -29,31 +51,47 @@ export function requireRemoteBrowserConfig(): OpenClawConfig {
 }
 
 export function shouldUseRemoteBrowser() {
-  return hasOpenClawConfig();
+  return getRemoteBrowserProvider() !== null;
 }
 
 export async function createRemoteSession(): Promise<RemoteSession> {
-  const config = getOpenClawConfig();
+  const provider = getRemoteBrowserProvider();
 
-  return {
-    provider: "openclaw",
-    sessionId: `openclaw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    connectUrl: config.apiUrl,
-  };
+  if (provider === "browserbase") {
+    return createBrowserbaseSession();
+  }
+
+  if (provider === "openclaw") {
+    const config = getOpenClawConfig();
+
+    return {
+      provider: "openclaw",
+      sessionId: `openclaw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      connectUrl: config.apiUrl,
+    };
+  }
+
+  throw new Error(
+    "[AUTO_APPLY_REMOTE] Remote browser requested without a configured provider.",
+  );
 }
 
 export async function closeRemoteSession(
-  _provider?: RemoteBrowserProvider,
-  _sessionId?: string,
+  provider?: RemoteBrowserProvider,
+  sessionId?: string,
 ) {
-  void _provider;
-  void _sessionId;
+  if (provider === "browserbase" && sessionId) {
+    await closeBrowserbaseSession(sessionId);
+  }
+
   return;
 }
 
 export function describeRemoteBrowserRuntime(): RemoteBrowserRuntime {
+  const provider = getRemoteBrowserProvider() ?? "openclaw";
+
   return {
-    provider: "openclaw",
+    provider,
     headless: true,
     isolatedProfile: true,
     serverSideOnly: true,

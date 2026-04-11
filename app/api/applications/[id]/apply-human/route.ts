@@ -37,7 +37,7 @@ export async function POST(
         ok: false,
         status: "AUTO_APPLY_UNAVAILABLE",
         error:
-          "Human verification browser sessions are not exposed in the OpenClaw auto-apply flow.",
+          "Human verification browser handoff is not exposed in the current in-app auto-apply flow.",
       },
       { status: 409 },
     );

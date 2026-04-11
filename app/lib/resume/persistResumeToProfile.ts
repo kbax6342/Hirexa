@@ -227,6 +227,34 @@ function trimOrNull(value?: string | null) {
   return trimmed ? trimmed : null;
 }
 
+function normalizeResumeMimeType(args: {
+  mimeType: string | null;
+  fileName: string;
+}) {
+  const normalizedMimeType = (args.mimeType ?? "").trim().toLowerCase();
+  const normalizedFileName = args.fileName.trim().toLowerCase();
+
+  if (normalizedMimeType.includes("pdf") || normalizedFileName.endsWith(".pdf")) {
+    return "application/pdf";
+  }
+
+  if (normalizedMimeType) {
+    return normalizedMimeType;
+  }
+
+  if (normalizedFileName.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (normalizedFileName.endsWith(".doc")) {
+    return "application/msword";
+  }
+  if (normalizedFileName.endsWith(".txt")) {
+    return "text/plain";
+  }
+
+  return "application/octet-stream";
+}
+
 function readFirstWorkplaceLocation(value: unknown) {
   if (!Array.isArray(value)) return null;
 
@@ -753,7 +781,10 @@ export async function persistResumeToProfile(args: {
   }
 
   const fileName = trimOrNull(args.resumeFile?.fileName) ?? "pasted-resume.txt";
-  const mimeType = trimOrNull(args.resumeFile?.mimeType) ?? "text/plain";
+  const mimeType = normalizeResumeMimeType({
+    mimeType: trimOrNull(args.resumeFile?.mimeType) ?? "text/plain",
+    fileName,
+  });
 
   let extractedResumeText = normalizeResumeText(args.resumeText ?? "");
   if (args.resumeFile) {

@@ -69,19 +69,26 @@ export function buildAutomationAudit(args: {
   const previousAutomation =
     asRecord(previousAudit.automation) ??
     asRecord(previousAudit.openclaw) ??
+    asRecord(previousAudit.playwright) ??
     {};
+  const resolvedProvider =
+    args.automation.provider ??
+    args.provider ??
+    asString(previousAudit.provider) ??
+    "playwright";
 
   const nextAutomation = {
     ...previousAutomation,
     ...args.automation,
-    provider: args.automation.provider ?? args.provider ?? "openclaw",
+    provider: resolvedProvider,
   };
 
   const nextAudit: JsonRecord = {
     ...previousAudit,
-    provider: args.provider ?? asString(previousAudit.provider) ?? "openclaw",
+    provider: args.provider ?? asString(previousAudit.provider) ?? resolvedProvider,
     automation: nextAutomation,
     openclaw: nextAutomation,
+    playwright: nextAutomation,
   };
 
   if (args.finalValuesToSubmit) {

@@ -9,6 +9,20 @@ export type OpenClawConfig = {
   timeoutMs: number;
 };
 
+type OpenClawTransport = {
+  mode: "worker" | "gateway";
+  startUrl: string;
+  headers: Record<string, string>;
+  fallbackStatusUrl: (runId: string) => string;
+};
+
+type OpenClawRunConfig = {
+  apiUrl?: string;
+  apiKey?: string;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
 export type OpenClawRunSnapshot = {
   ok: boolean;
   runId?: string;
@@ -60,6 +74,14 @@ function requireEnv(name: string) {
   return value.trim();
 }
 
+function getAutomationWorkerBaseUrl() {
+  const raw =
+    process.env.AUTOMATION_WORKER_URL?.trim() ||
+    process.env.AUTOMATION_SERVICE_URL?.trim() ||
+    "";
+  return raw.replace(/\/+$/, "");
+}
+
 export function getOpenClawConfig(): OpenClawConfig {
   return {
     apiUrl: requireEnv("OPENCLAW_API_URL"),
@@ -82,6 +104,21 @@ export function hasOpenClawConfig() {
   } catch {
     return false;
   }
+}
+
+function getOpenClawRunConfig(): OpenClawRunConfig {
+  return {
+    apiUrl: process.env.OPENCLAW_API_URL?.trim() || undefined,
+    apiKey: process.env.OPENCLAW_API_KEY?.trim() || undefined,
+    pollIntervalMs: Math.max(
+      1000,
+      Number.parseInt(process.env.OPENCLAW_POLL_INTERVAL_MS ?? "2500", 10) || 2500,
+    ),
+    timeoutMs: Math.max(
+      30_000,
+      Number.parseInt(process.env.OPENCLAW_TIMEOUT_MS ?? "300000", 10) || 300000,
+    ),
+  };
 }
 
 function normalizeOpenClawSnapshot(raw: unknown): OpenClawRunSnapshot {
@@ -145,10 +182,43 @@ function normalizeOpenClawSnapshot(raw: unknown): OpenClawRunSnapshot {
   };
 }
 
-function buildHeaders(config: OpenClawConfig) {
+function buildHeaders(config: { apiKey?: string }) {
   return {
     "Content-Type": "application/json",
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+  };
+}
+
+function buildWorkerHeaders() {
+  const token = process.env.AUTOMATION_SERVICE_TOKEN?.trim() || "";
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+function resolveTransport(config: OpenClawRunConfig): OpenClawTransport {
+  const workerBaseUrl = getAutomationWorkerBaseUrl();
+  if (workerBaseUrl) {
+    return {
+      mode: "worker",
+      startUrl: new URL("apply", `${workerBaseUrl}/`).toString(),
+      headers: buildWorkerHeaders(),
+      fallbackStatusUrl: (runId: string) =>
+        new URL(`runs/${encodeURIComponent(runId)}`, `${workerBaseUrl}/`).toString(),
+    };
+  }
+
+  if (!config.apiUrl) {
+    throw new Error("[OPENCLAW_APPLY] Missing required env var: OPENCLAW_API_URL");
+  }
+
+  const baseUrl = config.apiUrl.replace(/\/+$/, "");
+  return {
+    mode: "gateway",
+    startUrl: config.apiUrl,
+    headers: buildHeaders(config),
+    fallbackStatusUrl: (runId: string) => `${baseUrl}/${encodeURIComponent(runId)}`,
   };
 }
 
@@ -177,21 +247,37 @@ async function parseOpenClawResponse(response: Response) {
 }
 
 export async function startOpenClawRun(payload: Record<string, unknown>) {
-  const config = getOpenClawConfig();
+  const config = getOpenClawRunConfig();
+  const transport = resolveTransport(config);
 
   console.log("[OPENCLAW_APPLY] starting OpenClaw run", {
-    apiUrl: config.apiUrl,
-    hasApiKey: Boolean(config.apiKey),
+    mode: transport.mode,
+    method: "POST",
+    url: transport.startUrl,
+    hasAuthHeader: Boolean(transport.headers.Authorization),
   });
 
-  const response = await fetch(config.apiUrl, {
+  const response = await fetch(transport.startUrl, {
     method: "POST",
-    headers: buildHeaders(config),
+    headers: transport.headers,
     body: JSON.stringify(payload),
     cache: "no-store",
   });
 
-  return parseOpenClawResponse(response);
+  console.log("[OPENCLAW_APPLY] OpenClaw start response", {
+    mode: transport.mode,
+    method: "POST",
+    url: transport.startUrl,
+    status: response.status,
+  });
+
+  const snapshot = await parseOpenClawResponse(response);
+
+  if (!snapshot.pollUrl && snapshot.runId) {
+    snapshot.pollUrl = transport.fallbackStatusUrl(snapshot.runId);
+  }
+
+  return snapshot;
 }
 
 export function isOpenClawTerminalStatus(status: string | undefined) {
@@ -214,7 +300,8 @@ export async function waitForOpenClawRun(args: {
   initial: OpenClawRunSnapshot;
   onUpdate?: (snapshot: OpenClawRunSnapshot) => Promise<void> | void;
 }) {
-  const config = getOpenClawConfig();
+  const config = getOpenClawRunConfig();
+  const transport = resolveTransport(config);
   let snapshot = args.initial;
 
   await args.onUpdate?.(snapshot);
@@ -223,18 +310,31 @@ export async function waitForOpenClawRun(args: {
     return snapshot;
   }
 
-  const pollUrl = snapshot.pollUrl?.trim();
-  const baseUrl = config.apiUrl.replace(/\/+$/, "");
-  const fallbackStatusUrl = `${baseUrl}/${encodeURIComponent(snapshot.runId)}`;
+  const fallbackStatusUrl = transport.fallbackStatusUrl(snapshot.runId);
   const deadline = Date.now() + config.timeoutMs;
 
   while (Date.now() < deadline) {
     await delay(config.pollIntervalMs);
 
-    const response = await fetch(pollUrl ?? fallbackStatusUrl, {
+    const requestUrl = snapshot.pollUrl?.trim() || fallbackStatusUrl;
+
+    console.log("[OPENCLAW_APPLY] OpenClaw poll request", {
+      mode: transport.mode,
       method: "GET",
-      headers: buildHeaders(config),
+      url: requestUrl,
+    });
+
+    const response = await fetch(requestUrl, {
+      method: "GET",
+      headers: transport.headers,
       cache: "no-store",
+    });
+
+    console.log("[OPENCLAW_APPLY] OpenClaw poll response", {
+      mode: transport.mode,
+      method: "GET",
+      url: requestUrl,
+      status: response.status,
     });
 
     snapshot = await parseOpenClawResponse(response);

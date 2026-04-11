@@ -84,14 +84,27 @@ type AutoApplyStartResponse = {
   applicationId?: string;
   applySessionId?: string;
   status?: string;
+  submissionStatus?: string;
+  emailStatus?: string;
+  message?: string;
   error?: string;
   missingRequired?: string[];
 };
 
+type AutoApplyBannerState = {
+  message: string;
+  ctaLabel: string;
+  ctaHref: string;
+};
+
 type ApplySessionPollResponse = {
   ok?: boolean;
+  found?: boolean;
+  storageBackendUsed?: string;
   session?: {
     status?: string;
+    submissionStatus?: string;
+    emailStatus?: string;
     lastUrl?: string;
     error?: string;
     message?: string;
@@ -101,13 +114,37 @@ type ApplySessionPollResponse = {
 
 const AUTO_APPLY_CTA_LABEL = "Auto apply Now";
 const AUTO_APPLY_LOADING_LABEL = "Starting auto apply...";
+const AUTO_APPLY_MISSING_RESUME_MESSAGE =
+  "Auto Apply needs a PDF resume first. Upload your resume to continue.";
+
+function isMissingResumeAutoApplyError(payload: AutoApplyStartResponse | null | undefined) {
+  const missingRequired = Array.isArray(payload?.missingRequired)
+    ? payload?.missingRequired
+    : [];
+  const hasResumeMissingFlag = missingRequired.some(
+    (field) => String(field).trim().toLowerCase() === "resume"
+  );
+  const message = String(payload?.error ?? "").trim().toLowerCase();
+
+  return (
+    hasResumeMissingFlag ||
+    message.includes("resume required for auto apply") ||
+    message.includes("resume is required for auto apply") ||
+    message.includes("upload a resume to continue") ||
+    message.includes("upload a pdf resume")
+  );
+}
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
   const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
 
   switch (normalized) {
+    case "APPLY_NOT_STARTED":
+      return "Could not start";
     case "AUTO_APPLY_UNAVAILABLE":
       return "Not available";
+    case "UNCONFIRMED":
+      return "Unconfirmed";
     case "SUBMITTED":
       return "Submitted";
     default:
@@ -259,6 +296,9 @@ export default function JobMatchesLayout({
     null
   );
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [autoApplyBanner, setAutoApplyBanner] = useState<AutoApplyBannerState | null>(
+    null
+  );
 
   const [autoApplyPopupState, setAutoApplyPopupState] = useState<AutoApplyPopupState>(
     () => createEmptyAutoApplyPopupState()
@@ -688,6 +728,19 @@ export default function JobMatchesLayout({
           const nextItems = { ...current.items };
 
           for (const { item, res, payload } of results) {
+            if (res.status === 404 || payload.found === false) {
+              nextItems[item.applicationId] = {
+                ...nextItems[item.applicationId],
+                applySessionId: null,
+                status: "FAILED",
+                message:
+                  payload.error ??
+                  "Auto apply session could not be found. Please restart auto apply.",
+                updatedAt: now,
+              };
+              continue;
+            }
+
             if (!res.ok || !payload.ok || !payload.session) continue;
 
             const displayStatus =
@@ -1268,6 +1321,7 @@ export default function JobMatchesLayout({
 
   const startDashboardAutoApply = useCallback(
     async (job: SupportedAutoApplyJob) => {
+      setAutoApplyBanner(null);
       const applyProvider = detectApplyProviderFromJob(job);
       const jobUrl = job.jobUrl?.trim() ?? "";
       if (!jobUrl) {
@@ -1333,6 +1387,7 @@ export default function JobMatchesLayout({
       upsertAutoApplyPopupItem(
         {
           applicationId,
+          applySessionId: null,
           jobId: job.id,
           jobTitle: job.title,
           company: job.company,
@@ -1358,20 +1413,34 @@ export default function JobMatchesLayout({
       const startData = (await startRes.json()) as AutoApplyStartResponse;
       if (!startRes.ok || !startData?.ok || !startData.applySessionId) {
         const message = startData?.error ?? "Unable to start auto apply.";
+        const missingResume = isMissingResumeAutoApplyError(startData);
         const status =
           startData?.status === "AUTO_APPLY_UNAVAILABLE"
             ? "AUTO_APPLY_UNAVAILABLE"
             : "FAILED";
+        const popupMessage = missingResume
+          ? AUTO_APPLY_MISSING_RESUME_MESSAGE
+          : message;
 
         upsertAutoApplyPopupItem({
           applicationId,
+          applySessionId: null,
           jobId: job.id,
           jobTitle: job.title,
           company: job.company,
           location: job.location,
           status,
-          message,
+          message: popupMessage,
         });
+
+        if (missingResume) {
+          setAutoApplyBanner({
+            message: AUTO_APPLY_MISSING_RESUME_MESSAGE,
+            ctaLabel: "Upload resume",
+            ctaHref: "/profile",
+          });
+          return false;
+        }
 
         throw new Error(message);
       }
@@ -1387,6 +1456,7 @@ export default function JobMatchesLayout({
           toApplySessionDisplayStatus(startData.status) ??
           startData.status ??
           "STARTING",
+        message: startData.message ?? null,
       });
 
       console.info("[AUTO_APPLY_DASHBOARD] started background auto-apply", {
@@ -1441,11 +1511,6 @@ export default function JobMatchesLayout({
           <div className="mt-4 shrink-0 sm:mt-8">
             <div className="text-black">
               <h2 className="text-lg font-semibold">Smart Matches</h2>
-              <p className="mt-1 text-sm text-gray-700">
-                We’ve scanned jobs to find your best matches, saving you hours of
-                searching. Select your favorites and use Hirexa to prepare stronger,
-                faster applications.
-              </p>
               <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -1582,6 +1647,21 @@ export default function JobMatchesLayout({
               {resolutionMeta?.fallbackUsed && resolutionMeta.resolvedLocationMessage ? (
                 <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   {resolutionMeta.resolvedLocationMessage}
+                </div>
+              ) : null}
+
+              {autoApplyBanner ? (
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p>{autoApplyBanner.message}</p>
+                    <button
+                      type="button"
+                      onClick={() => router.push(autoApplyBanner.ctaHref)}
+                      className="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+                    >
+                      {autoApplyBanner.ctaLabel}
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1861,7 +1941,8 @@ export default function JobMatchesLayout({
                               "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
                               submitted
                                 ? "bg-emerald-100 text-emerald-700"
-                                : item.status === "AUTO_APPLY_UNAVAILABLE"
+                                : item.status === "AUTO_APPLY_UNAVAILABLE" ||
+                                    item.status === "APPLY_NOT_STARTED"
                                   ? "bg-amber-100 text-amber-800"
                                   : "bg-red-100 text-red-700",
                             ].join(" ")}

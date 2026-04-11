@@ -1,6 +1,7 @@
 import sgMail from "@sendgrid/mail";
 
 import { getEmailConfig, getSecurityEmailConfig } from "./config";
+import { normalizeEmailError } from "./errorDiagnostics";
 
 type EmailCategory = "transactional" | "marketing";
 type SenderProfile = "default" | "security";
@@ -66,13 +67,31 @@ export async function sendEmail({
     toDomain: to.split("@")[1] ?? null,
   });
 
-  await getSendGridClient().send({
-    to,
-    from,
-    subject,
-    html,
-    text: finalText,
-    replyTo,
-    headers: Object.keys(headers).length ? headers : undefined,
-  });
+  try {
+    await getSendGridClient().send({
+      to,
+      from,
+      subject,
+      html,
+      text: finalText,
+      replyTo,
+      headers: Object.keys(headers).length ? headers : undefined,
+    });
+  } catch (error) {
+    const diagnostic = await normalizeEmailError(error);
+    const logPrefix = subject.startsWith("Application update:")
+      ? "[AUTO_APPLY_EMAIL]"
+      : "[EMAIL_PROVIDER]";
+
+    console.error(`${logPrefix} direct email send failed`, {
+      category,
+      senderProfile,
+      subject,
+      toDomain: to.split("@")[1] ?? null,
+      from,
+      replyTo: replyTo ?? null,
+      diagnostic,
+    });
+    throw error;
+  }
 }

@@ -8,6 +8,10 @@ import {
   type AdzunaSearchTier,
 } from "@/app/lib/jobs/adzunaFeedPlan";
 import { applyLocationMatchMetadata } from "@/app/lib/jobs/locationMatch";
+import {
+  scoreJobRelevance,
+  shouldExcludeJob,
+} from "@/app/lib/jobs/relevance";
 import { getSmartMatchSearchConfigForUser } from "@/app/lib/jobs/smartMatchSearch";
 import type { Job } from "@/app/lib/jobs/types";
 import { fetchAdzunaJobs } from "@/app/lib/providers/adzuna";
@@ -123,6 +127,32 @@ function dedupeJobs(jobs: Job[]) {
   });
 }
 
+function countJobsBySource(jobs: readonly Job[]) {
+  return jobs.reduce(
+    (counts, job) => {
+      counts[job.source] = (counts[job.source] ?? 0) + 1;
+      return counts;
+    },
+    {} as Partial<Record<Job["source"], number>>,
+  );
+}
+
+function summarizeExclusionReasons(
+  excludedJobs: Array<{ reason: string }>,
+  limit = 3,
+) {
+  const counts = new Map<string, number>();
+
+  for (const job of excludedJobs) {
+    counts.set(job.reason, (counts.get(job.reason) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([reason, count]) => ({ reason, count }));
+}
+
 function getMatchTierWeight(job: Job) {
   switch (job.matchTier) {
     case "exact":
@@ -140,10 +170,39 @@ function getMatchTierWeight(job: Job) {
   }
 }
 
-function rankJobs(jobs: Job[]) {
-  return [...jobs].sort(
-    (left, right) => getMatchTierWeight(right) - getMatchTierWeight(left)
-  );
+function hashString(value: string) {
+  let hash = 0;
+
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+
+  return hash;
+}
+
+function rankJobs(args: {
+  jobs: Job[];
+  query: string;
+  preferredLocation: string;
+  includeRemote: boolean;
+}) {
+  return [...args.jobs]
+    .map((job) => ({
+      job,
+      relevanceScore: scoreJobRelevance(job, args.query, args.preferredLocation, {
+        includeRemote: args.includeRemote,
+      }),
+      tieBreaker: hashString(`${args.query}|${job.source}|${job.id}`) % 17,
+    }))
+    .sort(
+      (left, right) =>
+        right.relevanceScore - left.relevanceScore ||
+        getMatchTierWeight(right.job) - getMatchTierWeight(left.job) ||
+        left.tieBreaker - right.tieBreaker ||
+        left.job.title.localeCompare(right.job.title) ||
+        left.job.company.localeCompare(right.job.company)
+    )
+    .map(({ job }) => job);
 }
 
 function mapCategoryToQuery(category: string) {
@@ -230,6 +289,7 @@ async function fetchTierPage(args: {
   tier: AdzunaSearchTier;
   page: number;
   limit: number;
+  query: string;
   preferredLocation: string;
   includeRemote: boolean;
 }) {
@@ -241,16 +301,53 @@ async function fetchTierPage(args: {
   });
 
   const cleanedJobs = dedupeJobs(rawJobs).filter((job) => !isHiringEventJob(job));
-  const rankedJobs = rankJobs(
-    applyLocationMatchMetadata(
-      cleanedJobs,
+  const excludedJobs: Array<{ job: Job; reason: string }> = [];
+  const relevanceFilteredJobs = cleanedJobs.filter((job) => {
+    const exclusion = shouldExcludeJob(
+      job,
+      args.query,
       args.preferredLocation || args.tier.location || null,
-      args.includeRemote
-    )
+      { includeRemote: args.includeRemote },
+    );
+
+    if (!exclusion.exclude) {
+      return true;
+    }
+
+    excludedJobs.push({
+      job,
+      reason: exclusion.reason ?? "relevance_excluded",
+    });
+    return false;
+  });
+  const locationMatchedJobs = applyLocationMatchMetadata(
+    relevanceFilteredJobs,
+    args.preferredLocation || args.tier.location || null,
+    args.includeRemote
   );
+  const rankedJobs = rankJobs({
+    jobs: locationMatchedJobs,
+    query: args.query,
+    preferredLocation: args.preferredLocation || args.tier.location || "",
+    includeRemote: args.includeRemote,
+  });
+
+  console.info("[JOBS_FEED] relevance filter", {
+    query: args.query,
+    tierQuery: args.tier.query,
+    tierLocation: args.tier.location || null,
+    countBeforeFiltering: cleanedJobs.length,
+    countAfterFiltering: relevanceFilteredJobs.length,
+    countAfterLocationMatch: locationMatchedJobs.length,
+    topExclusionReasons: summarizeExclusionReasons(excludedJobs),
+    bySourceBeforeFiltering: countJobsBySource(cleanedJobs),
+    bySourceAfterFiltering: countJobsBySource(relevanceFilteredJobs),
+    bySourceAfterLocationMatch: countJobsBySource(locationMatchedJobs),
+  });
 
   return {
     rawJobs,
+    filteredJobs: rankedJobs,
     rankedJobs,
   };
 }
@@ -280,6 +377,14 @@ export async function GET(req: Request) {
   const resolvedPreferredLocation = normalizeLocationLabel(
     requestedLocation || requestedState || profilePreferredLocation
   );
+
+  console.info("[JOBS_FEED] request", {
+    query: resolvedQuery || null,
+    requestedQuery: requestedQuery || null,
+    category: rawCategory || null,
+    location: resolvedPreferredLocation || null,
+    includeRemote,
+  });
 
   if (!resolvedQuery) {
     return buildEmptyResponse({
@@ -338,7 +443,7 @@ export async function GET(req: Request) {
   let adzunaPage = cursor?.adzunaPage ?? 1;
   let activeTier: AdzunaSearchTier | null = null;
   let activeJobs: Job[] = [];
-  let activeRawJobs: Job[] = [];
+  let activeSourceJobs: Job[] = [];
   const attemptedStates: string[] = [];
   const providerErrors: Array<{ source: string; reason: string }> = [];
 
@@ -351,6 +456,7 @@ export async function GET(req: Request) {
         tier,
         page: adzunaPage,
         limit,
+        query: resolvedQuery,
         preferredLocation: resolvedPreferredLocation,
         includeRemote,
       });
@@ -358,7 +464,7 @@ export async function GET(req: Request) {
       if (result.rankedJobs.length > 0) {
         activeTier = tier;
         activeJobs = result.rankedJobs;
-        activeRawJobs = result.rawJobs;
+        activeSourceJobs = result.filteredJobs;
         break;
       }
     } catch (error) {
@@ -428,7 +534,7 @@ export async function GET(req: Request) {
     jobs: activeJobs,
     items: activeJobs,
     bySource: {
-      adzuna: activeRawJobs,
+      adzuna: activeSourceJobs,
     },
     count: activeJobs.length,
     providerErrors,

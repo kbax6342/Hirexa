@@ -51,7 +51,11 @@ export async function POST(
       );
     }
 
-    const applySession = getSession(body.applySessionId);
+    const applySession = getSession(body.applySessionId, {
+      caller: "POST /api/applications/[id]/confirm-submitted",
+      sourcePath: "app/api/applications/[id]/confirm-submitted/route.ts",
+      phase: "confirm",
+    });
     if (!applySession || applySession.applicationId !== application.id) {
       return NextResponse.json(
         { ok: false, error: "Apply session not found" },

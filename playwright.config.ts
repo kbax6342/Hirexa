@@ -28,6 +28,6 @@ export default defineConfig({
         command: "npm run dev",
         url: baseURL,
         reuseExistingServer: !process.env.CI,
-        timeout: 120_000,
+        timeout: 180_000,
       },
 });

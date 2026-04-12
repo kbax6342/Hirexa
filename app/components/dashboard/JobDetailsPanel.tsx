@@ -45,6 +45,13 @@ type JobDetailsPanelProps = {
   onOutreach?: () => void;
   hideAiApplyOnDesktop?: boolean;
   hideAdzunaAttribution?: boolean;
+  autoApplyStopPoint?: {
+    stoppedAtUrl?: string | null;
+    stoppedAtTitle?: string | null;
+    lastActionText?: string | null;
+    lastActionSelector?: string | null;
+    status?: string | null;
+  } | null;
 };
 
 function normalizeRenderedParagraph(value: string) {
@@ -174,6 +181,7 @@ export default function JobDetailsPanel({
   onOutreach,
   hideAiApplyOnDesktop = false,
   hideAdzunaAttribution = false,
+  autoApplyStopPoint = null,
 }: JobDetailsPanelProps) {
   const descriptionSource = String(job?.description ?? "");
   const parsedMeta = useMemo(
@@ -355,6 +363,66 @@ export default function JobDetailsPanel({
             ) : null}
           </div>
         )}
+
+        {autoApplyStopPoint &&
+        (autoApplyStopPoint.stoppedAtUrl ||
+          autoApplyStopPoint.stoppedAtTitle ||
+          autoApplyStopPoint.lastActionText ||
+          autoApplyStopPoint.lastActionSelector ||
+          autoApplyStopPoint.status) ? (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+            <p className="font-semibold uppercase tracking-wide text-amber-800">
+              Auto Apply Stop Point
+            </p>
+
+            {autoApplyStopPoint.stoppedAtUrl ? (
+              <div className="mt-2">
+                <p className="font-semibold text-amber-900">Stopped at</p>
+                <a
+                  className="mt-1 block break-all font-mono text-[11px] underline"
+                  href={autoApplyStopPoint.stoppedAtUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {autoApplyStopPoint.stoppedAtUrl}
+                </a>
+              </div>
+            ) : null}
+
+            {autoApplyStopPoint.stoppedAtTitle ? (
+              <div className="mt-2">
+                <p className="font-semibold text-amber-900">Page title</p>
+                <p className="mt-1 break-words text-sm text-amber-950">
+                  {autoApplyStopPoint.stoppedAtTitle}
+                </p>
+              </div>
+            ) : null}
+
+            {autoApplyStopPoint.lastActionText ||
+            autoApplyStopPoint.lastActionSelector ? (
+              <div className="mt-2">
+                <p className="font-semibold text-amber-900">Last action</p>
+                <p className="mt-1 break-words text-sm text-amber-950">
+                  {autoApplyStopPoint.lastActionText ?? "Unknown action"}
+                </p>
+                {autoApplyStopPoint.lastActionSelector ? (
+                  <p className="mt-1 break-all font-mono text-[11px] text-amber-800">
+                    {autoApplyStopPoint.lastActionSelector}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {autoApplyStopPoint.status ? (
+              <div className="mt-2">
+                <p className="font-semibold text-amber-900">Apply status</p>
+                <p className="mt-1 text-sm text-amber-950">
+                  {autoApplyStopPoint.status}
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">

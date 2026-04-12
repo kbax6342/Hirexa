@@ -15,8 +15,12 @@ export type AutoApplyPopupItem = {
   status: ApplySessionStatus | string;
   message?: string | null;
   lastUrl?: string | null;
+  stoppedAtUrl?: string | null;
+  stoppedAtTitle?: string | null;
   currentUrl?: string | null;
   lastAction?: string | null;
+  lastActionText?: string | null;
+  lastActionSelector?: string | null;
   stopReason?: string | null;
   stopClassification?: ApplyStopClassification | null;
   updatedAt: number;

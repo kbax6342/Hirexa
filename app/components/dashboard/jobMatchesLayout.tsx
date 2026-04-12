@@ -92,8 +92,12 @@ type AutoApplyStartResponse = {
   message?: string;
   error?: string;
   finalUrl?: string | null;
+  stoppedAtUrl?: string | null;
+  stoppedAtTitle?: string | null;
   currentUrl?: string | null;
   lastAction?: string | null;
+  lastActionText?: string | null;
+  lastActionSelector?: string | null;
   stopReason?: string | null;
   stopClassification?: ApplyStopClassification | null;
   missingRequired?: string[];
@@ -118,8 +122,12 @@ type ApplySessionPollResponse = {
     message?: string;
     debug?: {
       finalUrl?: string | null;
+      stoppedAtUrl?: string | null;
+      stoppedAtTitle?: string | null;
       currentUrl?: string | null;
       lastAction?: string | null;
+      lastActionText?: string | null;
+      lastActionSelector?: string | null;
       stopReason?: string | null;
       stopClassification?: ApplyStopClassification | null;
     };
@@ -177,6 +185,10 @@ function isStoppedAutoApplyStatus(status: string | null | undefined) {
     status === "WAITING_HUMAN" ||
     status === "FAILED"
   );
+}
+
+function isDashboardStopPointStatus(status: string | null | undefined) {
+  return isStoppedAutoApplyStatus(status) || status === "AUTO_APPLY_UNAVAILABLE";
 }
 
 function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
@@ -376,6 +388,61 @@ export default function JobMatchesLayout({
       ),
     [autoApplyPopupState.items]
   );
+  const selectedAutoApplyItem = useMemo(() => {
+    if (!selectedId && !selectedSummary?.jobUrl) {
+      return null;
+    }
+
+    const normalizedSelectedUrl = normalizeJobUrl(selectedSummary?.jobUrl);
+    return (
+      autoApplyItems.find((item) => {
+        if (item.jobId === selectedId) {
+          return true;
+        }
+
+        return Boolean(
+          normalizedSelectedUrl &&
+            normalizeJobUrl(item.jobUrl ?? undefined) === normalizedSelectedUrl,
+        );
+      }) ?? null
+    );
+  }, [autoApplyItems, selectedId, selectedSummary?.jobUrl]);
+  const rightAutoApplyStopPoint = useMemo(() => {
+    if (
+      !selectedAutoApplyItem ||
+      !isDashboardStopPointStatus(selectedAutoApplyItem.status)
+    ) {
+      return null;
+    }
+
+    const stoppedAtUrl =
+      selectedAutoApplyItem.stoppedAtUrl ??
+      selectedAutoApplyItem.lastUrl ??
+      selectedAutoApplyItem.currentUrl ??
+      selectedAutoApplyItem.jobUrl ??
+      null;
+    const hasStopPoint = Boolean(
+      stoppedAtUrl ||
+        selectedAutoApplyItem.stoppedAtTitle ||
+        selectedAutoApplyItem.lastActionText ||
+        selectedAutoApplyItem.lastActionSelector,
+    );
+
+    if (!hasStopPoint) {
+      return null;
+    }
+
+    return {
+      stoppedAtUrl,
+      stoppedAtTitle: selectedAutoApplyItem.stoppedAtTitle ?? null,
+      lastActionText:
+        selectedAutoApplyItem.lastActionText ??
+        selectedAutoApplyItem.lastAction ??
+        null,
+      lastActionSelector: selectedAutoApplyItem.lastActionSelector ?? null,
+      status: formatAutoApplyStatusLabel(selectedAutoApplyItem.status),
+    };
+  }, [selectedAutoApplyItem]);
 
   const right = selectedDetails ?? selectedSummaryDetail;
   const rightAiApplyLabel = AUTO_APPLY_CTA_LABEL;
@@ -785,6 +852,16 @@ export default function JobMatchesLayout({
                 payload.session.lastUrl ??
                 item.lastUrl ??
                 null,
+              stoppedAtUrl:
+                payload.session.debug?.stoppedAtUrl ??
+                nextItems[item.applicationId]?.stoppedAtUrl ??
+                item.stoppedAtUrl ??
+                null,
+              stoppedAtTitle:
+                payload.session.debug?.stoppedAtTitle ??
+                nextItems[item.applicationId]?.stoppedAtTitle ??
+                item.stoppedAtTitle ??
+                null,
               currentUrl:
                 payload.session.debug?.currentUrl ??
                 nextItems[item.applicationId]?.currentUrl ??
@@ -794,6 +871,16 @@ export default function JobMatchesLayout({
                 payload.session.debug?.lastAction ??
                 nextItems[item.applicationId]?.lastAction ??
                 item.lastAction ??
+                null,
+              lastActionText:
+                payload.session.debug?.lastActionText ??
+                nextItems[item.applicationId]?.lastActionText ??
+                item.lastActionText ??
+                null,
+              lastActionSelector:
+                payload.session.debug?.lastActionSelector ??
+                nextItems[item.applicationId]?.lastActionSelector ??
+                item.lastActionSelector ??
                 null,
               stopReason:
                 payload.session.debug?.stopReason ??
@@ -1481,8 +1568,12 @@ export default function JobMatchesLayout({
           status,
           message: popupMessage,
           lastUrl: startData?.finalUrl ?? null,
+          stoppedAtUrl: startData?.stoppedAtUrl ?? null,
+          stoppedAtTitle: startData?.stoppedAtTitle ?? null,
           currentUrl: startData?.currentUrl ?? null,
           lastAction: startData?.lastAction ?? null,
+          lastActionText: startData?.lastActionText ?? null,
+          lastActionSelector: startData?.lastActionSelector ?? null,
           stopReason: startData?.stopReason ?? null,
           stopClassification: startData?.stopClassification ?? null,
         });
@@ -1945,6 +2036,7 @@ export default function JobMatchesLayout({
             aiApplyLoading={aiApplyLoading}
             aiApplyLabel={rightAiApplyLabel}
             aiApplyLoadingLabel={rightAiApplyLoadingLabel}
+            autoApplyStopPoint={rightAutoApplyStopPoint}
             onAiApply={handleAiApplyFromDetails}
             onCareerCoach={handleCareerCoachFromDetails}
             onOutreach={handleOutreachFromDetails}

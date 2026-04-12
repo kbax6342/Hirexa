@@ -92,6 +92,10 @@ type AutoApplyStopDebug = {
   currentUrl: string | null;
   lastAction: AutoApplyLastAction;
   stopClassification: ApplyStopClassification;
+  stoppedAtUrl: string | null;
+  stoppedAtTitle: string | null;
+  lastActionText: string | null;
+  lastActionSelector: string | null;
 };
 
 async function findApplicationForUser(id: string, userId: string) {
@@ -249,6 +253,7 @@ function buildStopDebugFromRawResult(
   if (
     result.needsHuman !== true &&
     result.status !== "APPLY_NOT_STARTED" &&
+    result.status !== "AUTO_APPLY_UNAVAILABLE" &&
     result.status !== "FAILED"
   ) {
     return null;
@@ -264,6 +269,23 @@ function buildStopDebugFromRawResult(
     finalUrl,
     currentUrl,
     lastAction,
+    stoppedAtUrl:
+      result.debug?.stoppedAtUrl ?? currentUrl ?? finalUrl,
+    stoppedAtTitle: result.debug?.stoppedAtTitle ?? null,
+    lastActionText:
+      result.debug?.lastActionText ??
+      result.debug?.applyCtaClickedText ??
+      result.debug?.cookiePromptClickedText ??
+      result.debug?.handoffCtaClickedText ??
+      result.debug?.entryCtaClickedText ??
+      null,
+    lastActionSelector:
+      result.debug?.lastActionSelector ??
+      result.debug?.applyCtaClickedSelector ??
+      result.debug?.cookiePromptSelector ??
+      result.debug?.handoffCtaClickedSelector ??
+      result.debug?.entryCtaClickedSelector ??
+      null,
     stopClassification: deriveStopClassification({
       targetUrl: result.debug?.targetUrl ?? null,
       finalUrl,
@@ -291,6 +313,7 @@ function buildStopDebugFromExecutionResult(
   if (
     result.needsHuman !== true &&
     result.status !== "APPLY_NOT_STARTED" &&
+    result.status !== "AUTO_APPLY_UNAVAILABLE" &&
     result.status !== "FAILED"
   ) {
     return null;
@@ -306,6 +329,23 @@ function buildStopDebugFromExecutionResult(
     finalUrl,
     currentUrl,
     lastAction,
+    stoppedAtUrl:
+      result.debug.stoppedAtUrl ?? currentUrl ?? finalUrl,
+    stoppedAtTitle: result.debug.stoppedAtTitle ?? null,
+    lastActionText:
+      result.debug.lastActionText ??
+      result.debug.applyCtaClickedText ??
+      result.debug.cookiePromptClickedText ??
+      result.debug.handoffCtaClickedText ??
+      result.debug.entryCtaClickedText ??
+      null,
+    lastActionSelector:
+      result.debug.lastActionSelector ??
+      result.debug.applyCtaClickedSelector ??
+      result.debug.cookiePromptSelector ??
+      result.debug.handoffCtaClickedSelector ??
+      result.debug.entryCtaClickedSelector ??
+      null,
     stopClassification:
       result.debug.stopClassification ??
       deriveStopClassification({
@@ -342,6 +382,10 @@ function withStopDebug(
       ...result.debug,
       finalUrl: stopDebug.finalUrl ?? undefined,
       currentUrl: stopDebug.currentUrl ?? undefined,
+      stoppedAtUrl: stopDebug.stoppedAtUrl ?? undefined,
+      stoppedAtTitle: stopDebug.stoppedAtTitle ?? undefined,
+      lastActionText: stopDebug.lastActionText ?? undefined,
+      lastActionSelector: stopDebug.lastActionSelector ?? undefined,
       stopReason: stopDebug.stopReason,
       lastAction: stopDebug.lastAction,
       stopClassification: stopDebug.stopClassification,
@@ -366,7 +410,73 @@ function applyRouteLevelSubmissionGuard(args: {
     applySessionId: args.applySessionId ?? null,
     rawStatus,
     rawSubmissionConfirmed,
+    entryUrl: args.rawResult.debug?.entryUrl ?? null,
+    initialLoadedUrl: args.rawResult.debug?.initialLoadedUrl ?? null,
     finalUrl: args.rawResult.finalUrl ?? args.rawResult.openUrl ?? null,
+    domain: args.rawResult.debug?.domain ?? null,
+    stoppedAtUrl: args.rawResult.debug?.stoppedAtUrl ?? null,
+    stoppedAtTitle: args.rawResult.debug?.stoppedAtTitle ?? null,
+    lastActionText: args.rawResult.debug?.lastActionText ?? null,
+    lastActionSelector: args.rawResult.debug?.lastActionSelector ?? null,
+    ctaAttempts: args.rawResult.debug?.ctaAttempts ?? [],
+    entryCtaFound: args.rawResult.debug?.entryCtaFound === true,
+    entryCtaClicked: args.rawResult.debug?.entryCtaClicked === true,
+    entryCtaClickedText: args.rawResult.debug?.entryCtaClickedText ?? null,
+    entryCtaClickedSelector:
+      args.rawResult.debug?.entryCtaClickedSelector ?? null,
+    entryDismissedBlocker:
+      args.rawResult.debug?.entryDismissedBlocker === true,
+    handoffPageDetected: args.rawResult.debug?.handoffPageDetected === true,
+    handoffUrl: args.rawResult.debug?.handoffUrl ?? null,
+    handoffContinuationAttempted:
+      args.rawResult.debug?.handoffContinuationAttempted === true,
+    handoffContinuationSucceeded:
+      args.rawResult.debug?.handoffContinuationSucceeded === true,
+    handoffCtaFound: args.rawResult.debug?.handoffCtaFound === true,
+    handoffCtaClicked: args.rawResult.debug?.handoffCtaClicked === true,
+    handoffCtaClickedText:
+      args.rawResult.debug?.handoffCtaClickedText ?? null,
+    handoffCtaClickedSelector:
+      args.rawResult.debug?.handoffCtaClickedSelector ?? null,
+    handoffAttempts: args.rawResult.debug?.handoffAttempts ?? [],
+    cookiePromptDetected: args.rawResult.debug?.cookiePromptDetected === true,
+    cookiePromptClicked: args.rawResult.debug?.cookiePromptClicked === true,
+    cookiePromptClickedText:
+      args.rawResult.debug?.cookiePromptClickedText ?? null,
+    cookiePromptSelector: args.rawResult.debug?.cookiePromptSelector ?? null,
+    cookiePromptAttempts: args.rawResult.debug?.cookiePromptAttempts ?? [],
+    postCookieWaitAttempted:
+      args.rawResult.debug?.postCookieWaitAttempted === true,
+    postCookieUrlBefore: args.rawResult.debug?.postCookieUrlBefore ?? null,
+    postCookieUrlAfter: args.rawResult.debug?.postCookieUrlAfter ?? null,
+    postCookieUrlChanged:
+      args.rawResult.debug?.postCookieUrlChanged === true,
+    postCookieProgressDetected:
+      args.rawResult.debug?.postCookieProgressDetected === true,
+    postCookieTitleAfter:
+      args.rawResult.debug?.postCookieTitleAfter ?? null,
+    applyCtaClickedText: args.rawResult.debug?.applyCtaClickedText ?? null,
+    applyCtaClickedSelector:
+      args.rawResult.debug?.applyCtaClickedSelector ?? null,
+    ctaClickedText: args.rawResult.debug?.ctaClickedText ?? null,
+    ctaClickedSelector: args.rawResult.debug?.ctaClickedSelector ?? null,
+    dismissedBlocker: args.rawResult.debug?.dismissedBlocker === true,
+    resolverCandidates: args.rawResult.debug?.resolverCandidates ?? [],
+    resolverRejectedCandidates:
+      args.rawResult.debug?.resolverRejectedCandidates ?? [],
+    resolverSelectedLink: args.rawResult.debug?.resolverSelectedLink ?? null,
+    resolvedHandoffClickAttempted:
+      args.rawResult.debug?.resolvedHandoffClickAttempted === true,
+    resolvedHandoffClickSucceeded:
+      args.rawResult.debug?.resolvedHandoffClickSucceeded === true,
+    resolvedHandoffClickedHref:
+      args.rawResult.debug?.resolvedHandoffClickedHref ?? null,
+    resolvedHandoffClickedText:
+      args.rawResult.debug?.resolvedHandoffClickedText ?? null,
+    resolvedHandoffUrlBefore:
+      args.rawResult.debug?.resolvedHandoffUrlBefore ?? null,
+    resolvedHandoffUrlAfter:
+      args.rawResult.debug?.resolvedHandoffUrlAfter ?? null,
     applyCtaFound: evidence.applyCtaFound,
     applyCtaClicked: evidence.applyCtaClicked,
     hopCount: evidence.hopCount,
@@ -546,7 +656,73 @@ function logAutoApplyDebug(args: {
 
   console.info("[AUTO_APPLY_DEBUG]", {
     applicationId: args.applicationId,
+    entryUrl: args.result.debug.entryUrl ?? null,
+    initialLoadedUrl: args.result.debug.initialLoadedUrl ?? null,
     finalUrl: stopDebug.finalUrl,
+    domain: args.result.debug.domain ?? null,
+    stoppedAtUrl: stopDebug.stoppedAtUrl,
+    stoppedAtTitle: stopDebug.stoppedAtTitle,
+    lastActionText: stopDebug.lastActionText,
+    lastActionSelector: stopDebug.lastActionSelector,
+    ctaAttempts: args.result.debug.ctaAttempts ?? [],
+    entryCtaFound: args.result.debug.entryCtaFound === true,
+    entryCtaClicked: args.result.debug.entryCtaClicked === true,
+    entryCtaClickedText: args.result.debug.entryCtaClickedText ?? null,
+    entryCtaClickedSelector:
+      args.result.debug.entryCtaClickedSelector ?? null,
+    entryDismissedBlocker:
+      args.result.debug.entryDismissedBlocker === true,
+    handoffPageDetected: args.result.debug.handoffPageDetected === true,
+    handoffUrl: args.result.debug.handoffUrl ?? null,
+    handoffContinuationAttempted:
+      args.result.debug.handoffContinuationAttempted === true,
+    handoffContinuationSucceeded:
+      args.result.debug.handoffContinuationSucceeded === true,
+    handoffCtaFound: args.result.debug.handoffCtaFound === true,
+    handoffCtaClicked: args.result.debug.handoffCtaClicked === true,
+    handoffCtaClickedText:
+      args.result.debug.handoffCtaClickedText ?? null,
+    handoffCtaClickedSelector:
+      args.result.debug.handoffCtaClickedSelector ?? null,
+    handoffAttempts: args.result.debug.handoffAttempts ?? [],
+    cookiePromptDetected: args.result.debug.cookiePromptDetected === true,
+    cookiePromptClicked: args.result.debug.cookiePromptClicked === true,
+    cookiePromptClickedText:
+      args.result.debug.cookiePromptClickedText ?? null,
+    cookiePromptSelector: args.result.debug.cookiePromptSelector ?? null,
+    cookiePromptAttempts: args.result.debug.cookiePromptAttempts ?? [],
+    postCookieWaitAttempted:
+      args.result.debug.postCookieWaitAttempted === true,
+    postCookieUrlBefore: args.result.debug.postCookieUrlBefore ?? null,
+    postCookieUrlAfter: args.result.debug.postCookieUrlAfter ?? null,
+    postCookieUrlChanged:
+      args.result.debug.postCookieUrlChanged === true,
+    postCookieProgressDetected:
+      args.result.debug.postCookieProgressDetected === true,
+    postCookieTitleAfter:
+      args.result.debug.postCookieTitleAfter ?? null,
+    applyCtaClickedText: args.result.debug.applyCtaClickedText ?? null,
+    applyCtaClickedSelector:
+      args.result.debug.applyCtaClickedSelector ?? null,
+    ctaClickedText: args.result.debug.ctaClickedText ?? null,
+    ctaClickedSelector: args.result.debug.ctaClickedSelector ?? null,
+    dismissedBlocker: args.result.debug.dismissedBlocker === true,
+    resolverCandidates: args.result.debug.resolverCandidates ?? [],
+    resolverRejectedCandidates:
+      args.result.debug.resolverRejectedCandidates ?? [],
+    resolverSelectedLink: args.result.debug.resolverSelectedLink ?? null,
+    resolvedHandoffClickAttempted:
+      args.result.debug.resolvedHandoffClickAttempted === true,
+    resolvedHandoffClickSucceeded:
+      args.result.debug.resolvedHandoffClickSucceeded === true,
+    resolvedHandoffClickedHref:
+      args.result.debug.resolvedHandoffClickedHref ?? null,
+    resolvedHandoffClickedText:
+      args.result.debug.resolvedHandoffClickedText ?? null,
+    resolvedHandoffUrlBefore:
+      args.result.debug.resolvedHandoffUrlBefore ?? null,
+    resolvedHandoffUrlAfter:
+      args.result.debug.resolvedHandoffUrlAfter ?? null,
     currentUrl: stopDebug.currentUrl,
     applyCtaClicked: args.result.debug.applyCtaClicked === true,
     hopCount:
@@ -557,6 +733,29 @@ function logAutoApplyDebug(args: {
     confirmationTextFound: args.result.debug.confirmationTextFound === true,
     stopReason: stopDebug.stopReason,
     stopClassification: stopDebug.stopClassification,
+  });
+}
+
+function logAutoApplyStopPoint(args: {
+  applicationId: string;
+  applySessionId?: string;
+  phase: "background" | "foreground";
+  result: ApplyExecutionResult;
+}) {
+  const stopDebug = buildStopDebugFromExecutionResult(args.result);
+  if (!stopDebug) {
+    return;
+  }
+
+  console.info("[AUTO_APPLY_STOP_POINT]", {
+    applicationId: args.applicationId,
+    applySessionId: args.applySessionId ?? null,
+    phase: args.phase,
+    stoppedAtUrl: stopDebug.stoppedAtUrl,
+    stoppedAtTitle: stopDebug.stoppedAtTitle,
+    lastActionText: stopDebug.lastActionText,
+    lastActionSelector: stopDebug.lastActionSelector,
+    finalStatus: args.result.status,
   });
 }
 
@@ -574,7 +773,11 @@ function buildStopResponseFields(result: ApplyExecutionResult) {
     stopReason: stopDebug.stopReason,
     finalUrl,
     currentUrl: stopDebug.currentUrl,
+    stoppedAtUrl: stopDebug.stoppedAtUrl,
+    stoppedAtTitle: stopDebug.stoppedAtTitle,
     lastAction: stopDebug.lastAction,
+    lastActionText: stopDebug.lastActionText,
+    lastActionSelector: stopDebug.lastActionSelector,
     stopClassification: stopDebug.stopClassification,
   };
 }
@@ -763,6 +966,12 @@ async function persistAutomationOutcome(args: {
     storageTarget: "jobApplication",
   });
   logAutoApplyDebug({
+    applicationId: args.application.id,
+    applySessionId: args.applySessionId,
+    phase: args.phase,
+    result: finalResult,
+  });
+  logAutoApplyStopPoint({
     applicationId: args.application.id,
     applySessionId: args.applySessionId,
     phase: args.phase,
@@ -1085,7 +1294,10 @@ export async function POST(
 
     console.log("[AUTO_APPLY_ROUTE] prepared apply payload", {
       applicationId: application.id,
+      jobUrl: application.jobUrl,
       targetUrl: prepared.targetUrl ?? application.jobUrl,
+      usesExternalPostingUrl:
+        (prepared.targetUrl ?? application.jobUrl) === application.jobUrl,
       applyProvider: prepared.applyProvider ?? null,
       missingRequired: prepared.missingRequired,
       answerCount: Object.keys(prepared.finalValuesToSubmit).length,
@@ -1299,7 +1511,7 @@ export async function POST(
             error:
               finalResult.message ??
               "Auto apply is not available for this job application.",
-            finalUrl: finalResult.finalUrl,
+            ...buildStopResponseFields(finalResult),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },

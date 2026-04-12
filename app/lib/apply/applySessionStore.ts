@@ -13,11 +13,64 @@ export type ApplySessionClickRecord = {
   navigation: "same-tab" | "popup" | "new-page";
 };
 
+export type ApplySessionCtaAttemptRecord = {
+  phase: "entry" | "handoff" | "cookie";
+  action?: "scan" | "click";
+  selector: string;
+  text: string;
+  matchedText: string;
+  locatorStrategy?: string;
+  candidateFound?: boolean;
+  dismissesBlocker?: boolean;
+  success: boolean;
+  urlBefore: string;
+  urlAfter?: string;
+  applyCtaFoundAfter?: boolean;
+};
+
 export type ApplySessionDebug = {
+  entryUrl?: string;
+  initialLoadedUrl?: string;
   finalUrl?: string;
+  domain?: string;
+  stoppedAtUrl?: string;
+  stoppedAtTitle?: string;
+  lastActionText?: string;
+  lastActionSelector?: string;
   hopCount?: number;
   urlsVisited?: string[];
   clicks?: ApplySessionClickRecord[];
+  ctaAttempts?: ApplySessionCtaAttemptRecord[];
+  entryCtaFound?: boolean;
+  entryCtaClicked?: boolean;
+  entryCtaClickedText?: string;
+  entryCtaClickedSelector?: string;
+  entryDismissedBlocker?: boolean;
+  handoffPageDetected?: boolean;
+  handoffUrl?: string;
+  handoffContinuationAttempted?: boolean;
+  handoffContinuationSucceeded?: boolean;
+  handoffCtaFound?: boolean;
+  handoffCtaClicked?: boolean;
+  handoffCtaClickedText?: string;
+  handoffCtaClickedSelector?: string;
+  handoffAttempts?: ApplySessionCtaAttemptRecord[];
+  cookiePromptDetected?: boolean;
+  cookiePromptClicked?: boolean;
+  cookiePromptClickedText?: string;
+  cookiePromptSelector?: string;
+  cookiePromptAttempts?: ApplySessionCtaAttemptRecord[];
+  postCookieWaitAttempted?: boolean;
+  postCookieUrlBefore?: string;
+  postCookieUrlAfter?: string;
+  postCookieUrlChanged?: boolean;
+  postCookieProgressDetected?: boolean;
+  postCookieTitleAfter?: string;
+  applyCtaClickedText?: string;
+  applyCtaClickedSelector?: string;
+  ctaClickedText?: string;
+  ctaClickedSelector?: string;
+  dismissedBlocker?: boolean;
   attemptedSelectors?: string[];
   applyCtaFound?: boolean;
   applyCtaClicked?: boolean;
@@ -38,6 +91,29 @@ export type ApplySessionDebug = {
   lastAction?: "no_apply_cta" | "login_required" | "verification_required";
   stopClassification?: ApplyStopClassification;
   finalReason?: string;
+  resolverAttemptedLinks?: string[];
+  resolverCandidates?: Array<{
+    href: string;
+    hostname: string;
+    text: string;
+    score: number;
+    reasons: string[];
+  }>;
+  resolverRejectedCandidates?: Array<{
+    href: string;
+    hostname: string;
+    text: string;
+    reason: string;
+  }>;
+  resolverSelectedLink?: string;
+  resolverSuccess?: boolean;
+  resolverNewUrl?: string;
+  resolvedHandoffClickAttempted?: boolean;
+  resolvedHandoffClickSucceeded?: boolean;
+  resolvedHandoffClickedHref?: string;
+  resolvedHandoffClickedText?: string;
+  resolvedHandoffUrlBefore?: string;
+  resolvedHandoffUrlAfter?: string;
 };
 
 export type ApplySubmissionStatus = "PENDING" | "SUBMITTED" | "NOT_SUBMITTED";

@@ -156,12 +156,17 @@ export default function AuditClient({
     reason?: string;
     hints?: string[];
     finalUrl?: string;
+    stoppedAtUrl?: string;
+    stoppedAtTitle?: string;
     currentUrl?: string;
     lastAction?: string;
+    lastActionText?: string;
+    lastActionSelector?: string;
     stopReason?: string;
     stopClassification?: ApplyStopClassification;
     errorSnippet?: string;
     screenshotPath?: string;
+    status?: string;
   } | null>(null);
 
   const loadAudit = useCallback(async () => {
@@ -259,8 +264,12 @@ export default function AuditClient({
               message?: string;
               debug?: {
                 finalUrl?: string | null;
+                stoppedAtUrl?: string | null;
+                stoppedAtTitle?: string | null;
                 currentUrl?: string | null;
                 lastAction?: string | null;
+                lastActionText?: string | null;
+                lastActionSelector?: string | null;
                 stopReason?: string | null;
                 stopClassification?: ApplyStopClassification | null;
               };
@@ -306,11 +315,13 @@ export default function AuditClient({
           ) {
             const finalUrl =
               payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null;
+            const stoppedAtUrl =
+              payload.session.debug?.stoppedAtUrl ?? finalUrl;
             const lastAction = payload.session.debug?.lastAction ?? null;
             const stopClassification =
               payload.session.debug?.stopClassification ?? null;
             setApplyMessage(
-              finalUrl
+              stoppedAtUrl
                 ? "Stopped at:"
                 : payload.session.message ??
                     (sessionStatus === "APPLY_NOT_STARTED"
@@ -325,18 +336,26 @@ export default function AuditClient({
                       ? "Opened job page but could not start application."
                       : "Auto apply is not available for this job application."),
             );
-            setAppliedFinalUrl(finalUrl);
+            setAppliedFinalUrl(stoppedAtUrl);
             setApplyDebug(
-              finalUrl || lastAction
+              stoppedAtUrl || lastAction
                 ? {
                     finalUrl: finalUrl ?? undefined,
+                    stoppedAtUrl: stoppedAtUrl ?? undefined,
+                    stoppedAtTitle:
+                      payload.session.debug?.stoppedAtTitle ?? undefined,
                     currentUrl: payload.session.debug?.currentUrl ?? undefined,
                     lastAction: lastAction ?? undefined,
+                    lastActionText:
+                      payload.session.debug?.lastActionText ?? undefined,
+                    lastActionSelector:
+                      payload.session.debug?.lastActionSelector ?? undefined,
                     stopReason: payload.session.debug?.stopReason ?? undefined,
                     stopClassification: stopClassification ?? undefined,
                     reason: stopClassification
                       ? getStopReasonLabel(stopClassification.reason)
                       : lastAction ?? undefined,
+                    status: sessionStatus ?? payload.session.status ?? undefined,
                   }
                 : null,
             );
@@ -361,11 +380,13 @@ export default function AuditClient({
           if (payload.session.status === "FAILED") {
             const finalUrl =
               payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null;
+            const stoppedAtUrl =
+              payload.session.debug?.stoppedAtUrl ?? finalUrl;
             const lastAction = payload.session.debug?.lastAction ?? null;
             const stopClassification =
               payload.session.debug?.stopClassification ?? null;
             setApplyMessage(
-              finalUrl
+              stoppedAtUrl
                 ? "Stopped at:"
                 : payload.session.error ?? "Auto apply automation failed.",
             );
@@ -374,18 +395,26 @@ export default function AuditClient({
                 ? `Why it stopped: ${getStopReasonLabel(stopClassification.reason)}`
                 : payload.session.error ?? "Auto apply automation failed.",
             );
-            setAppliedFinalUrl(finalUrl);
+            setAppliedFinalUrl(stoppedAtUrl);
             setApplyDebug(
-              finalUrl || lastAction
+              stoppedAtUrl || lastAction
                 ? {
                     finalUrl: finalUrl ?? undefined,
+                    stoppedAtUrl: stoppedAtUrl ?? undefined,
+                    stoppedAtTitle:
+                      payload.session.debug?.stoppedAtTitle ?? undefined,
                     currentUrl: payload.session.debug?.currentUrl ?? undefined,
                     lastAction: lastAction ?? undefined,
+                    lastActionText:
+                      payload.session.debug?.lastActionText ?? undefined,
+                    lastActionSelector:
+                      payload.session.debug?.lastActionSelector ?? undefined,
                     stopReason: payload.session.debug?.stopReason ?? undefined,
                     stopClassification: stopClassification ?? undefined,
                     reason: stopClassification
                       ? getStopReasonLabel(stopClassification.reason)
                       : lastAction ?? undefined,
+                    status: sessionStatus ?? payload.session.status ?? undefined,
                   }
                 : null,
             );
@@ -426,6 +455,10 @@ export default function AuditClient({
         hint?: string;
         reason?: string;
         finalUrl?: string;
+        stoppedAtUrl?: string;
+        stoppedAtTitle?: string;
+        lastActionText?: string;
+        lastActionSelector?: string;
         screenshotPath?: string;
         htmlSnippet?: string;
         message?: string;
@@ -441,12 +474,20 @@ export default function AuditClient({
           reason: payload.reason ?? payload.hint,
           hints: [],
           finalUrl: payload.finalUrl,
+          stoppedAtUrl: payload.stoppedAtUrl,
+          stoppedAtTitle: payload.stoppedAtTitle,
           currentUrl: undefined,
           lastAction: undefined,
+          lastActionText: payload.lastActionText,
+          lastActionSelector: payload.lastActionSelector,
           stopReason: undefined,
           stopClassification: undefined,
           errorSnippet: payload.htmlSnippet,
           screenshotPath: payload.screenshotPath,
+          status:
+            toApplySessionDisplayStatus(payload.status) ??
+            payload.status ??
+            undefined,
         });
         throw new Error(
           (payload.error ?? "Unable to submit application") + missing,
@@ -813,16 +854,78 @@ export default function AuditClient({
             </div>
           ) : null}
 
-          {applyDebug.finalUrl ? (
-            <p className="mt-2 break-all">
-              <span className="font-semibold">Final URL:</span>{" "}
-              {applyDebug.finalUrl}
-            </p>
+          {applyDebug.stoppedAtUrl ||
+          applyDebug.finalUrl ||
+          applyDebug.currentUrl ||
+          applyDebug.stoppedAtTitle ||
+          applyDebug.lastActionText ||
+          applyDebug.status ? (
+            <div className="mt-3 grid gap-2 rounded-md border border-amber-200 bg-white p-3 text-xs text-amber-950">
+              {applyDebug.stoppedAtUrl ||
+              applyDebug.finalUrl ||
+              applyDebug.currentUrl ? (
+                <div>
+                  <p className="font-semibold uppercase tracking-wide text-amber-800">
+                    Stopped at
+                  </p>
+                  <a
+                    className="mt-1 block break-all font-mono text-[11px] underline"
+                    href={
+                      applyDebug.stoppedAtUrl ??
+                      applyDebug.finalUrl ??
+                      applyDebug.currentUrl
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {applyDebug.stoppedAtUrl ??
+                      applyDebug.finalUrl ??
+                      applyDebug.currentUrl}
+                  </a>
+                </div>
+              ) : null}
+
+              {applyDebug.stoppedAtTitle ? (
+                <div>
+                  <p className="font-semibold uppercase tracking-wide text-amber-800">
+                    Page title
+                  </p>
+                  <p className="mt-1 break-words text-sm">
+                    {applyDebug.stoppedAtTitle}
+                  </p>
+                </div>
+              ) : null}
+
+              {applyDebug.lastActionText || applyDebug.lastActionSelector ? (
+                <div>
+                  <p className="font-semibold uppercase tracking-wide text-amber-800">
+                    Last action
+                  </p>
+                  <p className="mt-1 break-words text-sm">
+                    {applyDebug.lastActionText ?? "Unknown action"}
+                    {applyDebug.lastActionSelector ? (
+                      <span className="mt-1 block font-mono text-[11px] text-amber-800">
+                        {applyDebug.lastActionSelector}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+              ) : null}
+
+              {applyDebug.status ? (
+                <div>
+                  <p className="font-semibold uppercase tracking-wide text-amber-800">
+                    Apply status
+                  </p>
+                  <p className="mt-1 text-sm">{applyDebug.status}</p>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
-          {applyDebug.finalUrl || applyDebug.currentUrl ? (
+          {applyDebug.stoppedAtUrl || applyDebug.finalUrl || applyDebug.currentUrl ? (
             <SavedStrategyPanel
-              finalUrl={applyDebug.finalUrl}
+              finalUrl={applyDebug.stoppedAtUrl ?? applyDebug.finalUrl}
               currentUrl={applyDebug.currentUrl}
               lastAction={applyDebug.lastAction}
               stopReason={applyDebug.stopReason}

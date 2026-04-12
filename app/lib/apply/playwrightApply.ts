@@ -16,6 +16,10 @@ import {
   detectPageSignals,
   waitForDomAndSettle,
 } from "@/app/lib/apply/playwrightSignals";
+import {
+  deriveStopClassification,
+  type ApplyStopClassification,
+} from "@/app/lib/apply/stopClassification";
 import type {
   ApplySessionClickRecord,
   ApplySessionDebug,
@@ -65,6 +69,11 @@ export type PlaywrightApplyResult = {
     confirmationDetected: boolean;
     verificationDetected: boolean;
     finalReason?: string;
+    stopClassification?: ApplyStopClassification;
+    resolverAttemptedLinks?: string[];
+    resolverSelectedLink?: string;
+    resolverSuccess?: boolean;
+    resolverNewUrl?: string;
   };
 };
 
@@ -133,6 +142,27 @@ type PlaywrightEvidence = {
   submissionConfirmed: boolean;
 };
 
+type ApplySourceCandidate = {
+  href: string;
+  score: number;
+};
+
+type ApplySourceResolverResult = {
+  attemptedLinks: string[];
+  selectedLink?: string;
+  success: boolean;
+  newUrl?: string;
+};
+
+const APPLY_SOURCE_RESOLVER_KEYWORDS = [
+  "apply",
+  "job",
+  "jobs",
+  "career",
+  "careers",
+  "external",
+] as const;
+
 function buildDebugPayload(args: {
   attemptedSelectors: string[];
   missingNames: string[];
@@ -167,6 +197,11 @@ function buildDebugPayload(args: {
   confirmationDetected: boolean;
   verificationDetected: boolean;
   finalReason?: string;
+  stopClassification?: ApplyStopClassification;
+  resolverAttemptedLinks?: string[];
+  resolverSelectedLink?: string;
+  resolverSuccess?: boolean;
+  resolverNewUrl?: string;
 }) {
   return {
     attemptedSelectors: args.attemptedSelectors,
@@ -202,6 +237,11 @@ function buildDebugPayload(args: {
     confirmationDetected: args.confirmationDetected,
     verificationDetected: args.verificationDetected,
     finalReason: args.finalReason,
+    stopClassification: args.stopClassification,
+    resolverAttemptedLinks: args.resolverAttemptedLinks ?? [],
+    resolverSelectedLink: args.resolverSelectedLink,
+    resolverSuccess: args.resolverSuccess,
+    resolverNewUrl: args.resolverNewUrl,
   };
 }
 
@@ -265,6 +305,180 @@ function logPlaywrightEvidence(evidence: PlaywrightEvidence) {
   console.log("[AUTO_APPLY_PLAYWRIGHT] evidence", evidence);
 }
 
+function parseHostname(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function dedupeUrls(urls: string[]) {
+  return [...new Set(urls.filter((url) => Boolean(url)))];
+}
+
+async function collectApplySourceCandidates(
+  page: Page,
+): Promise<ApplySourceCandidate[]> {
+  const currentUrl = page.url();
+  const currentHostname = parseHostname(currentUrl);
+
+  return page
+    .locator("a")
+    .evaluateAll(
+      (anchors, args) => {
+        const results: ApplySourceCandidate[] = [];
+        const seen = new Set<string>();
+
+        for (const anchor of anchors) {
+          if (!(anchor instanceof HTMLAnchorElement)) continue;
+
+          const rawHref = anchor.getAttribute("href")?.trim();
+          if (!rawHref) continue;
+
+          let absoluteHref = "";
+          let hostname = "";
+
+          try {
+            absoluteHref = new URL(rawHref, args.currentUrl).toString();
+            hostname = new URL(absoluteHref).hostname.toLowerCase();
+          } catch {
+            continue;
+          }
+
+          if (!hostname || hostname === args.currentHostname) continue;
+          if (seen.has(absoluteHref)) continue;
+
+          const signalText = [
+            absoluteHref,
+            anchor.textContent ?? "",
+            anchor.getAttribute("aria-label") ?? "",
+            anchor.getAttribute("title") ?? "",
+          ]
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+          let score = 0;
+          for (const keyword of args.keywords) {
+            if (!signalText.includes(keyword)) continue;
+
+            if (keyword === "apply") {
+              score += 50;
+            } else if (keyword === "career" || keyword === "careers") {
+              score += 20;
+            } else if (keyword === "external") {
+              score += 15;
+            } else {
+              score += 10;
+            }
+          }
+
+          if (score === 0) continue;
+
+          seen.add(absoluteHref);
+          results.push({
+            href: absoluteHref,
+            score,
+          });
+        }
+
+        results.sort((left, right) => right.score - left.score);
+        return results.slice(0, 10);
+      },
+      {
+        currentUrl,
+        currentHostname,
+        keywords: [...APPLY_SOURCE_RESOLVER_KEYWORDS],
+      },
+    )
+    .catch(() => []);
+}
+
+async function resolveApplySourceFromAggregatorPage(
+  page: Page,
+): Promise<ApplySourceResolverResult> {
+  const candidates = await collectApplySourceCandidates(page);
+  const attemptedLinks = candidates.map((candidate) => candidate.href);
+  const selectedLink = attemptedLinks[0];
+
+  if (!selectedLink) {
+    const result = {
+      attemptedLinks,
+      success: false,
+      newUrl: page.url(),
+    } satisfies ApplySourceResolverResult;
+
+    console.log("[AUTO_APPLY_RESOLVER]", result);
+    return result;
+  }
+
+  try {
+    await page.goto(selectedLink, { waitUntil: "domcontentloaded" });
+    await waitForDomAndSettle(page);
+
+    const result = {
+      attemptedLinks,
+      selectedLink,
+      success: true,
+      newUrl: page.url(),
+    } satisfies ApplySourceResolverResult;
+
+    console.log("[AUTO_APPLY_RESOLVER]", result);
+    return result;
+  } catch {
+    const result = {
+      attemptedLinks,
+      selectedLink,
+      success: false,
+      newUrl: page.url(),
+    } satisfies ApplySourceResolverResult;
+
+    console.log("[AUTO_APPLY_RESOLVER]", result);
+    return result;
+  }
+}
+
+function mergeChaseResults(args: {
+  initial: CtaChaseResult;
+  resolved: CtaChaseResult;
+  resolverUrl?: string;
+}): CtaChaseResult {
+  const mergedUrlsVisited = dedupeUrls([
+    ...args.initial.urlsVisited,
+    args.resolverUrl ?? "",
+    ...args.resolved.urlsVisited,
+  ]);
+  const hopCount =
+    args.initial.hopCount +
+    (args.resolverUrl ? 1 : 0) +
+    args.resolved.hopCount;
+  const clicks = [...args.initial.clicks, ...args.resolved.clicks];
+  const finalReason = args.resolved.finalReason ?? args.initial.finalReason;
+
+  if ("unavailable" in args.resolved && args.resolved.unavailable) {
+    return {
+      ...args.resolved,
+      hopCount,
+      urlsVisited: mergedUrlsVisited,
+      clicks,
+      finalReason,
+    };
+  }
+
+  return {
+    ...args.resolved,
+    hopCount,
+    urlsVisited: mergedUrlsVisited,
+    clicks,
+    finalReason,
+  };
+}
+
 export async function applyWithPlaywright(args: {
   jobUrl: string;
   form?: {
@@ -289,6 +503,24 @@ export async function applyWithPlaywright(args: {
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
   const targetUrl = args.form?.embedUrl ?? args.jobUrl;
+  let currentUrl = targetUrl;
+  let resolverAttemptedLinks: string[] = [];
+  let resolverSelectedLink: string | undefined;
+  let resolverSuccess: boolean | undefined;
+  let resolverNewUrl: string | undefined;
+
+  const captureCurrentUrl = (pageOrUrl?: Page | string | null) => {
+    if (typeof pageOrUrl === "string") {
+      currentUrl = pageOrUrl;
+      return currentUrl;
+    }
+
+    if (pageOrUrl) {
+      currentUrl = pageOrUrl.url();
+    }
+
+    return currentUrl;
+  };
 
   try {
     await args.onStatus?.({
@@ -329,8 +561,9 @@ export async function applyWithPlaywright(args: {
     console.log("[AUTO_APPLY_PLAYWRIGHT] navigating", { targetUrl });
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
     await waitForDomAndSettle(page);
+    captureCurrentUrl(page);
 
-    const chase: CtaChaseResult = await chaseApplyPath({
+    let chase: CtaChaseResult = await chaseApplyPath({
       page,
       context,
       onPageReady: args.onPageReady,
@@ -341,7 +574,59 @@ export async function applyWithPlaywright(args: {
     });
 
     page = chase.page;
-    const chaseEvidence = buildCtaEvidence(chase, page.url());
+    captureCurrentUrl(page);
+    let chaseEvidence = buildCtaEvidence(chase, page.url());
+    const initialStopClassification = deriveStopClassification({
+      targetUrl,
+      finalUrl: page.url(),
+      currentUrl: page.url(),
+      applyCtaFound: chaseEvidence.applyCtaFound,
+      applyCtaClicked: chaseEvidence.applyCtaClicked,
+      hopCount: chaseEvidence.hopCount,
+      confirmationTextFound: chase.signals.confirmationTextFound,
+      verificationSignals: [
+        ...chase.signals.verificationSignals,
+        ...chase.signals.accountSignals,
+      ],
+      pageText: chase.signals.pageText,
+      finalReason: chase.finalReason,
+      formDetected: chase.signals.formDetected,
+    });
+
+    if (
+      initialStopClassification.reason === "aggregator_no_cta" &&
+      !chaseEvidence.applyCtaFound
+    ) {
+      const resolverResult = await resolveApplySourceFromAggregatorPage(page);
+      resolverAttemptedLinks = resolverResult.attemptedLinks;
+      resolverSelectedLink = resolverResult.selectedLink;
+      resolverSuccess = resolverResult.success;
+      resolverNewUrl = resolverResult.newUrl;
+
+      if (resolverResult.success) {
+        captureCurrentUrl(page);
+
+        const resolvedChase = await chaseApplyPath({
+          page,
+          context,
+          onPageReady: args.onPageReady,
+          onStatus: args.onStatus,
+          viewerUrl: remoteSession?.viewerUrl,
+          remoteSessionId: remoteSession?.sessionId,
+          openUrl: resolverResult.newUrl ?? resolverResult.selectedLink,
+        });
+
+        page = resolvedChase.page;
+        captureCurrentUrl(page);
+        chase = mergeChaseResults({
+          initial: chase,
+          resolved: resolvedChase,
+          resolverUrl: resolverResult.newUrl ?? resolverResult.selectedLink,
+        });
+        chaseEvidence = buildCtaEvidence(chase, page.url());
+      }
+    }
+
     const landedWithoutStarting = isNoInteractionOnTarget({
       applyCtaClicked: chaseEvidence.applyCtaClicked,
       hopCount: chaseEvidence.hopCount,
@@ -440,6 +725,10 @@ export async function applyWithPlaywright(args: {
             finalReason:
               chase.finalReason ??
               "Confirmation-like content was detected without any confirmed application action.",
+            resolverAttemptedLinks,
+            resolverSelectedLink,
+            resolverSuccess,
+            resolverNewUrl,
           }),
         };
       }
@@ -499,6 +788,10 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: true,
           verificationDetected: chase.signals.needsHuman,
           finalReason: chase.finalReason,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
@@ -571,6 +864,10 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: chase.signals.confirmationDetected,
           verificationDetected: true,
           finalReason: chase.finalReason,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
@@ -642,6 +939,10 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: chase.signals.confirmationDetected,
           verificationDetected: chase.signals.needsHuman,
           finalReason: chase.finalReason,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
@@ -653,9 +954,9 @@ export async function applyWithPlaywright(args: {
 
     await args.onStatus?.({
       status: "OPENING_FORM",
-      lastUrl: page.url(),
+      lastUrl: captureCurrentUrl(page),
       viewerUrl: remoteSession?.viewerUrl,
-      openUrl: page.url(),
+      openUrl: currentUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
 
@@ -665,9 +966,9 @@ export async function applyWithPlaywright(args: {
 
     await args.onStatus?.({
       status: "FILLING_FORM",
-      lastUrl: page.url(),
+      lastUrl: captureCurrentUrl(page),
       viewerUrl: remoteSession?.viewerUrl,
-      openUrl: page.url(),
+      openUrl: currentUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
 
@@ -830,15 +1131,19 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: preSubmitSignals.confirmationDetected,
           verificationDetected: true,
           finalReason: "Verification detected before submission.",
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
 
     await args.onStatus?.({
       status: "SUBMITTING",
-      lastUrl: page.url(),
+      lastUrl: captureCurrentUrl(page),
       viewerUrl: remoteSession?.viewerUrl,
-      openUrl: page.url(),
+      openUrl: currentUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
 
@@ -935,21 +1240,24 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: false,
           verificationDetected: false,
           finalReason: message,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
 
     await args.onStatus?.({
       status: "WAITING_CONFIRMATION",
-      lastUrl: page.url(),
+      lastUrl: captureCurrentUrl(page),
       viewerUrl: remoteSession?.viewerUrl,
-      openUrl: page.url(),
+      openUrl: currentUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
 
     await waitForDomAndSettle(page);
-
-    const finalUrl = page.url();
+    const finalUrl = captureCurrentUrl(page);
     const finalSignals = await detectPageSignals(page);
     const success = resolveSubmissionConfirmed({
       confirmationTextFound: finalSignals.confirmationTextFound,
@@ -1032,6 +1340,10 @@ export async function applyWithPlaywright(args: {
           confirmationDetected: success,
           verificationDetected: true,
           finalReason: "Verification detected after submit.",
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
         }),
       };
     }
@@ -1086,18 +1398,24 @@ export async function applyWithPlaywright(args: {
         finalReason: success
           ? "Submission confirmed."
           : "Application submission not confirmed.",
+        resolverAttemptedLinks,
+        resolverSelectedLink,
+        resolverSuccess,
+        resolverNewUrl,
       }),
     };
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Playwright submit failed.";
+    const finalUrl = captureCurrentUrl();
     console.log("[AUTO_APPLY_CRAWL] error", message);
 
     await args.onStatus?.({
       status: "FAILED",
+      lastUrl: finalUrl,
       error: message,
       viewerUrl: remoteSession?.viewerUrl,
-      openUrl: targetUrl,
+      openUrl: finalUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
 
@@ -1105,7 +1423,7 @@ export async function applyWithPlaywright(args: {
       attemptedSelectors,
       applyCtaFound: false,
       applyCtaClicked: false,
-      currentUrl: targetUrl,
+      currentUrl: finalUrl,
       hopCount: 0,
       submitButtonFound: false,
       submitButtonClicked: false,
@@ -1119,18 +1437,20 @@ export async function applyWithPlaywright(args: {
     return {
       ok: false,
       status: "FAILED",
+      finalUrl,
       message,
-      openUrl: targetUrl,
+      openUrl: finalUrl,
       viewerUrl: remoteSession?.viewerUrl,
       debug: buildDebugPayload({
         attemptedSelectors,
         missingNames,
+        finalUrl,
         sessionId: remoteSession?.sessionId,
         viewerUrl: remoteSession?.viewerUrl,
         targetUrl,
         applyCtaFound: false,
         applyCtaClicked: false,
-        currentUrl: targetUrl,
+        currentUrl: finalUrl,
         submitButtonFound: false,
         submitButtonClicked: false,
         confirmationTextFound: false,
@@ -1148,6 +1468,10 @@ export async function applyWithPlaywright(args: {
         confirmationDetected: false,
         verificationDetected: false,
         finalReason: message,
+        resolverAttemptedLinks,
+        resolverSelectedLink,
+        resolverSuccess,
+        resolverNewUrl,
       }),
     };
   } finally {
@@ -1171,6 +1495,7 @@ export function toApplySessionDebug(
   if (!result) return undefined;
 
   return {
+    finalUrl: result.finalUrl,
     hopCount: result.hopCount,
     urlsVisited: result.urlsVisited,
     clicks: result.clicks,
@@ -1190,6 +1515,7 @@ export function toApplySessionDebug(
     successUrlPatternMatched: result.successUrlPatternMatched,
     verificationDetected: result.verificationDetected,
     submissionConfirmed: result.submissionConfirmed,
+    stopClassification: result.stopClassification,
     finalReason: result.finalReason,
   };
 }

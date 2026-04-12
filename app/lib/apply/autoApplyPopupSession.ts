@@ -1,3 +1,4 @@
+import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
 export const AUTO_APPLY_POPUP_STORAGE_KEY = "hirexa_auto_apply_popup_state";
@@ -7,12 +8,17 @@ export type AutoApplyPopupItem = {
   applicationId: string;
   applySessionId?: string | null;
   jobId: string;
+  jobUrl?: string | null;
   jobTitle: string;
   company: string;
   location?: string | null;
   status: ApplySessionStatus | string;
   message?: string | null;
   lastUrl?: string | null;
+  currentUrl?: string | null;
+  lastAction?: string | null;
+  stopReason?: string | null;
+  stopClassification?: ApplyStopClassification | null;
   updatedAt: number;
 };
 

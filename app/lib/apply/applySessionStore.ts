@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
 export type ApplySessionClickRecord = {
@@ -13,6 +14,7 @@ export type ApplySessionClickRecord = {
 };
 
 export type ApplySessionDebug = {
+  finalUrl?: string;
   hopCount?: number;
   urlsVisited?: string[];
   clicks?: ApplySessionClickRecord[];
@@ -32,6 +34,9 @@ export type ApplySessionDebug = {
   successUrlPatternMatched?: boolean;
   verificationDetected?: boolean;
   submissionConfirmed?: boolean;
+  stopReason?: "HUMAN_INTERVENTION_REQUIRED";
+  lastAction?: "no_apply_cta" | "login_required" | "verification_required";
+  stopClassification?: ApplyStopClassification;
   finalReason?: string;
 };
 

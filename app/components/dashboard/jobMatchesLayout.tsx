@@ -5,11 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
 import { useSession } from "next-auth/react";
+import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
 import JobDetailsPanel, { type FormattedJob } from "@/app/components/dashboard/JobDetailsPanel";
 import AdzunaAttribution from "@/app/components/jobs/AdzunaAttribution";
+import SavedStrategyPanel from "@/app/components/apply/SavedStrategyPanel";
+import { APPLY_SESSION_POLL_INTERVAL_MS } from "@/app/lib/apply/applySessionPolling";
 import {
   buildApplyProviderPayload,
   detectApplyProviderFromJob,
@@ -88,6 +91,11 @@ type AutoApplyStartResponse = {
   emailStatus?: string;
   message?: string;
   error?: string;
+  finalUrl?: string | null;
+  currentUrl?: string | null;
+  lastAction?: string | null;
+  stopReason?: string | null;
+  stopClassification?: ApplyStopClassification | null;
   missingRequired?: string[];
 };
 
@@ -108,6 +116,13 @@ type ApplySessionPollResponse = {
     lastUrl?: string;
     error?: string;
     message?: string;
+    debug?: {
+      finalUrl?: string | null;
+      currentUrl?: string | null;
+      lastAction?: string | null;
+      stopReason?: string | null;
+      stopClassification?: ApplyStopClassification | null;
+    };
   };
   error?: string;
 };
@@ -154,6 +169,14 @@ function formatAutoApplyStatusLabel(status: string | null | undefined) {
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(" ");
   }
+}
+
+function isStoppedAutoApplyStatus(status: string | null | undefined) {
+  return (
+    status === "APPLY_NOT_STARTED" ||
+    status === "WAITING_HUMAN" ||
+    status === "FAILED"
+  );
 }
 
 function sameDashboardFilters(left: DashboardFilters, right: DashboardFilters) {
@@ -750,17 +773,41 @@ export default function JobMatchesLayout({
 
             nextItems[item.applicationId] = {
               ...nextItems[item.applicationId],
+              applySessionId: isApplySessionTerminalStatus(displayStatus)
+                ? null
+                : nextItems[item.applicationId]?.applySessionId ??
+                  item.applySessionId ??
+                  null,
               status: displayStatus,
               message: payload.session.message ?? payload.session.error ?? null,
-              lastUrl: payload.session.lastUrl ?? item.lastUrl ?? null,
+              lastUrl:
+                payload.session.debug?.finalUrl ??
+                payload.session.lastUrl ??
+                item.lastUrl ??
+                null,
+              currentUrl:
+                payload.session.debug?.currentUrl ??
+                nextItems[item.applicationId]?.currentUrl ??
+                item.currentUrl ??
+                null,
+              lastAction:
+                payload.session.debug?.lastAction ??
+                nextItems[item.applicationId]?.lastAction ??
+                item.lastAction ??
+                null,
+              stopReason:
+                payload.session.debug?.stopReason ??
+                nextItems[item.applicationId]?.stopReason ??
+                item.stopReason ??
+                null,
+              stopClassification:
+                payload.session.debug?.stopClassification ??
+                nextItems[item.applicationId]?.stopClassification ??
+                item.stopClassification ??
+                null,
               updatedAt: now,
             };
           }
-
-          console.info("[AUTO_APPLY_POPUP] polled active sessions", {
-            sessionKey: current.currentSessionKey,
-            itemCount: results.length,
-          });
 
           return {
             ...current,
@@ -778,7 +825,7 @@ export default function JobMatchesLayout({
     void poll();
     const interval = window.setInterval(() => {
       void poll();
-    }, 2000);
+    }, APPLY_SESSION_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
   }, [autoApplyItems, updateAutoApplyPopupState]);
@@ -1389,6 +1436,7 @@ export default function JobMatchesLayout({
           applicationId,
           applySessionId: null,
           jobId: job.id,
+          jobUrl: job.jobUrl,
           jobTitle: job.title,
           company: job.company,
           location: job.location,
@@ -1426,11 +1474,17 @@ export default function JobMatchesLayout({
           applicationId,
           applySessionId: null,
           jobId: job.id,
+          jobUrl: job.jobUrl,
           jobTitle: job.title,
           company: job.company,
           location: job.location,
           status,
           message: popupMessage,
+          lastUrl: startData?.finalUrl ?? null,
+          currentUrl: startData?.currentUrl ?? null,
+          lastAction: startData?.lastAction ?? null,
+          stopReason: startData?.stopReason ?? null,
+          stopClassification: startData?.stopClassification ?? null,
         });
 
         if (missingResume) {
@@ -1449,6 +1503,7 @@ export default function JobMatchesLayout({
         applicationId,
         applySessionId: startData.applySessionId,
         jobId: job.id,
+        jobUrl: job.jobUrl,
         jobTitle: job.title,
         company: job.company,
         location: job.location,
@@ -1919,6 +1974,17 @@ export default function JobMatchesLayout({
                   const terminal = isApplySessionTerminalStatus(item.status);
                   const submitted = isApplySessionSuccessStatus(item.status);
                   const statusLabel = formatAutoApplyStatusLabel(item.status);
+                  const stoppedStatus = isStoppedAutoApplyStatus(item.status);
+                  const stoppedUrl =
+                    item.lastUrl ?? item.currentUrl ?? item.jobUrl ?? null;
+                  const canRenderStoppedPageUi =
+                    stoppedStatus &&
+                    Boolean(
+                      stoppedUrl ||
+                        item.stopClassification ||
+                        item.stopReason ||
+                        item.lastAction,
+                    );
 
                   return (
                     <div
@@ -1958,7 +2024,59 @@ export default function JobMatchesLayout({
                       </div>
 
                       {item.message ? (
-                        <p className="mt-2 text-[11px] text-gray-600">{item.message}</p>
+                        canRenderStoppedPageUi ? (
+                          <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                            {stoppedUrl ? (
+                              <p>
+                                Stopped at:{" "}
+                                <a
+                                  className="break-all underline"
+                                  href={stoppedUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {stoppedUrl}
+                                </a>
+                              </p>
+                            ) : null}
+                            <SavedStrategyPanel
+                              finalUrl={stoppedUrl}
+                              currentUrl={item.currentUrl}
+                              lastAction={item.lastAction}
+                              stopReason={item.stopReason}
+                              stopClassification={item.stopClassification}
+                              compact
+                              className="mt-2"
+                            />
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-[11px] text-gray-600">{item.message}</p>
+                        )
+                      ) : canRenderStoppedPageUi ? (
+                        <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                          {stoppedUrl ? (
+                            <p>
+                              Stopped at:{" "}
+                              <a
+                                className="break-all underline"
+                                href={stoppedUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {stoppedUrl}
+                              </a>
+                            </p>
+                          ) : null}
+                          <SavedStrategyPanel
+                            finalUrl={stoppedUrl}
+                            currentUrl={item.currentUrl}
+                            lastAction={item.lastAction}
+                            stopReason={item.stopReason}
+                            stopClassification={item.stopClassification}
+                            compact
+                            className="mt-2"
+                          />
+                        </div>
                       ) : null}
                     </div>
                   );

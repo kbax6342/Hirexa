@@ -9,6 +9,10 @@
    ========================= */
 @layer base {
   :root {
+    /* Keep Tailwind font tokens stable without requiring network font downloads. */
+    --font-inter: "Inter", system-ui, sans-serif;
+    --font-space-grotesk: "Space Grotesk", system-ui, sans-serif;
+
     --background: 230 55% 6%;
     --foreground: 210 40% 96%;
 

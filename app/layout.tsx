@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Space_Grotesk } from "next/font/google";
 import Script from "next/script";
 
 import "./globals.css";
@@ -16,16 +15,6 @@ import {
 } from "./lib/meta-pixel";
 import Providers from "./providers";
 import StyledJsxRegistry from "./registry";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  variable: "--font-space-grotesk",
-});
 
 export const dynamic = "force-dynamic";
 
@@ -78,7 +67,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable}`}>
+    <html lang="en">
       <body className="font-sans antialiased">
         <Script id="meta-pixel" strategy="beforeInteractive">
           {getMetaPixelInitScript(META_PIXEL_ID)}

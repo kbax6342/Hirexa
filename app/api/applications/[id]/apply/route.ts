@@ -32,6 +32,10 @@ import {
   computeMissingFromFields,
 } from "@/app/lib/jobApplicationAudit";
 import { prisma } from "@/app/lib/prisma";
+import {
+  deriveStopClassification,
+  type ApplyStopClassification,
+} from "@/app/lib/apply/stopClassification";
 
 export const runtime = "nodejs";
 
@@ -67,12 +71,27 @@ type PersistAutomationOutcomeResult = {
 type RawPlaywrightResult = Awaited<ReturnType<typeof applyWithPlaywright>>;
 
 type RoutePlaywrightEvidence = {
+  applyCtaFound: boolean;
   applyCtaClicked: boolean;
   hopCount: number;
   currentUrl: string | null;
   targetUrl: string | null;
+  submitButtonFound: boolean;
   submitButtonClicked: boolean;
   confirmationTextFound: boolean;
+};
+
+type AutoApplyLastAction =
+  | "no_apply_cta"
+  | "login_required"
+  | "verification_required";
+
+type AutoApplyStopDebug = {
+  stopReason: "HUMAN_INTERVENTION_REQUIRED";
+  finalUrl: string | null;
+  currentUrl: string | null;
+  lastAction: AutoApplyLastAction;
+  stopClassification: ApplyStopClassification;
 };
 
 async function findApplicationForUser(id: string, userId: string) {
@@ -97,18 +116,26 @@ function toHostedAnswersMap(values: Record<string, unknown>): AnswersMap {
 function normalizePlaywrightResult(
   result: Awaited<ReturnType<typeof applyWithPlaywright>>,
 ): ApplyExecutionResult {
-  const debug =
-    toApplySessionDebug(result.debug) ??
-    ({
-      finalReason:
-        result.message ??
-        result.status.toLowerCase(),
-    } satisfies ApplySessionDebug);
+  const stopDebug = buildStopDebugFromRawResult(result);
+  const debug = {
+    ...(toApplySessionDebug(result.debug) ??
+      ({
+        finalReason:
+          result.message ??
+          result.status.toLowerCase(),
+      } satisfies ApplySessionDebug)),
+    finalUrl:
+      result.finalUrl ?? result.openUrl ?? result.debug?.finalUrl ?? undefined,
+    stopReason: stopDebug?.stopReason,
+    lastAction: stopDebug?.lastAction,
+    stopClassification:
+      stopDebug?.stopClassification ?? result.debug?.stopClassification,
+  } satisfies ApplySessionDebug;
 
   return {
     ok: result.ok,
     status: result.status,
-    finalUrl: result.finalUrl ?? result.openUrl,
+    finalUrl: stopDebug?.finalUrl ?? result.finalUrl ?? result.openUrl,
     message: result.message,
     unavailable: result.unavailable,
     needsHuman: result.needsHuman,
@@ -120,12 +147,14 @@ function normalizePlaywrightResult(
 
 function readRoutePlaywrightEvidence(result: RawPlaywrightResult): RoutePlaywrightEvidence {
   return {
+    applyCtaFound: result.debug?.applyCtaFound === true,
     applyCtaClicked: result.debug?.applyCtaClicked === true,
     hopCount:
       typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0,
     currentUrl:
       result.debug?.currentUrl ?? result.finalUrl ?? result.openUrl ?? null,
     targetUrl: result.debug?.targetUrl ?? null,
+    submitButtonFound: result.debug?.submitButtonFound === true,
     submitButtonClicked: result.debug?.submitButtonClicked === true,
     confirmationTextFound: result.debug?.confirmationTextFound === true,
   };
@@ -141,6 +170,183 @@ function shouldForceApplyNotStarted(evidence: RoutePlaywrightEvidence) {
     evidence.submitButtonClicked !== true &&
     evidence.confirmationTextFound !== true
   );
+}
+
+function looksLikeLoginRequired(value: string | null | undefined) {
+  if (!value) return false;
+
+  const normalized = value.toLowerCase();
+  return [
+    "log in",
+    "login",
+    "sign in",
+    "signin",
+    "create account",
+    "sign up",
+    "register",
+    "set your password",
+    "password",
+    "confirm your email",
+    "verify your email",
+    "email verification",
+  ].some((signal) => normalized.includes(signal));
+}
+
+function deriveLastActionFromRawResult(
+  result: RawPlaywrightResult,
+): AutoApplyLastAction {
+  const applyCtaClicked = result.debug?.applyCtaClicked === true;
+  const hopCount =
+    typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0;
+
+  if (!applyCtaClicked && hopCount === 0) {
+    return "no_apply_cta";
+  }
+
+  const verificationText = [
+    ...(result.debug?.verificationSignals ?? []),
+    result.debug?.finalReason,
+    result.message,
+    result.finalUrl,
+    result.debug?.currentUrl,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+
+  return looksLikeLoginRequired(verificationText)
+    ? "login_required"
+    : "verification_required";
+}
+
+function deriveLastActionFromExecutionResult(
+  result: ApplyExecutionResult,
+): AutoApplyLastAction {
+  const applyCtaClicked = result.debug.applyCtaClicked === true;
+  const hopCount =
+    typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0;
+
+  if (!applyCtaClicked && hopCount === 0) {
+    return "no_apply_cta";
+  }
+
+  const verificationText = [
+    result.debug.finalReason,
+    result.message,
+    result.finalUrl,
+    result.debug.currentUrl,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+
+  return looksLikeLoginRequired(verificationText)
+    ? "login_required"
+    : "verification_required";
+}
+
+function buildStopDebugFromRawResult(
+  result: RawPlaywrightResult,
+): AutoApplyStopDebug | null {
+  if (
+    result.needsHuman !== true &&
+    result.status !== "APPLY_NOT_STARTED" &&
+    result.status !== "FAILED"
+  ) {
+    return null;
+  }
+
+  const finalUrl =
+    result.finalUrl ?? result.openUrl ?? result.debug?.finalUrl ?? null;
+  const currentUrl = result.debug?.currentUrl ?? finalUrl;
+  const lastAction = deriveLastActionFromRawResult(result);
+
+  return {
+    stopReason: "HUMAN_INTERVENTION_REQUIRED",
+    finalUrl,
+    currentUrl,
+    lastAction,
+    stopClassification: deriveStopClassification({
+      targetUrl: result.debug?.targetUrl ?? null,
+      finalUrl,
+      currentUrl,
+      applyCtaFound: result.debug?.applyCtaFound === true,
+      applyCtaClicked: result.debug?.applyCtaClicked === true,
+      hopCount:
+        typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0,
+      submitButtonFound: result.debug?.submitButtonFound === true,
+      submitButtonClicked: result.debug?.submitButtonClicked === true,
+      confirmationTextFound: result.debug?.confirmationTextFound === true,
+      verificationSignals: result.debug?.verificationSignals ?? [],
+      pageText: result.debug?.pageText,
+      finalReason: result.debug?.finalReason ?? result.message ?? null,
+      message: result.message,
+      lastAction,
+      formDetected: result.debug?.formDetected === true,
+    }),
+  };
+}
+
+function buildStopDebugFromExecutionResult(
+  result: ApplyExecutionResult,
+): AutoApplyStopDebug | null {
+  if (
+    result.needsHuman !== true &&
+    result.status !== "APPLY_NOT_STARTED" &&
+    result.status !== "FAILED"
+  ) {
+    return null;
+  }
+
+  const finalUrl = result.finalUrl ?? result.debug.finalUrl ?? null;
+  const currentUrl = result.debug.currentUrl ?? finalUrl;
+  const lastAction =
+    result.debug.lastAction ?? deriveLastActionFromExecutionResult(result);
+
+  return {
+    stopReason: "HUMAN_INTERVENTION_REQUIRED",
+    finalUrl,
+    currentUrl,
+    lastAction,
+    stopClassification:
+      result.debug.stopClassification ??
+      deriveStopClassification({
+        targetUrl: result.debug.targetUrl ?? null,
+        finalUrl,
+        currentUrl,
+        applyCtaFound: result.debug.applyCtaFound === true,
+        applyCtaClicked: result.debug.applyCtaClicked === true,
+        hopCount:
+          typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0,
+        submitButtonFound: result.debug.submitButtonFound === true,
+        submitButtonClicked: result.debug.submitButtonClicked === true,
+        confirmationTextFound: result.debug.confirmationTextFound === true,
+        finalReason: result.debug.finalReason ?? result.message ?? null,
+        message: result.message,
+        lastAction,
+        formDetected: result.debug.formDetected === true,
+      }),
+  };
+}
+
+function withStopDebug(
+  result: ApplyExecutionResult,
+  stopDebug: AutoApplyStopDebug | null,
+): ApplyExecutionResult {
+  if (!stopDebug) {
+    return result;
+  }
+
+  return {
+    ...result,
+    finalUrl: stopDebug.finalUrl ?? result.finalUrl,
+    debug: {
+      ...result.debug,
+      finalUrl: stopDebug.finalUrl ?? undefined,
+      currentUrl: stopDebug.currentUrl ?? undefined,
+      stopReason: stopDebug.stopReason,
+      lastAction: stopDebug.lastAction,
+      stopClassification: stopDebug.stopClassification,
+    },
+  };
 }
 
 function applyRouteLevelSubmissionGuard(args: {
@@ -161,10 +367,12 @@ function applyRouteLevelSubmissionGuard(args: {
     rawStatus,
     rawSubmissionConfirmed,
     finalUrl: args.rawResult.finalUrl ?? args.rawResult.openUrl ?? null,
+    applyCtaFound: evidence.applyCtaFound,
     applyCtaClicked: evidence.applyCtaClicked,
     hopCount: evidence.hopCount,
     currentUrl: evidence.currentUrl,
     targetUrl: evidence.targetUrl,
+    submitButtonFound: evidence.submitButtonFound,
     submitButtonClicked: evidence.submitButtonClicked,
     confirmationTextFound: evidence.confirmationTextFound,
   });
@@ -192,7 +400,10 @@ function applyRouteLevelSubmissionGuard(args: {
     };
   }
 
-  const normalized = normalizePlaywrightResult(guardedResult);
+  const normalized = withStopDebug(
+    normalizePlaywrightResult(guardedResult),
+    buildStopDebugFromRawResult(guardedResult),
+  );
   console.log("[AUTO_APPLY_ROUTE] playwright final promotion", {
     applicationId: args.applicationId,
     phase: args.phase,
@@ -214,11 +425,13 @@ function readExecutionEvidence(
   result: ApplyExecutionResult,
 ): RoutePlaywrightEvidence {
   return {
+    applyCtaFound: result.debug.applyCtaFound === true,
     applyCtaClicked: result.debug.applyCtaClicked === true,
     hopCount:
       typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0,
     currentUrl: result.debug.currentUrl ?? result.finalUrl ?? null,
     targetUrl: result.debug.targetUrl ?? null,
+    submitButtonFound: result.debug.submitButtonFound === true,
     submitButtonClicked: result.debug.submitButtonClicked === true,
     confirmationTextFound: result.debug.confirmationTextFound === true,
   };
@@ -241,16 +454,43 @@ function applyFinalWriteGuard(args: {
     storageTarget: args.storageTarget,
     rawStatus: args.result.rawStatus,
     rawSubmissionConfirmed: args.result.rawSubmissionConfirmed,
+    applyCtaFound: evidence.applyCtaFound,
     applyCtaClicked: evidence.applyCtaClicked,
     hopCount: evidence.hopCount,
     currentUrl: evidence.currentUrl,
     targetUrl: evidence.targetUrl,
+    submitButtonFound: evidence.submitButtonFound,
     submitButtonClicked: evidence.submitButtonClicked,
     confirmationTextFound: evidence.confirmationTextFound,
   });
 
+  const finalReason =
+    args.result.debug.finalReason ??
+    "Final write guard forced APPLY_NOT_STARTED for a no-interaction run.";
+  const stopClassification = deriveStopClassification({
+    targetUrl: args.result.debug.targetUrl ?? null,
+    finalUrl: args.result.finalUrl ?? evidence.currentUrl ?? null,
+    currentUrl: evidence.currentUrl,
+    applyCtaFound: evidence.applyCtaFound,
+    applyCtaClicked: evidence.applyCtaClicked,
+    hopCount: evidence.hopCount,
+    submitButtonFound: evidence.submitButtonFound,
+    submitButtonClicked: evidence.submitButtonClicked,
+    confirmationTextFound: evidence.confirmationTextFound,
+    finalReason,
+    message: args.result.message,
+    lastAction: "no_apply_cta",
+    formDetected: args.result.debug.formDetected === true,
+  });
+
   return {
-    ...args.result,
+    ...withStopDebug(args.result, {
+      stopReason: "HUMAN_INTERVENTION_REQUIRED",
+      finalUrl: args.result.finalUrl ?? evidence.currentUrl ?? null,
+      currentUrl: evidence.currentUrl,
+      lastAction: "no_apply_cta",
+      stopClassification,
+    }),
     ok: false,
     status: "APPLY_NOT_STARTED",
     unavailable: true,
@@ -258,10 +498,13 @@ function applyFinalWriteGuard(args: {
       args.result.message ?? "Opened job page but could not start application.",
     debug: {
       ...args.result.debug,
+      finalUrl: args.result.finalUrl ?? evidence.currentUrl ?? undefined,
+      currentUrl: evidence.currentUrl ?? undefined,
+      stopReason: "HUMAN_INTERVENTION_REQUIRED",
+      lastAction: "no_apply_cta",
+      stopClassification,
       submissionConfirmed: false,
-      finalReason:
-        args.result.debug.finalReason ??
-        "Final write guard forced APPLY_NOT_STARTED for a no-interaction run.",
+      finalReason,
     },
     rawStatus: args.result.rawStatus,
     rawSubmissionConfirmed: args.result.rawSubmissionConfirmed,
@@ -288,6 +531,52 @@ function logFinalWrite(args: {
     emailStatus: args.emailStatus,
     storageTarget: args.storageTarget,
   });
+}
+
+function logAutoApplyDebug(args: {
+  applicationId: string;
+  applySessionId?: string;
+  phase: "background" | "foreground";
+  result: ApplyExecutionResult;
+}) {
+  const stopDebug = buildStopDebugFromExecutionResult(args.result);
+  if (!stopDebug) {
+    return;
+  }
+
+  console.info("[AUTO_APPLY_DEBUG]", {
+    applicationId: args.applicationId,
+    finalUrl: stopDebug.finalUrl,
+    currentUrl: stopDebug.currentUrl,
+    applyCtaClicked: args.result.debug.applyCtaClicked === true,
+    hopCount:
+      typeof args.result.debug.hopCount === "number"
+        ? args.result.debug.hopCount
+        : 0,
+    submitButtonClicked: args.result.debug.submitButtonClicked === true,
+    confirmationTextFound: args.result.debug.confirmationTextFound === true,
+    stopReason: stopDebug.stopReason,
+    stopClassification: stopDebug.stopClassification,
+  });
+}
+
+function buildStopResponseFields(result: ApplyExecutionResult) {
+  const stopDebug = buildStopDebugFromExecutionResult(result);
+  const finalUrl = stopDebug?.finalUrl ?? result.finalUrl ?? result.debug.finalUrl ?? null;
+
+  if (!stopDebug) {
+    return {
+      finalUrl,
+    };
+  }
+
+  return {
+    stopReason: stopDebug.stopReason,
+    finalUrl,
+    currentUrl: stopDebug.currentUrl,
+    lastAction: stopDebug.lastAction,
+    stopClassification: stopDebug.stopClassification,
+  };
 }
 
 async function sendStatusChangeEmail(args: {
@@ -472,6 +761,12 @@ async function persistAutomationOutcome(args: {
     applicationId: args.application.id,
     applySessionId: args.applySessionId,
     storageTarget: "jobApplication",
+  });
+  logAutoApplyDebug({
+    applicationId: args.application.id,
+    applySessionId: args.applySessionId,
+    phase: args.phase,
+    result: finalResult,
   });
   const nextAudit = buildAutomationAudit({
     existingAudit: args.application.auditJson,
@@ -957,7 +1252,7 @@ export async function POST(
             ok: false,
             status: "WAITING_HUMAN",
             error: finalResult.message ?? "Human verification required.",
-            finalUrl: finalResult.finalUrl,
+            ...buildStopResponseFields(finalResult),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -973,7 +1268,7 @@ export async function POST(
             error:
               finalResult.message ??
               "Opened job page but could not start application.",
-            finalUrl: finalResult.finalUrl,
+            ...buildStopResponseFields(finalResult),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -1017,7 +1312,7 @@ export async function POST(
           ok: false,
           status: finalResult.status,
           error: finalResult.message ?? "Playwright automation failed.",
-          finalUrl: finalResult.finalUrl,
+          ...buildStopResponseFields(finalResult),
           submissionStatus: persistedOutcome.submissionStatus,
           emailStatus: persistedOutcome.emailStatus,
         },

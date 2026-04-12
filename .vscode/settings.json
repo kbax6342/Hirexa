@@ -1,0 +1,81 @@
+{
+  "testing.automaticallyOpenPeekView": "never",
+  "testing.openTesting": "neverOpen",
+  "testing.followRunningTest": true,
+  "testing.saveBeforeTest": true,
+
+  "workbench.colorTheme": "Dracula Theme",
+  "workbench.iconTheme": "material-icon-theme",
+  "workbench.startupEditor": "none",
+  "workbench.editor.enablePreview": false,
+
+  "editor.wordWrap": "on",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "editor.minimap.enabled": false,
+  "editor.stickyScroll.enabled": true,
+  "editor.inlineSuggest.enabled": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.fontFamily": "Operator Mono Light, Menlo, Monaco, 'Courier New', monospace",
+  "editor.fontSize": 20,
+  "editor.unicodeHighlight.nonBasicASCII": false,
+
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  "prettier.jsxSingleQuote": true,
+  "prettier.singleQuote": true,
+
+  "files.autoSave": "off",
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.exclude": {
+    "**/.next": true,
+    "**/playwright-report": true,
+    "**/test-results": true
+  },
+
+  "search.exclude": {
+    "**/.next": true,
+    "**/playwright-report": true,
+    "**/test-results": true,
+    "**/node_modules": false
+  },
+
+  "explorer.excludeGitIgnore": false,
+  "explorer.confirmDragAndDrop": false,
+  "explorer.confirmDelete": false,
+
+  "window.zoomLevel": -2,
+  "diffEditor.renderSideBySide": false,
+
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.fontFamily": "monospace",
+
+  "extensions.ignoreRecommendations": false,
+
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  "typescript.updateImportsOnFileMove.enabled": "always",
+
+  "security.workspace.trust.untrustedFiles": "open",
+  "git.enableSmartCommit": true,
+
+  "claudeCode.preferredLocation": "panel",
+  "chatgpt.runCodexInWindowsSubsystemForLinux": true,
+
+  "json.schemas": [],
+  "testing.automaticallyOpenTestResults": "neverOpen"
+}

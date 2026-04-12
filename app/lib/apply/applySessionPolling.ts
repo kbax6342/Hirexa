@@ -1,0 +1,1 @@
+export const APPLY_SESSION_POLL_INTERVAL_MS = 2000;

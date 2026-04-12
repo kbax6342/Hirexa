@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import SavedStrategyPanel from "@/app/components/apply/SavedStrategyPanel";
+import { APPLY_SESSION_POLL_INTERVAL_MS } from "@/app/lib/apply/applySessionPolling";
+import {
+  getStopReasonLabel,
+  type ApplyStopClassification,
+} from "@/app/lib/apply/stopClassification";
 import {
   isApplySessionSuccessStatus,
   toApplySessionDisplayStatus,
@@ -150,6 +156,10 @@ export default function AuditClient({
     reason?: string;
     hints?: string[];
     finalUrl?: string;
+    currentUrl?: string;
+    lastAction?: string;
+    stopReason?: string;
+    stopClassification?: ApplyStopClassification;
     errorSnippet?: string;
     screenshotPath?: string;
   } | null>(null);
@@ -247,6 +257,13 @@ export default function AuditClient({
               lastUrl?: string;
               error?: string;
               message?: string;
+              debug?: {
+                finalUrl?: string | null;
+                currentUrl?: string | null;
+                lastAction?: string | null;
+                stopReason?: string | null;
+                stopClassification?: ApplyStopClassification | null;
+              };
             };
             error?: string;
           };
@@ -273,8 +290,11 @@ export default function AuditClient({
             setApplyMessage(
               payload.session.message ?? "Application submitted successfully.",
             );
-            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            setAppliedFinalUrl(
+              payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null,
+            );
             setStatusMessage("Status updated: SENT");
+            setApplySessionId(null);
             await loadAudit();
             return;
           }
@@ -284,19 +304,43 @@ export default function AuditClient({
             sessionStatus === "AUTO_APPLY_UNAVAILABLE" ||
             sessionStatus === "WAITING_HUMAN"
           ) {
+            const finalUrl =
+              payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null;
+            const lastAction = payload.session.debug?.lastAction ?? null;
+            const stopClassification =
+              payload.session.debug?.stopClassification ?? null;
             setApplyMessage(
-              payload.session.message ??
-                (sessionStatus === "APPLY_NOT_STARTED"
-                  ? "Opened job page but could not start application."
-                  : "Auto apply is not available for this job application."),
+              finalUrl
+                ? "Stopped at:"
+                : payload.session.message ??
+                    (sessionStatus === "APPLY_NOT_STARTED"
+                      ? "Opened job page but could not start application."
+                      : "Auto apply is not available for this job application."),
             );
             setStatusMessage(
-              payload.session.message ??
-                (sessionStatus === "APPLY_NOT_STARTED"
-                  ? "Opened job page but could not start application."
-                  : "Auto apply is not available for this job application."),
+              stopClassification
+                ? `Why it stopped: ${getStopReasonLabel(stopClassification.reason)}`
+                : payload.session.message ??
+                    (sessionStatus === "APPLY_NOT_STARTED"
+                      ? "Opened job page but could not start application."
+                      : "Auto apply is not available for this job application."),
             );
-            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            setAppliedFinalUrl(finalUrl);
+            setApplyDebug(
+              finalUrl || lastAction
+                ? {
+                    finalUrl: finalUrl ?? undefined,
+                    currentUrl: payload.session.debug?.currentUrl ?? undefined,
+                    lastAction: lastAction ?? undefined,
+                    stopReason: payload.session.debug?.stopReason ?? undefined,
+                    stopClassification: stopClassification ?? undefined,
+                    reason: stopClassification
+                      ? getStopReasonLabel(stopClassification.reason)
+                      : lastAction ?? undefined,
+                  }
+                : null,
+            );
+            setApplySessionId(null);
             return;
           }
 
@@ -307,24 +351,51 @@ export default function AuditClient({
             setStatusMessage(
               payload.session.message ?? "Application submission not confirmed.",
             );
-            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            setAppliedFinalUrl(
+              payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null,
+            );
+            setApplySessionId(null);
             return;
           }
 
           if (payload.session.status === "FAILED") {
+            const finalUrl =
+              payload.session.debug?.finalUrl ?? payload.session.lastUrl ?? null;
+            const lastAction = payload.session.debug?.lastAction ?? null;
+            const stopClassification =
+              payload.session.debug?.stopClassification ?? null;
             setApplyMessage(
-              payload.session.error ?? "Auto apply automation failed.",
+              finalUrl
+                ? "Stopped at:"
+                : payload.session.error ?? "Auto apply automation failed.",
             );
             setStatusMessage(
-              payload.session.error ?? "Auto apply automation failed.",
+              stopClassification
+                ? `Why it stopped: ${getStopReasonLabel(stopClassification.reason)}`
+                : payload.session.error ?? "Auto apply automation failed.",
             );
-            setAppliedFinalUrl(payload.session.lastUrl ?? null);
+            setAppliedFinalUrl(finalUrl);
+            setApplyDebug(
+              finalUrl || lastAction
+                ? {
+                    finalUrl: finalUrl ?? undefined,
+                    currentUrl: payload.session.debug?.currentUrl ?? undefined,
+                    lastAction: lastAction ?? undefined,
+                    stopReason: payload.session.debug?.stopReason ?? undefined,
+                    stopClassification: stopClassification ?? undefined,
+                    reason: stopClassification
+                      ? getStopReasonLabel(stopClassification.reason)
+                      : lastAction ?? undefined,
+                  }
+                : null,
+            );
+            setApplySessionId(null);
           }
         } catch {
           // Polling is best effort.
         }
       })();
-    }, 2000);
+    }, APPLY_SESSION_POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
   }, [applySessionId, loadAudit]);
@@ -370,6 +441,10 @@ export default function AuditClient({
           reason: payload.reason ?? payload.hint,
           hints: [],
           finalUrl: payload.finalUrl,
+          currentUrl: undefined,
+          lastAction: undefined,
+          stopReason: undefined,
+          stopClassification: undefined,
           errorSnippet: payload.htmlSnippet,
           screenshotPath: payload.screenshotPath,
         });
@@ -743,6 +818,18 @@ export default function AuditClient({
               <span className="font-semibold">Final URL:</span>{" "}
               {applyDebug.finalUrl}
             </p>
+          ) : null}
+
+          {applyDebug.finalUrl || applyDebug.currentUrl ? (
+            <SavedStrategyPanel
+              finalUrl={applyDebug.finalUrl}
+              currentUrl={applyDebug.currentUrl}
+              lastAction={applyDebug.lastAction}
+              stopReason={applyDebug.stopReason}
+              stopClassification={applyDebug.stopClassification}
+              tone="amber"
+              className="mt-3"
+            />
           ) : null}
 
           {process.env.NODE_ENV === "development" &&

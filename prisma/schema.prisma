@@ -201,6 +201,7 @@ model UserProfile {
   portfolioUrl            String?
   questionsCompleted      Boolean            @default(false)
   benefitSelections       BenefitSelection[]
+  applySiteStrategies     ApplySiteStrategy[]
   jobApplications         JobApplication[]
   jobInterests            JobInterest[]
   resume                  Resume?
@@ -213,6 +214,38 @@ model UserProfile {
   @@index([citySearch])
   @@index([stateSearch])
   @@index([postalCodeSearch])
+}
+
+model ApplySiteStrategy {
+  id                  String      @id @default(cuid())
+
+  userProfileId       String
+  userProfile         UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  hostname            String
+  finalUrl            String?
+  lastAction          String?
+  stopReason          String?
+  instructions        String?
+  selectors           String?
+  stepsJson           Json?
+  trainingSource      String?
+  lastTrainedUrl      String?
+
+  status              String      @default("draft")
+  successCount        Int         @default(0)
+  failureCount        Int         @default(0)
+  lastReplaySucceeded Boolean?
+  lastFailureReason   String?
+  lastReplayedAt      DateTime?
+
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@unique([userProfileId, hostname])
+  @@index([userProfileId])
+  @@index([hostname])
+  @@index([userProfileId, status])
 }
 
 model OnboardingDraft {

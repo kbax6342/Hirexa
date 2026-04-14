@@ -183,7 +183,7 @@ export default function JobDetailsPanel({
   hideAdzunaAttribution = false,
   autoApplyStopPoint = null,
 }: JobDetailsPanelProps) {
-  const descriptionSource = String(job?.description ?? "");
+  const descriptionSource = String(job?.descriptionPlain ?? job?.description ?? "");
   const parsedMeta = useMemo(
     () => extractCompanyLocationFromDescription(descriptionSource),
     [descriptionSource]
@@ -206,10 +206,22 @@ export default function JobDetailsPanel({
 
     return formatAdzunaDescription(
       String(
-        job.descriptionPlain ?? job.content ?? job.description ?? job.descriptionHtml ?? ""
+        job.descriptionHtml ??
+          job.contentHtml ??
+          job.descriptionPlain ??
+          job.content ??
+          job.description ??
+          ""
       )
     );
-  }, [job?.content, job?.description, job?.descriptionHtml, job?.descriptionPlain, job?.source]);
+  }, [
+    job?.content,
+    job?.contentHtml,
+    job?.description,
+    job?.descriptionHtml,
+    job?.descriptionPlain,
+    job?.source,
+  ]);
 
   const panelFormatted = useMemo<FormattedJob | null>(() => {
     if (adzunaFormatted) {
@@ -229,9 +241,14 @@ export default function JobDetailsPanel({
     () => (detailBodyHtml ? sanitizeDashboardHtmlFallback(detailBodyHtml) : ""),
     [detailBodyHtml]
   );
+  const shouldPreferAdzunaHtml =
+    job?.source === "adzuna" &&
+    Boolean(sanitizedDetailBodyHtml) &&
+    (!adzunaFormatted || adzunaFormatted.isWeak);
 
   const hasPanelFormattedContent = Boolean(
-    panelFormatted &&
+    !shouldPreferAdzunaHtml &&
+      panelFormatted &&
       (getVisibleDashboardHighlights(panelFormatted.highlights).length > 0 ||
         getVisibleDashboardParagraphs("Position Overview", panelFormatted.intro).length > 0 ||
         panelFormatted.sections.some(
@@ -247,29 +264,30 @@ export default function JobDetailsPanel({
   );
 
   const hasPrettyContent =
-    getVisibleDashboardHighlights(pretty.highlights).length > 0 ||
-    pretty.sections.some(
-      (section) =>
-        !shouldHideDashboardSection(section.title, {
-          paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
-          bullets: section.kind === "bullets" ? section.bullets : undefined,
-          calloutValue:
-            section.kind === "callout" ? section.callout?.value : undefined,
-        }) &&
-        (getVisibleDashboardParagraphs(
-          section.title,
-          "paragraphs" in section ? section.paragraphs : undefined
-        ).length > 0 ||
-          getVisibleDashboardBullets(
+    !shouldPreferAdzunaHtml &&
+    (getVisibleDashboardHighlights(pretty.highlights).length > 0 ||
+      pretty.sections.some(
+        (section) =>
+          !shouldHideDashboardSection(section.title, {
+            paragraphs: "paragraphs" in section ? section.paragraphs : undefined,
+            bullets: section.kind === "bullets" ? section.bullets : undefined,
+            calloutValue:
+              section.kind === "callout" ? section.callout?.value : undefined,
+          }) &&
+          (getVisibleDashboardParagraphs(
             section.title,
-            section.kind === "bullets" ? section.bullets : undefined
+            "paragraphs" in section ? section.paragraphs : undefined
           ).length > 0 ||
-          Boolean(
-            section.kind === "callout"
-              ? getVisibleDashboardCalloutValue(section.title, section.callout?.value)
-              : null
-          ))
-    );
+            getVisibleDashboardBullets(
+              section.title,
+              section.kind === "bullets" ? section.bullets : undefined
+            ).length > 0 ||
+            Boolean(
+              section.kind === "callout"
+                ? getVisibleDashboardCalloutValue(section.title, section.callout?.value)
+                : null
+            ))
+      ));
 
   const cleanedDetailDescription = useMemo(
     () =>
@@ -295,8 +313,7 @@ export default function JobDetailsPanel({
     !detailsLoading &&
     !hasPanelFormattedContent &&
     !hasPrettyContent &&
-    !!sanitizedDetailBodyHtml &&
-    job?.source !== "adzuna";
+    !!sanitizedDetailBodyHtml;
 
   const shouldUseCleanTextFallback =
     !detailsLoading &&

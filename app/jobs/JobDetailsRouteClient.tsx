@@ -53,6 +53,9 @@ type AdzunaDetailsResponse = {
   source?: string | null;
   redirect_url?: string | null;
   descriptionIntro?: string[] | null;
+  responsibilities?: Array<string | null | undefined> | null;
+  qualifications?: Array<string | null | undefined> | null;
+  benefits?: Array<string | null | undefined> | null;
   sections?:
     | Array<{
         title?: string | null;
@@ -94,6 +97,28 @@ function normalizeStringArray(values: Array<string | null | undefined> | null | 
   return (values ?? [])
     .map((value) => normalizeText(value))
     .filter(Boolean);
+}
+
+function normalizeLocationPart(value: string | null | undefined) {
+  return normalizeText(value).replace(/\s+/g, " ");
+}
+
+function dedupeLocationParts(values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+
+  return values
+    .map((value) => normalizeLocationPart(value))
+    .filter((value) => {
+      const key = value.toLowerCase().replace(/\./g, "").trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function normalizeLocationString(value: string | null | undefined) {
+  const parts = dedupeLocationParts(String(value ?? "").split(","));
+  return parts.join(", ");
 }
 
 function isAdzunaJobId(value: string) {
@@ -151,16 +176,16 @@ function readAdzunaCompany(payload: AdzunaDetailsResponse) {
 
 function readAdzunaLocation(payload: AdzunaDetailsResponse) {
   if (payload.location && typeof payload.location === "object") {
-    const displayName = normalizeText(payload.location.display_name);
+    const displayName = normalizeLocationString(payload.location.display_name);
     if (displayName) return displayName;
 
-    const area = normalizeStringArray(payload.location.area);
+    const area = dedupeLocationParts(payload.location.area ?? []);
     if (area.length > 0) {
-      return area.slice(-2).join(", ");
+      return area.slice(-2).reverse().join(", ");
     }
   }
 
-  return normalizeText(
+  return normalizeLocationString(
     typeof payload.location === "string" ? payload.location : null
   );
 }
@@ -327,7 +352,9 @@ function mapAdzunaDetailToJobDetail(
     summary?.company ||
     "Unknown company";
   const location =
-    readAdzunaLocation(normalizedPayload) || summary?.location || "Unknown location";
+    readAdzunaLocation(normalizedPayload) ||
+    normalizeLocationString(summary?.location) ||
+    "Unknown location";
   const posted =
     normalizeText(normalizedPayload.postedLabel) ||
     normalizeText(normalizedPayload.posted) ||
@@ -363,6 +390,7 @@ function mapAdzunaDetailToJobDetail(
     normalizeText(normalizedPayload.summary) ||
     normalizeText(normalizedPayload.snippet) ||
     normalizeText(summary?.description);
+  const preferredDescription = descriptionHtml || descriptionPlain;
   const salaryIsEstimated =
     normalizedPayload.salaryIsEstimated ??
     isEstimatedSalary(normalizedPayload.salary_is_predicted);
@@ -393,11 +421,14 @@ function mapAdzunaDetailToJobDetail(
     salaryIsEstimated,
     employmentType,
     category,
-    description: descriptionPlain || undefined,
+    description: preferredDescription || undefined,
     descriptionPlain: descriptionPlain || null,
     descriptionHtml: descriptionHtml || null,
-    content: descriptionPlain || null,
+    content: preferredDescription || null,
     contentHtml: descriptionHtml || null,
+    duties: normalizeStringArray(normalizedPayload.responsibilities),
+    requirements: normalizeStringArray(normalizedPayload.qualifications),
+    benefits: normalizeStringArray(normalizedPayload.benefits),
     summary:
       normalizeText(normalizedPayload.summary) ||
       descriptionPlain ||
@@ -413,7 +444,7 @@ function mapAdzunaDetailToJobDetail(
     externalUrl: jobUrl || null,
     descriptionIntro: normalizeStringArray(normalizedPayload.descriptionIntro),
     sections: buildAdzunaDetailSections(normalizedPayload),
-    detailLevel: descriptionHtml || descriptionPlain ? "partial" : "summary",
+    detailLevel: descriptionHtml ? "full" : descriptionPlain ? "partial" : "summary",
     providerHasFullDetails: Boolean(descriptionHtml || descriptionPlain),
     metadata: normalizedPayload.metadata ?? {
       source: "Adzuna",

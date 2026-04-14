@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 
 import { getSiteUrl } from "@/app/lib/site-url";
 
+import JobDetailsRouteClient from "../JobDetailsRouteClient";
 import JobsExplorerClient, { type Job } from "./JobsExploreClient";
 
 type JobsResponse = {
@@ -14,6 +15,20 @@ function titleize(slug: string) {
   return slug
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function decodeSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function looksLikeJobId(value: string) {
+  return /^(adzuna|greenhouse|lever|ashby|workable|usajobs|remotive|remoteok|workday|icims|jazzhr|other):/i.test(
+    value
+  );
 }
 
 async function loadInitialJobs(categorySlug: string) {
@@ -52,7 +67,13 @@ export default async function Page({
   params: Promise<{ category: string }>;
 }) {
   const { category } = await params;
-  const categorySlug = (category ?? "all").toLowerCase();
+  const decodedCategory = decodeSegment(category ?? "all");
+
+  if (looksLikeJobId(decodedCategory)) {
+    return <JobDetailsRouteClient jobId={decodedCategory} />;
+  }
+
+  const categorySlug = decodedCategory.toLowerCase();
   const categoryLabel = titleize(categorySlug);
   const initialJobs = await loadInitialJobs(categorySlug);
 

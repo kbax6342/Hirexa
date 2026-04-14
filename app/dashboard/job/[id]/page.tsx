@@ -87,7 +87,7 @@ export default function DashboardJobDetailsPage() {
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
   const [aiApplyLoading, setAiApplyLoading] = useState(false);
   const applyProvider = detectApplyProviderFromJob(job);
-  const aiApplyLabel = "Auto apply Now";
+  const aiApplyLabel = "Apply Now";
   const aiApplyLoadingLabel = "Starting auto apply...";
 
   useEffect(() => {

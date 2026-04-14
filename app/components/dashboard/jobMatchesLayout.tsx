@@ -3,7 +3,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/outline";
+import {
+  BookmarkIcon as BookmarkOutline,
+  ChevronDownIcon,
+  ChevronUpIcon,
+} from "@heroicons/react/24/outline";
+import { BookmarkIcon as BookmarkSolid } from "@heroicons/react/24/solid";
 import { useSession } from "next-auth/react";
 import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
@@ -77,6 +82,16 @@ type CreditStatusResponse = {
   hirePilotCredits?: number;
 };
 
+type SaveJobResponse = {
+  error?: string;
+};
+
+type SavedJobsListResponse = {
+  jobs?: Array<{
+    jobId?: string;
+  }>;
+};
+
 type SupportedAutoApplyJob = Pick<
   Job,
   "id" | "source" | "title" | "company" | "location" | "jobUrl"
@@ -135,7 +150,7 @@ type ApplySessionPollResponse = {
   error?: string;
 };
 
-const AUTO_APPLY_CTA_LABEL = "Auto apply Now";
+const AUTO_APPLY_CTA_LABEL = "Apply Now";
 const AUTO_APPLY_LOADING_LABEL = "Starting auto apply...";
 const AUTO_APPLY_MISSING_RESUME_MESSAGE =
   "Auto Apply needs a PDF resume first. Upload your resume to continue.";
@@ -219,6 +234,28 @@ function normalizeJobUrl(url: string | undefined) {
   } catch {
     return url.trim().replace(/\/+$/, "");
   }
+}
+
+function normalizeSavedJobValue(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getSavedJobId(
+  job: Pick<Job, "id" | "jobUrl" | "title" | "company" | "location">
+) {
+  const explicitId = normalizeSavedJobValue(job.id);
+  if (explicitId) return explicitId;
+
+  const urlId = normalizeSavedJobValue(job.jobUrl);
+  if (urlId) return urlId;
+
+  const fallback = [job.title, job.company, job.location]
+    .map((value) => normalizeSavedJobValue(value)?.toLowerCase() ?? "")
+    .filter(Boolean)
+    .join("::");
+
+  return fallback || null;
 }
 
 function getJobDedupeKey(
@@ -334,6 +371,8 @@ export default function JobMatchesLayout({
   const [autoApplyBanner, setAutoApplyBanner] = useState<AutoApplyBannerState | null>(
     null
   );
+  const [savedJobIds, setSavedJobIds] = useState<string[]>([]);
+  const [savingJobIds, setSavingJobIds] = useState<string[]>([]);
 
   const [autoApplyPopupState, setAutoApplyPopupState] = useState<AutoApplyPopupState>(
     () => createEmptyAutoApplyPopupState()
@@ -916,6 +955,52 @@ export default function JobMatchesLayout({
 
     return () => window.clearInterval(interval);
   }, [autoApplyItems, updateAutoApplyPopupState]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setSavedJobIds([]);
+      setSavingJobIds([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSavedJobs() {
+      try {
+        const response = await fetch("/api/saved-jobs/list", {
+          cache: "no-store",
+        });
+
+        if (response.status === 401) {
+          if (!cancelled) {
+            setSavedJobIds([]);
+          }
+          return;
+        }
+
+        const payload = (await response.json().catch(() => ({}))) as SavedJobsListResponse;
+        if (!response.ok) {
+          throw new Error("Unable to load saved jobs.");
+        }
+
+        if (cancelled) return;
+
+        setSavedJobIds(
+          (payload.jobs ?? [])
+            .map((job) => normalizeSavedJobValue(job.jobId))
+            .filter((jobId): jobId is string => Boolean(jobId))
+        );
+      } catch (error) {
+        console.error("[SAVED_JOBS] dashboard preload failed", error);
+      }
+    }
+
+    void loadSavedJobs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
 
   async function loadPage(cursor: string | null, options?: { reset?: boolean }) {
     const requestExplicit =
@@ -1649,6 +1734,90 @@ export default function JobMatchesLayout({
     }
   };
 
+  const handleToggleSavedJob = useCallback(
+    async (job: Job) => {
+      const savedJobId = getSavedJobId(job);
+      const jobUrl = job.jobUrl?.trim() ?? "";
+
+      if (authStatus === "loading") {
+        return;
+      }
+
+      const callbackHref =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : "/dashboard";
+
+      if (authStatus !== "authenticated") {
+        router.push(`/login?callbackUrl=${encodeURIComponent(callbackHref)}`);
+        return;
+      }
+
+      if (!savedJobId || !jobUrl) {
+        return;
+      }
+
+      if (savingJobIds.includes(savedJobId)) {
+        return;
+      }
+
+      const currentlySaved = savedJobIds.includes(savedJobId);
+      const nextSaved = !currentlySaved;
+
+      setSavingJobIds((current) =>
+        current.includes(savedJobId) ? current : [...current, savedJobId]
+      );
+      setSavedJobIds((current) =>
+        nextSaved
+          ? current.includes(savedJobId)
+            ? current
+            : [...current, savedJobId]
+          : current.filter((jobId) => jobId !== savedJobId)
+      );
+
+      try {
+        const response = await fetch("/api/saved-jobs", {
+          method: currentlySaved ? "DELETE" : "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(
+            currentlySaved
+              ? {
+                  jobId: savedJobId,
+                }
+              : {
+                  jobId: savedJobId,
+                  title: job.title,
+                  company: job.company,
+                  location: job.location,
+                  url: jobUrl,
+                }
+          ),
+        });
+
+        const payload = (await response.json().catch(() => ({}))) as SaveJobResponse;
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Unable to update saved job.");
+        }
+      } catch (error) {
+        setSavedJobIds((current) =>
+          currentlySaved
+            ? current.includes(savedJobId)
+              ? current
+              : [...current, savedJobId]
+            : current.filter((jobId) => jobId !== savedJobId)
+        );
+        console.error("[SAVED_JOBS] dashboard toggle failed", error);
+      } finally {
+        setSavingJobIds((current) =>
+          current.filter((jobId) => jobId !== savedJobId)
+        );
+      }
+    },
+    [authStatus, router, savedJobIds, savingJobIds]
+  );
+
   return (
     <div className="mt-[59]">
       <div className="mt-4 grid min-h-0 grid-cols-1 gap-4 lg:mt-6 lg:grid-cols-12 lg:gap-6 xl:h-[calc(100vh-140px)]">
@@ -1817,6 +1986,14 @@ export default function JobMatchesLayout({
             {visibleJobs.map((job) => {
               const active = job.id === selectedId;
               const jobIdentity = getJobIdentity(job);
+              const savedJobId = getSavedJobId(job);
+              const isCardSaved = savedJobId
+                ? savedJobIds.includes(savedJobId)
+                : false;
+              const isCardSavePending = savedJobId
+                ? savingJobIds.includes(savedJobId)
+                : false;
+              const canSaveJob = Boolean(savedJobId && job.jobUrl?.trim());
               const isCardAiApplyLoading = cardAiApplyLoadingId === jobIdentity;
               const cardAiApplyLabel = AUTO_APPLY_CTA_LABEL;
               const cardAiApplyLoadingLabel = AUTO_APPLY_LOADING_LABEL;
@@ -1825,14 +2002,29 @@ export default function JobMatchesLayout({
                 <div
                   key={jobIdentity}
                   className={[
-                    "flex w-full flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition",
+                    "relative flex w-full flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition",
                     active
                       ? "border-blue-400 ring-2 ring-blue-100"
                       : "border-gray-200 hover:border-gray-300",
                   ].join(" ")}
                 >
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleSavedJob(job)}
+                    disabled={!canSaveJob || isCardSavePending}
+                    aria-pressed={isCardSaved}
+                    aria-label={isCardSaved ? `Unsave ${job.title}` : `Save ${job.title}`}
+                    className="absolute top-3 right-3 z-10 p-1 text-white transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isCardSaved ? (
+                      <BookmarkSolid className="h-5 w-5 text-blue-600" />
+                    ) : (
+                      <BookmarkOutline className="h-5 w-5 text-slate-500" />
+                    )}
+                  </button>
+
                   <div className="flex w-full items-start justify-between gap-3">
-                    <div className="w-full min-w-0">
+                    <div className="w-full min-w-0 pr-12">
                       <div className="flex items-center gap-2">
                         <button
                           type="button"

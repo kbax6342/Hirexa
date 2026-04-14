@@ -68,6 +68,9 @@ export type ApplySessionDebug = {
   postCookieTitleAfter?: string;
   applyCtaClickedText?: string;
   applyCtaClickedSelector?: string;
+  applyHrefExtracted?: string;
+  applyNavigationForced?: boolean;
+  applyNavigationUrl?: string;
   ctaClickedText?: string;
   ctaClickedSelector?: string;
   dismissedBlocker?: boolean;

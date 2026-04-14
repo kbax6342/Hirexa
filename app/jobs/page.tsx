@@ -1,31 +1,16 @@
 "use client";
 
-import {
-  ArrowRightIcon,
-  ArrowTopRightOnSquareIcon,
-} from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 
-import AdzunaAttribution from "../components/jobs/AdzunaAttribution";
+import JobCard, {
+  resolveSavedJobId,
+  type JobCardData,
+} from "../components/jobs/JobCard";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import { Navbar } from "../components/navbar";
 import MobileListLoadingScreen from "../components/loading/MobileListLoadingScreen";
-
-type JobCard = {
-  id?: string;
-  title: string;
-  company: string;
-  salary?: string;
-  location: string;
-  posted: string;
-  jobUrl: string;
-  url?: string;
-  logoText?: string;
-  logoUrl?: string;
-  pill?: string;
-};
 
 type CategorySection = {
   name: string;
@@ -44,6 +29,13 @@ type CategorySection = {
 type ApiSectionsResponse = {
   sections?: CategorySection[];
   generatedAt?: string;
+  error?: string;
+};
+
+type SavedJobsListResponse = {
+  jobs?: Array<{
+    jobId: string;
+  }>;
   error?: string;
 };
 
@@ -189,128 +181,17 @@ function categoryHref(category: string) {
   return `/jobs/${categoryToSlug(category)}`;
 }
 
-function formatPostedDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function JobCardItem({ job }: { job: JobCard }) {
-  const router = useRouter();
-  const salaryText = job.salary ?? job.pill;
-  const applyUrl = job.jobUrl || job.url || "";
-  const applyLabel = "Apply Now";
-
-  function handleAiAssistantApply() {
-    if (!applyUrl) return;
-
-    const encodedUrl = encodeURIComponent(applyUrl);
-    router.push(`/job-tools/ai-assistant/apply?jobUrl=${encodedUrl}`);
-  }
-
-  return (
-    <div
-      className="
-        h-full
-        rounded-2xl bg-white p-6
-        shadow-sm ring-1 ring-slate-200
-        transition hover:shadow-md hover:ring-slate-300
-        flex flex-col
-      "
-    >
-      <div>
-        <button
-          onClick={() => {
-            sessionStorage.setItem("selectedJob", JSON.stringify(job));
-            router.push(`/jobs/details`);
-          }}
-          className="block w-full text-left text-[15px] font-semibold text-slate-900 hover:underline line-clamp-2"
-          title={job.title}
-        >
-          {job.title}
-        </button>
-
-        <div className="mt-2 text-sm text-slate-600 line-clamp-1">
-          {job.company} • {job.location}
-        </div>
-
-        {salaryText ? (
-          <div className="mt-3 inline-flex rounded-md bg-background/40 px-2.5 py-1 text-xs font-medium">
-            {salaryText}
-          </div>
-        ) : (
-          <div className="mt-3 h-6" />
-        )}
-
-        {job.posted ? (
-          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-            <svg
-              className="h-4 w-4 text-sky-500"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-
-            <span className="line-clamp-1">
-              Posted on: {formatPostedDate(job.posted)}
-            </span>
-          </div>
-        ) : (
-          <div className="mt-3 h-4" />
-        )}
-
-        <AdzunaAttribution className="mt-3" />
-      </div>
-
-      <div className="mt-auto pt-5">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleAiAssistantApply}
-            disabled={!applyUrl}
-            className="inline-flex flex-1 items-center justify-center rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span className="inline-flex items-center gap-2">
-              <span>{applyLabel}</span>
-              <ArrowRightIcon className="h-4 w-4" />
-            </span>
-          </button>
-
-          {applyUrl ? (
-            <a
-              href={applyUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Apply externally for ${job.title}`}
-              className="inline-flex items-center justify-center rounded-md border border-slate-300 p-3 text-slate-700 hover:bg-slate-100"
-            >
-              <ArrowTopRightOnSquareIcon className="h-5 w-5" />
-            </a>
-          ) : (
-            <span
-              aria-hidden="true"
-              className="inline-flex items-center justify-center rounded-md border border-slate-200 p-3 text-slate-400"
-            >
-              <ArrowTopRightOnSquareIcon className="h-5 w-5" />
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function mapSectionJobToCard(job: CategorySection["jobs"][number]): JobCardData {
+  return {
+    id: job.id,
+    title: job.title,
+    company: job.company,
+    location: job.location,
+    posted: job.posted,
+    jobUrl: job.jobUrl,
+    salary: job.salary,
+    logoText: job.company?.[0]?.toUpperCase() ?? "•",
+  };
 }
 
 function AllJobCategories({
@@ -421,10 +302,12 @@ function AllJobCategories({
 }
 
 export default function JobsPage() {
+  const { status: authStatus } = useSession();
   const [expandAllCategoriesSignal, setExpandAllCategoriesSignal] = useState(0);
   const [adzunaSections, setAdzunaSections] = useState<CategorySection[]>([]);
   const [adzunaLoading, setAdzunaLoading] = useState(true);
   const [adzunaError, setAdzunaError] = useState<string | null>(null);
+  const [savedJobs, setSavedJobs] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,6 +347,42 @@ export default function JobsPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSavedJobs() {
+      try {
+        const response = await fetch("/api/saved-jobs/list", {
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => ({}))) as SavedJobsListResponse;
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "Unable to load saved jobs.");
+        }
+
+        if (!cancelled) {
+          setSavedJobs((data.jobs ?? []).map((job) => job.jobId));
+        }
+      } catch {
+        if (!cancelled) {
+          setSavedJobs([]);
+        }
+      }
+    }
+
+    if (authStatus !== "authenticated") {
+      setSavedJobs([]);
+      return;
+    }
+
+    void loadSavedJobs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
 
   return (
     <>
@@ -588,22 +507,30 @@ export default function JobsPage() {
                     </div>
 
                     <ul className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                      {section.jobs.map((job) => (
-                        <li key={job.id}>
-                          <JobCardItem
-                            job={{
-                              id: job.id,
-                              title: job.title,
-                              company: job.company,
-                              location: job.location,
-                              posted: job.posted,
-                              jobUrl: job.jobUrl,
-                              salary: job.salary,
-                              logoText: job.company?.[0]?.toUpperCase() ?? "•",
-                            }}
-                          />
-                        </li>
-                      ))}
+                      {section.jobs.map((job) => {
+                        const cardJob = mapSectionJobToCard(job);
+                        const savedJobId = resolveSavedJobId(cardJob);
+
+                        return (
+                          <li key={job.id}>
+                            <JobCard
+                              job={cardJob}
+                              isSaved={savedJobId ? savedJobs.includes(savedJobId) : false}
+                              onSavedChange={(saved) => {
+                                if (!savedJobId) return;
+
+                                setSavedJobs((current) =>
+                                  saved
+                                    ? current.includes(savedJobId)
+                                      ? current
+                                      : [...current, savedJobId]
+                                    : current.filter((jobId) => jobId !== savedJobId)
+                                );
+                              }}
+                            />
+                          </li>
+                        );
+                      })}
                     </ul>
                   </section>
                 ))}

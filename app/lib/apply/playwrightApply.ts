@@ -92,6 +92,9 @@ export type PlaywrightApplyResult = {
     adzunaPostApplyPopupDetected?: boolean;
     adzunaPostApplyNewPageDetected?: boolean;
     adzunaPostApplyFallbackAttempted?: boolean;
+    applyHrefExtracted?: string;
+    applyNavigationForced?: boolean;
+    applyNavigationUrl?: string;
     handoffPageDetected?: boolean;
     handoffUrl?: string;
     handoffContinuationAttempted?: boolean;
@@ -150,12 +153,20 @@ export type PlaywrightApplyResult = {
     adzunaExtractedRedirectSource?:
       | "meta_refresh"
       | "inline_script"
-      | "fallback_anchor";
+      | "fallback_anchor"
+      | "appcast_href";
     adzunaExtractedRedirectHtmlRead?: boolean;
     adzunaExtractedRedirectFailureReason?: string[];
     adzunaExtractedRedirectNavAttempted?: boolean;
     adzunaExtractedRedirectNavSucceeded?: boolean;
     adzunaFallbackUrlAfter?: string;
+    adzunaInterstitialRecognized?: boolean;
+    appcastHopDetected?: boolean;
+    diceDestinationDetected?: boolean;
+    handoffResolvedViaKnownChain?: boolean;
+    knownChainClassificationGuardApplied?: boolean;
+    knownChainContinuationExhausted?: boolean;
+    knownChainAllowedToFail?: boolean;
     resolvedHandoffClickedHref?: string;
     resolvedHandoffClickedText?: string;
     resolvedHandoffUrlBefore?: string;
@@ -275,6 +286,9 @@ type AdzunaDetailsApplyPhaseResult = {
   postApplyPopupDetected: boolean;
   postApplyNewPageDetected: boolean;
   postApplyFallbackAttempted: boolean;
+  applyHrefExtracted?: string;
+  applyNavigationForced?: boolean;
+  applyNavigationUrl?: string;
   latestActionText?: string;
   latestActionSelector?: string;
 };
@@ -314,12 +328,17 @@ type HandoffContinuationResult = {
   adzunaExtractedRedirectSource?:
     | "meta_refresh"
     | "inline_script"
-    | "fallback_anchor";
+    | "fallback_anchor"
+    | "appcast_href";
   adzunaExtractedRedirectHtmlRead: boolean;
   adzunaExtractedRedirectFailureReason?: string[];
   adzunaExtractedRedirectNavAttempted: boolean;
   adzunaExtractedRedirectNavSucceeded: boolean;
   adzunaFallbackUrlAfter?: string;
+  adzunaInterstitialRecognized: boolean;
+  appcastHopDetected: boolean;
+  diceDestinationDetected: boolean;
+  handoffResolvedViaKnownChain: boolean;
   resolvedHandoffClickedHref?: string;
   resolvedHandoffClickedText?: string;
   resolvedHandoffUrlBefore?: string;
@@ -408,17 +427,26 @@ type AdzunaFallbackLinkResult = {
   extractedRedirectSource?:
     | "meta_refresh"
     | "inline_script"
-    | "fallback_anchor";
+    | "fallback_anchor"
+    | "appcast_href";
   extractedRedirectHtmlRead: boolean;
   extractedRedirectFailureReason?: string[];
   extractedRedirectNavAttempted: boolean;
   extractedRedirectNavSucceeded: boolean;
   urlAfter?: string;
+  adzunaInterstitialRecognized: boolean;
+  appcastHopDetected: boolean;
+  diceDestinationDetected: boolean;
+  handoffResolvedViaKnownChain: boolean;
 };
 
 type AdzunaExtractedRedirectResult = {
   extractedUrl?: string;
-  extractionSource?: "meta_refresh" | "inline_script" | "fallback_anchor";
+  extractionSource?:
+    | "meta_refresh"
+    | "inline_script"
+    | "fallback_anchor"
+    | "appcast_href";
   extractionSucceeded: boolean;
   htmlRead: boolean;
   failureReason?: string[];
@@ -690,6 +718,9 @@ function buildDebugPayload(args: {
   adzunaPostApplyPopupDetected?: boolean;
   adzunaPostApplyNewPageDetected?: boolean;
   adzunaPostApplyFallbackAttempted?: boolean;
+  applyHrefExtracted?: string;
+  applyNavigationForced?: boolean;
+  applyNavigationUrl?: string;
   handoffPageDetected?: boolean;
   handoffUrl?: string;
   handoffContinuationAttempted?: boolean;
@@ -748,12 +779,20 @@ function buildDebugPayload(args: {
   adzunaExtractedRedirectSource?:
     | "meta_refresh"
     | "inline_script"
-    | "fallback_anchor";
+    | "fallback_anchor"
+    | "appcast_href";
   adzunaExtractedRedirectHtmlRead?: boolean;
   adzunaExtractedRedirectFailureReason?: string[];
   adzunaExtractedRedirectNavAttempted?: boolean;
   adzunaExtractedRedirectNavSucceeded?: boolean;
   adzunaFallbackUrlAfter?: string;
+  adzunaInterstitialRecognized?: boolean;
+  appcastHopDetected?: boolean;
+  diceDestinationDetected?: boolean;
+  handoffResolvedViaKnownChain?: boolean;
+  knownChainClassificationGuardApplied?: boolean;
+  knownChainContinuationExhausted?: boolean;
+  knownChainAllowedToFail?: boolean;
   resolvedHandoffClickedHref?: string;
   resolvedHandoffClickedText?: string;
   resolvedHandoffUrlBefore?: string;
@@ -818,6 +857,9 @@ function buildDebugPayload(args: {
       args.adzunaPostApplyNewPageDetected ?? false,
     adzunaPostApplyFallbackAttempted:
       args.adzunaPostApplyFallbackAttempted ?? false,
+    applyHrefExtracted: args.applyHrefExtracted,
+    applyNavigationForced: args.applyNavigationForced ?? false,
+    applyNavigationUrl: args.applyNavigationUrl,
     handoffPageDetected: args.handoffPageDetected ?? false,
     handoffUrl: args.handoffUrl,
     handoffContinuationAttempted:
@@ -896,6 +938,17 @@ function buildDebugPayload(args: {
     adzunaExtractedRedirectNavSucceeded:
       args.adzunaExtractedRedirectNavSucceeded ?? false,
     adzunaFallbackUrlAfter: args.adzunaFallbackUrlAfter,
+    adzunaInterstitialRecognized:
+      args.adzunaInterstitialRecognized ?? false,
+    appcastHopDetected: args.appcastHopDetected ?? false,
+    diceDestinationDetected: args.diceDestinationDetected ?? false,
+    handoffResolvedViaKnownChain:
+      args.handoffResolvedViaKnownChain ?? false,
+    knownChainClassificationGuardApplied:
+      args.knownChainClassificationGuardApplied ?? false,
+    knownChainContinuationExhausted:
+      args.knownChainContinuationExhausted ?? false,
+    knownChainAllowedToFail: args.knownChainAllowedToFail ?? true,
     resolvedHandoffClickedHref: args.resolvedHandoffClickedHref,
     resolvedHandoffClickedText: args.resolvedHandoffClickedText,
     resolvedHandoffUrlBefore: args.resolvedHandoffUrlBefore,
@@ -1049,6 +1102,37 @@ function isAdzunaLandRedirectPage(rawUrl: string) {
     const hostname = parsed.hostname.toLowerCase();
     const pathname = normalizeResolverPathname(parsed.pathname);
     return hostname.includes("adzuna") && pathname.includes("/land/ad/");
+  } catch {
+    return false;
+  }
+}
+
+function isKnownHandoffChainPage(rawUrl: string) {
+  return (
+    isAdzunaLandRedirectPage(rawUrl) || isAppcastTrackingPage(rawUrl)
+  );
+}
+
+function buildKnownHandoffStopClassification(
+  rawUrl: string,
+): ApplyStopClassification | undefined {
+  if (!isKnownHandoffChainPage(rawUrl)) {
+    return undefined;
+  }
+
+  return {
+    reason: "external_redirect_needed",
+    pageType: "aggregator",
+    suggestedAction: "open_original_job_site",
+  } satisfies ApplyStopClassification;
+}
+
+function isDiceJobDetailPage(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = normalizeResolverPathname(parsed.pathname);
+    return hostname.includes("dice.com") && pathname.includes("/job-detail/");
   } catch {
     return false;
   }
@@ -1355,7 +1439,7 @@ async function waitForTrackedHandoffRedirects(args: {
   let activePage = args.page;
   const urlsVisited = [activePage.url()];
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     const currentUrl = activePage.url();
     if (
       !isAdzunaLandRedirectPage(currentUrl) &&
@@ -1377,8 +1461,32 @@ async function waitForTrackedHandoffRedirects(args: {
     }
 
     if (!progress.progressDetected) {
+      if (isAppcastTrackingPage(activePage.url()) && attempt < 3) {
+        await activePage.waitForTimeout(APPLY_SETTLE_DELAY_MS + 500).catch(
+          () => null,
+        );
+        await waitForDomAndSettle(activePage).catch(() => null);
+        if (!urlsVisited.includes(activePage.url())) {
+          urlsVisited.push(activePage.url());
+        }
+        continue;
+      }
       break;
     }
+  }
+
+  if (isAppcastTrackingPage(activePage.url())) {
+    console.log("[AUTO_APPLY_APPCAST_HOP]", {
+      currentUrl: activePage.url(),
+      urlsVisited,
+    });
+  }
+
+  if (isDiceJobDetailPage(activePage.url())) {
+    console.log("[AUTO_APPLY_DICE_DESTINATION]", {
+      currentUrl: activePage.url(),
+      urlsVisited,
+    });
   }
 
   return {
@@ -1444,9 +1552,7 @@ async function navigateAdzunaFallbackHrefDirectly(args: {
   const finalPage = chainedProgress.page;
   const finalUrl = finalPage.url();
   const succeeded =
-    finalUrl !== urlBefore &&
-    !isAdzunaLandRedirectPage(finalUrl) &&
-    !isAppcastTrackingPage(finalUrl);
+    finalUrl !== urlBefore && !isAdzunaLandRedirectPage(finalUrl);
 
   const result = {
     page: finalPage,
@@ -1492,12 +1598,49 @@ async function extractAdzunaInterstitialRedirectTarget(
   }
 
   const baseUrl = page.url();
+  const decodeExtractedInterstitialValue = (
+    rawValue: string | null | undefined,
+  ) => {
+    const value = String(rawValue ?? "").trim();
+    if (!value) return "";
+
+    return value
+      .replace(/^['"`]+|['"`]+$/g, "")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#34;/gi, '"')
+      .replace(/&apos;/gi, "'")
+      .replace(/&#39;/gi, "'")
+      .replace(/&amp;/gi, "&")
+      .replace(/\\u002F/gi, "/")
+      .replace(/\\u003A/gi, ":")
+      .replace(/\\u0026/gi, "&")
+      .replace(/\\x2F/gi, "/")
+      .replace(/\\x3A/gi, ":")
+      .replace(/\\x26/gi, "&")
+      .replace(/\\\//g, "/")
+      .trim();
+  };
+
   const normalizeUrl = (rawValue: string | null | undefined) => {
-    const raw = String(rawValue ?? "").trim();
+    const decoded = decodeExtractedInterstitialValue(rawValue);
+    if (!decoded) return null;
+
+    const raw = decoded.trim();
     if (!raw) return null;
 
+    if (/^javascript:/i.test(raw)) {
+      return null;
+    }
+
+    if (!/^https?:\/\//i.test(raw) && !raw.startsWith("/")) {
+      const embeddedHttpMatch = raw.match(/https?:\/\/[^\s"'<>]+/i);
+      if (embeddedHttpMatch?.[0]) {
+        return normalizeUrl(embeddedHttpMatch[0]);
+      }
+    }
+
     try {
-      return new URL(raw, baseUrl).toString();
+      return new URL(decoded, baseUrl).toString();
     } catch {
       return null;
     }
@@ -1513,40 +1656,16 @@ async function extractAdzunaInterstitialRedirectTarget(
     return appcast ?? normalized[0];
   };
 
-  const metaRefreshCandidates = Array.from(
-    html.matchAll(/<meta\b[^>]*>/gi),
-    (match) => match[0],
-  )
-    .filter((tag) => /http-equiv\s*=\s*(["'])?refresh\1/i.test(tag))
-    .map((tag) => {
-      const contentMatch = tag.match(
-        /content\s*=\s*(["'])([\s\S]*?)\1/i,
-      );
-      const content = contentMatch?.[2] ?? "";
-      const urlMatch = content.match(/(?:^|;)\s*url\s*=\s*([^;]+)/i);
-      return urlMatch?.[1]?.trim().replace(/^['"]|['"]$/g, "") ?? null;
-    });
-
-  const metaRefreshUrl = preferBestUrl(metaRefreshCandidates);
-  if (metaRefreshUrl) {
-    return {
-      extractedUrl: metaRefreshUrl,
-      extractionSource: "meta_refresh",
-      extractionSucceeded: true,
-      htmlRead: true,
-    } satisfies AdzunaExtractedRedirectResult;
-  }
-
   const inlineScriptCandidates = [
     ...Array.from(
       html.matchAll(
-        /(?:window\.)?location\.replace\(\s*(["'])(.*?)\1\s*\)/gi,
+        /window\.location\.replace\s*\(\s*(["'`])([\s\S]*?)\1\s*\)/gi,
       ),
       (match) => match[2],
     ),
     ...Array.from(
       html.matchAll(
-        /(?:window\.)?location(?:\.href)?\s*=\s*(["'])(.*?)\1/gi,
+        /(?:window\.)?location(?:\.href)?\s*=\s*(["'`])([\s\S]*?)\1/gi,
       ),
       (match) => match[2],
     ),
@@ -1557,6 +1676,30 @@ async function extractAdzunaInterstitialRedirectTarget(
     return {
       extractedUrl: inlineScriptUrl,
       extractionSource: "inline_script",
+      extractionSucceeded: true,
+      htmlRead: true,
+    } satisfies AdzunaExtractedRedirectResult;
+  }
+
+  const metaRefreshCandidates = Array.from(
+    html.matchAll(/<meta\b[^>]*>/gi),
+    (match) => match[0],
+  )
+    .filter((tag) => /http-equiv\s*=\s*(?:(["'])refresh\1|refresh)\b/i.test(tag))
+    .map((tag) => {
+      const contentMatch =
+        tag.match(/content\s*=\s*(["'])([\s\S]*?)\1/i) ??
+        tag.match(/content\s*=\s*([^\s>]+)/i);
+      const content = contentMatch?.[2] ?? contentMatch?.[1] ?? "";
+      const urlMatch = content.match(/(?:^|;)\s*url\s*=\s*(.+)$/i);
+      return urlMatch?.[1]?.trim() ?? null;
+    });
+
+  const metaRefreshUrl = preferBestUrl(metaRefreshCandidates);
+  if (metaRefreshUrl) {
+    return {
+      extractedUrl: metaRefreshUrl,
+      extractionSource: "meta_refresh",
       extractionSucceeded: true,
       htmlRead: true,
     } satisfies AdzunaExtractedRedirectResult;
@@ -1597,6 +1740,29 @@ async function extractAdzunaInterstitialRedirectTarget(
     } satisfies AdzunaExtractedRedirectResult;
   }
 
+  const appcastHrefCandidates = [
+    ...Array.from(
+      html.matchAll(
+        /href\s*=\s*(["'])(https?:\/\/click\.appcast\.io\/t\/[\s\S]*?)\1/gi,
+      ),
+      (match) => match[2],
+    ),
+    ...Array.from(
+      html.matchAll(/https?:\/\/click\.appcast\.io\/t\/[^\s"'<>]+/gi),
+      (match) => match[0],
+    ),
+  ];
+
+  const appcastHrefUrl = preferBestUrl(appcastHrefCandidates);
+  if (appcastHrefUrl) {
+    return {
+      extractedUrl: appcastHrefUrl,
+      extractionSource: "appcast_href",
+      extractionSucceeded: true,
+      htmlRead: true,
+    } satisfies AdzunaExtractedRedirectResult;
+  }
+
   return {
     extractionSucceeded: false,
     htmlRead: true,
@@ -1604,6 +1770,7 @@ async function extractAdzunaInterstitialRedirectTarget(
       "no_meta_refresh_match",
       "no_location_replace_match",
       "no_fallback_anchor_match",
+      "no_appcast_href_match",
     ],
   } satisfies AdzunaExtractedRedirectResult;
 }
@@ -1612,7 +1779,11 @@ async function navigateAdzunaExtractedRedirectDirectly(args: {
   page: Page;
   context: BrowserContext;
   extractedUrl: string;
-  extractionSource: "meta_refresh" | "inline_script" | "fallback_anchor";
+  extractionSource:
+    | "meta_refresh"
+    | "inline_script"
+    | "fallback_anchor"
+    | "appcast_href";
   onPageReady?: (
     page: Page,
     context: BrowserContext,
@@ -1737,11 +1908,34 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
     | "meta_refresh"
     | "inline_script"
     | "fallback_anchor"
+    | "appcast_href"
     | undefined;
   let extractedRedirectHtmlRead = false;
   let extractedRedirectFailureReason: string[] | undefined;
   let extractedRedirectNavAttempted = false;
   let extractedRedirectNavSucceeded = false;
+  const getKnownChainState = () => {
+    const knownUrls = dedupeUrls([fromUrl, ...urlsVisited, activePage.url()]);
+    const adzunaInterstitialRecognized = knownUrls.some((url) =>
+      isAdzunaLandRedirectPage(url),
+    );
+    const appcastHopDetected = knownUrls.some((url) =>
+      isAppcastTrackingPage(url),
+    );
+    const diceDestinationDetected = knownUrls.some((url) =>
+      isDiceJobDetailPage(url),
+    );
+
+    return {
+      adzunaInterstitialRecognized,
+      appcastHopDetected,
+      diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        adzunaInterstitialRecognized &&
+        appcastHopDetected &&
+        diceDestinationDetected,
+    };
+  };
 
   if (!isAdzunaLandRedirectPage(fromUrl)) {
     const result = {
@@ -1759,6 +1953,7 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
       extractedRedirectFailureReason,
       extractedRedirectNavAttempted,
       extractedRedirectNavSucceeded,
+      ...getKnownChainState(),
     } satisfies AdzunaFallbackLinkResult;
 
     console.log("[AUTO_APPLY_ADZUNA_FALLBACK]", {
@@ -1781,6 +1976,12 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
         result.extractedRedirectNavAttempted,
       adzunaExtractedRedirectNavSucceeded:
         result.extractedRedirectNavSucceeded,
+      adzunaInterstitialRecognized:
+        result.adzunaInterstitialRecognized,
+      appcastHopDetected: result.appcastHopDetected,
+      diceDestinationDetected: result.diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        result.handoffResolvedViaKnownChain,
       adzunaFallbackUrlAfter: fromUrl,
       currentUrl: fromUrl,
     });
@@ -1884,6 +2085,7 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
         extractedRedirectNavAttempted,
         extractedRedirectNavSucceeded,
         urlAfter: activePage.url(),
+        ...getKnownChainState(),
       } satisfies AdzunaFallbackLinkResult;
 
       console.log("[AUTO_APPLY_ADZUNA_FALLBACK]", {
@@ -1912,6 +2114,13 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
           extractedResult.extractedRedirectNavAttempted,
         adzunaExtractedRedirectNavSucceeded:
           extractedResult.extractedRedirectNavSucceeded,
+        adzunaInterstitialRecognized:
+          extractedResult.adzunaInterstitialRecognized,
+        appcastHopDetected: extractedResult.appcastHopDetected,
+        diceDestinationDetected:
+          extractedResult.diceDestinationDetected,
+        handoffResolvedViaKnownChain:
+          extractedResult.handoffResolvedViaKnownChain,
         adzunaFallbackUrlAfter: extractedResult.urlAfter ?? null,
         currentUrl: activePage.url(),
       });
@@ -1967,6 +2176,7 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
       extractedRedirectNavAttempted,
       extractedRedirectNavSucceeded,
       urlAfter: activePage.url(),
+      ...getKnownChainState(),
     } satisfies AdzunaFallbackLinkResult;
 
     console.log("[AUTO_APPLY_ADZUNA_FALLBACK]", {
@@ -1991,6 +2201,12 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
         result.extractedRedirectNavAttempted,
       adzunaExtractedRedirectNavSucceeded:
         result.extractedRedirectNavSucceeded,
+      adzunaInterstitialRecognized:
+        result.adzunaInterstitialRecognized,
+      appcastHopDetected: result.appcastHopDetected,
+      diceDestinationDetected: result.diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        result.handoffResolvedViaKnownChain,
       adzunaFallbackUrlAfter: result.urlAfter ?? null,
       currentUrl: activePage.url(),
     });
@@ -2078,6 +2294,7 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
       extractedRedirectNavAttempted,
       extractedRedirectNavSucceeded,
       urlAfter: activePage.url(),
+      ...getKnownChainState(),
     } satisfies AdzunaFallbackLinkResult;
 
     console.log("[AUTO_APPLY_ADZUNA_FALLBACK]", {
@@ -2103,6 +2320,12 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
         failedResult.extractedRedirectNavAttempted,
       adzunaExtractedRedirectNavSucceeded:
         failedResult.extractedRedirectNavSucceeded,
+      adzunaInterstitialRecognized:
+        failedResult.adzunaInterstitialRecognized,
+      appcastHopDetected: failedResult.appcastHopDetected,
+      diceDestinationDetected: failedResult.diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        failedResult.handoffResolvedViaKnownChain,
       adzunaFallbackUrlAfter: failedResult.urlAfter ?? null,
       currentUrl: activePage.url(),
     });
@@ -2236,6 +2459,7 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
     extractedRedirectNavAttempted,
     extractedRedirectNavSucceeded,
     urlAfter: activePage.url(),
+    ...getKnownChainState(),
   } satisfies AdzunaFallbackLinkResult;
 
   console.log("[AUTO_APPLY_ADZUNA_FALLBACK]", {
@@ -2260,6 +2484,12 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
       result.extractedRedirectNavAttempted,
     adzunaExtractedRedirectNavSucceeded:
       result.extractedRedirectNavSucceeded,
+    adzunaInterstitialRecognized:
+      result.adzunaInterstitialRecognized,
+    appcastHopDetected: result.appcastHopDetected,
+    diceDestinationDetected: result.diceDestinationDetected,
+    handoffResolvedViaKnownChain:
+      result.handoffResolvedViaKnownChain,
     adzunaFallbackUrlAfter: result.urlAfter ?? null,
     currentUrl: activePage.url(),
   });
@@ -3263,6 +3493,9 @@ async function runAdzunaDetailsApplyPhase(args: {
   let postApplyPopupDetected = false;
   let postApplyNewPageDetected = false;
   let postApplyFallbackAttempted = false;
+  let applyHrefExtracted: string | undefined;
+  let applyNavigationForced = false;
+  let applyNavigationUrl: string | undefined;
   let latestActionText: string | undefined;
   let latestActionSelector: string | undefined;
 
@@ -3287,6 +3520,9 @@ async function runAdzunaDetailsApplyPhase(args: {
       postApplyPopupDetected,
       postApplyNewPageDetected,
       postApplyFallbackAttempted,
+      applyHrefExtracted,
+      applyNavigationForced,
+      applyNavigationUrl,
       latestActionText,
       latestActionSelector,
     };
@@ -3326,6 +3562,15 @@ async function runAdzunaDetailsApplyPhase(args: {
       applyCaptureSkipClicked,
       applyCaptureSkipText,
       applyCaptureSkipSelector,
+      postApplyProgressionAttempted,
+      postApplyProgressionSucceeded,
+      postApplyUrlAfter,
+      postApplyPopupDetected,
+      postApplyNewPageDetected,
+      postApplyFallbackAttempted,
+      applyHrefExtracted,
+      applyNavigationForced,
+      applyNavigationUrl,
       latestActionText,
       latestActionSelector,
     };
@@ -3339,6 +3584,7 @@ async function runAdzunaDetailsApplyPhase(args: {
     await applyLocator.getAttribute("href").catch(() => null),
     fromUrl,
   );
+  applyHrefExtracted = applyHref ?? undefined;
   const applyCaptureFormSelector = 'div[data-js="apply-capture-form"]';
   const applyCaptureSkipSelectorRaw = 'a[data-js="apply-capture-skip"]';
   const applyCaptureFormLocator = activePage.locator(applyCaptureFormSelector);
@@ -3362,11 +3608,13 @@ async function runAdzunaDetailsApplyPhase(args: {
   const applyNavigationPromise = activePage
     .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 7_500 })
     .catch(() => null);
+  let clickAttemptSucceeded = false;
 
   try {
     await applyLocator
       .click({ timeout: 6_000 })
       .catch(() => applyLocator.click({ force: true, timeout: 6_000 }));
+    clickAttemptSucceeded = true;
   } catch {
     attempts.push({
       phase: "entry",
@@ -3381,99 +3629,129 @@ async function runAdzunaDetailsApplyPhase(args: {
       urlBefore: fromUrl,
       urlAfter: activePage.url(),
     } satisfies ApplySessionCtaAttemptRecord);
-
-    return {
-      page: activePage,
-      urlsVisited,
-      clicks,
-      attempts,
-      applyClicks,
-      handled: true,
-      applyClicked,
-      applyClickedText,
-      applyClickedSelector,
-      applyCaptureDetected,
-      applyCaptureSkipClicked,
-      applyCaptureSkipText,
-      applyCaptureSkipSelector,
-      postApplyProgressionAttempted,
-      postApplyProgressionSucceeded,
-      postApplyUrlAfter,
-      postApplyPopupDetected,
-      postApplyNewPageDetected,
-      postApplyFallbackAttempted,
-      latestActionText,
-      latestActionSelector,
-    };
   }
 
   postApplyProgressionAttempted = true;
-  await Promise.race([
-    applyNavigationPromise,
-    activePage
-      .waitForURL((url) => url.toString() !== fromUrl, {
-        timeout: 7_500,
-      })
-      .catch(() => null),
-    applyCaptureSkipLocator
-      .first()
-      .waitFor({ state: "visible", timeout: 6_500 })
-      .catch(() => null),
-    applyCaptureFormLocator
-      .first()
-      .waitFor({ state: "visible", timeout: 6_500 })
-      .catch(() => null),
-    activePage.waitForTimeout(APPLY_SETTLE_DELAY_MS + 2_000),
-  ]);
-  const [popupPage, contextPage] = await Promise.all([
-    applyPopupPromise,
-    applyContextPagePromise,
-  ]);
+  if (clickAttemptSucceeded) {
+    await Promise.race([
+      applyNavigationPromise,
+      activePage
+        .waitForURL((url) => url.toString() !== fromUrl, {
+          timeout: 7_500,
+        })
+        .catch(() => null),
+      applyCaptureSkipLocator
+        .first()
+        .waitFor({ state: "visible", timeout: 6_500 })
+        .catch(() => null),
+      applyCaptureFormLocator
+        .first()
+        .waitFor({ state: "visible", timeout: 6_500 })
+        .catch(() => null),
+      activePage.waitForTimeout(APPLY_SETTLE_DELAY_MS + 2_000),
+    ]);
+    const [popupPage, contextPage] = await Promise.all([
+      applyPopupPromise,
+      applyContextPagePromise,
+    ]);
 
-  if (popupPage) {
-    activePage = popupPage;
-    postApplyNewPageDetected = true;
-  } else if (contextPage && contextPage !== activePage) {
-    activePage = contextPage;
-    postApplyNewPageDetected = true;
+    if (popupPage) {
+      activePage = popupPage;
+      postApplyNewPageDetected = true;
+    } else if (contextPage && contextPage !== activePage) {
+      activePage = contextPage;
+      postApplyNewPageDetected = true;
+    }
+
+    await waitForDomAndSettle(activePage);
+    await args.onPageReady?.(activePage, args.context);
   }
 
-  await waitForDomAndSettle(activePage);
-  await args.onPageReady?.(activePage, args.context);
+  if (
+    activePage.url() === fromUrl &&
+    applyHref &&
+    applyHref !== fromUrl
+  ) {
+    applyNavigationForced = true;
+    applyNavigationUrl = applyHref;
+
+    console.log("[AUTO_APPLY_FORCE_NAV]", {
+      fromUrl,
+      currentUrl: activePage.url(),
+      applyHrefExtracted: applyHref ?? null,
+      applyNavigationForced,
+      applyNavigationUrl: applyNavigationUrl ?? null,
+    });
+
+    try {
+      await activePage.goto(applyHref, { waitUntil: "domcontentloaded" });
+      await waitForDomAndSettle(activePage);
+      await args.onPageReady?.(activePage, args.context);
+    } catch {
+      // Leave the existing fallback path to handle any remaining recovery.
+    }
+
+    attempts.push({
+      phase: "entry",
+      action: "click",
+      selector: `href:${applyHref}`,
+      text: applyText,
+      matchedText: "Apply for this job",
+      locatorStrategy: "forced_apply_href_navigation",
+      candidateFound: true,
+      dismissesBlocker: false,
+      success: activePage.url() !== fromUrl,
+      urlBefore: fromUrl,
+      urlAfter: activePage.url(),
+      applyCtaFoundAfter: activePage.url() !== fromUrl,
+    } satisfies ApplySessionCtaAttemptRecord);
+
+    console.log("[AUTO_APPLY_FORCE_NAV]", {
+      fromUrl,
+      currentUrl: activePage.url(),
+      applyHrefExtracted: applyHref ?? null,
+      applyNavigationForced,
+      applyNavigationUrl: applyNavigationUrl ?? null,
+      success: activePage.url() !== fromUrl,
+    });
+  }
 
   const applyToUrl = activePage.url();
   postApplyUrlAfter = applyToUrl;
-  const applyClick = {
-    hop: 1,
-    fromUrl,
-    toUrl: applyToUrl,
-    selector: applySelector,
-    text: applyText,
-    navigation: "same-tab",
-  } satisfies ApplySessionClickRecord;
+  applyClicked = clickAttemptSucceeded || applyNavigationForced;
 
-  clicks.push(applyClick);
-  applyClicks.push(applyClick);
-  applyClicked = true;
-  applyClickedText = applyText;
-  applyClickedSelector = applySelector;
-  latestActionText = applyText;
-  latestActionSelector = applySelector;
+  if (applyClicked) {
+    const applyClick = {
+      hop: 1,
+      fromUrl,
+      toUrl: applyToUrl,
+      selector: applySelector,
+      text: applyText,
+      navigation: "same-tab",
+    } satisfies ApplySessionClickRecord;
 
-  attempts.push({
-    phase: "entry",
-    action: "click",
-    selector: applySelector,
-    text: applyText,
-    matchedText: "Apply for this job",
-    locatorStrategy: "css_data_js",
-    candidateFound: true,
-    dismissesBlocker: false,
-    success: true,
-    urlBefore: fromUrl,
-    urlAfter: applyToUrl,
-    applyCtaFoundAfter: true,
-  } satisfies ApplySessionCtaAttemptRecord);
+    clicks.push(applyClick);
+    applyClicks.push(applyClick);
+    applyClickedText = applyText;
+    applyClickedSelector = applySelector;
+    latestActionText = applyText;
+    latestActionSelector = applySelector;
+
+    attempts.push({
+      phase: "entry",
+      action: "click",
+      selector: applySelector,
+      text: applyText,
+      matchedText: "Apply for this job",
+      locatorStrategy: "css_data_js",
+      candidateFound: true,
+      dismissesBlocker: false,
+      success: true,
+      urlBefore: fromUrl,
+      urlAfter: applyToUrl,
+      applyCtaFoundAfter: true,
+    } satisfies ApplySessionCtaAttemptRecord);
+  }
 
   if (!urlsVisited.includes(applyToUrl)) {
     urlsVisited.push(applyToUrl);
@@ -3500,6 +3778,9 @@ async function runAdzunaDetailsApplyPhase(args: {
     adzunaPostApplyUrlAfter: postApplyUrlAfter ?? null,
     adzunaPostApplyPopupDetected: postApplyPopupDetected,
     adzunaPostApplyNewPageDetected: postApplyNewPageDetected,
+    applyHrefExtracted: applyHrefExtracted ?? null,
+    applyNavigationForced,
+    applyNavigationUrl: applyNavigationUrl ?? null,
     handoffPageDetected: isAdzunaLandRedirectPage(applyToUrl),
   });
 
@@ -3513,7 +3794,7 @@ async function runAdzunaDetailsApplyPhase(args: {
 
     let fallbackSucceeded = false;
 
-    if (applyHref && applyHref !== activePage.url()) {
+    if (applyHref && applyHref !== activePage.url() && !applyNavigationForced) {
       try {
         await activePage.goto(applyHref, { waitUntil: "domcontentloaded" });
         await waitForDomAndSettle(activePage);
@@ -3643,7 +3924,47 @@ async function runAdzunaDetailsApplyPhase(args: {
       adzunaPostApplyProgressionSucceeded: postApplyProgressionSucceeded,
       adzunaPostApplyPopupDetected: postApplyPopupDetected,
       adzunaPostApplyNewPageDetected: postApplyNewPageDetected,
+      applyHrefExtracted: applyHrefExtracted ?? null,
+      applyNavigationForced,
+      applyNavigationUrl: applyNavigationUrl ?? null,
     });
+  }
+
+  if (!applyClicked && postApplyProgressionSucceeded) {
+    const finalApplyUrl = activePage.url();
+    const applyClick = {
+      hop: 1,
+      fromUrl,
+      toUrl: finalApplyUrl,
+      selector: applySelector,
+      text: applyText,
+      navigation: "same-tab",
+    } satisfies ApplySessionClickRecord;
+
+    clicks.push(applyClick);
+    applyClicks.push(applyClick);
+    applyClicked = true;
+    applyClickedText = applyText;
+    applyClickedSelector = applySelector;
+    latestActionText = applyText;
+    latestActionSelector = applySelector;
+
+    attempts.push({
+      phase: "entry",
+      action: "click",
+      selector: applySelector,
+      text: applyText,
+      matchedText: "Apply for this job",
+      locatorStrategy: applyNavigationForced
+        ? "forced_apply_href_navigation"
+        : "adzuna_post_apply_progression",
+      candidateFound: true,
+      dismissesBlocker: false,
+      success: true,
+      urlBefore: fromUrl,
+      urlAfter: finalApplyUrl,
+      applyCtaFoundAfter: true,
+    } satisfies ApplySessionCtaAttemptRecord);
   }
 
   console.log("[AUTO_APPLY_ADZUNA_DETAILS_APPLY]", {
@@ -3651,6 +3972,9 @@ async function runAdzunaDetailsApplyPhase(args: {
     toUrl: activePage.url(),
     selector: applySelector,
     text: applyText,
+    applyHrefExtracted: applyHrefExtracted ?? null,
+    applyNavigationForced,
+    applyNavigationUrl: applyNavigationUrl ?? null,
     applyCaptureVisible: applyCaptureDetected,
     adzunaPostApplyProgressionSucceeded: postApplyProgressionSucceeded,
   });
@@ -3695,6 +4019,9 @@ async function runAdzunaDetailsApplyPhase(args: {
       postApplyPopupDetected,
       postApplyNewPageDetected,
       postApplyFallbackAttempted,
+      applyHrefExtracted,
+      applyNavigationForced,
+      applyNavigationUrl,
       latestActionText,
       latestActionSelector,
     };
@@ -3752,6 +4079,9 @@ async function runAdzunaDetailsApplyPhase(args: {
       postApplyPopupDetected,
       postApplyNewPageDetected,
       postApplyFallbackAttempted,
+      applyHrefExtracted,
+      applyNavigationForced,
+      applyNavigationUrl,
       latestActionText,
       latestActionSelector,
     };
@@ -3827,6 +4157,9 @@ async function runAdzunaDetailsApplyPhase(args: {
     postApplyPopupDetected,
     postApplyNewPageDetected,
     postApplyFallbackAttempted,
+    applyHrefExtracted,
+    applyNavigationForced,
+    applyNavigationUrl,
     latestActionText,
     latestActionSelector,
   };
@@ -5078,6 +5411,8 @@ async function clickResolvedHandoffCandidateIfStuck(args: {
     locatorStrategy: target.locatorStrategy,
     directNavAttempted: false,
     directNavSucceeded: false,
+    directNavUrl: undefined,
+    directNavUrlAfter: undefined,
     clickedHref: target.href ?? candidate.href,
     clickedText: target.text || candidate.text,
     clickedSelector: target.selector,
@@ -5208,7 +5543,7 @@ async function clickHandoffCtaCandidate(args: {
 async function waitForHandoffAutoRedirect(page: Page, fromUrl: string) {
   await page
     .waitForURL((url) => url.toString() !== fromUrl, {
-      timeout: 4_000,
+      timeout: 6_500,
     })
     .catch(() => null);
   await waitForDomAndSettle(page);
@@ -5217,6 +5552,10 @@ async function waitForHandoffAutoRedirect(page: Page, fromUrl: string) {
 
 async function hasReachedPostHandoffDestination(page: Page) {
   const currentUrl = page.url();
+  if (isDiceJobDetailPage(currentUrl)) {
+    return true;
+  }
+
   if (
     isAdzunaLandRedirectPage(currentUrl) ||
     isAppcastTrackingPage(currentUrl)
@@ -5281,6 +5620,7 @@ async function runHandoffContinuationPhase(args: {
     | "meta_refresh"
     | "inline_script"
     | "fallback_anchor"
+    | "appcast_href"
     | undefined;
   let adzunaExtractedRedirectHtmlRead = false;
   let adzunaExtractedRedirectFailureReason: string[] | undefined;
@@ -5300,6 +5640,75 @@ async function runHandoffContinuationPhase(args: {
       urlsVisited.push(current);
     }
     return current;
+  };
+  const getKnownChainState = () => {
+    const knownUrls = dedupeUrls([initialUrl, ...urlsVisited, activePage.url()]);
+    const adzunaInterstitialRecognized = knownUrls.some((url) =>
+      isAdzunaLandRedirectPage(url),
+    );
+    const appcastHopDetected = knownUrls.some((url) =>
+      isAppcastTrackingPage(url),
+    );
+    const diceDestinationDetected = knownUrls.some((url) =>
+      isDiceJobDetailPage(url),
+    );
+
+    return {
+      adzunaInterstitialRecognized,
+      appcastHopDetected,
+      diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        adzunaInterstitialRecognized &&
+        appcastHopDetected &&
+        diceDestinationDetected,
+    };
+  };
+  const continueKnownHandoffChain = async (stage: string) => {
+    const startingState = getKnownChainState();
+
+    console.log("[AUTO_APPLY_ADZUNA_KNOWN_CHAIN]", {
+      stage,
+      currentUrl: activePage.url(),
+      ...startingState,
+      urlsVisited,
+    });
+
+    if (isAppcastTrackingPage(activePage.url())) {
+      console.log("[AUTO_APPLY_APPCAST_HOP]", {
+        stage,
+        currentUrl: activePage.url(),
+        urlsVisited,
+      });
+
+      const chainedProgress = await waitForTrackedHandoffRedirects({
+        page: activePage,
+        context: args.context,
+        onPageReady: args.onPageReady,
+      });
+
+      activePage = chainedProgress.page;
+      for (const url of chainedProgress.urlsVisited) {
+        if (!urlsVisited.includes(url)) {
+          urlsVisited.push(url);
+        }
+      }
+      recordUrl();
+    }
+
+    const endingState = getKnownChainState();
+    if (endingState.diceDestinationDetected) {
+      console.log("[AUTO_APPLY_DICE_DESTINATION]", {
+        stage,
+        currentUrl: activePage.url(),
+        urlsVisited,
+        ...endingState,
+      });
+    }
+
+    return (
+      endingState.diceDestinationDetected ||
+      (await hasReachedPostHandoffDestination(activePage))
+    );
   };
   const finalize = (continuationSucceeded: boolean) => {
     const result = {
@@ -5340,6 +5749,7 @@ async function runHandoffContinuationPhase(args: {
       adzunaExtractedRedirectNavAttempted,
       adzunaExtractedRedirectNavSucceeded,
       adzunaFallbackUrlAfter,
+      ...getKnownChainState(),
       resolvedHandoffClickedHref,
       resolvedHandoffClickedText,
       resolvedHandoffUrlBefore,
@@ -5394,6 +5804,12 @@ async function runHandoffContinuationPhase(args: {
       adzunaExtractedRedirectNavSucceeded:
         result.adzunaExtractedRedirectNavSucceeded,
       adzunaFallbackUrlAfter: result.adzunaFallbackUrlAfter ?? null,
+      adzunaInterstitialRecognized:
+        result.adzunaInterstitialRecognized,
+      appcastHopDetected: result.appcastHopDetected,
+      diceDestinationDetected: result.diceDestinationDetected,
+      handoffResolvedViaKnownChain:
+        result.handoffResolvedViaKnownChain,
       resolvedHandoffClickedHref: result.resolvedHandoffClickedHref ?? null,
       resolvedHandoffClickedText: result.resolvedHandoffClickedText ?? null,
       resolvedHandoffUrlBefore: result.resolvedHandoffUrlBefore ?? null,
@@ -5408,10 +5824,26 @@ async function runHandoffContinuationPhase(args: {
     return finalize(false);
   }
 
+  console.log("[AUTO_APPLY_ADZUNA_INTERSTITIAL_CONTINUE]", {
+    handoffUrl,
+    currentUrl: activePage.url(),
+    stage: "start",
+  });
+
   const autoRedirected = await waitForHandoffAutoRedirect(activePage, initialUrl);
   recordUrl();
 
-  if (autoRedirected && (await hasReachedPostHandoffDestination(activePage))) {
+  console.log("[AUTO_APPLY_ADZUNA_INTERSTITIAL_CONTINUE]", {
+    handoffUrl,
+    currentUrl: activePage.url(),
+    stage: "after_auto_redirect_wait",
+    autoRedirected,
+  });
+
+  if (
+    autoRedirected &&
+    (await continueKnownHandoffChain("auto_redirect_wait"))
+  ) {
     return finalize(true);
   }
 
@@ -5448,6 +5880,19 @@ async function runHandoffContinuationPhase(args: {
     adzunaFallbackResult.extractedRedirectNavSucceeded;
   adzunaFallbackUrlAfter = adzunaFallbackResult.urlAfter;
 
+  console.log("[AUTO_APPLY_ADZUNA_INTERSTITIAL_CONTINUE]", {
+    handoffUrl,
+    currentUrl: activePage.url(),
+    stage: "after_extraction_attempt",
+    adzunaExtractedRedirectHtmlRead,
+    adzunaExtractedRedirectUrl: adzunaExtractedRedirectUrl ?? null,
+    adzunaExtractedRedirectSource: adzunaExtractedRedirectSource ?? null,
+    adzunaExtractedRedirectFailureReason:
+      adzunaExtractedRedirectFailureReason ?? [],
+    adzunaExtractedRedirectNavAttempted,
+    adzunaExtractedRedirectNavSucceeded,
+  });
+
   for (const attempt of adzunaFallbackResult.attempts) {
     attempts.push(attempt);
     if (attempt.candidateFound) {
@@ -5470,7 +5915,7 @@ async function runHandoffContinuationPhase(args: {
 
   if (
     adzunaFallbackResult.clicked &&
-    (await hasReachedPostHandoffDestination(activePage))
+    (await continueKnownHandoffChain("adzuna_fallback"))
   ) {
     return finalize(true);
   }
@@ -5519,7 +5964,7 @@ async function runHandoffContinuationPhase(args: {
 
   if (
     resolvedHandoffResult.succeeded &&
-    (await hasReachedPostHandoffDestination(activePage))
+    (await continueKnownHandoffChain("resolved_handoff"))
   ) {
     return finalize(true);
   }
@@ -5575,14 +6020,21 @@ async function runHandoffContinuationPhase(args: {
 
     if (
       (redirectedAfterClick || result.click) &&
-      (await hasReachedPostHandoffDestination(activePage))
+      (await continueKnownHandoffChain(`handoff_cta_${step}`))
     ) {
       return finalize(true);
     }
 
-    if (!isAdzunaLandRedirectPage(activePage.url())) {
+    if (
+      !isAdzunaLandRedirectPage(activePage.url()) &&
+      !isAppcastTrackingPage(activePage.url())
+    ) {
       break;
     }
+  }
+
+  if (await continueKnownHandoffChain("before_finalize")) {
+    return finalize(true);
   }
 
   return finalize(false);
@@ -5933,6 +6385,9 @@ export async function applyWithPlaywright(args: {
   let postCookieTitleAfter: string | undefined;
   let applyCtaClickedText: string | undefined;
   let applyCtaClickedSelector: string | undefined;
+  let applyHrefExtracted: string | undefined;
+  let applyNavigationForced = false;
+  let applyNavigationUrl: string | undefined;
   let entryPhaseClicks: ApplySessionClickRecord[] = [];
   let entryPhaseUrlsVisited: string[] = [];
   let handoffPhaseClicks: ApplySessionClickRecord[] = [];
@@ -5974,12 +6429,21 @@ export async function applyWithPlaywright(args: {
     | "meta_refresh"
     | "inline_script"
     | "fallback_anchor"
+    | "appcast_href"
     | undefined;
   let adzunaExtractedRedirectHtmlRead = false;
   let adzunaExtractedRedirectFailureReason: string[] | undefined;
   let adzunaExtractedRedirectNavAttempted = false;
   let adzunaExtractedRedirectNavSucceeded = false;
   let adzunaFallbackUrlAfter: string | undefined;
+  let adzunaInterstitialRecognized = false;
+  let appcastHopDetected = false;
+  let diceDestinationDetected = false;
+  let handoffResolvedViaKnownChain = false;
+  let knownChainClassificationGuardApplied = false;
+  let knownChainContinuationExhausted = false;
+  let knownChainAllowedToFail = true;
+  let knownChainContinuationRoutineCompleted = false;
   let resolvedHandoffClickedHref: string | undefined;
   let resolvedHandoffClickedText: string | undefined;
   let resolvedHandoffUrlBefore: string | undefined;
@@ -6025,6 +6489,9 @@ export async function applyWithPlaywright(args: {
     adzunaPostApplyPopupDetected,
     adzunaPostApplyNewPageDetected,
     adzunaPostApplyFallbackAttempted,
+    applyHrefExtracted,
+    applyNavigationForced,
+    applyNavigationUrl,
     handoffPageDetected,
     handoffUrl,
     handoffContinuationAttempted,
@@ -6077,6 +6544,13 @@ export async function applyWithPlaywright(args: {
     adzunaExtractedRedirectNavAttempted,
     adzunaExtractedRedirectNavSucceeded,
     adzunaFallbackUrlAfter,
+    adzunaInterstitialRecognized,
+    appcastHopDetected,
+    diceDestinationDetected,
+    handoffResolvedViaKnownChain,
+    knownChainClassificationGuardApplied,
+    knownChainContinuationExhausted,
+    knownChainAllowedToFail,
     resolvedHandoffClickedHref,
     resolvedHandoffClickedText,
     resolvedHandoffUrlBefore,
@@ -6153,6 +6627,209 @@ export async function applyWithPlaywright(args: {
         ...result.urlsVisited,
       ]);
     }
+  };
+
+  const mergeHandoffPhase = (handoffPhase: HandoffContinuationResult) => {
+    activePage = handoffPhase.page;
+    captureCurrentUrl(activePage);
+    handoffPageDetected = handoffPhase.handoffPageDetected;
+    handoffUrl = handoffPhase.handoffUrl;
+    handoffContinuationAttempted = handoffPhase.continuationAttempted;
+    handoffContinuationSucceeded = handoffPhase.continuationSucceeded;
+    handoffCtaFound = handoffPhase.ctaFound;
+    handoffCtaClicked = handoffPhase.ctaClicked;
+    handoffCtaClickedText = handoffPhase.ctaClickedText;
+    handoffCtaClickedSelector = handoffPhase.ctaClickedSelector;
+    handoffAttempts = handoffPhase.attempts;
+    handoffPhaseClicks = handoffPhase.clicks;
+    handoffPhaseUrlsVisited = handoffPhase.urlsVisited;
+    resolvedHandoffClickAttempted =
+      handoffPhase.resolvedHandoffClickAttempted;
+    resolvedHandoffClickSucceeded =
+      handoffPhase.resolvedHandoffClickSucceeded;
+    resolvedHandoffElementFound =
+      handoffPhase.resolvedHandoffElementFound;
+    resolvedHandoffLocatorStrategy =
+      handoffPhase.resolvedHandoffLocatorStrategy;
+    resolvedHandoffDirectNavAttempted =
+      handoffPhase.resolvedHandoffDirectNavAttempted;
+    resolvedHandoffDirectNavSucceeded =
+      handoffPhase.resolvedHandoffDirectNavSucceeded;
+    resolvedHandoffDirectNavUrl =
+      handoffPhase.resolvedHandoffDirectNavUrl;
+    resolvedHandoffDirectNavUrlAfter =
+      handoffPhase.resolvedHandoffDirectNavUrlAfter;
+    adzunaFallbackLinkFound = handoffPhase.adzunaFallbackLinkFound;
+    adzunaFallbackLinkClicked = handoffPhase.adzunaFallbackLinkClicked;
+    adzunaFallbackLinkText = handoffPhase.adzunaFallbackLinkText;
+    adzunaFallbackLocatorStrategy =
+      handoffPhase.adzunaFallbackLocatorStrategy;
+    adzunaFallbackElementFound =
+      handoffPhase.adzunaFallbackElementFound;
+    adzunaFallbackClickSucceeded =
+      handoffPhase.adzunaFallbackClickSucceeded;
+    adzunaFallbackHref = handoffPhase.adzunaFallbackHref;
+    adzunaFallbackHost = handoffPhase.adzunaFallbackHost;
+    adzunaFallbackDirectNavAttempted =
+      handoffPhase.adzunaFallbackDirectNavAttempted;
+    adzunaFallbackDirectNavSucceeded =
+      handoffPhase.adzunaFallbackDirectNavSucceeded;
+    adzunaExtractedRedirectUrl =
+      handoffPhase.adzunaExtractedRedirectUrl;
+    adzunaExtractedRedirectSource =
+      handoffPhase.adzunaExtractedRedirectSource;
+    adzunaExtractedRedirectHtmlRead =
+      handoffPhase.adzunaExtractedRedirectHtmlRead;
+    adzunaExtractedRedirectFailureReason =
+      handoffPhase.adzunaExtractedRedirectFailureReason;
+    adzunaExtractedRedirectNavAttempted =
+      handoffPhase.adzunaExtractedRedirectNavAttempted;
+    adzunaExtractedRedirectNavSucceeded =
+      handoffPhase.adzunaExtractedRedirectNavSucceeded;
+    adzunaFallbackUrlAfter = handoffPhase.adzunaFallbackUrlAfter;
+    adzunaInterstitialRecognized =
+      handoffPhase.adzunaInterstitialRecognized;
+    appcastHopDetected = handoffPhase.appcastHopDetected;
+    diceDestinationDetected = handoffPhase.diceDestinationDetected;
+    handoffResolvedViaKnownChain =
+      handoffPhase.handoffResolvedViaKnownChain;
+    if (handoffPhase.ctaClickedText || handoffPhase.ctaClickedSelector) {
+      latestActionText = handoffPhase.ctaClickedText ?? latestActionText;
+      latestActionSelector =
+        handoffPhase.ctaClickedSelector ?? latestActionSelector;
+    }
+    ctaAttempts = [...ctaAttempts, ...handoffPhase.attempts];
+    resolvedHandoffClickedHref = handoffPhase.resolvedHandoffClickedHref;
+    resolvedHandoffClickedText = handoffPhase.resolvedHandoffClickedText;
+    resolvedHandoffUrlBefore = handoffPhase.resolvedHandoffUrlBefore;
+    resolvedHandoffUrlAfter = handoffPhase.resolvedHandoffUrlAfter;
+  };
+
+  const computeKnownChainClassificationState = (activeUrl: string) => {
+    const onKnownChainPage = isKnownHandoffChainPage(activeUrl);
+    const continuationCompleted =
+      knownChainContinuationRoutineCompleted ||
+      handoffResolvedViaKnownChain ||
+      handoffContinuationSucceeded ||
+      diceDestinationDetected;
+    const continuationExhausted =
+      onKnownChainPage && continuationCompleted && !diceDestinationDetected;
+
+    return {
+      onKnownChainPage,
+      knownChainClassificationGuardApplied:
+        onKnownChainPage && !continuationCompleted,
+      knownChainContinuationExhausted: continuationExhausted,
+      knownChainAllowedToFail:
+        !onKnownChainPage || continuationCompleted || diceDestinationDetected,
+    };
+  };
+
+  const refreshKnownChainClassificationState = (stage: string) => {
+    const activeUrl = captureCurrentUrl(activePage);
+    if (!isKnownHandoffChainPage(activeUrl)) {
+      knownChainContinuationRoutineCompleted = false;
+    }
+
+    const state = computeKnownChainClassificationState(activeUrl);
+    knownChainClassificationGuardApplied =
+      state.knownChainClassificationGuardApplied;
+    knownChainContinuationExhausted =
+      state.knownChainContinuationExhausted;
+    knownChainAllowedToFail = state.knownChainAllowedToFail;
+
+    console.log("[AUTO_APPLY_KNOWN_CHAIN_GUARD]", {
+      stage,
+      currentUrl: currentUrl ?? null,
+      handoffPageDetected,
+      handoffContinuationAttempted,
+      handoffContinuationSucceeded,
+      adzunaInterstitialRecognized,
+      appcastHopDetected,
+      diceDestinationDetected,
+      handoffResolvedViaKnownChain,
+      knownChainClassificationGuardApplied,
+      knownChainContinuationExhausted,
+      knownChainAllowedToFail,
+    });
+
+    return state;
+  };
+
+  const continueKnownChainBeforeClassification = async (stage: string) => {
+    const state = refreshKnownChainClassificationState(`${stage}:before`);
+    if (!state.onKnownChainPage || !activePage || !context) {
+      return false;
+    }
+
+    let routineRan = false;
+
+    if (isAdzunaLandRedirectPage(activePage.url())) {
+      routineRan = true;
+      const handoffPhase = await runHandoffContinuationPhase({
+        page: activePage,
+        context,
+        resolverSelectedLink,
+        resolverCandidates,
+        onPageReady: args.onPageReady,
+      });
+      mergeHandoffPhase(handoffPhase);
+    } else if (isAppcastTrackingPage(activePage.url())) {
+      routineRan = true;
+      const chainedProgress = await waitForTrackedHandoffRedirects({
+        page: activePage,
+        context,
+        onPageReady: args.onPageReady,
+      });
+      activePage = chainedProgress.page;
+      captureCurrentUrl(activePage);
+      handoffContinuationAttempted = true;
+      handoffPhaseUrlsVisited = dedupeUrls([
+        ...handoffPhaseUrlsVisited,
+        ...chainedProgress.urlsVisited,
+      ]);
+      adzunaInterstitialRecognized =
+        adzunaInterstitialRecognized ||
+        chainedProgress.urlsVisited.some((url) => isAdzunaLandRedirectPage(url));
+      appcastHopDetected = true;
+      diceDestinationDetected =
+        diceDestinationDetected ||
+        chainedProgress.urlsVisited.some((url) => isDiceJobDetailPage(url)) ||
+        isDiceJobDetailPage(activePage.url());
+      handoffResolvedViaKnownChain =
+        adzunaInterstitialRecognized &&
+        appcastHopDetected &&
+        diceDestinationDetected;
+      handoffContinuationSucceeded =
+        handoffContinuationSucceeded ||
+        diceDestinationDetected ||
+        (await hasReachedPostHandoffDestination(activePage));
+    }
+
+    if (isDiceJobDetailPage(activePage.url())) {
+      diceDestinationDetected = true;
+      handoffContinuationSucceeded = true;
+      handoffResolvedViaKnownChain =
+        adzunaInterstitialRecognized &&
+        appcastHopDetected &&
+        diceDestinationDetected;
+    }
+
+    const postContinuationCookiePhase = await dismissCookieConsentIfPresent({
+      page: activePage,
+      context,
+      onPageReady: args.onPageReady,
+    });
+    activePage = postContinuationCookiePhase.page;
+    captureCurrentUrl(activePage);
+    mergeCookiePromptPhase(postContinuationCookiePhase);
+
+    if (routineRan) {
+      knownChainContinuationRoutineCompleted = true;
+    }
+
+    refreshKnownChainClassificationState(`${stage}:after`);
+    return routineRan;
   };
 
   try {
@@ -6251,6 +6928,7 @@ export async function applyWithPlaywright(args: {
           postApplyPopupDetected: false,
           postApplyNewPageDetected: false,
           postApplyFallbackAttempted: false,
+          applyNavigationForced: false,
         };
 
     page = adzunaDetailsPhase.page;
@@ -6284,6 +6962,10 @@ export async function applyWithPlaywright(args: {
       adzunaDetailsPhase.postApplyNewPageDetected;
     adzunaPostApplyFallbackAttempted =
       adzunaDetailsPhase.postApplyFallbackAttempted;
+    applyHrefExtracted = adzunaDetailsPhase.applyHrefExtracted;
+    applyNavigationForced =
+      adzunaDetailsPhase.applyNavigationForced ?? false;
+    applyNavigationUrl = adzunaDetailsPhase.applyNavigationUrl;
     latestActionText =
       adzunaDetailsPhase.latestActionText ?? latestActionText;
     latestActionSelector =
@@ -6347,75 +7029,9 @@ export async function applyWithPlaywright(args: {
         resolverCandidates,
         onPageReady: args.onPageReady,
       });
-
-      page = handoffPhase.page;
+      mergeHandoffPhase(handoffPhase);
+      page = activePage ?? page;
       captureCurrentUrl(page);
-      handoffPageDetected = handoffPhase.handoffPageDetected;
-      handoffUrl = handoffPhase.handoffUrl;
-      handoffContinuationAttempted = handoffPhase.continuationAttempted;
-      handoffContinuationSucceeded = handoffPhase.continuationSucceeded;
-      handoffCtaFound = handoffPhase.ctaFound;
-      handoffCtaClicked = handoffPhase.ctaClicked;
-      handoffCtaClickedText = handoffPhase.ctaClickedText;
-      handoffCtaClickedSelector = handoffPhase.ctaClickedSelector;
-      handoffAttempts = handoffPhase.attempts;
-      handoffPhaseClicks = handoffPhase.clicks;
-      handoffPhaseUrlsVisited = handoffPhase.urlsVisited;
-      resolvedHandoffClickAttempted =
-        handoffPhase.resolvedHandoffClickAttempted;
-      resolvedHandoffClickSucceeded =
-        handoffPhase.resolvedHandoffClickSucceeded;
-      resolvedHandoffElementFound =
-        handoffPhase.resolvedHandoffElementFound;
-      resolvedHandoffLocatorStrategy =
-        handoffPhase.resolvedHandoffLocatorStrategy;
-      resolvedHandoffDirectNavAttempted =
-        handoffPhase.resolvedHandoffDirectNavAttempted;
-      resolvedHandoffDirectNavSucceeded =
-        handoffPhase.resolvedHandoffDirectNavSucceeded;
-      resolvedHandoffDirectNavUrl =
-        handoffPhase.resolvedHandoffDirectNavUrl;
-      resolvedHandoffDirectNavUrlAfter =
-        handoffPhase.resolvedHandoffDirectNavUrlAfter;
-      adzunaFallbackLinkFound = handoffPhase.adzunaFallbackLinkFound;
-      adzunaFallbackLinkClicked = handoffPhase.adzunaFallbackLinkClicked;
-      adzunaFallbackLinkText = handoffPhase.adzunaFallbackLinkText;
-      adzunaFallbackLocatorStrategy =
-        handoffPhase.adzunaFallbackLocatorStrategy;
-      adzunaFallbackElementFound =
-        handoffPhase.adzunaFallbackElementFound;
-      adzunaFallbackClickSucceeded =
-        handoffPhase.adzunaFallbackClickSucceeded;
-      adzunaFallbackHref = handoffPhase.adzunaFallbackHref;
-      adzunaFallbackHost = handoffPhase.adzunaFallbackHost;
-      adzunaFallbackDirectNavAttempted =
-        handoffPhase.adzunaFallbackDirectNavAttempted;
-      adzunaFallbackDirectNavSucceeded =
-        handoffPhase.adzunaFallbackDirectNavSucceeded;
-      adzunaExtractedRedirectUrl =
-        handoffPhase.adzunaExtractedRedirectUrl;
-      adzunaExtractedRedirectSource =
-        handoffPhase.adzunaExtractedRedirectSource;
-      adzunaExtractedRedirectHtmlRead =
-        handoffPhase.adzunaExtractedRedirectHtmlRead;
-      adzunaExtractedRedirectFailureReason =
-        handoffPhase.adzunaExtractedRedirectFailureReason;
-      adzunaExtractedRedirectNavAttempted =
-        handoffPhase.adzunaExtractedRedirectNavAttempted;
-      adzunaExtractedRedirectNavSucceeded =
-        handoffPhase.adzunaExtractedRedirectNavSucceeded;
-      adzunaFallbackUrlAfter = handoffPhase.adzunaFallbackUrlAfter;
-      resolvedHandoffClickedHref = handoffPhase.resolvedHandoffClickedHref;
-      resolvedHandoffClickedText = handoffPhase.resolvedHandoffClickedText;
-      resolvedHandoffUrlBefore = handoffPhase.resolvedHandoffUrlBefore;
-      resolvedHandoffUrlAfter = handoffPhase.resolvedHandoffUrlAfter;
-      ctaAttempts = [...ctaAttempts, ...handoffPhase.attempts];
-      if (handoffPhase.ctaClickedText || handoffPhase.ctaClickedSelector) {
-        latestActionText =
-          handoffPhase.ctaClickedText ?? latestActionText;
-        latestActionSelector =
-          handoffPhase.ctaClickedSelector ?? latestActionSelector;
-      }
     }
 
     const initialCookiePhase = await dismissCookieConsentIfPresent({
@@ -6426,6 +7042,15 @@ export async function applyWithPlaywright(args: {
     page = initialCookiePhase.page;
     captureCurrentUrl(page);
     mergeCookiePromptPhase(initialCookiePhase);
+
+    if (
+      isAdzunaLandRedirectPage(page.url()) ||
+      isAppcastTrackingPage(page.url())
+    ) {
+      await continueKnownChainBeforeClassification("pre_chase_guard");
+      page = activePage ?? page;
+      captureCurrentUrl(page);
+    }
 
     let chase: CtaChaseResult = await chaseApplyPath({
       page,
@@ -6497,77 +7122,9 @@ export async function applyWithPlaywright(args: {
             resolverCandidates,
             onPageReady: args.onPageReady,
           });
-
-          page = handoffPhase.page;
+          mergeHandoffPhase(handoffPhase);
+          page = activePage ?? page;
           captureCurrentUrl(page);
-          handoffPageDetected = handoffPhase.handoffPageDetected;
-          handoffUrl = handoffPhase.handoffUrl;
-          handoffContinuationAttempted =
-            handoffPhase.continuationAttempted;
-          handoffContinuationSucceeded =
-            handoffPhase.continuationSucceeded;
-          handoffCtaFound = handoffPhase.ctaFound;
-          handoffCtaClicked = handoffPhase.ctaClicked;
-          handoffCtaClickedText = handoffPhase.ctaClickedText;
-          handoffCtaClickedSelector = handoffPhase.ctaClickedSelector;
-          handoffAttempts = handoffPhase.attempts;
-          handoffPhaseClicks = handoffPhase.clicks;
-          handoffPhaseUrlsVisited = handoffPhase.urlsVisited;
-          resolvedHandoffClickAttempted =
-            handoffPhase.resolvedHandoffClickAttempted;
-          resolvedHandoffClickSucceeded =
-            handoffPhase.resolvedHandoffClickSucceeded;
-          resolvedHandoffElementFound =
-            handoffPhase.resolvedHandoffElementFound;
-          resolvedHandoffLocatorStrategy =
-            handoffPhase.resolvedHandoffLocatorStrategy;
-          resolvedHandoffDirectNavAttempted =
-            handoffPhase.resolvedHandoffDirectNavAttempted;
-          resolvedHandoffDirectNavSucceeded =
-            handoffPhase.resolvedHandoffDirectNavSucceeded;
-          resolvedHandoffDirectNavUrl =
-            handoffPhase.resolvedHandoffDirectNavUrl;
-          resolvedHandoffDirectNavUrlAfter =
-            handoffPhase.resolvedHandoffDirectNavUrlAfter;
-          adzunaFallbackLinkFound =
-            handoffPhase.adzunaFallbackLinkFound;
-          adzunaFallbackLinkClicked =
-            handoffPhase.adzunaFallbackLinkClicked;
-          adzunaFallbackLinkText =
-            handoffPhase.adzunaFallbackLinkText;
-          adzunaFallbackLocatorStrategy =
-            handoffPhase.adzunaFallbackLocatorStrategy;
-          adzunaFallbackElementFound =
-            handoffPhase.adzunaFallbackElementFound;
-          adzunaFallbackClickSucceeded =
-            handoffPhase.adzunaFallbackClickSucceeded;
-          adzunaFallbackHref = handoffPhase.adzunaFallbackHref;
-          adzunaFallbackHost = handoffPhase.adzunaFallbackHost;
-          adzunaFallbackDirectNavAttempted =
-            handoffPhase.adzunaFallbackDirectNavAttempted;
-          adzunaFallbackDirectNavSucceeded =
-            handoffPhase.adzunaFallbackDirectNavSucceeded;
-          adzunaExtractedRedirectUrl =
-            handoffPhase.adzunaExtractedRedirectUrl;
-          adzunaExtractedRedirectSource =
-            handoffPhase.adzunaExtractedRedirectSource;
-          adzunaExtractedRedirectHtmlRead =
-            handoffPhase.adzunaExtractedRedirectHtmlRead;
-          adzunaExtractedRedirectFailureReason =
-            handoffPhase.adzunaExtractedRedirectFailureReason;
-          adzunaExtractedRedirectNavAttempted =
-            handoffPhase.adzunaExtractedRedirectNavAttempted;
-          adzunaExtractedRedirectNavSucceeded =
-            handoffPhase.adzunaExtractedRedirectNavSucceeded;
-          adzunaFallbackUrlAfter =
-            handoffPhase.adzunaFallbackUrlAfter;
-          resolvedHandoffClickedHref =
-            handoffPhase.resolvedHandoffClickedHref;
-          resolvedHandoffClickedText =
-            handoffPhase.resolvedHandoffClickedText;
-          resolvedHandoffUrlBefore = handoffPhase.resolvedHandoffUrlBefore;
-          resolvedHandoffUrlAfter = handoffPhase.resolvedHandoffUrlAfter;
-          ctaAttempts = [...ctaAttempts, ...handoffPhase.attempts];
         }
 
         const resolvedCookiePhase = await dismissCookieConsentIfPresent({
@@ -6578,6 +7135,17 @@ export async function applyWithPlaywright(args: {
         page = resolvedCookiePhase.page;
         captureCurrentUrl(page);
         mergeCookiePromptPhase(resolvedCookiePhase);
+
+        if (
+          isAdzunaLandRedirectPage(page.url()) ||
+          isAppcastTrackingPage(page.url())
+        ) {
+          await continueKnownChainBeforeClassification(
+            "post_resolver_pre_chase_guard",
+          );
+          page = activePage ?? page;
+          captureCurrentUrl(page);
+        }
 
         const resolvedChase = await chaseApplyPath({
           page,
@@ -6595,6 +7163,45 @@ export async function applyWithPlaywright(args: {
           initial: chase,
           resolved: resolvedChase,
           resolverUrl: resolverResult.newUrl ?? resolverResult.selectedLink,
+        });
+        rawChaseEvidence = buildCtaEvidence(
+          chase,
+          page.url(),
+          realApplyPreludeClicks,
+        );
+      }
+    }
+
+    if (
+      isAdzunaLandRedirectPage(page.url()) ||
+      isAppcastTrackingPage(page.url())
+    ) {
+      await continueKnownChainBeforeClassification(
+        "post_chase_known_chain_guard",
+      );
+      page = activePage ?? page;
+      captureCurrentUrl(page);
+
+      if (
+        !isAdzunaLandRedirectPage(page.url()) &&
+        !isAppcastTrackingPage(page.url())
+      ) {
+        const recoveredChase = await chaseApplyPath({
+          page,
+          context,
+          onPageReady: args.onPageReady,
+          onStatus: args.onStatus,
+          viewerUrl: remoteSession?.viewerUrl,
+          remoteSessionId: remoteSession?.sessionId,
+          openUrl: page.url(),
+        });
+
+        page = recoveredChase.page;
+        captureCurrentUrl(page);
+        chase = mergeChaseResults({
+          initial: chase,
+          resolved: recoveredChase,
+          resolverUrl: page.url(),
         });
         rawChaseEvidence = buildCtaEvidence(
           chase,
@@ -6673,6 +7280,9 @@ export async function applyWithPlaywright(args: {
       adzunaPostApplyPopupDetected,
       adzunaPostApplyNewPageDetected,
       adzunaPostApplyFallbackAttempted,
+      applyHrefExtracted: applyHrefExtracted ?? null,
+      applyNavigationForced,
+      applyNavigationUrl: applyNavigationUrl ?? null,
       handoffPageDetected,
       handoffUrl: handoffUrl ?? null,
       handoffContinuationAttempted,
@@ -6712,6 +7322,10 @@ export async function applyWithPlaywright(args: {
       adzunaExtractedRedirectNavAttempted,
       adzunaExtractedRedirectNavSucceeded,
       adzunaFallbackUrlAfter: adzunaFallbackUrlAfter ?? null,
+      adzunaInterstitialRecognized,
+      appcastHopDetected,
+      diceDestinationDetected,
+      handoffResolvedViaKnownChain,
       resolvedHandoffClickedHref: resolvedHandoffClickedHref ?? null,
       resolvedHandoffClickedText: resolvedHandoffClickedText ?? null,
       resolvedHandoffUrlBefore: resolvedHandoffUrlBefore ?? null,
@@ -6740,6 +7354,8 @@ export async function applyWithPlaywright(args: {
       confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
       successUrlPatternMatched: chase.signals.successUrlPatternMatched,
     });
+
+    refreshKnownChainClassificationState("post_chase");
 
     const stalledAdzunaPostApply =
       adzunaPostApplyProgressionAttempted &&
@@ -6975,7 +7591,91 @@ export async function applyWithPlaywright(args: {
       };
     }
 
-    if (chase.signals.needsHuman) {
+    const knownHandoffStopClassification =
+      knownChainAllowedToFail
+        ? buildKnownHandoffStopClassification(page.url())
+        : undefined;
+
+    if (knownHandoffStopClassification) {
+      const finalUrl = page.url();
+      const finalStatus = "UNCONFIRMED";
+      const message = isAdzunaLandRedirectPage(finalUrl)
+        ? "Adzuna redirect interstitial did not resolve to a usable application page."
+        : "Tracked redirect hop did not resolve to a usable application page.";
+
+      await args.onStatus?.({
+        status: finalStatus,
+        lastUrl: finalUrl,
+        error: message,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        ...chaseEvidence,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: chase.signals.confirmationTextFound,
+        confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+        successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+        finalStatus,
+        submissionConfirmed: false,
+      });
+
+      return {
+        ok: false,
+        status: finalStatus,
+        unavailable: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          ...debugContext(),
+          ...(await captureStopPoint(page)),
+          finalUrl,
+          verificationSignals: [],
+          confirmationSignals: chase.signals.confirmationSignals,
+          pageText: chase.signals.pageText,
+          pageHtml: chase.signals.html,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          ...chaseEvidence,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: chase.signals.confirmationTextFound,
+          confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
+          successUrlPatternMatched: chase.signals.successUrlPatternMatched,
+          submissionConfirmed: false,
+          finalStatus,
+          success: false,
+          needsHuman: false,
+          unavailable: true,
+          hopCount: chaseEvidence.hopCount,
+          urlsVisited: effectiveChase.urlsVisited,
+          clicks: effectiveChase.clicks,
+          formDetected: false,
+          confirmationDetected: chase.signals.confirmationDetected,
+          verificationDetected: false,
+          finalReason:
+            chase.finalReason ??
+            "Known redirect-chain continuation was exhausted without reaching a destination page.",
+          stopClassification: knownHandoffStopClassification,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
+        }),
+      };
+    }
+
+    if (chase.signals.needsHuman && knownChainAllowedToFail) {
       keepBrowserOpen = true;
       const finalUrl = page.url();
       const message = chase.signals.accountSignals.length
@@ -7053,7 +7753,7 @@ export async function applyWithPlaywright(args: {
       };
     }
 
-    if ("unavailable" in chase && chase.unavailable) {
+    if ("unavailable" in chase && chase.unavailable && knownChainAllowedToFail) {
       const finalUrl = page.url();
       const finalStatus = landedWithoutStarting
         ? "APPLY_NOT_STARTED"
@@ -7758,6 +8458,9 @@ export function toApplySessionDebug(
     postCookieTitleAfter: result.postCookieTitleAfter,
     applyCtaClickedText: result.applyCtaClickedText,
     applyCtaClickedSelector: result.applyCtaClickedSelector,
+    applyHrefExtracted: result.applyHrefExtracted,
+    applyNavigationForced: result.applyNavigationForced,
+    applyNavigationUrl: result.applyNavigationUrl,
     ctaClickedText: result.ctaClickedText,
     ctaClickedSelector: result.ctaClickedSelector,
     dismissedBlocker: result.dismissedBlocker,
@@ -7802,5 +8505,16 @@ export function toApplySessionDebug(
       result.adzunaExtractedRedirectNavAttempted,
     adzunaExtractedRedirectNavSucceeded:
       result.adzunaExtractedRedirectNavSucceeded,
+    adzunaInterstitialRecognized:
+      result.adzunaInterstitialRecognized,
+    appcastHopDetected: result.appcastHopDetected,
+    diceDestinationDetected: result.diceDestinationDetected,
+    handoffResolvedViaKnownChain:
+      result.handoffResolvedViaKnownChain,
+    knownChainClassificationGuardApplied:
+      result.knownChainClassificationGuardApplied,
+    knownChainContinuationExhausted:
+      result.knownChainContinuationExhausted,
+    knownChainAllowedToFail: result.knownChainAllowedToFail,
   } as ApplySessionDebug;
 }

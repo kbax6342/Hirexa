@@ -19,6 +19,7 @@ model User {
   emailVerifiedAt DateTime?
   userProfile     UserProfile?
   billings        UserBilling[]
+  savedJobs       SavedJob[]
   hirePilotCreditGrants HirePilotCreditGrant[]
   hirePilotCreditUsages HirePilotCreditUsage[]
   passwordResetTokens PasswordResetToken[]
@@ -428,6 +429,24 @@ model ResumeFile {
   profile   UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   @@index([profileId])
+}
+
+
+model SavedJob {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String
+  title     String
+  company   String
+  location  String?
+  url       String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model EmailVerificationCode {

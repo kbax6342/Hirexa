@@ -43,13 +43,13 @@ const guestNav: NavItem[] = [
   { label: "Features", href: "/#features" },
   { label: "How It Works", href: "/how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
+  { label: "Saved Jobs", href: "/saved-jobs" },
   { label: "Job Locations", href: "/locations" },
 ];
 
 const authedNav: NavItem[] = [
   { label: "Smart Matches", href: "/dashboard" },
   { label: "AI Application Assistant", href: "/job-tools/generate" },
-  { label: "Profile", href: "/profile" },
   {
     label: "Agents",
     href: "#",
@@ -320,6 +320,18 @@ export function Navbar() {
                 <div className="absolute right-0 top-full z-50 mt-2 w-44 rounded-xl border border-border/60 bg-background shadow-lg opacity-0 scale-95 pointer-events-none transition-all duration-200 group-hover:pointer-events-auto group-hover:scale-100 group-hover:opacity-100">
                   <div className="py-1 text-sm">
                     <Link
+                      href="/profile"
+                      className="block px-4 py-2 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    >
+                      Profile
+                    </Link>
+                    <Link
+                      href="/saved-jobs"
+                      className="block px-4 py-2 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    >
+                      Saved Jobs
+                    </Link>
+                    <Link
                       href="/settings"
                       className="block px-4 py-2 text-muted-foreground hover:bg-secondary hover:text-foreground"
                     >
@@ -491,6 +503,38 @@ export function Navbar() {
                   >
                     {hirePilotDesktopLabel}
                   </Link>
+
+                  <Button
+                    asChild
+                    variant="ghost"
+                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                  >
+                    <Link
+                      href="/profile"
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
+                      Profile
+                    </Link>
+                  </Button>
+
+                  <Button
+                    asChild
+                    variant="ghost"
+                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                  >
+                    <Link
+                      href="/saved-jobs"
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
+                      Saved Jobs
+                    </Link>
+                  </Button>
 
                   <Button
                     asChild

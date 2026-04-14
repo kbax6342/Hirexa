@@ -600,6 +600,14 @@ function applyFinalWriteGuard(args: {
       currentUrl: evidence.currentUrl,
       lastAction: "no_apply_cta",
       stopClassification,
+      stoppedAtUrl:
+        args.result.debug.stoppedAtUrl ??
+        evidence.currentUrl ??
+        args.result.finalUrl ??
+        null,
+      stoppedAtTitle: args.result.debug.stoppedAtTitle ?? null,
+      lastActionText: args.result.debug.lastActionText ?? null,
+      lastActionSelector: args.result.debug.lastActionSelector ?? null,
     }),
     ok: false,
     status: "APPLY_NOT_STARTED",

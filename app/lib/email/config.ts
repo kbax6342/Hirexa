@@ -13,7 +13,8 @@ type ParsedLegacySender = {
 };
 
 function normalizeText(value: string | undefined | null) {
-  const nextValue = value?.trim();
+  const trimmed = value?.trim();
+  const nextValue = trimmed?.match(/^(['"])([\s\S]*)\1$/)?.[2]?.trim() ?? trimmed;
   return nextValue ? nextValue : null;
 }
 

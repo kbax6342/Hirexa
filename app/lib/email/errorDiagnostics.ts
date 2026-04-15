@@ -14,6 +14,20 @@ export type NormalizedEmailError = {
   env: Record<string, boolean>;
 };
 
+export type EmailFailureKind =
+  | "missing_api_key"
+  | "invalid_api_key"
+  | "permission_issue"
+  | "sender_verification_issue"
+  | "provider_request_failure"
+  | "unknown";
+
+export type EmailFailureClassification = {
+  kind: EmailFailureKind;
+  status: 500 | 502;
+  providerMessage: string;
+};
+
 const MAX_DEPTH = 6;
 const MAX_STRING_LENGTH = 4_000;
 const REDACTED = "[REDACTED]";
@@ -250,5 +264,89 @@ export async function normalizeEmailError(
     responseHeaders,
     providerErrors,
     env: getEnvPresence(),
+  };
+}
+
+function safeContains(value: unknown, pattern: RegExp) {
+  if (typeof value === "string") {
+    return pattern.test(value);
+  }
+
+  try {
+    return pattern.test(JSON.stringify(value));
+  } catch {
+    return false;
+  }
+}
+
+export function classifyEmailFailure(
+  diagnostic: NormalizedEmailError
+): EmailFailureClassification {
+  const status = diagnostic.status;
+  const hasApiKey = diagnostic.env.hasSendGridApiKey;
+  const authPattern =
+    /\b(unauthorized|invalid api key|authentication failed|permission denied|access forbidden|forbidden)\b/i;
+  const senderPattern =
+    /\b(sender identity|verified sender|from address|from email|authenticated domain|domain authentication|single sender verification)\b/i;
+
+  if (!hasApiKey || /missing sendgrid_api_key/i.test(diagnostic.message)) {
+    return {
+      kind: "missing_api_key",
+      status: 500,
+      providerMessage: "missing or empty SendGrid API key",
+    };
+  }
+
+  if (
+    status === 401 ||
+    /unauthorized|invalid api key|authentication/i.test(diagnostic.message) ||
+    safeContains(diagnostic.providerErrors, authPattern) ||
+    safeContains(diagnostic.responseBody, authPattern)
+  ) {
+    return {
+      kind: "invalid_api_key",
+      status: 502,
+      providerMessage: "email provider rejected authentication",
+    };
+  }
+
+  if (
+    status === 403 &&
+    (safeContains(diagnostic.providerErrors, senderPattern) ||
+      safeContains(diagnostic.responseBody, senderPattern) ||
+      senderPattern.test(diagnostic.message))
+  ) {
+    return {
+      kind: "sender_verification_issue",
+      status: 502,
+      providerMessage: "sender identity or sending domain is not verified",
+    };
+  }
+
+  if (status === 403 || /forbidden|permission/i.test(diagnostic.message)) {
+    return {
+      kind: "permission_issue",
+      status: 502,
+      providerMessage: "email provider denied permission for this request",
+    };
+  }
+
+  if (
+    status !== null ||
+    diagnostic.source !== "unknown" ||
+    diagnostic.providerErrors !== null ||
+    diagnostic.responseBody !== null
+  ) {
+    return {
+      kind: "provider_request_failure",
+      status: 502,
+      providerMessage: "email provider request failed",
+    };
+  }
+
+  return {
+    kind: "unknown",
+    status: 500,
+    providerMessage: "unknown email delivery failure",
   };
 }

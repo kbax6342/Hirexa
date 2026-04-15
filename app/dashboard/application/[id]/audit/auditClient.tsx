@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import SavedStrategyPanel from "@/app/components/apply/SavedStrategyPanel";
 import { APPLY_SESSION_POLL_INTERVAL_MS } from "@/app/lib/apply/applySessionPolling";
@@ -138,6 +139,8 @@ export default function AuditClient({
 }: {
   applicationId: string;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AuditResponse | null>(null);
@@ -168,6 +171,10 @@ export default function AuditClient({
     screenshotPath?: string;
     status?: string;
   } | null>(null);
+  const successJobId = useMemo(() => {
+    const value = searchParams.get("successJobId");
+    return typeof value === "string" ? value.trim() : "";
+  }, [searchParams]);
 
   const loadAudit = useCallback(async () => {
     const res = await fetch(`/api/applications/${applicationId}/audit`, {
@@ -182,6 +189,12 @@ export default function AuditClient({
     setData(payload);
   }, [applicationId]);
 
+  const redirectToAppliedSuccess = useCallback(() => {
+    if (!successJobId) return false;
+    router.replace(`/jobs/${encodeURIComponent(successJobId)}/applied`);
+    return true;
+  }, [router, successJobId]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -195,6 +208,14 @@ export default function AuditClient({
       }
     })();
   }, [loadAudit]);
+
+  useEffect(() => {
+    if (!successJobId) return;
+
+    if (data?.status === "SENT" || data?.status === "SUBMITTED") {
+      redirectToAppliedSuccess();
+    }
+  }, [data?.status, redirectToAppliedSuccess, successJobId]);
 
   const fieldStates = useMemo(
     () =>
@@ -304,6 +325,9 @@ export default function AuditClient({
             );
             setStatusMessage("Status updated: SENT");
             setApplySessionId(null);
+            if (redirectToAppliedSuccess()) {
+              return;
+            }
             await loadAudit();
             return;
           }
@@ -427,7 +451,7 @@ export default function AuditClient({
     }, APPLY_SESSION_POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [applySessionId, loadAudit]);
+  }, [applySessionId, loadAudit, redirectToAppliedSuccess]);
 
   const handleApplyNow = async () => {
     try {

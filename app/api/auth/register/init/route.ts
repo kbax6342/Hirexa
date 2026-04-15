@@ -5,6 +5,10 @@ import { verifyRecaptchaV3 } from "../../../../lib/security/recaptcha";
 import { validatePassword, hashPassword } from "../../../../lib/security/password";
 import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
 import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
+import {
+  classifyEmailFailure,
+  normalizeEmailError,
+} from "@/app/lib/email/errorDiagnostics";
 import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import {
@@ -127,10 +131,48 @@ export async function POST(req: Request) {
       },
     });
 
-    await sendVerificationCodeEmail(email, code);
+    try {
+      await sendVerificationCodeEmail(email, code);
+    } catch (emailError) {
+      const diagnostic = await normalizeEmailError(emailError);
+      const classification = classifyEmailFailure(diagnostic);
+
+      console.error("[REGISTER_INIT_EMAIL_SEND_FAILED]", {
+        failureKind: classification.kind,
+        providerMessage: classification.providerMessage,
+        emailDomain: email.split("@")[1] ?? null,
+        status: diagnostic.status,
+        statusText: diagnostic.statusText,
+        source: diagnostic.source,
+        providerErrors: diagnostic.providerErrors,
+        responseBody: diagnostic.responseBody,
+        env: diagnostic.env,
+        hasOnboardingDraft: Boolean(draft),
+        hasGuestId: Boolean(guestId),
+      });
+
+      return NextResponse.json(
+        { ok: false, error: "Verification email could not be sent." },
+        { status: classification.status }
+      );
+    }
 
     return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json({ error: "Bad request" }, { status: 400 });
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return NextResponse.json(
+        { ok: false, error: "Invalid request body." },
+        { status: 400 }
+      );
+    }
+
+    console.error("[REGISTER_INIT_FAILED]", {
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+
+    return NextResponse.json(
+      { ok: false, error: "Unable to start account verification right now." },
+      { status: 500 }
+    );
   }
 }

@@ -1,7 +1,7 @@
 import sgMail from "@sendgrid/mail";
 
 import { getEmailConfig, getSecurityEmailConfig } from "./config";
-import { normalizeEmailError } from "./errorDiagnostics";
+import { classifyEmailFailure, normalizeEmailError } from "./errorDiagnostics";
 
 type EmailCategory = "transactional" | "marketing";
 type SenderProfile = "default" | "security";
@@ -17,8 +17,18 @@ type SendEmailParams = {
 
 let sendGridConfigured = false;
 
+function trimEnvValue(value: string | undefined | null) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const quotedMatch = trimmed.match(/^(['"])([\s\S]*)\1$/);
+  return quotedMatch ? quotedMatch[2].trim() || null : trimmed;
+}
+
 function getSendGridClient() {
-  const apiKey = process.env.SENDGRID_API_KEY?.trim();
+  const apiKey = trimEnvValue(process.env.SENDGRID_API_KEY);
   if (!apiKey) {
     throw new Error("Missing SENDGRID_API_KEY");
   }
@@ -79,11 +89,14 @@ export async function sendEmail({
     });
   } catch (error) {
     const diagnostic = await normalizeEmailError(error);
+    const classification = classifyEmailFailure(diagnostic);
     const logPrefix = subject.startsWith("Application update:")
       ? "[AUTO_APPLY_EMAIL]"
       : "[EMAIL_PROVIDER]";
 
     console.error(`${logPrefix} direct email send failed`, {
+      failureKind: classification.kind,
+      providerMessage: classification.providerMessage,
       category,
       senderProfile,
       subject,

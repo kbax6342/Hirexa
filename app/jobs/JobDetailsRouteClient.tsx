@@ -3,8 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 
 import JobDetailsPanel from "@/app/components/dashboard/JobDetailsPanel";
+import {
+  buildApplyProviderPayload,
+  detectApplyProviderFromUrl,
+} from "@/app/lib/apply/providerDetection";
 import { readJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 import type {
   Job,
@@ -21,6 +26,11 @@ type JobDetailsResponse = {
   job: JobDetail;
   pretty: JobPretty;
   fullDetailsUnavailable?: boolean;
+};
+
+type PlanStatusResponse = {
+  active?: boolean;
+  pending?: boolean;
 };
 
 type AdzunaDetailsResponse = {
@@ -464,10 +474,12 @@ export default function JobDetailsRouteClient({
   jobId,
 }: JobDetailsRouteClientProps) {
   const router = useRouter();
+  const { status: authStatus } = useSession();
   const [detailsLoading, setDetailsLoading] = useState(true);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [job, setJob] = useState<JobDetail | null>(null);
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
+  const [aiApplyLoading, setAiApplyLoading] = useState(false);
 
   useEffect(() => {
     if (!jobId) {
@@ -565,12 +577,105 @@ export default function JobDetailsRouteClient({
   }, [jobId]);
 
   const externalApplyUrl = useMemo(() => normalizeJobUrl(job), [job]);
+  const applyProvider = useMemo(
+    () => detectApplyProviderFromUrl(externalApplyUrl),
+    [externalApplyUrl]
+  );
 
-  function handleAutoApply() {
+  async function handleAutoApply() {
     if (!externalApplyUrl) return;
-    router.push(
-      `/job-tools/ai-assistant/apply?jobUrl=${encodeURIComponent(externalApplyUrl)}`
-    );
+    if (aiApplyLoading) return;
+
+    const aiApplyHref = `/job-tools/ai-assistant/apply?jobUrl=${encodeURIComponent(externalApplyUrl)}`;
+
+    if (!applyProvider || !job) {
+      router.push(aiApplyHref);
+      return;
+    }
+
+    setAiApplyLoading(true);
+
+    try {
+      const callbackHref =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : `/jobs/${encodeURIComponent(jobId)}`;
+
+      if (authStatus === "loading") {
+        return;
+      }
+
+      if (authStatus !== "authenticated") {
+        router.push(`/login?callbackUrl=${encodeURIComponent(callbackHref)}`);
+        return;
+      }
+
+      const readPlanStatus = async (forceSync: boolean) => {
+        const response = await fetch(
+          forceSync
+            ? "/api/billing/plan-status?forceSync=1"
+            : "/api/billing/plan-status",
+          { cache: "no-store" }
+        );
+
+        if (response.status === 401) {
+          router.push(`/login?callbackUrl=${encodeURIComponent(callbackHref)}`);
+          return null;
+        }
+
+        if (!response.ok) {
+          throw new Error("Unable to verify subscription status.");
+        }
+
+        return (await response.json()) as PlanStatusResponse;
+      };
+
+      let planData = await readPlanStatus(false);
+      if (!planData) return;
+
+      if (planData.pending === true || planData.active !== true) {
+        const refreshedPlanData = await readPlanStatus(true);
+        if (!refreshedPlanData) return;
+        planData = refreshedPlanData;
+      }
+
+      if (planData.pending === true || planData.active !== true) {
+        const params = new URLSearchParams();
+        params.set("source", `${applyProvider}-auto-apply`);
+        params.set("jobUrl", externalApplyUrl);
+        router.push(`/plans?${params.toString()}`);
+        return;
+      }
+
+      const createResponse = await fetch("/api/applications/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          buildApplyProviderPayload({
+            ...job,
+            jobUrl: externalApplyUrl,
+          })
+        ),
+      });
+
+      const createPayload = (await createResponse.json()) as {
+        applicationId?: string;
+        error?: string;
+      };
+
+      if (!createResponse.ok || !createPayload?.applicationId) {
+        throw new Error(createPayload?.error ?? "Unable to start auto apply.");
+      }
+
+      router.push(
+        `/dashboard/application/${createPayload.applicationId}/audit?successJobId=${encodeURIComponent(jobId)}`
+      );
+    } catch (error) {
+      console.error("[JOB_DETAILS_AUTO_APPLY] falling back to AI apply", error);
+      router.push(aiApplyHref);
+    } finally {
+      setAiApplyLoading(false);
+    }
   }
 
   function handleCareerCoach() {
@@ -608,9 +713,10 @@ export default function JobDetailsRouteClient({
           formatted={null}
           detailsLoading={detailsLoading}
           detailsError={detailsError}
+          aiApplyLoading={aiApplyLoading}
           aiApplyDisabled={!externalApplyUrl}
           aiApplyLabel="Auto Apply Now"
-          aiApplyLoadingLabel="Opening..."
+          aiApplyLoadingLabel="Starting auto apply..."
           onAiApply={handleAutoApply}
           onCareerCoach={handleCareerCoach}
           onOutreach={handleOutreach}

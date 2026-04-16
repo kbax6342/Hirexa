@@ -19,10 +19,17 @@ import {
   toApplySessionDebug,
 } from "@/app/lib/apply/playwrightApply";
 import {
+  resolveDirectJobUrl,
+  type DirectJobResolution,
+} from "@/app/lib/apply/directJobResolver";
+import {
   prepareApplyPayload,
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
-import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
+import {
+  isApplySessionTerminalStatus,
+  type ApplySessionStatus,
+} from "@/app/lib/apply/sessionStatus";
 import { writeResumeToTemp } from "@/app/lib/apply/tempResume";
 import { detectApplyProviderFromJob } from "@/app/lib/apply/providerDetection";
 import { normalizeEmailError } from "@/app/lib/email/errorDiagnostics";
@@ -36,6 +43,13 @@ import {
   deriveStopClassification,
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
+import {
+  classifyJobUrlKind,
+  isAdzunaUrl,
+  isAggregatorHandoffUrl,
+  isAppcastUrl,
+  normalizeJobUrl,
+} from "@/app/lib/jobSources";
 
 export const runtime = "nodejs";
 
@@ -108,6 +122,267 @@ async function findApplicationForUser(id: string, userId: string) {
 type LoadedApplication = NonNullable<
   Awaited<ReturnType<typeof findApplicationForUser>>
 >;
+
+type DirectResolutionDebug = Pick<
+  ApplySessionDebug,
+  | "originalJobUrl"
+  | "resolvedDirectUrl"
+  | "applySource"
+  | "usedResolvedDirectUrl"
+  | "directJobResolutionAttempted"
+  | "directJobResolutionConfidence"
+  | "directJobResolutionProvider"
+  | "directJobResolutionMatchReason"
+  | "directJobResolutionError"
+  | "directJobResolutionCandidates"
+  | "startingUrlKind"
+  | "finalChosenUrlKind"
+>;
+
+type DirectResolutionContext = {
+  application: LoadedApplication;
+  originalUrl: string;
+  resolvedDirectUrl?: string;
+  debug: DirectResolutionDebug;
+  resolution?: DirectJobResolution;
+  usedResolvedDirectUrl: boolean;
+};
+
+function normalizeSourceLabel(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function shouldAttemptDirectResolution(application: LoadedApplication) {
+  const jobUrl = normalizeJobUrl(application.jobUrl ?? "");
+  const source = normalizeSourceLabel(application.source);
+
+  if (!jobUrl) return false;
+
+  return (
+    source.includes("adzuna") ||
+    source.includes("external") ||
+    isAggregatorHandoffUrl(jobUrl)
+  );
+}
+
+function shouldContinueWithOriginalUrl(url: string) {
+  const normalizedUrl = normalizeJobUrl(url);
+  if (!normalizedUrl) return false;
+
+  if (isAdzunaUrl(normalizedUrl) || isAppcastUrl(normalizedUrl)) {
+    return true;
+  }
+
+  return !isAggregatorHandoffUrl(normalizedUrl);
+}
+
+function buildDirectResolutionDebug(args: {
+  originalUrl: string;
+  source?: string | null;
+  resolution?: DirectJobResolution;
+  resolvedDirectUrl?: string;
+  attempted: boolean;
+}): DirectResolutionDebug {
+  return {
+    originalJobUrl: args.originalUrl || undefined,
+    resolvedDirectUrl: args.resolvedDirectUrl,
+    applySource: args.source ?? undefined,
+    usedResolvedDirectUrl:
+      Boolean(args.resolvedDirectUrl) &&
+      args.resolvedDirectUrl !== args.originalUrl,
+    directJobResolutionAttempted: args.attempted,
+    directJobResolutionConfidence: args.resolution?.confidence,
+    directJobResolutionProvider: args.resolution?.provider,
+    directJobResolutionMatchReason: args.resolution?.matchReason,
+    directJobResolutionError: args.resolution?.error,
+    directJobResolutionCandidates: args.resolution?.candidates ?? [],
+    startingUrlKind: classifyJobUrlKind(args.originalUrl),
+    finalChosenUrlKind: classifyJobUrlKind(
+      args.resolvedDirectUrl ?? args.originalUrl,
+    ),
+  };
+}
+
+function mergeDirectResolutionAudit(args: {
+  application: LoadedApplication;
+  debug: DirectResolutionDebug;
+}): Prisma.JsonValue {
+  const previousDebug = readAutomationAudit(args.application.auditJson).state.debug ?? {};
+
+  return buildAutomationAudit({
+    existingAudit: args.application.auditJson,
+    provider: args.application.source ?? "playwright",
+    automation: {
+      provider: "playwright",
+      debug: {
+        ...previousDebug,
+        ...args.debug,
+      },
+    },
+  }) as Prisma.JsonValue;
+}
+
+function buildUrlDecisionFields(
+  debug:
+    | Pick<
+        ApplySessionDebug,
+        | "originalJobUrl"
+        | "resolvedDirectUrl"
+        | "usedResolvedDirectUrl"
+        | "applySource"
+        | "startingUrlKind"
+        | "finalChosenUrlKind"
+        | "targetUrl"
+      >
+    | null
+    | undefined,
+) {
+  return {
+    originalUrl: debug?.originalJobUrl ?? null,
+    resolvedDirectUrl: debug?.resolvedDirectUrl ?? null,
+    usedResolvedDirectUrl: debug?.usedResolvedDirectUrl === true,
+    applySource: debug?.applySource ?? null,
+    startingUrlKind: debug?.startingUrlKind ?? null,
+    finalChosenUrlKind: debug?.finalChosenUrlKind ?? null,
+    chosenApplyUrl:
+      debug?.targetUrl ??
+      debug?.resolvedDirectUrl ??
+      debug?.originalJobUrl ??
+      null,
+  };
+}
+
+async function resolveApplicationDirectJobUrl(args: {
+  application: LoadedApplication;
+}) {
+  const originalUrl = normalizeJobUrl(args.application.jobUrl ?? "");
+  const source = args.application.source ?? null;
+  const shouldAttempt = shouldAttemptDirectResolution(args.application);
+
+  if (!shouldAttempt) {
+    return {
+      context: {
+        application: args.application,
+        originalUrl,
+        debug: buildDirectResolutionDebug({
+          originalUrl,
+          source,
+          attempted: false,
+        }),
+        usedResolvedDirectUrl: false,
+      } satisfies DirectResolutionContext,
+    };
+  }
+
+  const resolution = await resolveDirectJobUrl({
+    title: args.application.title ?? args.application.jobTitle,
+    company: args.application.company,
+    location: args.application.location,
+    currentUrl: originalUrl,
+    source,
+  });
+
+  const resolvedDirectUrl =
+    resolution.ok ? normalizeJobUrl(resolution.resolvedUrl ?? "") || null : null;
+  const debug = buildDirectResolutionDebug({
+    originalUrl,
+    source,
+    resolution,
+    resolvedDirectUrl: resolvedDirectUrl ?? undefined,
+    attempted: true,
+  });
+  const nextAudit = mergeDirectResolutionAudit({
+    application: args.application,
+    debug,
+  });
+  const usedResolvedDirectUrl =
+    Boolean(resolvedDirectUrl) && resolvedDirectUrl !== originalUrl;
+
+  console.log("[AUTO_APPLY_ROUTE] direct resolution evaluated", {
+    applicationId: args.application.id,
+    source,
+    originalUrl,
+    resolvedDirectUrl: resolvedDirectUrl ?? null,
+    usedResolvedDirectUrl,
+    confidence: resolution.confidence ?? null,
+    provider: resolution.provider ?? null,
+    matchReason: resolution.matchReason ?? null,
+    error: resolution.error ?? null,
+    startingUrlKind: debug.startingUrlKind ?? null,
+    finalChosenUrlKind: debug.finalChosenUrlKind ?? null,
+  });
+
+  if (usedResolvedDirectUrl) {
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        jobUrl: resolvedDirectUrl,
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason: null,
+      },
+    });
+
+    return {
+      context: {
+        application: {
+          ...args.application,
+          jobUrl: resolvedDirectUrl,
+          auditJson: nextAudit,
+          failureReason: null,
+        } as LoadedApplication,
+        originalUrl,
+        resolvedDirectUrl: resolvedDirectUrl ?? undefined,
+        debug,
+        resolution,
+        usedResolvedDirectUrl,
+      },
+    };
+  }
+
+  if (!resolution.ok && !shouldContinueWithOriginalUrl(originalUrl)) {
+    const message =
+      "Could not resolve a confident direct employer/ATS application URL";
+
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason: message,
+        verificationRequired: false,
+      },
+    });
+
+    return {
+      context: {
+        application: {
+          ...args.application,
+          auditJson: nextAudit,
+          failureReason: message,
+        } as LoadedApplication,
+        originalUrl,
+        debug,
+        resolution,
+        usedResolvedDirectUrl: false,
+      },
+      blocked: true,
+      message,
+    };
+  }
+
+  return {
+    context: {
+      application: {
+        ...args.application,
+        auditJson: nextAudit,
+      } as LoadedApplication,
+      originalUrl,
+      resolvedDirectUrl: resolvedDirectUrl ?? undefined,
+      debug,
+      resolution,
+      usedResolvedDirectUrl,
+    },
+  };
+}
 
 function toHostedAnswersMap(values: Record<string, unknown>): AnswersMap {
   const entries = Object.entries(values)
@@ -410,6 +685,39 @@ function applyRouteLevelSubmissionGuard(args: {
     applySessionId: args.applySessionId ?? null,
     rawStatus,
     rawSubmissionConfirmed,
+    originalJobUrl: args.rawResult.debug?.originalJobUrl ?? null,
+    resolvedDirectUrl: args.rawResult.debug?.resolvedDirectUrl ?? null,
+    usedResolvedDirectUrl:
+      args.rawResult.debug?.usedResolvedDirectUrl === true,
+    applySource: args.rawResult.debug?.applySource ?? null,
+    directJobResolutionAttempted:
+      args.rawResult.debug?.directJobResolutionAttempted === true,
+    directJobResolutionConfidence:
+      args.rawResult.debug?.directJobResolutionConfidence ?? null,
+    directJobResolutionProvider:
+      args.rawResult.debug?.directJobResolutionProvider ?? null,
+    directJobResolutionMatchReason:
+      args.rawResult.debug?.directJobResolutionMatchReason ?? null,
+    directJobResolutionError:
+      args.rawResult.debug?.directJobResolutionError ?? null,
+    directJobResolutionCandidates:
+      args.rawResult.debug?.directJobResolutionCandidates ?? [],
+    searchFallbackTriggered:
+      args.rawResult.debug?.searchFallbackTriggered === true,
+    searchFallbackQueries:
+      args.rawResult.debug?.searchFallbackQueries ?? [],
+    searchFallbackCandidates:
+      args.rawResult.debug?.searchFallbackCandidates ?? [],
+    searchFallbackChosenCandidate:
+      args.rawResult.debug?.searchFallbackChosenCandidate ?? null,
+    searchFallbackAttemptCount:
+      args.rawResult.debug?.searchFallbackAttemptCount ?? 0,
+    searchFallbackSuccess:
+      args.rawResult.debug?.searchFallbackSuccess === true,
+    searchFallbackFailureReason:
+      args.rawResult.debug?.searchFallbackFailureReason ?? null,
+    startingUrlKind: args.rawResult.debug?.startingUrlKind ?? null,
+    finalChosenUrlKind: args.rawResult.debug?.finalChosenUrlKind ?? null,
     entryUrl: args.rawResult.debug?.entryUrl ?? null,
     initialLoadedUrl: args.rawResult.debug?.initialLoadedUrl ?? null,
     finalUrl: args.rawResult.finalUrl ?? args.rawResult.openUrl ?? null,
@@ -465,6 +773,56 @@ function applyRouteLevelSubmissionGuard(args: {
     resolverRejectedCandidates:
       args.rawResult.debug?.resolverRejectedCandidates ?? [],
     resolverSelectedLink: args.rawResult.debug?.resolverSelectedLink ?? null,
+    adzunaHandoffFailureReasons:
+      args.rawResult.debug?.adzunaHandoffFailureReasons ?? [],
+    adzunaExternalLinkCandidates:
+      args.rawResult.debug?.adzunaExternalLinkCandidates ?? [],
+    adzunaBodyTextPreview:
+      args.rawResult.debug?.adzunaBodyTextPreview ?? null,
+    adzunaTokenizedInterstitialDetected:
+      args.rawResult.debug?.adzunaTokenizedInterstitialDetected === true,
+    adzunaTokenizedParamsPresent:
+      args.rawResult.debug?.adzunaTokenizedParamsPresent ?? [],
+    adzunaDownstreamCandidates:
+      args.rawResult.debug?.adzunaDownstreamCandidates ?? [],
+    adzunaScriptRedirectCandidates:
+      args.rawResult.debug?.adzunaScriptRedirectCandidates ?? [],
+    adzunaNetworkRedirectCandidates:
+      args.rawResult.debug?.adzunaNetworkRedirectCandidates ?? [],
+    adzunaFinalFailureReason:
+      args.rawResult.debug?.adzunaFinalFailureReason ?? null,
+    adzunaHandoffPageTitle:
+      args.rawResult.debug?.adzunaHandoffPageTitle ?? null,
+    adzunaHandoffVisibleCtas:
+      args.rawResult.debug?.adzunaHandoffVisibleCtas ?? [],
+    adzunaOverlayDetected:
+      args.rawResult.debug?.adzunaOverlayDetected === true,
+    adzunaOverlayDismissed:
+      args.rawResult.debug?.adzunaOverlayDismissed === true,
+    adzunaOverlayType:
+      args.rawResult.debug?.adzunaOverlayType ?? null,
+    adzunaOverlaySelectorsTried:
+      args.rawResult.debug?.adzunaOverlaySelectorsTried ?? [],
+    adzunaHandoffPopupOccurred:
+      args.rawResult.debug?.adzunaHandoffPopupOccurred === true,
+    adzunaHandoffUsedPopup:
+      args.rawResult.debug?.adzunaHandoffUsedPopup === true,
+    adzunaDownstreamConfirmed:
+      args.rawResult.debug?.adzunaDownstreamConfirmed === true,
+    adzunaAuthPageDetected:
+      args.rawResult.debug?.adzunaAuthPageDetected === true,
+    adzunaForgotPasswordDetected:
+      args.rawResult.debug?.adzunaForgotPasswordDetected === true,
+    adzunaLoginAttempted:
+      args.rawResult.debug?.adzunaLoginAttempted === true,
+    adzunaLoginSucceeded:
+      args.rawResult.debug?.adzunaLoginSucceeded === true,
+    adzunaLoginFailedReason:
+      args.rawResult.debug?.adzunaLoginFailedReason ?? null,
+    blockedResolvedHandoffCandidates:
+      args.rawResult.debug?.blockedResolvedHandoffCandidates ?? [],
+    selectedResolvedHandoffCandidate:
+      args.rawResult.debug?.selectedResolvedHandoffCandidate ?? null,
     resolvedHandoffClickAttempted:
       args.rawResult.debug?.resolvedHandoffClickAttempted === true,
     resolvedHandoffClickSucceeded:
@@ -477,6 +835,12 @@ function applyRouteLevelSubmissionGuard(args: {
       args.rawResult.debug?.resolvedHandoffUrlBefore ?? null,
     resolvedHandoffUrlAfter:
       args.rawResult.debug?.resolvedHandoffUrlAfter ?? null,
+    playwrightLaunchStrategy:
+      args.rawResult.debug?.playwrightLaunchStrategy ?? null,
+    playwrightPersistentContext:
+      args.rawResult.debug?.playwrightPersistentContext === true,
+    playwrightUserDataDir:
+      args.rawResult.debug?.playwrightUserDataDir ?? null,
     applyCtaFound: evidence.applyCtaFound,
     applyCtaClicked: evidence.applyCtaClicked,
     hopCount: evidence.hopCount,
@@ -629,6 +993,101 @@ function applyFinalWriteGuard(args: {
   };
 }
 
+function ensureTerminalApplySessionResult(args: {
+  result: ApplyExecutionResult;
+  applicationId: string;
+  applySessionId?: string;
+}) {
+  if (
+    args.result.needsHuman === true ||
+    isApplySessionTerminalStatus(args.result.status)
+  ) {
+    return args.result;
+  }
+
+  const evidence = readExecutionEvidence(args.result);
+  const finalUrl =
+    args.result.finalUrl ?? args.result.debug.finalUrl ?? evidence.currentUrl;
+  const currentUrl = evidence.currentUrl ?? finalUrl;
+  const finalReason =
+    args.result.debug.finalReason ??
+    args.result.message ??
+    "Background apply finished without reaching a terminal session state.";
+  const lastAction =
+    args.result.debug.lastAction ??
+    (evidence.applyCtaClicked ? "verification_required" : "no_apply_cta");
+  const coercedStatus =
+    args.result.unavailable === true
+      ? "AUTO_APPLY_UNAVAILABLE"
+      : "FAILED";
+  const stopClassification =
+    args.result.debug.stopClassification ??
+    deriveStopClassification({
+      targetUrl: args.result.debug.targetUrl ?? null,
+      finalUrl,
+      currentUrl,
+      applyCtaFound: evidence.applyCtaFound,
+      applyCtaClicked: evidence.applyCtaClicked,
+      hopCount: evidence.hopCount,
+      submitButtonFound: evidence.submitButtonFound,
+      submitButtonClicked: evidence.submitButtonClicked,
+      confirmationTextFound: evidence.confirmationTextFound,
+      finalReason,
+      message: args.result.message,
+      lastAction,
+      formDetected: args.result.debug.formDetected === true,
+    });
+
+  console.error("[AUTO_APPLY_ROUTE] coerced non-terminal session result", {
+    applicationId: args.applicationId,
+    applySessionId: args.applySessionId ?? null,
+    rawStatus: args.result.rawStatus,
+    sessionStatus: args.result.status,
+    coercedStatus,
+    currentUrl,
+    finalUrl,
+    finalReason,
+  });
+
+  return {
+    ...withStopDebug(
+      {
+        ...args.result,
+        ok: false,
+        status: coercedStatus,
+        message: finalReason,
+        debug: {
+          ...args.result.debug,
+          finalUrl: finalUrl ?? undefined,
+          currentUrl: currentUrl ?? undefined,
+          stopReason: "HUMAN_INTERVENTION_REQUIRED",
+          lastAction,
+          stopClassification,
+          submissionConfirmed: false,
+          finalReason,
+        },
+      },
+      {
+        stopReason: "HUMAN_INTERVENTION_REQUIRED",
+        finalUrl,
+        currentUrl,
+        lastAction,
+        stopClassification,
+        stoppedAtUrl:
+          args.result.debug.stoppedAtUrl ??
+          currentUrl ??
+          finalUrl ??
+          null,
+        stoppedAtTitle: args.result.debug.stoppedAtTitle ?? null,
+        lastActionText: args.result.debug.lastActionText ?? null,
+        lastActionSelector: args.result.debug.lastActionSelector ?? null,
+      },
+    ),
+    rawStatus: args.result.rawStatus,
+    rawSubmissionConfirmed: args.result.rawSubmissionConfirmed,
+  } satisfies ApplyExecutionResult;
+}
+
 function logFinalWrite(args: {
   applicationId: string;
   applySessionId?: string;
@@ -664,6 +1123,39 @@ function logAutoApplyDebug(args: {
 
   console.info("[AUTO_APPLY_DEBUG]", {
     applicationId: args.applicationId,
+    originalJobUrl: args.result.debug.originalJobUrl ?? null,
+    resolvedDirectUrl: args.result.debug.resolvedDirectUrl ?? null,
+    usedResolvedDirectUrl:
+      args.result.debug.usedResolvedDirectUrl === true,
+    applySource: args.result.debug.applySource ?? null,
+    directJobResolutionAttempted:
+      args.result.debug.directJobResolutionAttempted === true,
+    directJobResolutionConfidence:
+      args.result.debug.directJobResolutionConfidence ?? null,
+    directJobResolutionProvider:
+      args.result.debug.directJobResolutionProvider ?? null,
+    directJobResolutionMatchReason:
+      args.result.debug.directJobResolutionMatchReason ?? null,
+    directJobResolutionError:
+      args.result.debug.directJobResolutionError ?? null,
+    directJobResolutionCandidates:
+      args.result.debug.directJobResolutionCandidates ?? [],
+    searchFallbackTriggered:
+      args.result.debug.searchFallbackTriggered === true,
+    searchFallbackQueries:
+      args.result.debug.searchFallbackQueries ?? [],
+    searchFallbackCandidates:
+      args.result.debug.searchFallbackCandidates ?? [],
+    searchFallbackChosenCandidate:
+      args.result.debug.searchFallbackChosenCandidate ?? null,
+    searchFallbackAttemptCount:
+      args.result.debug.searchFallbackAttemptCount ?? 0,
+    searchFallbackSuccess:
+      args.result.debug.searchFallbackSuccess === true,
+    searchFallbackFailureReason:
+      args.result.debug.searchFallbackFailureReason ?? null,
+    startingUrlKind: args.result.debug.startingUrlKind ?? null,
+    finalChosenUrlKind: args.result.debug.finalChosenUrlKind ?? null,
     entryUrl: args.result.debug.entryUrl ?? null,
     initialLoadedUrl: args.result.debug.initialLoadedUrl ?? null,
     finalUrl: stopDebug.finalUrl,
@@ -719,6 +1211,55 @@ function logAutoApplyDebug(args: {
     resolverRejectedCandidates:
       args.result.debug.resolverRejectedCandidates ?? [],
     resolverSelectedLink: args.result.debug.resolverSelectedLink ?? null,
+    adzunaHandoffFailureReasons:
+      args.result.debug.adzunaHandoffFailureReasons ?? [],
+    adzunaExternalLinkCandidates:
+      args.result.debug.adzunaExternalLinkCandidates ?? [],
+    adzunaBodyTextPreview:
+      args.result.debug.adzunaBodyTextPreview ?? null,
+    adzunaTokenizedInterstitialDetected:
+      args.result.debug.adzunaTokenizedInterstitialDetected === true,
+    adzunaTokenizedParamsPresent:
+      args.result.debug.adzunaTokenizedParamsPresent ?? [],
+    adzunaDownstreamCandidates:
+      args.result.debug.adzunaDownstreamCandidates ?? [],
+    adzunaScriptRedirectCandidates:
+      args.result.debug.adzunaScriptRedirectCandidates ?? [],
+    adzunaNetworkRedirectCandidates:
+      args.result.debug.adzunaNetworkRedirectCandidates ?? [],
+    adzunaFinalFailureReason:
+      args.result.debug.adzunaFinalFailureReason ?? null,
+    adzunaHandoffPageTitle:
+      args.result.debug.adzunaHandoffPageTitle ?? null,
+    adzunaHandoffVisibleCtas:
+      args.result.debug.adzunaHandoffVisibleCtas ?? [],
+    adzunaOverlayDetected:
+      args.result.debug.adzunaOverlayDetected === true,
+    adzunaOverlayDismissed:
+      args.result.debug.adzunaOverlayDismissed === true,
+    adzunaOverlayType: args.result.debug.adzunaOverlayType ?? null,
+    adzunaOverlaySelectorsTried:
+      args.result.debug.adzunaOverlaySelectorsTried ?? [],
+    adzunaHandoffPopupOccurred:
+      args.result.debug.adzunaHandoffPopupOccurred === true,
+    adzunaHandoffUsedPopup:
+      args.result.debug.adzunaHandoffUsedPopup === true,
+    adzunaDownstreamConfirmed:
+      args.result.debug.adzunaDownstreamConfirmed === true,
+    adzunaAuthPageDetected:
+      args.result.debug.adzunaAuthPageDetected === true,
+    adzunaForgotPasswordDetected:
+      args.result.debug.adzunaForgotPasswordDetected === true,
+    adzunaLoginAttempted:
+      args.result.debug.adzunaLoginAttempted === true,
+    adzunaLoginSucceeded:
+      args.result.debug.adzunaLoginSucceeded === true,
+    adzunaLoginFailedReason:
+      args.result.debug.adzunaLoginFailedReason ?? null,
+    blockedResolvedHandoffCandidates:
+      args.result.debug.blockedResolvedHandoffCandidates ?? [],
+    selectedResolvedHandoffCandidate:
+      args.result.debug.selectedResolvedHandoffCandidate ?? null,
     resolvedHandoffClickAttempted:
       args.result.debug.resolvedHandoffClickAttempted === true,
     resolvedHandoffClickSucceeded:
@@ -731,6 +1272,12 @@ function logAutoApplyDebug(args: {
       args.result.debug.resolvedHandoffUrlBefore ?? null,
     resolvedHandoffUrlAfter:
       args.result.debug.resolvedHandoffUrlAfter ?? null,
+    playwrightLaunchStrategy:
+      args.result.debug.playwrightLaunchStrategy ?? null,
+    playwrightPersistentContext:
+      args.result.debug.playwrightPersistentContext === true,
+    playwrightUserDataDir:
+      args.result.debug.playwrightUserDataDir ?? null,
     currentUrl: stopDebug.currentUrl,
     applyCtaClicked: args.result.debug.applyCtaClicked === true,
     hopCount:
@@ -1102,12 +1649,34 @@ async function runBackgroundApply(args: {
   finalValuesToSubmit: AnswersMap;
   targetUrl?: string;
   resumePath: string;
+  urlResolution: DirectResolutionContext;
 }) {
   try {
     const result = applyRouteLevelSubmissionGuard({
       rawResult: await applyWithPlaywright({
         jobUrl: args.application.jobUrl ?? "",
         form: args.targetUrl ? { embedUrl: args.targetUrl } : undefined,
+        metadata: {
+          originalUrl: args.urlResolution.originalUrl,
+          resolvedUrl: args.urlResolution.resolvedDirectUrl,
+          source: args.application.source,
+          title: args.application.title ?? args.application.jobTitle,
+          company: args.application.company,
+          location: args.application.location,
+          directJobResolution: {
+            attempted:
+              args.urlResolution.debug.directJobResolutionAttempted === true,
+            confidence:
+              args.urlResolution.debug.directJobResolutionConfidence,
+            provider:
+              args.urlResolution.debug.directJobResolutionProvider,
+            matchReason:
+              args.urlResolution.debug.directJobResolutionMatchReason,
+            error: args.urlResolution.debug.directJobResolutionError,
+            candidates:
+              args.urlResolution.debug.directJobResolutionCandidates,
+          },
+        },
         values: args.finalValuesToSubmit,
         resumePath: args.resumePath,
         onStatus: ({ status, lastUrl, error, message, openUrl, remoteSessionId }) => {
@@ -1153,7 +1722,11 @@ async function runBackgroundApply(args: {
       applySessionId: args.applySessionId,
     });
 
-    const finalResult = persistedOutcome.result;
+    const finalResult = ensureTerminalApplySessionResult({
+      result: persistedOutcome.result,
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId,
+    });
     logFinalWrite({
       applicationId: args.application.id,
       applySessionId: args.applySessionId,
@@ -1279,19 +1852,39 @@ export async function POST(
       answerCount: Object.keys(body.answers ?? {}).length,
     });
 
-    const application = await findApplicationForUser(id, userId);
+    const foundApplication = await findApplicationForUser(id, userId);
 
-    if (!application) {
+    if (!foundApplication) {
       return NextResponse.json(
         { ok: false, error: "Application not found" },
         { status: 404 },
       );
     }
 
+    let application: LoadedApplication = foundApplication;
+
     if (!application.jobUrl) {
       return NextResponse.json(
         { ok: false, error: "Application missing jobUrl" },
         { status: 400 },
+      );
+    }
+
+    const directResolution = await resolveApplicationDirectJobUrl({
+      application,
+    });
+    const urlResolution = directResolution.context;
+    application = urlResolution.application;
+
+    if (directResolution.blocked) {
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "APPLY_NOT_STARTED",
+          error: directResolution.message,
+          ...buildUrlDecisionFields(urlResolution.debug),
+        },
+        { status: 409 },
       );
     }
 
@@ -1303,6 +1896,9 @@ export async function POST(
     console.log("[AUTO_APPLY_ROUTE] prepared apply payload", {
       applicationId: application.id,
       jobUrl: application.jobUrl,
+      originalUrl: urlResolution.originalUrl || null,
+      resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+      usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
       targetUrl: prepared.targetUrl ?? application.jobUrl,
       usesExternalPostingUrl:
         (prepared.targetUrl ?? application.jobUrl) === application.jobUrl,
@@ -1413,6 +2009,7 @@ export async function POST(
         finalValuesToSubmit: prepared.finalValuesToSubmit,
         targetUrl: prepared.targetUrl,
         resumePath: tempResume.path,
+        urlResolution,
       });
 
       return NextResponse.json({
@@ -1422,14 +2019,39 @@ export async function POST(
         submissionStatus: "PENDING",
         emailStatus: "PENDING",
         message: "Starting Playwright automation.",
+        ...buildUrlDecisionFields({
+          ...urlResolution.debug,
+          targetUrl: prepared.targetUrl,
+        }),
       });
     }
 
     try {
       const result = applyRouteLevelSubmissionGuard({
         rawResult: await applyWithPlaywright({
-          jobUrl: application.jobUrl,
+          jobUrl: application.jobUrl ?? "",
           form: prepared.targetUrl ? { embedUrl: prepared.targetUrl } : undefined,
+          metadata: {
+            originalUrl: urlResolution.originalUrl,
+            resolvedUrl: urlResolution.resolvedDirectUrl,
+            source: application.source,
+            title: application.title ?? application.jobTitle,
+            company: application.company,
+            location: application.location,
+            directJobResolution: {
+              attempted:
+                urlResolution.debug.directJobResolutionAttempted === true,
+              confidence:
+                urlResolution.debug.directJobResolutionConfidence,
+              provider:
+                urlResolution.debug.directJobResolutionProvider,
+              matchReason:
+                urlResolution.debug.directJobResolutionMatchReason,
+              error: urlResolution.debug.directJobResolutionError,
+              candidates:
+                urlResolution.debug.directJobResolutionCandidates,
+            },
+          },
           values: prepared.finalValuesToSubmit,
           resumePath: tempResume.path,
         }),
@@ -1460,6 +2082,7 @@ export async function POST(
           ok: true,
           status: "SENT",
           finalUrl: finalResult.finalUrl,
+          ...buildUrlDecisionFields(finalResult.debug),
           submissionStatus: persistedOutcome.submissionStatus,
           emailStatus: persistedOutcome.emailStatus,
           message: persistedOutcome.message,
@@ -1473,6 +2096,7 @@ export async function POST(
             status: "WAITING_HUMAN",
             error: finalResult.message ?? "Human verification required.",
             ...buildStopResponseFields(finalResult),
+            ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -1489,6 +2113,7 @@ export async function POST(
               finalResult.message ??
               "Opened job page but could not start application.",
             ...buildStopResponseFields(finalResult),
+            ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -1504,6 +2129,7 @@ export async function POST(
             error:
               finalResult.message ?? "Application submission not confirmed.",
             finalUrl: finalResult.finalUrl,
+            ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -1520,6 +2146,7 @@ export async function POST(
               finalResult.message ??
               "Auto apply is not available for this job application.",
             ...buildStopResponseFields(finalResult),
+            ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
             emailStatus: persistedOutcome.emailStatus,
           },
@@ -1533,6 +2160,7 @@ export async function POST(
           status: finalResult.status,
           error: finalResult.message ?? "Playwright automation failed.",
           ...buildStopResponseFields(finalResult),
+          ...buildUrlDecisionFields(finalResult.debug),
           submissionStatus: persistedOutcome.submissionStatus,
           emailStatus: persistedOutcome.emailStatus,
         },

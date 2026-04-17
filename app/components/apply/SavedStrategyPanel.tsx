@@ -804,6 +804,10 @@ export default function SavedStrategyPanel({
                 "status" in step && typeof step.status === "string" && step.status
                   ? step.status
                   : null;
+              const replayReason =
+                "reason" in step && typeof step.reason === "string" && step.reason
+                  ? step.reason
+                  : null;
 
               return (
                 <div
@@ -850,8 +854,8 @@ export default function SavedStrategyPanel({
                     URL: {step.currentUrl}
                   </p>
 
-                  {"reason" in step && step.reason ? (
-                    <p className="mt-1 text-xs text-red-600">Reason: {step.reason}</p>
+                  {replayReason ? (
+                    <p className="mt-1 text-xs text-red-600">Reason: {replayReason}</p>
                   ) : null}
                 </div>
               );

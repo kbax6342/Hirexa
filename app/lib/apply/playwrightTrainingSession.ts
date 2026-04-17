@@ -181,11 +181,19 @@ export async function startPlaywrightTrainingSession(args: {
     );
 
     await context.addInitScript(() => {
-      if ((window as Record<string, unknown>).__hirexaTeachRecorderInstalled) {
+      type TeachRecorderWindow = Window &
+        typeof globalThis & {
+          __hirexaTeachRecorderInstalled?: boolean;
+          __hirexaRecordTrainingAction?: (step: Record<string, unknown>) => Promise<void>;
+        };
+
+      const teachWindow = window as unknown as TeachRecorderWindow;
+
+      if (teachWindow.__hirexaTeachRecorderInstalled) {
         return;
       }
 
-      (window as Record<string, unknown>).__hirexaTeachRecorderInstalled = true;
+      teachWindow.__hirexaTeachRecorderInstalled = true;
 
       const normalizeText = (value: string | null | undefined) =>
         String(value ?? "").replace(/\s+/g, " ").trim();
@@ -220,18 +228,19 @@ export async function startPlaywrightTrainingSession(args: {
 
         while (current && current instanceof HTMLElement) {
           const tagName = current.tagName.toLowerCase();
-          const parent = current.parentElement;
-          if (!parent) {
+          const currentTagName = current.tagName;
+          const parentElement: Element | null = current.parentElement;
+          if (!parentElement) {
             segments.unshift(tagName);
             break;
           }
 
-          const siblings = Array.from(parent.children).filter(
-            (child) => child.tagName === current?.tagName,
+          const siblings: Element[] = Array.from(parentElement.children).filter(
+            (child: Element) => child.tagName === currentTagName,
           );
           const index = siblings.indexOf(current) + 1;
           segments.unshift(`${tagName}:nth-of-type(${index})`);
-          current = parent;
+          current = parentElement;
         }
 
         return segments.join(" > ");
@@ -323,10 +332,7 @@ export async function startPlaywrightTrainingSession(args: {
             type,
             ...describeElement(element),
           };
-          const recorder = (window as Record<string, unknown>)
-            .__hirexaRecordTrainingAction as
-            | ((step: Record<string, unknown>) => Promise<void>)
-            | undefined;
+          const recorder = teachWindow.__hirexaRecordTrainingAction;
           void recorder?.(payload);
         } catch {
           // Ignore recording errors in the page.

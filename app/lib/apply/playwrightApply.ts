@@ -2573,7 +2573,7 @@ async function recoverFromAdzunaForgotPasswordPage(args: {
     context: BrowserContext,
   ) => Promise<void> | void;
 }) {
-  let activePage = args.page;
+  const activePage = args.page;
   const urlsVisited = [activePage.url()];
   const clicks: ApplySessionClickRecord[] = [];
   const attempts: ApplySessionCtaAttemptRecord[] = [];
@@ -2979,7 +2979,7 @@ async function handleAdzunaAuthGateIfPresent(args: {
 
   let loginAttempted = false;
   let loginSucceeded = false;
-  let loginFailedReason: string | undefined;
+  let loginFailedReason: string | undefined = undefined;
 
   console.info("[AUTO_APPLY_ADZUNA_AUTH]", {
     currentUrl: activePage.url(),
@@ -3528,16 +3528,16 @@ async function clickAdzunaFallbackLinkIfStuck(args: {
   const attempts: ApplySessionCtaAttemptRecord[] = [];
   let directNavAttempted = false;
   let directNavSucceeded = false;
-  let extractedRedirectUrl: string | undefined;
+  let extractedRedirectUrl: string | undefined = undefined;
   let extractedRedirectSource:
     | "meta_refresh"
     | "inline_script"
     | "fallback_anchor"
     | "appcast_href"
     | "tokenized_dom_candidate"
-    | undefined;
+    | undefined = undefined;
   let extractedRedirectHtmlRead = false;
-  let extractedRedirectFailureReason: string[] | undefined;
+  let extractedRedirectFailureReason: string[] | undefined = undefined;
   let extractedRedirectNavAttempted = false;
   let extractedRedirectNavSucceeded = false;
   let tokenizedInterstitialDetected = false;
@@ -5309,15 +5309,15 @@ async function runAdzunaDetailsApplyPhase(args: {
   let applyClickedSelector: string | undefined;
   let applyCaptureDetected = false;
   let applyCaptureSkipClicked = false;
-  let applyCaptureSkipText: string | undefined;
-  let applyCaptureSkipSelector: string | undefined;
+  let applyCaptureSkipText: string | undefined = undefined;
+  let applyCaptureSkipSelector: string | undefined = undefined;
   let postApplyProgressionAttempted = false;
   let postApplyProgressionSucceeded = false;
   let postApplyUrlAfter: string | undefined;
   let postApplyPopupDetected = false;
   let postApplyNewPageDetected = false;
   let postApplyFallbackAttempted = false;
-  let applyHrefExtracted: string | undefined;
+  let applyHrefExtracted: string | undefined = undefined;
   let applyNavigationForced = false;
   let applyNavigationUrl: string | undefined;
   let latestActionText: string | undefined;
@@ -7621,41 +7621,41 @@ async function runHandoffContinuationPhase(args: {
   let resolvedHandoffClickAttempted = false;
   let resolvedHandoffClickSucceeded = false;
   let resolvedHandoffElementFound = false;
-  let resolvedHandoffLocatorStrategy: string | undefined;
+  let resolvedHandoffLocatorStrategy: string | undefined = undefined;
   let resolvedHandoffDirectNavAttempted = false;
   let resolvedHandoffDirectNavSucceeded = false;
-  let resolvedHandoffDirectNavUrl: string | undefined;
-  let resolvedHandoffDirectNavUrlAfter: string | undefined;
+  let resolvedHandoffDirectNavUrl: string | undefined = undefined;
+  let resolvedHandoffDirectNavUrlAfter: string | undefined = undefined;
   let adzunaFallbackLinkFound = false;
   let adzunaFallbackLinkClicked = false;
-  let adzunaFallbackLinkText: string | undefined;
-  let adzunaFallbackLocatorStrategy: string | undefined;
+  let adzunaFallbackLinkText: string | undefined = undefined;
+  let adzunaFallbackLocatorStrategy: string | undefined = undefined;
   let adzunaFallbackElementFound = false;
   let adzunaFallbackClickSucceeded = false;
-  let adzunaFallbackHref: string | undefined;
-  let adzunaFallbackHost: string | undefined;
+  let adzunaFallbackHref: string | undefined = undefined;
+  let adzunaFallbackHost: string | undefined = undefined;
   let adzunaFallbackDirectNavAttempted = false;
   let adzunaFallbackDirectNavSucceeded = false;
-  let adzunaExtractedRedirectUrl: string | undefined;
+  let adzunaExtractedRedirectUrl: string | undefined = undefined;
   let adzunaExtractedRedirectSource:
     | "meta_refresh"
     | "inline_script"
     | "fallback_anchor"
     | "appcast_href"
     | "tokenized_dom_candidate"
-    | undefined;
+    | undefined = undefined;
   let adzunaExtractedRedirectHtmlRead = false;
-  let adzunaExtractedRedirectFailureReason: string[] | undefined;
+  let adzunaExtractedRedirectFailureReason: string[] | undefined = undefined;
   let adzunaExtractedRedirectNavAttempted = false;
   let adzunaExtractedRedirectNavSucceeded = false;
-  let adzunaFallbackUrlAfter: string | undefined;
-  let resolvedHandoffClickedHref: string | undefined;
-  let resolvedHandoffClickedText: string | undefined;
-  let resolvedHandoffUrlBefore: string | undefined;
-  let resolvedHandoffUrlAfter: string | undefined;
+  let adzunaFallbackUrlAfter: string | undefined = undefined;
+  let resolvedHandoffClickedHref: string | undefined = undefined;
+  let resolvedHandoffClickedText: string | undefined = undefined;
+  let resolvedHandoffUrlBefore: string | undefined = undefined;
+  let resolvedHandoffUrlAfter: string | undefined = undefined;
   let blockedResolvedHandoffCandidates:
     ApplySourceRejectedCandidate[] = [];
-  let selectedResolvedHandoffCandidate: string | undefined;
+  let selectedResolvedHandoffCandidate: string | undefined = undefined;
   let adzunaTokenizedInterstitialDetected =
     initialLandState.isTokenizedInterstitial;
   let adzunaTokenizedParamsPresent =

@@ -37,6 +37,13 @@ type SavedStrategyPanelProps = {
   className?: string;
 };
 
+type ReplayTimelineStep = ApplySiteStrategyStep & {
+  status?: string | null;
+  reason?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
 type ReplaySessionResponse = {
   ok?: boolean;
   error?: string;
@@ -64,19 +71,13 @@ type ReplaySessionResponse = {
       completedStepCount: number;
       totalStepCount: number;
     } | null;
-    steps: Array<
-      ApplySiteStrategyStep & {
-        status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
-        reason?: string | null;
-        startedAt?: string | null;
-        completedAt?: string | null;
-      }
-    >;
+    steps: ReplayTimelineStep[];
   };
 };
 
-function formatReplayStatus(status: string | null | undefined) {
-  if (!status) return null;
+function formatReplayStatus(status: unknown) {
+  if (status == null || status === "") return null;
+  if (typeof status !== "string") return "Unknown";
 
   switch (status) {
     case "STARTING":
@@ -303,7 +304,17 @@ export default function SavedStrategyPanel({
                     payload.session.status === "FAILED" ? "FAILED" : "COMPLETED",
                   lastReplayedAt:
                     payload.session.lastReplayedAt ?? new Date().toISOString(),
-                  lastReplayResult: payload.session.lastReplayResult ?? null,
+                  lastReplayResult: payload.session.lastReplayResult
+                    ? {
+                        ...payload.session.lastReplayResult,
+                        currentUrl:
+                          payload.session.lastReplayResult.currentUrl ?? undefined,
+                        reason:
+                          payload.session.lastReplayResult.reason ?? undefined,
+                        failingStepId:
+                          payload.session.lastReplayResult.failingStepId ?? undefined,
+                      }
+                    : null,
                   failingStepId: payload.session.failingStepId ?? null,
                 });
                 setSavedStrategy(next);
@@ -788,56 +799,63 @@ export default function SavedStrategyPanel({
         <div className="mt-3 rounded-md border border-current/10 bg-white/70 p-3">
           <p className="font-medium text-current">Saved steps</p>
           <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
-            {activeReplaySteps.map((step, index) => (
-              <div
-                key={step.id}
-                className="rounded-md border border-current/10 bg-white p-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-medium text-current">
-                    {index + 1}. {step.type}
-                    {step.label ? ` - ${step.label}` : ""}
+            {activeReplaySteps.map((step, index) => {
+              const replayStatus =
+                "status" in step && typeof step.status === "string" && step.status
+                  ? step.status
+                  : null;
+
+              return (
+                <div
+                  key={step.id}
+                  className="rounded-md border border-current/10 bg-white p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-current">
+                      {index + 1}. {step.type}
+                      {step.label ? ` - ${step.label}` : ""}
+                    </p>
+                    {replayStatus ? (
+                      <span className={cn("text-xs", palette.subtle)}>
+                        {formatReplayStatus(replayStatus)}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {step.selector ? (
+                    <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
+                      Selector: {step.selector}
+                    </p>
+                  ) : null}
+
+                  {step.text ? (
+                    <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
+                      Text: {step.text}
+                    </p>
+                  ) : null}
+
+                  {step.value ? (
+                    <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
+                      Value: {step.value}
+                    </p>
+                  ) : null}
+
+                  {typeof step.checked === "boolean" ? (
+                    <p className={cn("mt-1 text-xs", palette.subtle)}>
+                      Checked: {String(step.checked)}
+                    </p>
+                  ) : null}
+
+                  <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
+                    URL: {step.currentUrl}
                   </p>
-                  {"status" in step && step.status ? (
-                    <span className={cn("text-xs", palette.subtle)}>
-                      {formatReplayStatus(step.status)}
-                    </span>
+
+                  {"reason" in step && step.reason ? (
+                    <p className="mt-1 text-xs text-red-600">Reason: {step.reason}</p>
                   ) : null}
                 </div>
-
-                {step.selector ? (
-                  <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
-                    Selector: {step.selector}
-                  </p>
-                ) : null}
-
-                {step.text ? (
-                  <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
-                    Text: {step.text}
-                  </p>
-                ) : null}
-
-                {step.value ? (
-                  <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
-                    Value: {step.value}
-                  </p>
-                ) : null}
-
-                {typeof step.checked === "boolean" ? (
-                  <p className={cn("mt-1 text-xs", palette.subtle)}>
-                    Checked: {String(step.checked)}
-                  </p>
-                ) : null}
-
-                <p className={cn("mt-1 break-all text-xs", palette.subtle)}>
-                  URL: {step.currentUrl}
-                </p>
-
-                {"reason" in step && step.reason ? (
-                  <p className="mt-1 text-xs text-red-600">Reason: {step.reason}</p>
-                ) : null}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}

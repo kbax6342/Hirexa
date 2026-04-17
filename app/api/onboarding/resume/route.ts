@@ -8,6 +8,7 @@ import { auth } from "@/app/lib/auth";
 import { sendResumeUploadedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 import { mergeGuestProfileIntoUserProfile } from "@/app/lib/profile/mergeGuestProfile";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
+import { PdfUnreadableError } from "@/app/lib/pdf/serverPdfParser";
 import { prisma } from "@/app/lib/prisma";
 import { persistResumeToProfile } from "@/app/lib/resume/persistResumeToProfile";
 import { cookies } from "next/headers";
@@ -240,6 +241,18 @@ export async function POST(req: Request) {
 
     return response;
   } catch (error) {
+    // STEP 3: return 422 from onboarding route
+    if (error instanceof PdfUnreadableError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: "UNREADABLE_PDF",
+          error: error.message,
+        },
+        { status: 422 }
+      );
+    }
+
     const info = extractStatusAndRequestId(error);
 
     if (isRetryableStatus(info.status)) {

@@ -41,6 +41,21 @@ export type PdfTextResult = {
   fullText: string;
 };
 
+const PDF_UNREADABLE_MESSAGE =
+  "We couldn’t read this PDF. Please re-save/export it as a new PDF or upload a DOCX file.";
+
+// STEP 1: typed PDF parser error
+export class PdfUnreadableError extends Error {
+  cause?: unknown;
+
+  constructor(message = PDF_UNREADABLE_MESSAGE, options?: { cause?: unknown }) {
+    super(message);
+    this.name = "PdfUnreadableError";
+    Object.setPrototypeOf(this, new.target.prototype);
+    this.cause = options?.cause;
+  }
+}
+
 function normalizePdfText(text: string) {
   return text
     .replace(/\u00a0/g, " ")
@@ -52,9 +67,56 @@ function normalizePdfText(text: string) {
     .trim();
 }
 
+// STEP 2: map malformed PDF failures
+function isPdfStructureError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  const candidate = error as {
+    name?: unknown;
+    message?: unknown;
+    code?: unknown;
+    stack?: unknown;
+  };
+
+  const combinedText = [
+    candidate.name,
+    candidate.message,
+    candidate.code,
+    candidate.stack,
+    typeof error === "string" ? error : null,
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    combinedText.includes("bad xref entry") ||
+    combinedText.includes("formaterror") ||
+    combinedText.includes("invalidpdfexception") ||
+    combinedText.includes("xref")
+  );
+}
+
 export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult> {
   const pdfParse = getPdfParse();
-  const result = await pdfParse(buffer);
+  let result: PdfParseResult;
+
+  try {
+    result = await pdfParse(buffer);
+  } catch (error) {
+    if (error instanceof PdfUnreadableError) {
+      throw error;
+    }
+
+    if (isPdfStructureError(error)) {
+      throw new PdfUnreadableError(undefined, { cause: error });
+    }
+
+    throw error;
+  }
+
   const fullText = normalizePdfText(result.text ?? "");
   const pages = fullText ? [{ page: 1, text: fullText }] : [];
 

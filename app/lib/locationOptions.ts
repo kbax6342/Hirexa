@@ -82,6 +82,7 @@ const MAJOR_US_CITIES: CityOption[] = [
   { name: "Charlotte", stateCode: "NC" },
   { name: "Chicago", stateCode: "IL" },
   { name: "Cincinnati", stateCode: "OH" },
+  { name: "Cedar Rapids", stateCode: "IA" },
   { name: "Cleveland", stateCode: "OH" },
   { name: "Columbus", stateCode: "OH" },
   { name: "Dallas", stateCode: "TX" },
@@ -234,6 +235,14 @@ export function normalizeLocationLabel(value: string) {
 
   const parsedCityState = parseCityAndState(normalized);
   if (parsedCityState?.city) {
+    const matchedState = normalizeStateInput(parsedCityState.state);
+    if (!matchedState) {
+      const matchedCity = findExactCity(parsedCityState.city);
+      if (matchedCity) {
+        return `${matchedCity.name}, ${matchedCity.stateCode}`;
+      }
+    }
+
     const formatted = formatCityState(parsedCityState.city, parsedCityState.state);
     if (formatted) return formatted;
   }

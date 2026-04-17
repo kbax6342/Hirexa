@@ -17,6 +17,8 @@ export type AdzunaHandoffUrlState = {
   isTokenizedInterstitial: boolean;
   tokenizedParamsPresent: string[];
   isAuthUrl: boolean;
+  isInterstitialUrl: boolean;
+  isLoginGateUrl: boolean;
   isStillHandoff: boolean;
 };
 
@@ -72,6 +74,11 @@ export function isLikelyDownstreamApplicationUrl(rawUrl: string) {
   return Boolean(parsed.hostname.trim());
 }
 
+export function isAdzunaUnresolvedHandoffUrl(rawUrl: string) {
+  const state = classifyAdzunaHandoffUrl(rawUrl);
+  return state.isStillHandoff || state.isInterstitialUrl || state.isLoginGateUrl;
+}
+
 export function classifyAdzunaHandoffUrl(rawUrl: string): AdzunaHandoffUrlState {
   const parsed = safeParseUrl(rawUrl);
   if (!parsed) {
@@ -81,6 +88,8 @@ export function classifyAdzunaHandoffUrl(rawUrl: string): AdzunaHandoffUrlState 
       isTokenizedInterstitial: false,
       tokenizedParamsPresent: [],
       isAuthUrl: false,
+      isInterstitialUrl: false,
+      isLoginGateUrl: false,
       isStillHandoff: false,
     };
   }
@@ -96,6 +105,17 @@ export function classifyAdzunaHandoffUrl(rawUrl: string): AdzunaHandoffUrlState 
   const isAuthUrl =
     isAdzunaHost &&
     (pathname === "/authenticate" || pathname.startsWith("/authenticate/"));
+  const isInterstitialUrl =
+    isAdzunaHost &&
+    (pathname.includes("/interstitial") ||
+      pathname.includes("/redirect") ||
+      pathname.includes("/handoff"));
+  const isLoginGateUrl =
+    isAdzunaHost &&
+    (pathname.includes("/login") ||
+      pathname.includes("/signin") ||
+      pathname.includes("/sign-in") ||
+      pathname.includes("/authenticate"));
   const isTokenizedInterstitial =
     isLandAdUrl &&
     (tokenizedParamsPresent.includes("aztt") ||
@@ -107,7 +127,14 @@ export function classifyAdzunaHandoffUrl(rawUrl: string): AdzunaHandoffUrlState 
     isTokenizedInterstitial,
     tokenizedParamsPresent,
     isAuthUrl,
-    isStillHandoff: isLandAdUrl || isAuthUrl || isAppcastTrackingUrl(rawUrl),
+    isInterstitialUrl,
+    isLoginGateUrl,
+    isStillHandoff:
+      isLandAdUrl ||
+      isAuthUrl ||
+      isInterstitialUrl ||
+      isLoginGateUrl ||
+      isAppcastTrackingUrl(rawUrl),
   };
 }
 

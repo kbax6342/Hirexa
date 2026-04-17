@@ -8,7 +8,7 @@ import {
 } from "@heroicons/react/24/solid";
 import {
   ONBOARDING_PROFILE_ROUTE,
-  getNextOnboardingRoute,
+  RESUME_ROUTE,
 } from "@/app/lib/onboarding-flow";
 
 type FormState = {
@@ -263,9 +263,7 @@ export default function ProfileForm() {
     setSaving(false);
 
     // ✅ Only navigate when save succeeds
-    router.push(
-      getNextOnboardingRoute(ONBOARDING_PROFILE_ROUTE) ?? "/questionsClients"
-    );
+    router.push(RESUME_ROUTE);
   }
 
   const inputBase =

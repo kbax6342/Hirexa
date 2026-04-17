@@ -18,6 +18,7 @@ import {
   applyWithPlaywright,
   toApplySessionDebug,
 } from "@/app/lib/apply/playwrightApply";
+import { isAdzunaUnresolvedHandoffUrl } from "@/app/lib/apply/adzunaHandoff";
 import {
   resolveDirectJobUrl,
   type DirectJobResolution,
@@ -45,8 +46,8 @@ import {
 } from "@/app/lib/apply/stopClassification";
 import {
   classifyJobUrlKind,
-  isAdzunaUrl,
   isAggregatorHandoffUrl,
+  isAdzunaUrl,
   isAppcastUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
@@ -128,13 +129,18 @@ type DirectResolutionDebug = Pick<
   | "originalJobUrl"
   | "resolvedDirectUrl"
   | "applySource"
+  | "googleFirstResolutionTriggered"
   | "usedResolvedDirectUrl"
   | "directJobResolutionAttempted"
+  | "directJobResolutionQueries"
+  | "directJobResolutionNormalizedLocation"
+  | "directJobResolutionSearchProvider"
   | "directJobResolutionConfidence"
   | "directJobResolutionProvider"
   | "directJobResolutionMatchReason"
   | "directJobResolutionError"
   | "directJobResolutionCandidates"
+  | "adzunaStrategyReplaySkipped"
   | "startingUrlKind"
   | "finalChosenUrlKind"
 >;
@@ -147,6 +153,11 @@ type DirectResolutionContext = {
   resolution?: DirectJobResolution;
   usedResolvedDirectUrl: boolean;
 };
+
+const ADZUNA_UNRESOLVED_TARGET_MESSAGE =
+  "Adzuna handoff unresolved: no confirmed employer-hosted application URL found after search fallback";
+const ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE =
+  "No confirmed employer-hosted application URL found from Google-first resolution for Adzuna job";
 
 function normalizeSourceLabel(value: string | null | undefined) {
   return String(value ?? "").trim().toLowerCase();
@@ -165,11 +176,25 @@ function shouldAttemptDirectResolution(application: LoadedApplication) {
   );
 }
 
+function isAdzunaApplySource(args: {
+  source?: string | null;
+  jobUrl?: string | null;
+}) {
+  const source = normalizeSourceLabel(args.source);
+  const jobUrl = normalizeJobUrl(args.jobUrl ?? "");
+
+  return source.includes("adzuna") || isAdzunaUrl(jobUrl);
+}
+
 function shouldContinueWithOriginalUrl(url: string) {
   const normalizedUrl = normalizeJobUrl(url);
   if (!normalizedUrl) return false;
 
-  if (isAdzunaUrl(normalizedUrl) || isAppcastUrl(normalizedUrl)) {
+  if (isAdzunaUnresolvedHandoffUrl(normalizedUrl)) {
+    return false;
+  }
+
+  if (isAppcastUrl(normalizedUrl)) {
     return true;
   }
 
@@ -187,15 +212,23 @@ function buildDirectResolutionDebug(args: {
     originalJobUrl: args.originalUrl || undefined,
     resolvedDirectUrl: args.resolvedDirectUrl,
     applySource: args.source ?? undefined,
+    googleFirstResolutionTriggered:
+      args.resolution?.googleFirstTriggered === true,
     usedResolvedDirectUrl:
       Boolean(args.resolvedDirectUrl) &&
       args.resolvedDirectUrl !== args.originalUrl,
     directJobResolutionAttempted: args.attempted,
+    directJobResolutionQueries: args.resolution?.queries ?? [],
+    directJobResolutionNormalizedLocation:
+      args.resolution?.normalizedLocation,
+    directJobResolutionSearchProvider: args.resolution?.searchProvider,
     directJobResolutionConfidence: args.resolution?.confidence,
     directJobResolutionProvider: args.resolution?.provider,
     directJobResolutionMatchReason: args.resolution?.matchReason,
     directJobResolutionError: args.resolution?.error,
     directJobResolutionCandidates: args.resolution?.candidates ?? [],
+    adzunaStrategyReplaySkipped:
+      args.resolution?.adzunaStrategyReplaySkipped === true,
     startingUrlKind: classifyJobUrlKind(args.originalUrl),
     finalChosenUrlKind: classifyJobUrlKind(
       args.resolvedDirectUrl ?? args.originalUrl,
@@ -237,6 +270,24 @@ function buildUrlDecisionFields(
     | null
     | undefined,
 ) {
+  const applySource = normalizeSourceLabel(debug?.applySource);
+  const isBlockedAdzunaTarget = (url: string | null | undefined) =>
+    Boolean(url) &&
+    applySource.includes("adzuna") &&
+    isAdzunaUrl(String(url));
+  const chosenApplyUrl =
+    (debug?.targetUrl && !isBlockedAdzunaTarget(debug.targetUrl)
+      ? debug.targetUrl
+      : null) ??
+    (debug?.resolvedDirectUrl && !isBlockedAdzunaTarget(debug.resolvedDirectUrl)
+      ? debug.resolvedDirectUrl
+      : null) ??
+    (debug?.originalJobUrl &&
+    !isAdzunaUnresolvedHandoffUrl(debug.originalJobUrl) &&
+    !isBlockedAdzunaTarget(debug.originalJobUrl)
+      ? debug.originalJobUrl
+      : null);
+
   return {
     originalUrl: debug?.originalJobUrl ?? null,
     resolvedDirectUrl: debug?.resolvedDirectUrl ?? null,
@@ -244,11 +295,7 @@ function buildUrlDecisionFields(
     applySource: debug?.applySource ?? null,
     startingUrlKind: debug?.startingUrlKind ?? null,
     finalChosenUrlKind: debug?.finalChosenUrlKind ?? null,
-    chosenApplyUrl:
-      debug?.targetUrl ??
-      debug?.resolvedDirectUrl ??
-      debug?.originalJobUrl ??
-      null,
+    chosenApplyUrl,
   };
 }
 
@@ -257,6 +304,10 @@ async function resolveApplicationDirectJobUrl(args: {
 }) {
   const originalUrl = normalizeJobUrl(args.application.jobUrl ?? "");
   const source = args.application.source ?? null;
+  const adzunaSourceDetected = isAdzunaApplySource({
+    source,
+    jobUrl: originalUrl,
+  });
   const shouldAttempt = shouldAttemptDirectResolution(args.application);
 
   if (!shouldAttempt) {
@@ -302,8 +353,17 @@ async function resolveApplicationDirectJobUrl(args: {
     applicationId: args.application.id,
     source,
     originalUrl,
+    googleFirstResolutionTriggered:
+      resolution.googleFirstTriggered === true,
+    adzunaHandoffDetected: isAdzunaUnresolvedHandoffUrl(originalUrl),
+    acceptanceRule: resolution.acceptanceRule ?? null,
+    normalizedLocation: resolution.normalizedLocation ?? null,
+    searchProvider: resolution.searchProvider ?? null,
+    queries: resolution.queries ?? [],
     resolvedDirectUrl: resolvedDirectUrl ?? null,
     usedResolvedDirectUrl,
+    adzunaStrategyReplaySkipped:
+      resolution.adzunaStrategyReplaySkipped === true,
     confidence: resolution.confidence ?? null,
     provider: resolution.provider ?? null,
     matchReason: resolution.matchReason ?? null,
@@ -340,8 +400,12 @@ async function resolveApplicationDirectJobUrl(args: {
   }
 
   if (!resolution.ok && !shouldContinueWithOriginalUrl(originalUrl)) {
-    const message =
-      "Could not resolve a confident direct employer/ATS application URL";
+    const message = adzunaSourceDetected
+      ? resolution.error ?? ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE
+      : isAdzunaUnresolvedHandoffUrl(originalUrl)
+        ? resolution.error ?? ADZUNA_UNRESOLVED_TARGET_MESSAGE
+      : resolution.error ??
+        "Could not resolve a confident direct employer/ATS application URL";
 
     await prisma.jobApplication.update({
       where: { id: args.application.id },
@@ -1546,7 +1610,10 @@ async function persistAutomationOutcome(args: {
       confirmationDetected: finalResult.debug.confirmationDetected,
       verificationDetected:
         finalResult.needsHuman ?? finalResult.debug.verificationDetected,
-      debug: finalResult.debug,
+      debug: {
+        ...(readAutomationAudit(args.application.auditJson).state.debug ?? {}),
+        ...finalResult.debug,
+      },
     },
   });
 
@@ -1892,12 +1959,26 @@ export async function POST(
       application,
       requestAnswers: body.answers,
     });
+    const adzunaSourceDetected = isAdzunaApplySource({
+      source: application.source,
+      jobUrl: urlResolution.originalUrl || application.jobUrl,
+    });
 
     console.log("[AUTO_APPLY_ROUTE] prepared apply payload", {
       applicationId: application.id,
       jobUrl: application.jobUrl,
       originalUrl: urlResolution.originalUrl || null,
       resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+      googleFirstResolutionTriggered:
+        urlResolution.debug.googleFirstResolutionTriggered === true,
+      directJobResolutionNormalizedLocation:
+        urlResolution.debug.directJobResolutionNormalizedLocation ?? null,
+      directJobResolutionSearchProvider:
+        urlResolution.debug.directJobResolutionSearchProvider ?? null,
+      directJobResolutionQueries:
+        urlResolution.debug.directJobResolutionQueries ?? [],
+      adzunaStrategyReplaySkipped:
+        urlResolution.debug.adzunaStrategyReplaySkipped === true,
       usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
       targetUrl: prepared.targetUrl ?? application.jobUrl,
       usesExternalPostingUrl:
@@ -1905,6 +1986,78 @@ export async function POST(
       applyProvider: prepared.applyProvider ?? null,
       missingRequired: prepared.missingRequired,
       answerCount: Object.keys(prepared.finalValuesToSubmit).length,
+    });
+
+    const chosenTargetUrl = normalizeJobUrl(
+      prepared.targetUrl ?? application.jobUrl ?? "",
+    );
+    if (
+      (adzunaSourceDetected && isAdzunaUrl(chosenTargetUrl)) ||
+      isAdzunaUnresolvedHandoffUrl(chosenTargetUrl)
+    ) {
+      const message = adzunaSourceDetected
+        ? ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE
+        : ADZUNA_UNRESOLVED_TARGET_MESSAGE;
+
+      console.warn("[AUTO_APPLY_ROUTE] blocking unresolved Adzuna target", {
+        applicationId: application.id,
+        originalUrl: urlResolution.originalUrl || null,
+        resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+        chosenTargetUrl,
+        applySource: urlResolution.debug.applySource ?? null,
+        googleFirstResolutionTriggered:
+          urlResolution.debug.googleFirstResolutionTriggered === true,
+        directJobResolutionQueries:
+          urlResolution.debug.directJobResolutionQueries ?? [],
+      });
+
+      const nextAudit = buildAutomationAudit({
+        existingAudit: application.auditJson,
+        provider: prepared.applyProvider ?? application.source ?? "playwright",
+        finalValuesToSubmit: prepared.finalValuesToSubmit,
+        automation: {
+          provider: "playwright",
+          status: "FAILED",
+          message,
+          finalReason: message,
+          debug: {
+            ...(readAutomationAudit(application.auditJson).state.debug ?? {}),
+            ...urlResolution.debug,
+            targetUrl: chosenTargetUrl,
+          },
+        },
+      });
+
+      await prisma.jobApplication.update({
+        where: { id: application.id },
+        data: {
+          auditJson: nextAudit as Prisma.InputJsonValue,
+          failureReason: message,
+          verificationRequired: false,
+        },
+      });
+
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "APPLY_NOT_STARTED",
+          error: message,
+          ...buildUrlDecisionFields({
+            ...urlResolution.debug,
+            targetUrl: chosenTargetUrl,
+          }),
+        },
+        { status: 409 },
+      );
+    }
+
+    console.log("[AUTO_APPLY_ROUTE] final target selected", {
+      applicationId: application.id,
+      originalUrl: urlResolution.originalUrl || null,
+      resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+      targetUrl: chosenTargetUrl,
+      usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
+      applyProvider: prepared.applyProvider ?? null,
     });
 
     if (prepared.missingRequired.length > 0) {

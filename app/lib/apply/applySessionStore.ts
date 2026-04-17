@@ -36,8 +36,12 @@ export type ApplySessionDebug = {
   originalJobUrl?: string;
   resolvedDirectUrl?: string;
   applySource?: string;
+  googleFirstResolutionTriggered?: boolean;
   usedResolvedDirectUrl?: boolean;
   directJobResolutionAttempted?: boolean;
+  directJobResolutionQueries?: string[];
+  directJobResolutionNormalizedLocation?: string;
+  directJobResolutionSearchProvider?: string;
   directJobResolutionConfidence?: number;
   directJobResolutionProvider?: string;
   directJobResolutionMatchReason?: string;
@@ -49,6 +53,7 @@ export type ApplySessionDebug = {
     confidence: number;
     reason: string;
   }>;
+  adzunaStrategyReplaySkipped?: boolean;
   searchFallbackTriggered?: boolean;
   searchFallbackQueries?: string[];
   searchFallbackCandidates?: JobSearchFallbackCandidate[];

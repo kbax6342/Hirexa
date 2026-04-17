@@ -8,7 +8,12 @@ export type JobSearchResult = {
   source?: string;
 };
 
-type SearchProviderName = "duckduckgo_html" | "brave" | "serpapi" | "none";
+export type SearchProviderName =
+  | "duckduckgo_html"
+  | "brave"
+  | "serpapi"
+  | "none";
+type SearchProviderPreference = SearchProviderName | "google_first";
 
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -30,7 +35,21 @@ const TOKEN_STOP_WORDS = new Set([
   "with",
 ]);
 
-function resolveSearchProvider(): SearchProviderName | string {
+export function resolveJobSearchProvider(args?: {
+  preferredProvider?: SearchProviderPreference | string | null;
+}): SearchProviderName | string {
+  const preferredProvider = String(args?.preferredProvider ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (preferredProvider === "google_first") {
+    if (process.env.SERPAPI_API_KEY?.trim()) {
+      return "serpapi";
+    }
+  } else if (preferredProvider) {
+    return preferredProvider;
+  }
+
   const configuredProvider = String(process.env.JOB_SEARCH_PROVIDER ?? "")
     .trim()
     .toLowerCase();
@@ -410,6 +429,7 @@ async function searchSingleQuery(
 export async function searchJobPages(args: {
   queries: string[];
   limit?: number;
+  preferredProvider?: SearchProviderPreference | string | null;
 }): Promise<JobSearchResult[]> {
   const queries = args.queries
     .map((query) => query.trim())
@@ -420,7 +440,9 @@ export async function searchJobPages(args: {
     return [];
   }
 
-  const provider = resolveSearchProvider();
+  const provider = resolveJobSearchProvider({
+    preferredProvider: args.preferredProvider,
+  });
   const perQueryLimit = Math.max(3, Math.ceil(limit / queries.length) + 2);
 
   console.log("[JOB_SEARCH_PROVIDER] search start", {

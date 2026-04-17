@@ -103,6 +103,7 @@ export default function TeachPageDialog({
       }),
     [currentUrl, finalUrl, lastAction, stopClassification],
   );
+  const teachFieldClassName = "bg-white text-black";
 
   useEffect(() => {
     if (!open) return;
@@ -269,7 +270,7 @@ export default function TeachPageDialog({
       >
         {triggerLabel ?? "Teach this page"}
       </Button>
-      <DialogContent className="max-w-2xl border-gray-200 bg-white text-gray-900">
+      <DialogContent className="h-[calc(100vh-2rem)] max-h-[calc(100vh-2rem)] w-fit max-w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-gray-200 bg-white text-gray-900">
         <DialogHeader>
           <DialogTitle>Teach this page</DialogTitle>
           <DialogDescription>
@@ -278,12 +279,13 @@ export default function TeachPageDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-800">
               URL or hostname
             </label>
             <Input
+              className={teachFieldClassName}
               value={urlOrHostname}
               onChange={(event) => setUrlOrHostname(event.target.value)}
               placeholder="https://jobs.example.com/apply or jobs.example.com"
@@ -295,14 +297,22 @@ export default function TeachPageDialog({
               <label className="text-sm font-medium text-gray-800">
                 Detected stop reason
               </label>
-              <Input value={resolvedStopReason} readOnly />
+              <Input
+                className={teachFieldClassName}
+                value={resolvedStopReason}
+                readOnly
+              />
             </div>
 
             <div className="space-y-1">
               <label className="text-sm font-medium text-gray-800">
                 Last action
               </label>
-              <Input value={resolvedLastAction} readOnly />
+              <Input
+                className={teachFieldClassName}
+                value={resolvedLastAction}
+                readOnly
+              />
             </div>
           </div>
 
@@ -312,12 +322,13 @@ export default function TeachPageDialog({
             </p>
           ) : null}
 
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="border-sky-600 bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
                 disabled={!resolvedUrl || trainingStatus === "starting" || isRecording}
                 onClick={() => {
                   void startRecording();
@@ -330,6 +341,7 @@ export default function TeachPageDialog({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="border-sky-600 bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
                 disabled={!trainingSessionId || !isRecording}
                 onClick={() => {
                   void (async () => {
@@ -395,6 +407,7 @@ export default function TeachPageDialog({
               Instructions
             </label>
             <Textarea
+              className={teachFieldClassName}
               value={instructions}
               onChange={(event) => setInstructions(event.target.value)}
               placeholder="Describe how this site should be handled next time."
@@ -406,13 +419,14 @@ export default function TeachPageDialog({
               Selector notes
             </label>
             <Textarea
+              className={teachFieldClassName}
               value={selectors}
               onChange={(event) => setSelectors(event.target.value)}
               placeholder="Optional CSS/XPath/button text notes."
             />
           </div>
 
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+          <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
             <div className="flex items-center justify-between gap-3">
               <p className="font-medium text-gray-900">
                 Recorded steps ({recordedSteps.length})
@@ -491,7 +505,7 @@ export default function TeachPageDialog({
           </div>
 
           {savedStrategy ? (
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+            <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
               <p className="font-medium text-gray-900">
                 Saved strategy for {savedStrategy.hostname}
               </p>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { signIn, useSession } from "next-auth/react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
 import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 
@@ -26,9 +26,23 @@ function getVerifyAccountProgressPercent() {
   return Math.max(8, Math.round((verifyStep / totalSteps) * 100));
 }
 
+function resolvePostVerifyRedirect(value: string | null) {
+  if (!value) {
+    return DASHBOARD_ROUTE;
+  }
+
+  if (!value.startsWith("/") || value.startsWith("//")) {
+    return DASHBOARD_ROUTE;
+  }
+
+  return value;
+}
+
 export default function VerifyAccountStep() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { executeRecaptcha } = useGoogleReCaptcha();
+  const { data: session, status } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -36,19 +50,36 @@ export default function VerifyAccountStep() {
   const [loadingDefaults, setLoadingDefaults] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const progressPercent = useMemo(() => getVerifyAccountProgressPercent(), []);
+  const callbackUrl = useMemo(
+    () => resolvePostVerifyRedirect(searchParams.get("callbackUrl")),
+    [searchParams]
+  );
+  const isAuthenticated = status === "authenticated";
 
   useEffect(() => {
     const pending = readPendingOnboardingSignup();
 
-    if (!pending) {
-      router.replace(CREATE_ACCOUNT_ROUTE);
+    if (pending) {
+      setEmail(pending.email);
+      setPassword(pending.password);
+      setLoadingDefaults(false);
       return;
     }
 
-    setEmail(pending.email);
-    setPassword(pending.password);
-    setLoadingDefaults(false);
-  }, [router]);
+    if (status === "loading") {
+      return;
+    }
+
+    const sessionEmail = String(session?.user?.email ?? "").trim().toLowerCase();
+    if (status === "authenticated" && sessionEmail) {
+      setEmail(sessionEmail);
+      setPassword("");
+      setLoadingDefaults(false);
+      return;
+    }
+
+    router.replace(CREATE_ACCOUNT_ROUTE);
+  }, [router, session?.user?.email, status]);
 
   function handleBack() {
     router.push(CREATE_ACCOUNT_ROUTE);
@@ -86,20 +117,23 @@ export default function VerifyAccountStep() {
         throw new Error(data?.error ?? "Verification failed.");
       }
 
-      const login = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
+      if (!isAuthenticated && password) {
+        const login = await signIn("credentials", {
+          email,
+          password,
+          redirect: false,
+        });
 
-      if (login?.error) {
-        throw new Error(
-          "Your account was verified, but automatic sign-in failed. Please log in."
-        );
+        if (login?.error) {
+          throw new Error(
+            "Your account was verified, but automatic sign-in failed. Please log in."
+          );
+        }
       }
 
       clearPendingOnboardingSignup();
-      router.push(DASHBOARD_ROUTE);
+      router.push(callbackUrl);
+      router.refresh();
     } catch (verifyError) {
       setMessage(
         verifyError instanceof Error
@@ -159,7 +193,7 @@ export default function VerifyAccountStep() {
               </h1>
               <p className="mt-3 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">
                 We sent a verification code to your email so we can secure your
-                account and save your job search.
+                Hirexa account before you continue.
               </p>
               {email ? (
                 <p className="mt-2 text-sm text-slate-500">{email}</p>

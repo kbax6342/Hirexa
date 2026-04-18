@@ -19,6 +19,11 @@ import {
   GUEST_USER_COOKIE,
 } from "@/app/lib/onboarding/start";
 import { syncLoopsContact } from "@/app/lib/email/loops";
+import {
+  getLegacyProfessionalLinkBackfill,
+  resolveProfessionalLinksForProfile,
+  sanitizeProfessionalLinks,
+} from "@/app/lib/profile/professionalLinks";
 import type Stripe from "stripe";
 import { getCurrentViewerProfile } from "@/app/lib/profile-server";
 
@@ -34,6 +39,7 @@ type ProfileBody = {
   state?: string;
   linkedinUrl?: string;
   portfolioUrl?: string;
+  professionalLinks?: unknown;
   phone?: string;
   email?: string;
 };
@@ -274,6 +280,19 @@ export async function POST(req: Request) {
     }
 
     const normalizedEmail = normalizeText(body.email) ?? (session?.user as any)?.email ?? null;
+    const hasProfessionalLinksPayload = Object.prototype.hasOwnProperty.call(
+      body,
+      "professionalLinks"
+    );
+    const normalizedProfessionalLinks = hasProfessionalLinksPayload
+      ? sanitizeProfessionalLinks(body.professionalLinks)
+      : resolveProfessionalLinksForProfile({
+          linkedinUrl: normalizeText(body.linkedinUrl),
+          portfolioUrl: normalizeText(body.portfolioUrl),
+        });
+    const legacyProfessionalLinkFields = getLegacyProfessionalLinkBackfill(
+      normalizedProfessionalLinks
+    );
     const privateFields = sanitizePrivateProfileFields({
       dob: body.dob,
       address: body.address,
@@ -322,8 +341,8 @@ export async function POST(req: Request) {
         state: null,
         stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
-        linkedinUrl: normalizeText(body.linkedinUrl),
-        portfolioUrl: normalizeText(body.portfolioUrl),
+        linkedinUrl: legacyProfessionalLinkFields.linkedinUrl,
+        portfolioUrl: legacyProfessionalLinkFields.portfolioUrl,
         registrationStatus: nextRegistrationStatusAfterProfileSave(
           existingProfile?.registrationStatus
         ),
@@ -349,8 +368,8 @@ export async function POST(req: Request) {
         state: null,
         stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
-        linkedinUrl: normalizeText(body.linkedinUrl),
-        portfolioUrl: normalizeText(body.portfolioUrl),
+        linkedinUrl: legacyProfessionalLinkFields.linkedinUrl,
+        portfolioUrl: legacyProfessionalLinkFields.portfolioUrl,
         registrationStatus: nextRegistrationStatusAfterProfileSave(
           existingProfile?.registrationStatus
         ),

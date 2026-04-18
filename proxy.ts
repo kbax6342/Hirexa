@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "./auth";
+import { getHirexaVerificationGateForUser } from "@/app/lib/auth/hirexaVerification";
 import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
+import { VERIFY_ACCOUNT_ROUTE } from "@/app/lib/onboarding-flow";
 
 const AUTH_REQUIRED_PREFIXES = [
   "/dashboard",
@@ -10,6 +12,7 @@ const AUTH_REQUIRED_PREFIXES = [
   "/settings",
   "/profile",
   "/applications",
+  "/recruiter",
 ];
 
 const ONBOARDING_REDIRECT_PREFIXES = [
@@ -47,6 +50,13 @@ export default auth(async (req) => {
     isAuthenticated &&
     userId
   ) {
+    const verification = await getHirexaVerificationGateForUser(userId);
+    if (verification.requiresVerification) {
+      const verifyUrl = new URL(VERIFY_ACCOUNT_ROUTE, origin);
+      verifyUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
+      return NextResponse.redirect(verifyUrl);
+    }
+
     const onboarding = await getOnboardingStatusForUser(userId);
 
     if (
@@ -82,6 +92,9 @@ export default auth(async (req) => {
     AUTH_REQUIRED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
     const loginUrl = new URL("/login", origin);
+    if (pathname.startsWith("/recruiter")) {
+      loginUrl.searchParams.set("mode", "recruiter");
+    }
     loginUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
 
     return NextResponse.redirect(loginUrl);
@@ -96,6 +109,7 @@ export const config = {
     "/questions",
     "/dashboard/:path*",
     "/hirepilot",
+    "/job-tools/:path*",
     "/job-tools/generate",
     "/job-tools/agents/linkedin-outreach/:path*",
     "/job-tools/ai-assistant/:path*",
@@ -104,6 +118,8 @@ export const config = {
     "/settings/:path*",
     "/profile",
     "/applications/:path*",
+    "/recruiter/:path*",
+    "/saved-jobs",
     "/onboarding/profile/:path*",
     "/questions/step2Resume/:path*",
     "/onboarding/job-interest/:path*",

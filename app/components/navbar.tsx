@@ -43,7 +43,6 @@ const guestNav: NavItem[] = [
   { label: "Features", href: "/#features" },
   { label: "How It Works", href: "/how-it-works" },
   { label: "Find Jobs", href: "/jobs" },
-  { label: "Saved Jobs", href: "/saved-jobs" },
   { label: "Job Locations", href: "/locations" },
 ];
 
@@ -272,7 +271,7 @@ export function Navbar() {
         hideOnMobile ? "hidden md:block" : ""
       }`}
     >
-      <nav className="relative mx-auto flex min-h-[76px] max-w-7xl items-center justify-between px-5 py-4 lg:px-6">
+      <nav className="relative mx-6 flex min-h-[76px] w-[calc(100%-3rem)] items-center justify-between pl-5 pr-0 py-4 lg:mx-0 lg:ml-6 lg:w-full lg:pl-6 lg:pr-[4%]">
         <div aria-hidden="true" className="h-10 w-10 shrink-0 lg:hidden" />
 
         <Link
@@ -289,7 +288,7 @@ export function Navbar() {
 
         <DesktopNav items={navLinks} />
 
-        <div className="hidden items-center gap-3 lg:flex">
+        <div className="hidden items-center lg:flex">
           {status === "loading" ? (
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
           ) : !isAuthed ? (
@@ -306,7 +305,7 @@ export function Navbar() {
                 {hirePilotDesktopLabel}
               </Link>
 
-              <div className="relative group">
+              <div className="relative ml-4 group">
                 <div className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
                   <UserCircleIcon className="h-5 w-5 text-muted-foreground" />
                   <span className="max-w-[180px] truncate">
@@ -347,6 +346,14 @@ export function Navbar() {
                   </div>
                 </div>
               </div>
+
+              <Link
+                href="/recruiter/dashboard"
+                title="Recruiter accounts only"
+                className="ml-6 inline-flex items-center rounded-full border border-sky-600 bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
+              >
+                Recruiter Dashboard
+              </Link>
             </>
           )}
         </div>
@@ -503,6 +510,23 @@ export function Navbar() {
                   >
                     {hirePilotDesktopLabel}
                   </Link>
+
+                  <Button
+                    asChild
+                    variant="ghost"
+                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                  >
+                    <Link
+                      href="/recruiter/dashboard"
+                      title="Recruiter accounts only"
+                      onClick={() => {
+                        setMobileOpen(false);
+                        setMobileAgentsOpen(false);
+                      }}
+                    >
+                      Recruiter Dashboard
+                    </Link>
+                  </Button>
 
                   <Button
                     asChild

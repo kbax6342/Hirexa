@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 
 type SessionUserWithFlags = {
   isExistingUser?: boolean;
+  requiresVerification?: boolean;
 };
 
 export default function GoogleRedirectPage() {
@@ -23,9 +24,17 @@ export default function GoogleRedirectPage() {
     }
 
     const sessionUser = session?.user as SessionUserWithFlags | undefined;
-    router.replace(
-      sessionUser?.isExistingUser === true ? "/dashboard" : "/questions"
-    );
+    const nextPath =
+      sessionUser?.isExistingUser === true ? "/dashboard" : "/questions";
+
+    if (sessionUser?.requiresVerification) {
+      router.replace(
+        `/onboarding/verify-account?callbackUrl=${encodeURIComponent(nextPath)}`
+      );
+      return;
+    }
+
+    router.replace(nextPath);
   }, [router, session, status]);
 
   return (

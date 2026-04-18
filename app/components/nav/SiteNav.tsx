@@ -20,7 +20,7 @@ export default function SiteHeaderClient() {
   }
 
   return (
-    <nav className="relative flex items-center border-b px-10 py-6">
+    <nav className="relative flex items-center border-b pl-10 pr-0 py-6 lg:pr-[4%]">
       {/* LEFT: BRAND */}
       <Link href="/" className="flex items-center gap-3">
         <Image
@@ -79,48 +79,58 @@ export default function SiteHeaderClient() {
             </Link>
           </>
         ) : (
-          <div className="relative group">
-            {/* Trigger */}
-            <div className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-blue-600 hover:underline">
-              <UserCircleIcon className="h-5 w-5 text-blue-600" />
-              <span>{session.user?.name || session.user?.email}</span>
+          <div className="flex items-center">
+            <div className="relative group">
+              {/* Trigger */}
+              <div className="flex items-center gap-2 cursor-pointer text-sm font-semibold text-blue-600 hover:underline">
+                <UserCircleIcon className="h-5 w-5 text-blue-600" />
+                <span>{session.user?.name || session.user?.email}</span>
+              </div>
+
+
+             {/* ✅ Hover buffer to prevent flicker (fills the gap between name and menu) */}
+    <div className="absolute right-0 top-full h-3 w-40" />
+
+            {/* Dropdown */}
+            <div
+              className="
+                absolute right-0 top-full mt-2 w-40 rounded-lg border border-gray-200 bg-white shadow-lg
+                opacity-0 scale-95 pointer-events-none
+                group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto
+                transition-all duration-200
+                z-50
+              "
+            >
+              <ul className="flex flex-col py-1 text-sm text-gray-700">
+                <li>
+                  <Link
+                    href="/settings"
+                    className="block px-4 py-2 hover:bg-gray-300"
+                  >
+                    Settings
+                  </Link>
+                </li>
+
+                <li>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="w-full text-left px-4 py-2 text-red-600 hover:bg-gray-300"
+                  >
+                    Log out
+                  </button>
+                </li>
+              </ul>
+            </div>
             </div>
 
-
-           {/* ✅ Hover buffer to prevent flicker (fills the gap between name and menu) */}
-  <div className="absolute right-0 top-full h-3 w-40" />
-
-          {/* Dropdown */}
-          <div
-            className="
-              absolute right-0 top-full mt-2 w-40 rounded-lg border border-gray-200 bg-white shadow-lg
-              opacity-0 scale-95 pointer-events-none
-              group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto
-              transition-all duration-200
-              z-50
-            "
-          >
-            <ul className="flex flex-col py-1 text-sm text-gray-700">
-              <li>
-                <Link
-                  href="/settings"
-                  className="block px-4 py-2 hover:bg-gray-300"
-                >
-                  Settings
-                </Link>
-              </li>
-
-              <li>
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="w-full text-left px-4 py-2 text-red-600 hover:bg-gray-300"
-                >
-                  Log out
-                </button>
-              </li>
-            </ul>
-          </div>
+            <Link
+              href="/recruiter/dashboard"
+              title="Recruiter accounts only"
+              className="ml-6 rounded-full border border-sky-600 bg-sky-600 px-4 py-2 text-white hover:bg-sky-700"
+            >
+              Recruiter Dashboard
+            </Link>
           </div>
         )}
       </div>

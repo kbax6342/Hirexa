@@ -9,20 +9,22 @@ datasource db {
 }
 
 model User {
-  id              String        @id @default(cuid())
-  name            String?
-  email           String?       @unique
-  password        String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  isGuest         Boolean       @default(true)
-  emailVerifiedAt DateTime?
-  userProfile     UserProfile?
-  billings        UserBilling[]
-  savedJobs       SavedJob[]
+  id                    String                 @id @default(cuid())
+  name                  String?
+  email                 String?                @unique
+  password              String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  isGuest               Boolean                @default(true)
+  emailVerifiedAt       DateTime?
+  userProfile           UserProfile?
+  billings              UserBilling[]
+  savedJobs             SavedJob[]
   hirePilotCreditGrants HirePilotCreditGrant[]
   hirePilotCreditUsages HirePilotCreditUsage[]
-  passwordResetTokens PasswordResetToken[]
+  passwordResetTokens   PasswordResetToken[]
+  recruiterAgency       RecruiterAgency?       @relation("RecruiterAgencyOwner")
+  recruiterProfile      RecruiterProfile?
 }
 
 model LinkedInAccount {
@@ -135,8 +137,8 @@ model OutreachJobTarget {
 }
 
 model UserProfile {
-  id                      String             @id @default(cuid())
-  userId                  String?            @unique
+  id                      String                @id @default(cuid())
+  userId                  String?               @unique
   firstName               String?
   lastName                String?
   phone                   String?
@@ -151,22 +153,22 @@ model UserProfile {
   ethnicity               String?
   disability              String?
   veteran                 String?
-  createdAt               DateTime           @default(now())
-  updatedAt               DateTime           @updatedAt
-  guestId                 String?            @unique
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  guestId                 String?               @unique
   compensationType        String?
   minCompensation         Int?
-  resumeSkills            String[]           @default([])
-  skills                  String[]           @default([])
+  resumeSkills            String[]              @default([])
+  skills                  String[]              @default([])
   email                   String?
   welcomeEmailSentAt      DateTime?
-  includeRemote           Boolean            @default(true)
+  includeRemote           Boolean               @default(true)
   workplaceLocations      Json?
-  newsletterOptIn         Boolean            @default(false)
+  newsletterOptIn         Boolean               @default(false)
   newsletterSource        String?
   emailVerifiedAt         DateTime?
   unsubscribedAt          DateTime?
-  registrationStatus      String?            @default("pending_verification")
+  registrationStatus      String?               @default("pending_verification")
   address                 String?
   addressEncrypted        String?
   city                    String?
@@ -185,9 +187,9 @@ model UserProfile {
   profileImage            Bytes?
   profileImageMimeType    String?
   profileImageFilename    String?
-  trialSubscriber         Boolean            @default(false)
-  monthlySubscriber       Boolean            @default(false)
-  yearlySubscriber        Boolean            @default(false)
+  trialSubscriber         Boolean               @default(false)
+  monthlySubscriber       Boolean               @default(false)
+  yearlySubscriber        Boolean               @default(false)
   trialPlanStatus         String?
   monthlyPlanStatus       String?
   yearlyPlanStatus        String?
@@ -200,7 +202,8 @@ model UserProfile {
   countryCode             String?
   country                 String?
   portfolioUrl            String?
-  questionsCompleted      Boolean            @default(false)
+  professionalLinks       Json?
+  questionsCompleted      Boolean               @default(false)
   benefitSelections       BenefitSelection[]
   applySiteStrategies     ApplySiteStrategy[]
   jobApplications         JobApplication[]
@@ -209,7 +212,7 @@ model UserProfile {
   resumeFiles             ResumeFile[]
   stripePayments          StripePayment[]
   emailLifecycleEvents    EmailLifecycleEvent[]
-  user                    User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                    User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([email])
   @@index([citySearch])
@@ -218,30 +221,30 @@ model UserProfile {
 }
 
 model ApplySiteStrategy {
-  id                  String      @id @default(cuid())
+  id String @id @default(cuid())
 
-  userProfileId       String
-  userProfile         UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  userProfileId String
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
-  hostname            String
-  finalUrl            String?
-  lastAction          String?
-  stopReason          String?
-  instructions        String?
-  selectors           String?
-  stepsJson           Json?
-  trainingSource      String?
-  lastTrainedUrl      String?
+  hostname       String
+  finalUrl       String?
+  lastAction     String?
+  stopReason     String?
+  instructions   String?
+  selectors      String?
+  stepsJson      Json?
+  trainingSource String?
+  lastTrainedUrl String?
 
-  status              String      @default("draft")
-  successCount        Int         @default(0)
-  failureCount        Int         @default(0)
+  status              String    @default("draft")
+  successCount        Int       @default(0)
+  failureCount        Int       @default(0)
   lastReplaySucceeded Boolean?
   lastFailureReason   String?
   lastReplayedAt      DateTime?
 
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([userProfileId, hostname])
   @@index([userProfileId])
@@ -250,15 +253,15 @@ model ApplySiteStrategy {
 }
 
 model OnboardingDraft {
-  id         String   @id @default(cuid())
-  draftToken String   @unique
+  id         String    @id @default(cuid())
+  draftToken String    @unique
   guestId    String?
-  status     String   @default("active")
+  status     String    @default("active")
   lastStep   String?
   payload    Json?
   expiresAt  DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@index([guestId])
   @@index([status, expiresAt])
@@ -431,7 +434,6 @@ model ResumeFile {
   @@index([profileId])
 }
 
-
 model SavedJob {
   id        String   @id @default(cuid())
   userId    String
@@ -442,7 +444,7 @@ model SavedJob {
   url       String
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, jobId])
   @@index([userId])
@@ -458,14 +460,14 @@ model EmailVerificationCode {
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   email     String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([email])
@@ -532,19 +534,19 @@ model Subscription {
 }
 
 model HirePilotUsage {
-  id              String    @id @default(cuid())
-  userId          String
-  jobTitle        String?
-  company         String?
-  status          String    @default("listening")
-  inputSource     String?
-  reportEligible  Boolean   @default(false)
-  endedAt         DateTime?
-  transcript      Json?
+  id                String    @id @default(cuid())
+  userId            String
+  jobTitle          String?
+  company           String?
+  status            String    @default("listening")
+  inputSource       String?
+  reportEligible    Boolean   @default(false)
+  endedAt           DateTime?
+  transcript        Json?
   detectedQuestions Json?
-  suggestedAnswers Json?
-  report          Json?
-  createdAt       DateTime  @default(now())
+  suggestedAnswers  Json?
+  report            Json?
+  createdAt         DateTime  @default(now())
 
   @@index([userId, createdAt])
   @@index([userId, status, createdAt])
@@ -632,4 +634,166 @@ model UserBilling {
   @@index([status])
   @@index([stripeCustomerId])
   @@index([stripeSubscriptionId])
+}
+
+model RecruiterAgency {
+  id          String               @id @default(cuid())
+  ownerUserId String               @unique
+  name        String
+  slug        String               @unique
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  ownerUser   User                 @relation("RecruiterAgencyOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  jobOrders   RecruiterJobOrder[]
+  candidates  RecruiterCandidate[]
+
+  @@index([slug])
+}
+
+model RecruiterProfile {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  firstName             String?
+  lastName              String?
+  jobTitle              String?
+  workEmail             String?
+  phone                 String?
+  linkedinUrl           String?
+  agencyName            String?
+  agencyWebsite         String?
+  city                  String?
+  state                 String?
+  companyDescription    String?  @db.Text
+  hiringIndustries      String[] @default([])
+  recruitingSpecialties String[] @default([])
+  hiringRoles           String[] @default([])
+  seniorityLevels       String[] @default([])
+  employmentTypes       String[] @default([])
+  workModes             String[] @default([])
+  hiringLocations       String[] @default([])
+  calendarUrl           String?
+  intakeEmail           String?
+  resumeSubmissionEmail String?
+  outreachTone          String?  @default("professional")
+  autoFollowUp          Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([agencyName])
+  @@index([workEmail])
+}
+
+model RecruiterJobOrder {
+  id                      String                @id @default(cuid())
+  agencyId                String
+  title                   String
+  companyName             String
+  location                String?
+  employmentType          String?
+  salaryMin               Int?
+  salaryMax               Int?
+  description             String                @db.Text
+  requiredSkills          String[]              @default([])
+  preferredSkills         String[]              @default([])
+  requiredYearsExperience Int?
+  status                  String                @default("OPEN")
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  agency                  RecruiterAgency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  matches                 RecruiterMatch[]
+  submissions             RecruiterSubmission[]
+
+  @@index([agencyId])
+  @@index([agencyId, status])
+  @@index([updatedAt])
+}
+
+model RecruiterCandidate {
+  id              String                   @id @default(cuid())
+  agencyId        String
+  firstName       String?
+  lastName        String?
+  email           String?
+  phone           String?
+  location        String?
+  headline        String?
+  resumeText      String?                  @db.Text
+  skills          String[]                 @default([])
+  yearsExperience Int?
+  source          String                   @default("UPLOAD")
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  agency          RecruiterAgency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  files           RecruiterCandidateFile[]
+  matches         RecruiterMatch[]
+  submissions     RecruiterSubmission[]
+
+  @@index([agencyId])
+  @@index([agencyId, email])
+  @@index([updatedAt])
+}
+
+model RecruiterCandidateFile {
+  id          String             @id @default(cuid())
+  candidateId String
+  filename    String
+  mimeType    String
+  fileUrl     String?
+  rawText     String?            @db.Text
+  createdAt   DateTime           @default(now())
+  candidate   RecruiterCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+model RecruiterMatch {
+  id                    String             @id @default(cuid())
+  jobOrderId            String
+  candidateId           String
+  score                 Int
+  bestFitReasons        Json
+  redFlags              Json
+  missingQualifications Json
+  summary               String?            @db.Text
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  jobOrder              RecruiterJobOrder  @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  candidate             RecruiterCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([jobOrderId, candidateId])
+  @@index([jobOrderId, score])
+  @@index([candidateId])
+}
+
+model RecruiterSubmission {
+  id                  String                @id @default(cuid())
+  jobOrderId          String
+  candidateId         String
+  stage               String                @default("SCREENED")
+  notes               String?               @db.Text
+  lastOutreachMessage String?               @db.Text
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  jobOrder            RecruiterJobOrder     @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  candidate           RecruiterCandidate    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  stageEvents         RecruiterStageEvent[]
+
+  @@unique([jobOrderId, candidateId])
+  @@index([jobOrderId])
+  @@index([candidateId])
+  @@index([jobOrderId, stage])
+}
+
+model RecruiterStageEvent {
+  id           String              @id @default(cuid())
+  submissionId String
+  fromStage    String?
+  toStage      String
+  note         String?             @db.Text
+  createdAt    DateTime            @default(now())
+  submission   RecruiterSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@index([createdAt])
 }

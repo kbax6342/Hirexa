@@ -165,6 +165,7 @@ const profileSelect = Prisma.validator<Prisma.UserProfileSelect>()({
   profileImageMimeType: true,
   profileImageFilename: true,
 
+  // Add multi-link profile fields only after the Prisma schema and profile API migrate together.
   linkedinUrl: true,
   portfolioUrl: true,
 

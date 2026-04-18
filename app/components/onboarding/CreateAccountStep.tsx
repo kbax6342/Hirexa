@@ -3,11 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3";
+import { getProviders } from "next-auth/react";
 import {
   ArrowLeftIcon,
   InformationCircleIcon,
 } from "@heroicons/react/24/outline";
 
+import AppleButton from "@/app/components/loginForm/AppleButton";
+import GoogleButton from "@/app/components/loginForm/GoogleButton";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import {
@@ -17,6 +20,7 @@ import {
   VERIFY_ACCOUNT_ROUTE,
 } from "@/app/lib/onboarding-flow";
 import {
+  clearPendingOnboardingSignup,
   readPendingOnboardingSignup,
   writePendingOnboardingSignup,
 } from "@/app/lib/auth/onboardingPendingSignup";
@@ -90,9 +94,12 @@ export default function CreateAccountStep() {
   const [loading, setLoading] = useState(false);
   const [loadingDefaults, setLoadingDefaults] = useState(true);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [oauthProviderIds, setOauthProviderIds] = useState<string[]>([]);
 
   const passwordScore = useMemo(() => scorePassword(password), [password]);
   const progressPercent = useMemo(() => getCreateAccountProgressPercent(), []);
+  const googleProviderEnabled = oauthProviderIds.includes("google");
+  const appleProviderEnabled = oauthProviderIds.includes("apple");
 
   useEffect(() => {
     let active = true;
@@ -141,6 +148,30 @@ export default function CreateAccountStep() {
     }
 
     void loadProfileDefaults();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    void getProviders()
+      .then((providers) => {
+        if (!active) return;
+
+        const nextProviders = Object.values(providers ?? {})
+          .filter((provider) => provider.id !== "credentials")
+          .map((provider) => provider.id);
+
+        setOauthProviderIds(nextProviders);
+      })
+      .catch(() => {
+        if (active) {
+          setOauthProviderIds([]);
+        }
+      });
 
     return () => {
       active = false;
@@ -316,6 +347,27 @@ export default function CreateAccountStep() {
                 Create your account so Hirexa can save your profile, keep your filters,
                 and track your best-fit jobs.
               </p>
+            </div>
+
+            <div className="my-6 flex items-center gap-3">
+              <div className="h-px flex-1 bg-slate-200" />
+              <span className="text-xs text-slate-500">Or continue with</span>
+              <div className="h-px flex-1 bg-slate-200" />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <GoogleButton
+                callbackUrl="/dashboard"
+                disabled={loading || !googleProviderEnabled}
+                onBeforeSignIn={clearPendingOnboardingSignup}
+                className="h-12"
+              />
+              <AppleButton
+                callbackUrl="/dashboard"
+                disabled={loading || !appleProviderEnabled}
+                onBeforeSignIn={clearPendingOnboardingSignup}
+                className="h-12"
+              />
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3 sm:mt-8 sm:gap-5">

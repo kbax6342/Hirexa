@@ -3,13 +3,13 @@ import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
 import { verifyRecaptchaV3 } from "../../../../lib/security/recaptcha";
 import { validatePassword, hashPassword } from "../../../../lib/security/password";
-import { generateOtp6, hashOtp } from "../../../../lib/security/otp";
 import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 import {
   classifyEmailFailure,
   normalizeEmailError,
 } from "@/app/lib/email/errorDiagnostics";
 import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
+import { issueHirexaVerificationCode } from "@/app/lib/auth/hirexaVerification";
 import { invalidateCachedProfile } from "@/app/lib/profile-cache";
 import {
   getActiveOnboardingDraftForCookies,
@@ -116,20 +116,7 @@ export async function POST(req: Request) {
       invalidateCachedProfile({ userId: null, guestId });
     }
 
-    const code = generateOtp6();
-    await prisma.emailOtp.upsert({
-      where: { email },
-      create: {
-        email,
-        codeHash: hashOtp(code),
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      },
-      update: {
-        codeHash: hashOtp(code),
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-        attempts: 0,
-      },
-    });
+    const code = await issueHirexaVerificationCode(email);
 
     try {
       await sendVerificationCodeEmail(email, code);

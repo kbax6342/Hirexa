@@ -2,14 +2,24 @@ import "server-only";
 
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Apple from "next-auth/providers/apple";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/app/lib/prisma";
+import {
+  getHirexaVerificationGateForUser,
+  issueHirexaVerificationCode,
+  normalizeAuthEmail,
+  upsertLocalUserAndProfileForSocialAuth,
+} from "@/app/lib/auth/hirexaVerification";
+import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
 import { validateSecurityEnvironment } from "@/lib/security/env";
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+const appleClientId = process.env.APPLE_CLIENT_ID?.trim();
+const appleClientSecret = process.env.APPLE_CLIENT_SECRET?.trim();
 const useSecureCookies = process.env.NODE_ENV === "production";
 
 validateSecurityEnvironment();
@@ -17,108 +27,15 @@ validateSecurityEnvironment();
 type CallbackUserWithFlags = {
   id?: string;
   isExistingUser?: boolean;
+  requiresVerification?: boolean;
 };
 
 type TokenWithFlags = {
   id?: string;
   isExistingUser?: boolean;
   questionsCompleted?: boolean;
+  requiresVerification?: boolean;
 };
-
-function normalizeEmail(value: string | null | undefined) {
-  return value?.trim().toLowerCase() || null;
-}
-
-function splitDisplayName(name: string | null | undefined) {
-  const normalized = name?.trim() || "";
-  if (!normalized) {
-    return { firstName: null, lastName: null };
-  }
-
-  const parts = normalized.split(/\s+/).filter(Boolean);
-  return {
-    firstName: parts[0] ?? null,
-    lastName: parts.slice(1).join(" ") || null,
-  };
-}
-
-async function ensureLocalUserForGoogle(params: {
-  email?: string | null;
-  name?: string | null;
-}) {
-  const email = normalizeEmail(params.email);
-  if (!email) return null;
-
-  const name = params.name?.trim() || null;
-  const { firstName, lastName } = splitDisplayName(name);
-
-  return prisma.$transaction(async (tx) => {
-    const localUser = await tx.user.upsert({
-      where: { email },
-      create: {
-        email,
-        name,
-        isGuest: false,
-        emailVerifiedAt: new Date(),
-      },
-      update: {
-        name: name ?? undefined,
-        isGuest: false,
-        emailVerifiedAt: new Date(),
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
-
-    const existingProfileByUserId = await tx.userProfile.findUnique({
-      where: { userId: localUser.id },
-      select: { id: true },
-    });
-
-    if (existingProfileByUserId) {
-      await tx.userProfile.update({
-        where: { id: existingProfileByUserId.id },
-        data: {
-          email,
-          ...(firstName ? { firstName } : {}),
-          ...(lastName ? { lastName } : {}),
-        },
-      });
-    } else {
-      const existingProfileByEmail = await tx.userProfile.findFirst({
-        where: { email },
-        select: { id: true, registrationStatus: true },
-      });
-
-      if (existingProfileByEmail) {
-        await tx.userProfile.update({
-          where: { id: existingProfileByEmail.id },
-          data: {
-            userId: localUser.id,
-            email,
-            ...(firstName ? { firstName } : {}),
-            ...(lastName ? { lastName } : {}),
-          },
-        });
-      } else {
-        await tx.userProfile.create({
-          data: {
-            userId: localUser.id,
-            email,
-            firstName,
-            lastName,
-            registrationStatus: "registered",
-          },
-        });
-      }
-    }
-
-    return localUser;
-  });
-}
 
 export const { auth, handlers, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
@@ -161,41 +78,59 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           }),
         ]
       : []),
+    ...(appleClientId && appleClientSecret
+      ? [
+          Apple({
+            clientId: appleClientId,
+            clientSecret: appleClientSecret,
+          }),
+        ]
+      : []),
   ],
 
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
 
   callbacks: {
     async signIn({ user, account }) {
-      if (account?.provider !== "google") {
+      const provider = account?.provider;
+      if (provider !== "google" && provider !== "apple") {
         return true;
       }
 
-      const email = normalizeEmail(user.email ?? null);
+      const email = normalizeAuthEmail(user.email ?? null);
       if (!email) {
         return false;
       }
 
-      const existingUser = await prisma.user.findUnique({
-        where: { email },
-        select: { id: true },
-      });
-      const wasExistingUser = Boolean(existingUser);
-
-      const localUser = await ensureLocalUserForGoogle({
+      const socialAccount = await upsertLocalUserAndProfileForSocialAuth({
         email,
         name: user.name ?? null,
       });
 
-      if (!localUser) {
+      if (!socialAccount) {
         return false;
       }
 
+      if (!socialAccount.alreadyVerified) {
+        try {
+          const code = await issueHirexaVerificationCode(email);
+          await sendVerificationCodeEmail(email, code);
+        } catch (error) {
+          console.error("[auth] failed to send verification code for social sign-in", {
+            provider,
+            email,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          return false;
+        }
+      }
+
       const callbackUser = user as typeof user & CallbackUserWithFlags;
-      callbackUser.id = localUser.id;
-      callbackUser.isExistingUser = wasExistingUser;
-      user.email = localUser.email;
-      user.name = localUser.name ?? user.name;
+      callbackUser.id = socialAccount.localUser.id;
+      callbackUser.isExistingUser = socialAccount.wasExistingUser;
+      callbackUser.requiresVerification = !socialAccount.alreadyVerified;
+      user.email = socialAccount.localUser.email;
+      user.name = socialAccount.localUser.name ?? user.name;
 
       return true;
     },
@@ -212,15 +147,40 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         } else {
           delete authToken.isExistingUser;
         }
-      } else if (authToken.id == null && token.email) {
-        const localUser = await ensureLocalUserForGoogle({
-          email: token.email,
-          name: token.name ?? null,
-        });
 
-        if (localUser) {
-          authToken.id = localUser.id;
-          token.sub = localUser.id;
+        if (typeof callbackUser.requiresVerification === "boolean") {
+          authToken.requiresVerification = callbackUser.requiresVerification;
+        } else {
+          delete authToken.requiresVerification;
+        }
+      } else if (authToken.id == null && token.email) {
+        const normalizedTokenEmail = normalizeAuthEmail(token.email);
+
+        if (normalizedTokenEmail) {
+          const localUser = await prisma.user.findUnique({
+            where: { email: normalizedTokenEmail },
+            select: { id: true },
+          });
+
+          if (localUser?.id) {
+            authToken.id = localUser.id;
+            token.sub = localUser.id;
+          }
+        }
+      }
+
+      if (authToken.id ?? token.sub) {
+        try {
+          const verification = await getHirexaVerificationGateForUser(
+            authToken.id ?? token.sub
+          );
+          authToken.requiresVerification = verification.requiresVerification;
+        } catch (error) {
+          console.error("[auth] failed to load verification gate for session token", {
+            userId: authToken.id ?? token.sub ?? null,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          authToken.requiresVerification = false;
         }
       }
 
@@ -252,6 +212,10 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
 
         if (typeof authToken.isExistingUser === "boolean") {
           sessionUser.isExistingUser = authToken.isExistingUser;
+        }
+
+        if (typeof authToken.requiresVerification === "boolean") {
+          sessionUser.requiresVerification = authToken.requiresVerification;
         }
       }
       return session;

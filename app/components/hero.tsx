@@ -10,6 +10,7 @@ import {
   CheckCircleIcon,
   MagnifyingGlassIcon,
   SparklesIcon,
+  UserCircleIcon,
 } from "@heroicons/react/24/outline";
 
 import { Button } from "../components/ui/button";
@@ -67,6 +68,7 @@ export function Hero({ href }: { href: string }) {
   const desktopPrimaryHref = isAuthed ? "/dashboard" : "/onboarding/profile";
   const mobilePrimaryLabel = isAuthed ? "Open Dashboard" : "Get Started Free";
   const desktopPrimaryLabel = isAuthed ? "Go to Dashboard" : "Get Started Free";
+  const mobileLoginHref = "/login";
 
   async function handleGetStarted(
     event: MouseEvent<HTMLAnchorElement>,
@@ -103,22 +105,37 @@ export function Hero({ href }: { href: string }) {
 
       <div className="relative mx-auto max-w-7xl px-5 sm:px-6">
         <div className="mx-auto flex min-h-[calc(100svh-4rem)] max-w-md flex-col justify-between md:hidden">
-          <div className="text-center">
-            <div className="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-sky-600 text-[10px] font-bold tracking-normal text-white">
-                H
-              </span>
-              Hirexa AI
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-100">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-sky-600 text-[10px] font-bold tracking-normal text-white">
+                  H
+                </span>
+                Hirexa AI
+              </div>
+
+              <Button
+                asChild
+                variant="outline"
+                className="h-9 rounded-full border-white/12 bg-white/[0.05] px-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-white hover:bg-white/[0.1] hover:text-white"
+              >
+                <Link href={mobileLoginHref}>
+                  <UserCircleIcon className="h-4 w-4" />
+                  Log In
+                </Link>
+              </Button>
             </div>
 
-            <h1 className="mt-4 text-balance font-heading text-[3rem] font-semibold leading-[0.94] tracking-tight text-white">
-              Find Better Jobs With AI
-            </h1>
+            <div className="mt-6 text-center">
+              <h1 className="text-balance font-heading text-[3rem] font-semibold leading-[0.94] tracking-tight text-white">
+                Find Better Jobs With AI
+              </h1>
 
-            <p className="mt-3 text-[18px] leading-7 text-slate-300">
-              Join the platform that uses advanced AI to match you with
-              opportunities tailored to your professional identity.
-            </p>
+              <p className="mt-3 text-[18px] leading-7 text-slate-300">
+                Join the platform that uses advanced AI to match you with
+                opportunities tailored to your professional identity.
+              </p>
+            </div>
           </div>
 
           <div className="mt-3 space-y-1.5">

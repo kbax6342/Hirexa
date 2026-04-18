@@ -19,6 +19,14 @@ import {
   type LocationSuggestion,
 } from "@/app/lib/locationOptions";
 import { calculateProfileStrength } from "@/app/lib/profile/profileStrength";
+import {
+  inferDeterministicProfessionalLinkLabel,
+  needsAiProfessionalLinkLabel,
+  normalizeProfessionalLinkLabelText,
+  normalizeProfessionalLinkUrl,
+  resolveProfessionalLinksForProfile,
+  type ProfessionalLink,
+} from "@/app/lib/profile/professionalLinks";
 
 type ExperienceItem = {
   id: string;
@@ -27,6 +35,11 @@ type ExperienceItem = {
   location: string;
   dateRange: string;
   bullets: string[];
+};
+
+type ProfessionalLinkFormItem = ProfessionalLink & {
+  isInferring?: boolean;
+  error?: string | null;
 };
 
 type PersonalDetailsForm = {
@@ -38,8 +51,7 @@ type PersonalDetailsForm = {
   city: string;
   state: string;
   postalCode: string;
-  linkedinUrl: string;
-  portfolioUrl: string;
+  professionalLinks: ProfessionalLinkFormItem[];
 };
 
 type PreferenceForm = {
@@ -60,11 +72,6 @@ type NewExperienceForm = {
   location: string;
   dateRange: string;
   bullets: string[];
-};
-
-type HirePilotStatus = {
-  hirePilotUnlimited: boolean;
-  hirePilotCredits: number;
 };
 
 export type ProfileApiResponse = {
@@ -116,6 +123,7 @@ export type ProfileApiResponse = {
     displayState?: string | null;
     linkedinUrl?: string | null;
     portfolioUrl?: string | null;
+    professionalLinks?: ProfessionalLink[] | null;
     authorizedUS?: string | null;
     sponsorship?: string | null;
     felony?: string | null;
@@ -162,6 +170,64 @@ type ProfileClientProps = {
   initialProfile?: ProfileApiResponse["profile"];
 };
 
+function createProfessionalLinkFormId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `profile_link_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createProfessionalLinkFormItem(
+  link?: Partial<ProfessionalLinkFormItem>
+): ProfessionalLinkFormItem {
+  return {
+    id: link?.id ?? createProfessionalLinkFormId(),
+    url: link?.url ?? "",
+    label: link?.label ?? "",
+    source: link?.source ?? "auto",
+    isInferring: false,
+    error: null,
+  };
+}
+
+function createProfessionalLinkFormItems(
+  profile: ProfileApiResponse["profile"]
+): ProfessionalLinkFormItem[] {
+  return resolveProfessionalLinksForProfile({
+    professionalLinks: profile?.professionalLinks,
+    linkedinUrl: profile?.linkedinUrl,
+    portfolioUrl: profile?.portfolioUrl,
+  }).map((link) => createProfessionalLinkFormItem(link));
+}
+
+function stripProfessionalLinkUiState(
+  link: ProfessionalLinkFormItem
+): ProfessionalLink {
+  return {
+    id: link.id,
+    url: link.url,
+    label: link.label,
+    source: link.source,
+  };
+}
+
+function createPersonalDetailsForm(
+  profile: ProfileApiResponse["profile"]
+): PersonalDetailsForm {
+  return {
+    firstName: profile?.firstName ?? "",
+    lastName: profile?.lastName ?? "",
+    email: profile?.email ?? "",
+    phone: profile?.phone ?? "",
+    address: profile?.displayAddress ?? profile?.address ?? "",
+    city: profile?.displayCity ?? profile?.city ?? "",
+    state: profile?.displayState ?? profile?.state ?? "",
+    postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
+    professionalLinks: createProfessionalLinkFormItems(profile),
+  };
+}
+
 // ✅ Change your accent text color to sky-500
 const NON_DB_TEXT_CLASS = "text-sky-500";
 
@@ -196,35 +262,21 @@ const PROFILE_SECTIONS = [
   { id: "education", label: "Education" },
   { id: "experience", label: "Experience" },
   { id: "skills", label: "Skills" },
-  { id: "settings", label: "Settings" },
   { id: "job-preferences", label: "Job Preferences" },
-  { id: "notifications", label: "Notifications" },
-  { id: "privacy-security", label: "Privacy & Security" },
   { id: "ai-profile-sync", label: "AI Profile Sync" },
 ] as const;
 
+const PROFESSIONAL_LINK_PLACEHOLDERS = [
+  "https://www.linkedin.com/in/your-name",
+  "https://github.com/your-name",
+  "https://yourportfolio.com",
+];
+
 type ProfileSectionId = (typeof PROFILE_SECTIONS)[number]["id"];
-
-function formatProfileDate(value?: string | null, options?: { includeTime?: boolean }) {
-  if (!value) return "Not found";
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    ...(options?.includeTime
-      ? {
-          hour: "numeric" as const,
-          minute: "2-digit" as const,
-        }
-      : {}),
-  }).format(parsed);
-}
+type PersonalEditorSectionId = Extract<
+  ProfileSectionId,
+  "personal-info" | "professional-links"
+>;
 
 export default function ProfileClient({
   initialProfile,
@@ -236,7 +288,6 @@ export default function ProfileClient({
   const [profile, setProfile] = useState<ProfileApiResponse["profile"]>(
     initialProfile ?? null
   );
-  const [hirePilotStatus, setHirePilotStatus] = useState<HirePilotStatus | null>(null);
 
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
@@ -245,8 +296,8 @@ export default function ProfileClient({
 
   const [showPreferenceEditor, setShowPreferenceEditor] = useState(false);
 
-  // ✅ Personal details edit mode
-  const [isEditingPersonal, setIsEditingPersonal] = useState(false);
+  const [editingPersonalSection, setEditingPersonalSection] =
+    useState<PersonalEditorSectionId | null>(null);
   const [savingPersonalDetails, setSavingPersonalDetails] = useState(false);
 
   const [personalDetailsForm, setPersonalDetailsForm] = useState<PersonalDetailsForm>({
@@ -258,8 +309,7 @@ export default function ProfileClient({
     city: "",
     state: "",
     postalCode: "",
-    linkedinUrl: "",
-    portfolioUrl: "",
+    professionalLinks: [],
   });
 
   const [savingPreferences, setSavingPreferences] = useState(false);
@@ -279,8 +329,12 @@ export default function ProfileClient({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
-  const personalDetailsCardRef = useRef<HTMLDivElement | null>(null);
+  const personalDetailsCardRef = useRef<HTMLElement | null>(null);
+  const professionalLinkLabelCacheRef = useRef(new Map<string, string>());
   const [activeSection, setActiveSection] = useState<ProfileSectionId>("personal-info");
+  const isEditingPersonal = editingPersonalSection === "personal-info";
+  const isEditingProfessionalLinks =
+    editingPersonalSection === "professional-links";
 
   // ✅ show all experiences toggle
   const [showAllExperiences, setShowAllExperiences] = useState(false);
@@ -297,27 +351,299 @@ export default function ProfileClient({
     bullets: [""],
   });
 
-  const loadHirePilotStatus = useCallback(async () => {
-    const hirePilotRes = await fetch("/api/user/hirepilot-status", {
-      cache: "no-store",
-    });
+  const inferProfessionalLinkMetadata = useCallback(async (inputUrl: string) => {
+    const normalizedUrl = normalizeProfessionalLinkUrl(inputUrl);
+    if (!normalizedUrl) {
+      throw new Error("Enter a valid URL.");
+    }
 
-    if (hirePilotRes.ok) {
-      const hirePilotData = await readJsonResponse<HirePilotStatus>(hirePilotRes);
-      setHirePilotStatus(
-        hirePilotData ?? {
-          hirePilotUnlimited: false,
-          hirePilotCredits: 0,
+    const cachedLabel = professionalLinkLabelCacheRef.current.get(normalizedUrl);
+    if (cachedLabel) {
+      return { normalizedUrl, label: cachedLabel };
+    }
+
+    let resolvedUrl = normalizedUrl;
+    let label = inferDeterministicProfessionalLinkLabel(normalizedUrl);
+
+    if (needsAiProfessionalLinkLabel(normalizedUrl)) {
+      try {
+        const res = await fetch("/api/profile/professional-links/infer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: normalizedUrl }),
+        });
+        const data = await readJsonResponse<{
+          ok?: boolean;
+          error?: string;
+          label?: string;
+          normalizedUrl?: string;
+        }>(res);
+
+        if (res.ok) {
+          resolvedUrl =
+            normalizeProfessionalLinkUrl(data?.normalizedUrl ?? normalizedUrl) ||
+            normalizedUrl;
+          label =
+            normalizeProfessionalLinkLabelText(data?.label) ||
+            label ||
+            inferDeterministicProfessionalLinkLabel(resolvedUrl);
         }
-      );
+      } catch {
+        // The UI falls back to deterministic labels if inference is unavailable.
+      }
+    }
+
+    const resolvedLabel =
+      label || inferDeterministicProfessionalLinkLabel(resolvedUrl) || "Personal Website";
+    professionalLinkLabelCacheRef.current.set(resolvedUrl, resolvedLabel);
+
+    return {
+      normalizedUrl: resolvedUrl,
+      label: resolvedLabel,
+    };
+  }, []);
+
+  function addProfessionalLink() {
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: [...prev.professionalLinks, createProfessionalLinkFormItem()],
+    }));
+    setError(null);
+  }
+
+  function removeProfessionalLink(linkId: string) {
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: prev.professionalLinks.filter((link) => link.id !== linkId),
+    }));
+    setError(null);
+  }
+
+  function updateProfessionalLinkUrl(linkId: string, value: string) {
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: prev.professionalLinks.map((link) =>
+        link.id === linkId
+          ? {
+              ...link,
+              url: value,
+              error: null,
+              isInferring: false,
+            }
+          : link
+      ),
+    }));
+    setError(null);
+  }
+
+  function updateProfessionalLinkLabel(linkId: string, value: string) {
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: prev.professionalLinks.map((link) =>
+        link.id === linkId
+          ? {
+              ...link,
+              label: value,
+              source: normalizeProfessionalLinkLabelText(value) ? "custom" : "auto",
+              error: null,
+            }
+          : link
+      ),
+    }));
+    setError(null);
+  }
+
+  async function finalizeProfessionalLink(linkId: string) {
+    const currentLink = personalDetailsForm.professionalLinks.find((link) => link.id === linkId);
+    if (!currentLink) return;
+
+    const rawUrl = currentLink.url.trim();
+    if (!rawUrl) {
+      setPersonalDetailsForm((prev) => ({
+        ...prev,
+        professionalLinks: prev.professionalLinks.map((link) =>
+          link.id === linkId
+            ? {
+                ...link,
+                error: null,
+                isInferring: false,
+              }
+            : link
+        ),
+      }));
       return;
     }
 
-    setHirePilotStatus({
-      hirePilotUnlimited: false,
-      hirePilotCredits: 0,
+    const normalizedUrl = normalizeProfessionalLinkUrl(rawUrl);
+    if (!normalizedUrl) {
+      setPersonalDetailsForm((prev) => ({
+        ...prev,
+        professionalLinks: prev.professionalLinks.map((link) =>
+          link.id === linkId
+            ? {
+                ...link,
+                error: "Enter a valid URL.",
+                isInferring: false,
+              }
+            : link
+        ),
+      }));
+      return;
+    }
+
+    const isDuplicate = personalDetailsForm.professionalLinks.some((link) => {
+      if (link.id === linkId) return false;
+      const linkUrl = normalizeProfessionalLinkUrl(link.url);
+      return linkUrl && linkUrl.toLowerCase() === normalizedUrl.toLowerCase();
     });
-  }, []);
+
+    if (isDuplicate) {
+      setPersonalDetailsForm((prev) => ({
+        ...prev,
+        professionalLinks: prev.professionalLinks.map((link) =>
+          link.id === linkId
+            ? {
+                ...link,
+                url: normalizedUrl,
+                error: "This link is already added.",
+                isInferring: false,
+              }
+            : link
+        ),
+      }));
+      return;
+    }
+
+    const shouldAutoLabel =
+      !normalizeProfessionalLinkLabelText(currentLink.label) ||
+      currentLink.source !== "custom";
+
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: prev.professionalLinks.map((link) =>
+        link.id === linkId
+          ? {
+              ...link,
+              url: normalizedUrl,
+              error: null,
+              isInferring: shouldAutoLabel && needsAiProfessionalLinkLabel(normalizedUrl),
+            }
+          : link
+      ),
+    }));
+
+    if (!shouldAutoLabel) {
+      return;
+    }
+
+    try {
+      const resolved = await inferProfessionalLinkMetadata(normalizedUrl);
+
+      setPersonalDetailsForm((prev) => ({
+        ...prev,
+        professionalLinks: prev.professionalLinks.map((link) => {
+          if (link.id !== linkId) return link;
+
+          const manualLabel = normalizeProfessionalLinkLabelText(link.label);
+          const keepCustom = link.source === "custom" && manualLabel;
+
+          return {
+            ...link,
+            url: resolved.normalizedUrl,
+            label: keepCustom ? manualLabel : resolved.label,
+            source: keepCustom ? "custom" : "auto",
+            error: null,
+            isInferring: false,
+          };
+        }),
+      }));
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Unable to generate a link label right now.";
+
+      setPersonalDetailsForm((prev) => ({
+        ...prev,
+        professionalLinks: prev.professionalLinks.map((link) =>
+          link.id === linkId
+            ? {
+                ...link,
+                url: normalizedUrl,
+                error: message,
+                isInferring: false,
+              }
+            : link
+        ),
+      }));
+    }
+  }
+
+  async function prepareProfessionalLinksForSave() {
+    const nextLinks: ProfessionalLinkFormItem[] = [];
+    const seen = new Set<string>();
+    let hasErrors = false;
+
+    for (const link of personalDetailsForm.professionalLinks) {
+      const rawUrl = link.url.trim();
+      const manualLabel = normalizeProfessionalLinkLabelText(link.label);
+
+      if (!rawUrl && !manualLabel) {
+        continue;
+      }
+
+      const normalizedUrl = normalizeProfessionalLinkUrl(rawUrl);
+      if (!normalizedUrl) {
+        hasErrors = true;
+        nextLinks.push({
+          ...link,
+          error: "Enter a valid URL.",
+          isInferring: false,
+        });
+        continue;
+      }
+
+      const dedupeKey = normalizedUrl.toLowerCase();
+      if (seen.has(dedupeKey)) {
+        hasErrors = true;
+        nextLinks.push({
+          ...link,
+          url: normalizedUrl,
+          error: "This link is already added.",
+          isInferring: false,
+        });
+        continue;
+      }
+
+      seen.add(dedupeKey);
+
+      const keepCustom = link.source === "custom" && manualLabel;
+      const resolved = keepCustom
+        ? {
+            normalizedUrl,
+            label: manualLabel,
+          }
+        : await inferProfessionalLinkMetadata(normalizedUrl);
+
+      nextLinks.push({
+        ...link,
+        url: resolved.normalizedUrl,
+        label: keepCustom ? manualLabel : resolved.label,
+        source: keepCustom ? "custom" : "auto",
+        error: null,
+        isInferring: false,
+      });
+    }
+
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      professionalLinks: nextLinks,
+    }));
+
+    if (hasErrors) {
+      return null;
+    }
+
+    return nextLinks.map(stripProfessionalLinkUiState);
+  }
 
   const loadProfile = useCallback(async () => {
     try {
@@ -347,41 +673,24 @@ export default function ProfileClient({
       }
 
       setProfile(data?.profile ?? null);
-      await loadHirePilotStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load profile");
     } finally {
       setLoading(false);
     }
-  }, [loadHirePilotStatus]);
+  }, []);
 
   useEffect(() => {
     if (hasInitialProfile) return;
     void loadProfile();
   }, [hasInitialProfile, loadProfile]);
 
-  useEffect(() => {
-    if (!hasInitialProfile) return;
-    void loadHirePilotStatus();
-  }, [hasInitialProfile, loadHirePilotStatus]);
-
   // keep form synced from DB, but don't clobber while editing
   useEffect(() => {
-    if (isEditingPersonal) return;
+    if (editingPersonalSection) return;
 
-    setPersonalDetailsForm({
-      firstName: profile?.firstName ?? "",
-      lastName: profile?.lastName ?? "",
-      email: profile?.email ?? "",
-      phone: profile?.phone ?? "",
-      address: profile?.displayAddress ?? profile?.address ?? "",
-      city: profile?.displayCity ?? profile?.city ?? "",
-      state: profile?.displayState ?? profile?.state ?? "",
-      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
-      linkedinUrl: profile?.linkedinUrl ?? "",
-      portfolioUrl: profile?.portfolioUrl ?? "",
-    });
-  }, [profile, isEditingPersonal]);
+    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+  }, [editingPersonalSection, profile]);
 
   const displayPersonalDetails = useMemo(
     () => ({
@@ -403,6 +712,16 @@ export default function ProfileClient({
     ]
   );
 
+  const professionalLinks = useMemo(
+    () =>
+      resolveProfessionalLinksForProfile({
+        professionalLinks: profile?.professionalLinks,
+        linkedinUrl: profile?.linkedinUrl,
+        portfolioUrl: profile?.portfolioUrl,
+      }),
+    [profile?.linkedinUrl, profile?.portfolioUrl, profile?.professionalLinks]
+  );
+
   useEffect(() => {
     if (process.env.NODE_ENV !== "production" && profile) {
       console.log("[profile page] render values", {
@@ -417,30 +736,6 @@ export default function ProfileClient({
 
   const name =
     [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || "Not provided in database";
-
-  const subscriptionSummary = useMemo(
-    () => ({
-      email: profile?.subscriptionEmail ?? profile?.email ?? "Not found",
-      isSubscribed: Boolean(profile?.trialSubscriber || profile?.monthlySubscriber || profile?.yearlySubscriber)
-        ? "Yes"
-        : "No",
-      planStatus: profile?.trialPlanStatus ?? profile?.monthlyPlanStatus ?? profile?.yearlyPlanStatus ?? "none",
-      purchasedAt: formatProfileDate(profile?.subscriptionPurchasedAt),
-      checkedAt: formatProfileDate(profile?.subscriptionCheckedAt),
-    }),
-    [
-      profile?.email,
-      profile?.monthlyPlanStatus,
-      profile?.monthlySubscriber,
-      profile?.subscriptionCheckedAt,
-      profile?.subscriptionEmail,
-      profile?.subscriptionPurchasedAt,
-      profile?.trialPlanStatus,
-      profile?.trialSubscriber,
-      profile?.yearlyPlanStatus,
-      profile?.yearlySubscriber,
-    ]
-  );
 
   const formattedMinCompensation = useMemo(() => {
     const type: CompensationType =
@@ -462,17 +757,6 @@ export default function ProfileClient({
   }, [profile]);
 
   const recentExperience = useMemo(() => experience.slice(0, 4), [experience]);
-  const hirexaBillingActive = useMemo(
-    () => isActiveBillingStatus(subscriptionSummary.planStatus),
-    [subscriptionSummary.planStatus]
-  );
-  const hirepilotBillingActive = useMemo(
-    () =>
-      Boolean(
-        hirePilotStatus?.hirePilotUnlimited || (hirePilotStatus?.hirePilotCredits ?? 0) > 0
-      ),
-    [hirePilotStatus?.hirePilotCredits, hirePilotStatus?.hirePilotUnlimited]
-  );
 
   // ✅ decide what to render in the list
   const visibleExperience = useMemo(() => {
@@ -553,12 +837,6 @@ export default function ProfileClient({
     () => profileStrength.combinedSkills,
     [profileStrength.combinedSkills]
   );
-  const newsletterStatus = profile?.unsubscribedAt
-    ? "Unsubscribed"
-    : profile?.newsletterOptIn
-      ? "Subscribed"
-      : "Not subscribed";
-  const securityStatus = profile?.emailVerifiedAt ? "Verified" : "Pending";
 
   useEffect(() => {
     const sections = PROFILE_SECTIONS.map((section) =>
@@ -612,9 +890,9 @@ export default function ProfileClient({
     personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function openPersonalDetailsEditor() {
-    startEditPersonal();
-    personalDetailsCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function openProfessionalLinksEditor() {
+    startEditProfessionalLinks();
+    scrollToSection("professional-links");
   }
 
   function scrollToSection(sectionId: ProfileSectionId) {
@@ -630,11 +908,26 @@ export default function ProfileClient({
     try {
       setSavingPersonalDetails(true);
       setError(null);
+      const professionalLinksForSave = await prepareProfessionalLinksForSave();
+      if (!professionalLinksForSave) {
+        setError("Fix the link errors before saving.");
+        return;
+      }
 
       const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(personalDetailsForm),
+        body: JSON.stringify({
+          firstName: personalDetailsForm.firstName,
+          lastName: personalDetailsForm.lastName,
+          email: personalDetailsForm.email,
+          phone: personalDetailsForm.phone,
+          address: personalDetailsForm.address,
+          city: personalDetailsForm.city,
+          state: personalDetailsForm.state,
+          postalCode: personalDetailsForm.postalCode,
+          professionalLinks: professionalLinksForSave,
+        }),
       });
 
       const data = await readJsonResponse<{
@@ -648,10 +941,11 @@ export default function ProfileClient({
       }
 
       if (data?.profile) {
-        setProfile(data.profile);
+        const nextProfile = data.profile;
+        setProfile((prev) => (prev ? { ...prev, ...nextProfile } : nextProfile));
       }
 
-      setIsEditingPersonal(false);
+      setEditingPersonalSection(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save personal details.");
     } finally {
@@ -1049,19 +1343,18 @@ export default function ProfileClient({
   }
 
   function startEditPersonal() {
-    setPersonalDetailsForm({
-      firstName: profile?.firstName ?? "",
-      lastName: profile?.lastName ?? "",
-      email: profile?.email ?? "",
-      phone: profile?.phone ?? "",
-      address: profile?.displayAddress ?? profile?.address ?? "",
-      city: profile?.displayCity ?? profile?.city ?? "",
-      state: profile?.displayState ?? profile?.state ?? "",
-      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
-      linkedinUrl: profile?.linkedinUrl ?? "",
-      portfolioUrl: profile?.portfolioUrl ?? "",
-    });
-    setIsEditingPersonal(true);
+    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+    setEditingPersonalSection("personal-info");
+  }
+
+  function startEditProfessionalLinks() {
+    const nextForm = createPersonalDetailsForm(profile);
+    if (!nextForm.professionalLinks.length) {
+      nextForm.professionalLinks = [createProfessionalLinkFormItem()];
+    }
+
+    setPersonalDetailsForm(nextForm);
+    setEditingPersonalSection("professional-links");
   }
 
 // ✅ Replace your ToggleField with this version (fixes the thumb alignment + looks like a real switch)
@@ -1117,20 +1410,989 @@ function ToggleField({
 }
 
   function cancelEditPersonal() {
-    setIsEditingPersonal(false);
+    setEditingPersonalSection(null);
     setError(null);
-    setPersonalDetailsForm({
-      firstName: profile?.firstName ?? "",
-      lastName: profile?.lastName ?? "",
-      email: profile?.email ?? "",
-      phone: profile?.phone ?? "",
-      address: profile?.displayAddress ?? profile?.address ?? "",
-      city: profile?.displayCity ?? profile?.city ?? "",
-      state: profile?.displayState ?? profile?.state ?? "",
-      postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
-      linkedinUrl: profile?.linkedinUrl ?? "",
-      portfolioUrl: profile?.portfolioUrl ?? "",
-    });
+    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+  }
+
+  function renderProfileSectionContent(sectionId: ProfileSectionId) {
+    switch (sectionId) {
+      case "personal-info":
+        return (
+          <Card className="p-6">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <div className="text-black text-md mb-2">Personal Info</div>
+                <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
+                  {profile?.profileImageUrl ? (
+                    <Image
+                      src={profile.profileImageUrl}
+                      alt="Profile"
+                      width={64}
+                      height={64}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-sm font-bold text-indigo-950">
+                      {name.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1" />
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingPhoto}
+                className={`${SKY_BTN_SOFT} inline-flex items-center gap-2`}
+              >
+                <ArrowUpTrayIcon className="h-4 w-4" />
+                {uploadingPhoto ? "Uploading…" : "Upload Photo"}
+              </button>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoChange}
+              />
+            </div>
+
+            <div className="mt-6 flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-900">
+                Personal details
+              </div>
+
+              {!isEditingPersonal ? (
+                <button
+                  type="button"
+                  onClick={startEditPersonal}
+                  className={SKY_BTN_SOFT_SM}
+                >
+                  <PencilSquareIcon className="h-4 w-4" />
+                  Edit
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={cancelEditPersonal}
+                  className={SKY_BTN_MUTED}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+            {!isEditingPersonal ? (
+              <div className="mt-4 space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FieldRow
+                    label="First name"
+                    value={profile?.firstName ?? "Not provided in database"}
+                  />
+                  <FieldRow
+                    label="Last name"
+                    value={profile?.lastName ?? "Not provided in database"}
+                  />
+                </div>
+
+                <div className="grid gap-3">
+                  <FieldRow
+                    label="Email"
+                    value={profile?.email ?? "Not provided in database"}
+                  />
+                  <FieldRow
+                    label="Phone number"
+                    value={profile?.phone ?? "Not provided in database"}
+                  />
+                  <FieldRow label="Address" value={displayPersonalDetails.address} />
+                  <FieldRow label="City" value={displayPersonalDetails.city} />
+                  <FieldRow label="State" value={displayPersonalDetails.state} />
+                  <FieldRow
+                    label="Postal code"
+                    value={displayPersonalDetails.postalCode}
+                  />
+                </div>
+
+                {loading ? (
+                  <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>
+                    Loading profile from database…
+                  </p>
+                ) : null}
+                {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+              </div>
+            ) : (
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField
+                    label="First name"
+                    value={personalDetailsForm.firstName}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({
+                        ...prev,
+                        firstName: value,
+                      }))
+                    }
+                  />
+                  <TextField
+                    label="Last name"
+                    value={personalDetailsForm.lastName}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, lastName: value }))
+                    }
+                  />
+                </div>
+
+                <div className="grid gap-3">
+                  <TextField
+                    label="Email"
+                    value={personalDetailsForm.email}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, email: value }))
+                    }
+                  />
+                  <TextField
+                    label="Phone number"
+                    value={personalDetailsForm.phone}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, phone: value }))
+                    }
+                  />
+                  <TextField
+                    label="Address"
+                    value={personalDetailsForm.address}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, address: value }))
+                    }
+                  />
+                  <TextField
+                    label="City"
+                    value={personalDetailsForm.city}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, city: value }))
+                    }
+                  />
+                  <TextField
+                    label="State"
+                    value={personalDetailsForm.state}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({ ...prev, state: value }))
+                    }
+                  />
+                  <TextField
+                    label="Postal code"
+                    value={personalDetailsForm.postalCode}
+                    onChange={(value) =>
+                      setPersonalDetailsForm((prev) => ({
+                        ...prev,
+                        postalCode: value,
+                      }))
+                    }
+                  />
+                </div>
+
+                {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+
+                <button
+                  type="button"
+                  onClick={() => void savePersonalDetails()}
+                  disabled={savingPersonalDetails}
+                  className={`${SKY_BTN_PRIMARY} w-full`}
+                >
+                  {savingPersonalDetails ? "Saving changes..." : "Save changes"}
+                </button>
+              </div>
+            )}
+          </Card>
+        );
+      case "professional-links":
+        return (
+          <Card className="p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">
+                  Professional Links
+                </div>
+                <p className="mt-2 text-sm text-slate-600">
+                  Add the links recruiters and application flows are most likely
+                  to use.
+                </p>
+              </div>
+              {!isEditingProfessionalLinks ? (
+                <button
+                  type="button"
+                  onClick={openProfessionalLinksEditor}
+                  className={SKY_BTN_SOFT_SM}
+                >
+                  <PencilSquareIcon className="h-4 w-4" />
+                  Edit links
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={cancelEditPersonal}
+                  className={SKY_BTN_MUTED}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+            {!isEditingProfessionalLinks ? (
+              <>
+                {professionalLinks.length ? (
+                  <div className="mt-4 grid gap-3">
+                    {professionalLinks.map((link) => (
+                      <div
+                        key={link.id}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-slate-600">
+                              {link.label}
+                            </div>
+                            <a
+                              href={link.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1 block truncate text-sm font-semibold text-slate-900 transition-colors hover:text-sky-600"
+                            >
+                              {link.url}
+                            </a>
+                          </div>
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                            {link.source === "custom" ? "Custom" : "Auto"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
+                    <div className="text-sm font-semibold text-slate-900">
+                      No links added yet.
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      Start with the links recruiters are most likely to open first.
+                    </p>
+                    <div className="mt-3 space-y-1 text-xs text-slate-500">
+                      {PROFESSIONAL_LINK_PLACEHOLDERS.map((placeholder) => (
+                        <div key={placeholder}>{placeholder}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="mt-4 space-y-4">
+                {personalDetailsForm.professionalLinks.length ? (
+                  <div className="space-y-3">
+                    {personalDetailsForm.professionalLinks.map((link, index) => (
+                      <div
+                        key={link.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-4"
+                      >
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto] lg:items-end">
+                          <TextField
+                            label="Label"
+                            value={link.label}
+                            onChange={(value) =>
+                              updateProfessionalLinkLabel(link.id, value)
+                            }
+                          />
+
+                          <label className="flex flex-col gap-1">
+                            <span className="text-xs font-semibold text-slate-700">
+                              URL
+                            </span>
+                            <input
+                              value={link.url}
+                              onChange={(event) =>
+                                updateProfessionalLinkUrl(link.id, event.target.value)
+                              }
+                              onBlur={() => void finalizeProfessionalLink(link.id)}
+                              onPaste={() => {
+                                window.setTimeout(() => {
+                                  void finalizeProfessionalLink(link.id);
+                                }, 0);
+                              }}
+                              placeholder={
+                                PROFESSIONAL_LINK_PLACEHOLDERS[
+                                  index % PROFESSIONAL_LINK_PLACEHOLDERS.length
+                                ]
+                              }
+                              className={[
+                                "rounded-xl border bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-200",
+                                link.error
+                                  ? "border-red-300 focus:border-red-400"
+                                  : "border-slate-300 focus:border-sky-400",
+                              ].join(" ")}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => removeProfessionalLink(link.id)}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-100 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-200"
+                          >
+                            <TrashIcon className="h-4 w-4" />
+                            Remove
+                          </button>
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                          <p
+                            className={[
+                              "text-xs",
+                              link.error
+                                ? "text-red-600"
+                                : link.isInferring
+                                  ? "text-slate-500"
+                                  : "text-slate-500",
+                            ].join(" ")}
+                          >
+                            {link.error
+                              ? link.error
+                              : link.isInferring
+                                ? "Generating a label..."
+                                : link.source === "custom"
+                                  ? "Custom label"
+                                  : "Label auto-fills from the link when possible."}
+                          </p>
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                            {link.source === "custom" ? "Custom" : "Auto"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Add the links recruiters and application flows are most likely
+                      to use.
+                    </div>
+                    <div className="mt-3 space-y-1 text-xs text-slate-500">
+                      {PROFESSIONAL_LINK_PLACEHOLDERS.map((placeholder) => (
+                        <div key={placeholder}>{placeholder}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={addProfessionalLink}
+                  className={`${SKY_BTN_MUTED} w-full justify-center`}
+                >
+                  Add link
+                </button>
+
+                {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+                <button
+                  type="button"
+                  onClick={() => void savePersonalDetails()}
+                  disabled={savingPersonalDetails}
+                  className={`${SKY_BTN_PRIMARY} w-full`}
+                >
+                  {savingPersonalDetails ? "Saving links..." : "Save links"}
+                </button>
+              </div>
+            )}
+          </Card>
+        );
+      case "education":
+        return (
+          <Card className="p-6">
+            <div className="text-sm font-semibold text-slate-900">Education</div>
+            <p className="mt-2 text-sm text-slate-600">
+              School history, certifications, and training can live here as profile
+              editing expands.
+            </p>
+
+            <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">
+                Standalone education editing is not connected yet.
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                For now, uploading your latest resume is the best way to keep
+                education and certifications attached to your profile during
+                generation and autofill workflows.
+              </p>
+              <button
+                type="button"
+                onClick={() => resumeInputRef.current?.click()}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                <ArrowUpTrayIcon className="h-4 w-4" />
+                Upload resume
+              </button>
+            </div>
+          </Card>
+        );
+      case "experience":
+        return (
+          <Card className="p-6">
+            <div className="flex-col items-start justify-between gap-4">
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-md font-semibold text-slate-700">Resume:</div>
+                  <button
+                    type="button"
+                    onClick={() => resumeInputRef.current?.click()}
+                    disabled={uploadingResume}
+                    className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
+                  >
+                    <ArrowUpTrayIcon className="h-4 w-4" />
+                    {uploadingResume ? "Uploading…" : "Upload resume"}
+                  </button>
+                  <input
+                    ref={resumeInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    onChange={handleResumeChange}
+                  />
+                </div>
+                {profile?.resume ? (
+                  <div className="mt-2 space-y-1 text-sm text-slate-700">
+                    <p>
+                      <span className="font-semibold">File:</span>{" "}
+                      {profile.resume.filename}
+                    </p>
+                    <p>
+                      <span className="font-semibold">Type:</span>{" "}
+                      {profile.resume.mimeType}
+                    </p>
+                  </div>
+                ) : (
+                  <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+                    No resume record found in database.
+                  </p>
+                )}
+                {resumeUploadSuccess ? (
+                  <p className="mt-2 text-xs text-sky-500">{resumeUploadSuccess}</p>
+                ) : null}
+                {resumeUploadError ? (
+                  <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p>
+                ) : null}
+              </div>
+
+              <div className="mt-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-md font-semibold text-slate-700">
+                    Experience:{" "}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={startAddExperience}
+                    className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
+                  >
+                    + Add experience
+                  </button>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {isAddingExperience ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <TextField
+                          label="Job title"
+                          value={newExperienceForm.title}
+                          onChange={(value) =>
+                            updateNewExperienceField("title", value)
+                          }
+                        />
+                        <TextField
+                          label="Company"
+                          value={newExperienceForm.company}
+                          onChange={(value) =>
+                            updateNewExperienceField("company", value)
+                          }
+                        />
+                        <TextField
+                          label="Location"
+                          value={newExperienceForm.location}
+                          onChange={(value) =>
+                            updateNewExperienceField("location", value)
+                          }
+                        />
+                        <TextField
+                          label="Date range"
+                          value={newExperienceForm.dateRange}
+                          onChange={(value) =>
+                            updateNewExperienceField("dateRange", value)
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-4 space-y-2">
+                        <div className="text-xs font-semibold text-slate-700">
+                          Highlights
+                        </div>
+                        {newExperienceForm.bullets.map((bullet, index) => (
+                          <div key={`new-bullet-${index}`} className="space-y-1">
+                            <textarea
+                              value={bullet}
+                              onChange={(event) =>
+                                updateNewExperienceBullet(index, event.target.value)
+                              }
+                              rows={2}
+                              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
+                              placeholder="Add a responsibility or accomplishment"
+                            />
+                            {newExperienceForm.bullets.length > 1 ? (
+                              <button
+                                type="button"
+                                className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                onClick={() => removeNewExperienceBullet(index)}
+                              >
+                                Remove bullet
+                              </button>
+                            ) : null}
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={addNewExperienceBullet}
+                          className="text-xs font-semibold text-sky-600 hover:text-sky-700"
+                        >
+                          + Add bullet
+                        </button>
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void saveNewExperience()}
+                          disabled={addingExperience}
+                          className={SKY_BTN_SOFT_SM}
+                        >
+                          {addingExperience ? "Saving..." : "Save experience"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsAddingExperience(false);
+                            resetNewExperienceForm();
+                          }}
+                          className={SKY_BTN_MUTED}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {experience.length > 4 && !showAllExperiences ? (
+                    <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>
+                      Showing the 4 most recent experience records.
+                    </p>
+                  ) : null}
+
+                  {visibleExperience.length === 0 ? (
+                    <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>
+                      No experience rows found in database.
+                    </p>
+                  ) : null}
+
+                  {visibleExperience.map((exp) => {
+                    const open = !!expandedExp[exp.id];
+                    const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
+                    const showToggle = exp.bullets.length > 2;
+                    const isEditing = editingExperienceId === exp.id;
+
+                    return (
+                      <div
+                        key={exp.id}
+                        className="rounded-2xl border border-slate-200 bg-white p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <div className="text-sm font-semibold text-slate-900">
+                                {exp.title}
+                              </div>
+                              <span className="text-sm text-slate-300">|</span>
+                              <div className="text-sm font-semibold text-slate-700">
+                                {exp.company}
+                              </div>
+                            </div>
+
+                            <div className="mt-1 text-xs text-slate-500">
+                              {exp.location} • {exp.dateRange}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              aria-label="Edit experience"
+                              className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
+                              onClick={() => startEditExperience(exp)}
+                            >
+                              <PencilSquareIcon className="h-5 w-5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              aria-label="Delete experience"
+                              className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
+                              onClick={() => removeFromList(exp.id)}
+                            >
+                              <TrashIcon className="h-5 w-5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isEditing ? (
+                          <div className="mt-3 space-y-2">
+                            {editingBullets.map((bullet, index) => (
+                              <div key={`${exp.id}-edit-${index}`} className="space-y-1">
+                                <textarea
+                                  value={bullet}
+                                  onChange={(event) =>
+                                    updateEditingBullet(index, event.target.value)
+                                  }
+                                  rows={2}
+                                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
+                                  placeholder="Enter bullet"
+                                />
+                                {editingBullets.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                                    onClick={() => removeEditingBullet(index)}
+                                  >
+                                    Remove bullet
+                                  </button>
+                                ) : null}
+                              </div>
+                            ))}
+
+                            <button
+                              type="button"
+                              onClick={addEditingBullet}
+                              className="text-xs font-semibold text-sky-600 hover:text-sky-700"
+                            >
+                              + Add bullet
+                            </button>
+
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={saveExperienceBullets}
+                                disabled={savingExperience}
+                                className={SKY_BTN_SOFT_SM}
+                              >
+                                {savingExperience ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEditExperience}
+                                className={SKY_BTN_MUTED}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                            {bullets.map((b, i) => (
+                              <li key={i}>{b}</li>
+                            ))}
+                          </ul>
+                        )}
+
+                        {showToggle && !isEditing ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleExp(exp.id)}
+                            className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-sky-500 hover:text-sky-600"
+                          >
+                            {open ? "Show less" : "Show more"}
+                            {open ? (
+                              <ChevronUpIcon className="h-4 w-4" />
+                            ) : (
+                              <ChevronDownIcon className="h-4 w-4" />
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
+                  {experience.length > 4 ? (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllExperiences((prev) => !prev)}
+                        className="w-full rounded-2xl bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
+                      >
+                        {showAllExperiences
+                          ? "Show less"
+                          : `Show more (${experience.length - 4} more)`}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </Card>
+        );
+      case "skills":
+        return (
+          <Card className="p-6">
+            <div className="text-sm font-semibold text-slate-900">Skills</div>
+            <p className="mt-2 text-sm text-slate-600">
+              Hirexa uses saved skills from onboarding and resume parsing to
+              personalize matching and AI output.
+            </p>
+
+            {combinedSkills.length ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {combinedSkills.map((skill) => (
+                  <span
+                    key={skill}
+                    className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>
+                No skills found yet. Upload a resume or complete onboarding to
+                populate your skill profile.
+              </p>
+            )}
+
+            <p className="mt-3 text-xs text-slate-500">
+              {combinedSkills.length
+                ? `${combinedSkills.length} skill${combinedSkills.length === 1 ? "" : "s"} currently available across your saved profile and resume data.`
+                : "Adding at least 3 skills will improve your profile strength and job matching."}
+            </p>
+          </Card>
+        );
+      case "job-preferences":
+        return (
+          <Card className="p-6">
+            <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>
+              Job-matching signals
+            </div>
+            <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
+              Add more details (roles, locations, salary, availability) to boost
+              match quality.
+            </p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <FieldRow label="Target role" value={savedTargetRole} />
+              <FieldRow
+                label="Smart Matches default location"
+                value={savedSmartMatchesLocation}
+              />
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Minimum salary:{" "}
+              <span className="font-semibold">{formattedMinCompensation}</span>
+            </p>
+            <p className="mt-2 text-xs text-slate-500">
+              Target role is saved in Job-matching signals. Smart Matches default
+              location comes from Personal details city and state, and only falls
+              back to the saved location preference if city/state is blank.
+            </p>
+
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setShowPreferenceEditor((prev) => !prev)}
+                className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
+              </button>
+              <button
+                type="button"
+                onClick={openSmartMatchesLocationEditor}
+                className={SKY_BTN_MUTED}
+              >
+                Edit City & State
+              </button>
+            </div>
+
+            {showPreferenceEditor ? (
+              <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <TextField
+                    label="Target role"
+                    value={preferencesForm.roleFocus}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))
+                    }
+                  />
+
+                  <SelectField
+                    label="Availability"
+                    value={preferencesForm.availability}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({ ...prev, availability: value }))
+                    }
+                    options={AVAILABILITY_OPTIONS}
+                  />
+
+                  <SelectField
+                    label="Employment type"
+                    value={preferencesForm.employmentType}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        employmentType: value,
+                      }))
+                    }
+                    options={EMPLOYMENT_TYPE_OPTIONS}
+                  />
+
+                  <SelectField
+                    label="Seniority level"
+                    value={preferencesForm.seniorityLevel}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        seniorityLevel: value,
+                      }))
+                    }
+                    options={SENIORITY_LEVEL_OPTIONS}
+                  />
+
+                  <SelectField
+                    label="Salary type"
+                    value={preferencesForm.compensationType}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        compensationType:
+                          value === "hourly" ? "hourly" : "yearly",
+                      }))
+                    }
+                    options={["yearly", "hourly"]}
+                  />
+
+                  <TextField
+                    label="Minimum salary"
+                    value={String(preferencesForm.minCompensation)}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        minCompensation:
+                          Number(value.replace(/[^\d]/g, "")) || 0,
+                      }))
+                    }
+                  />
+
+                  <LocationAutocompleteField
+                    label="Fallback location (used only when city/state is blank)"
+                    value={preferencesForm.workplaceLocations[0] ?? ""}
+                    onChange={(value) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        workplaceLocations: value.trim() ? [value] : [],
+                      }))
+                    }
+                  />
+
+                  <ToggleField
+                    label="Remote"
+                    checked={preferencesForm.includeRemote}
+                    checkedLabel="On"
+                    uncheckedLabel="Off"
+                    onChange={(checked) =>
+                      setPreferencesForm((prev) => ({
+                        ...prev,
+                        includeRemote: checked,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-slate-700">
+                    Benefit selections
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {ALL_BENEFIT_OPTIONS.map((benefit) => (
+                      <button
+                        key={benefit}
+                        type="button"
+                        onClick={() => toggleBenefit(benefit)}
+                        className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                          preferencesForm.benefits.includes(benefit)
+                            ? "border-sky-300 bg-sky-50 text-sky-700"
+                            : "border-slate-300 bg-white text-slate-700"
+                        }`}
+                      >
+                        {benefit}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {preferencesError ? (
+                  <p className="text-xs text-red-600">{preferencesError}</p>
+                ) : null}
+
+                <button
+                  type="button"
+                  onClick={() => void savePreferences()}
+                  disabled={savingPreferences}
+                  className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPreferences ? "Saving..." : "Save Preferences"}
+                </button>
+              </div>
+            ) : null}
+          </Card>
+        );
+      case "ai-profile-sync":
+        return (
+          <Card className="p-6">
+            <div className="text-sm font-semibold text-slate-900">
+              AI Profile Sync
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Keep your profile aligned with the workflows you already use in
+              Hirexa.
+            </p>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <FieldRow
+                label="Resume sync"
+                value={
+                  profileStrength.hasResume
+                    ? "Active from uploaded resume"
+                    : "Waiting for a resume upload"
+                }
+              />
+              <FieldRow
+                label="Profile sync status"
+                value="Onboarding and profile saves sync automatically"
+              />
+            </div>
+
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Resume uploads, onboarding answers, and supported generate flows
+              already feed your saved Hirexa profile. Dedicated external-platform
+              sync controls can live here later without changing your current data.
+            </p>
+          </Card>
+        );
+      default:
+        return null;
+    }
   }
 
   return (
@@ -1141,7 +2403,7 @@ function ToggleField({
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
             Build a stronger Hirexa profile
           </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+          <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-600">
             Keep your personal details, job preferences, resume history, and account
             settings organized in one place so Hirexa can personalize matches and
             application workflows with less guesswork.
@@ -1222,925 +2484,18 @@ function ToggleField({
           </aside>
 
           <div className="min-w-0">
-            <div className="flex min-w-0 flex-col gap-6">
-          <section className="contents">
-            {/* =======================
-                PERSONAL DETAILS
-               ======================= */}
-            <div
-              ref={personalDetailsCardRef}
-              id="personal-info"
-              className="order-1 scroll-mt-28"
-            >
-            <Card className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="relative">
-                  <div className="text-black text-md mb-2">Personal Information:</div>
-                  <div className="h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-rose-200 to-amber-200 ring-4 ring-white">
-                    {profile?.profileImageUrl ? (
-                      <Image
-                        src={profile.profileImageUrl}
-                        alt="Profile"
-                        width={64}
-                        height={64}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-sm font-bold text-indigo-950">
-                        {name.slice(0, 1).toUpperCase()}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex-1" />
-
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploadingPhoto}
-                  className={`${SKY_BTN_SOFT} inline-flex items-center gap-2`}
-                >
-                  <ArrowUpTrayIcon className="h-4 w-4" />
-                  {uploadingPhoto ? "Uploading…" : "Upload Photo"}
-                </button>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handlePhotoChange}
-                />
-              </div>
-
-              {/* Header row */}
-              <div className="mt-6 flex items-center justify-between">
-                <div className="text-sm font-semibold text-slate-900">Personal details</div>
-
-                {!isEditingPersonal ? (
-                  <button type="button" onClick={startEditPersonal} className={SKY_BTN_SOFT_SM}>
-                    <PencilSquareIcon className="h-4 w-4" />
-                    Edit
-                  </button>
-                ) : (
-                  <button type="button" onClick={cancelEditPersonal} className={SKY_BTN_MUTED}>
-                    Cancel
-                  </button>
-                )}
-              </div>
-
-              {/* View mode */}
-              {!isEditingPersonal ? (
-                <div className="mt-4 space-y-3">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <FieldRow label="First name" value={profile?.firstName ?? "Not provided in database"} />
-                    <FieldRow label="Last name" value={profile?.lastName ?? "Not provided in database"} />
-                  </div>
-
-                  <div className="grid gap-3">
-                    <FieldRow label="Email" value={profile?.email ?? "Not provided in database"} />
-                    <FieldRow label="Phone number" value={profile?.phone ?? "Not provided in database"} />
-                    <FieldRow label="Address" value={displayPersonalDetails.address} />
-                    <FieldRow label="City" value={displayPersonalDetails.city} />
-                    <FieldRow label="State" value={displayPersonalDetails.state} />
-                    <FieldRow label="Postal code" value={displayPersonalDetails.postalCode} />
-                    <FieldRow label="LinkedIn" value={profile?.linkedinUrl ?? "Not provided in database"} />
-                    <FieldRow label="Portfolio" value={profile?.portfolioUrl ?? "Not provided in database"} />
-                  </div>
-
-                  {loading ? <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>Loading profile from database…</p> : null}
-                  {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
-                </div>
-              ) : (
-                /* Edit mode */
-                <div className="mt-4 space-y-4">
-                  {/* First/Last name = 2 columns */}
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <TextField
-                      label="First name"
-                      value={personalDetailsForm.firstName}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, firstName: value }))}
-                    />
-                    <TextField
-                      label="Last name"
-                      value={personalDetailsForm.lastName}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, lastName: value }))}
-                    />
-                  </div>
-
-                  {/* Everything else = single column */}
-                  <div className="grid gap-3">
-                    <TextField
-                      label="Email"
-                      value={personalDetailsForm.email}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, email: value }))}
-                    />
-                    <TextField
-                      label="Phone number"
-                      value={personalDetailsForm.phone}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, phone: value }))}
-                    />
-                    <TextField
-                      label="Address"
-                      value={personalDetailsForm.address}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, address: value }))}
-                    />
-                    <TextField
-                      label="City"
-                      value={personalDetailsForm.city}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, city: value }))}
-                    />
-                    <TextField
-                      label="State"
-                      value={personalDetailsForm.state}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, state: value }))}
-                    />
-                    <TextField
-                      label="Postal code"
-                      value={personalDetailsForm.postalCode}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, postalCode: value }))}
-                    />
-                    <TextField
-                      label="LinkedIn"
-                      value={personalDetailsForm.linkedinUrl}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, linkedinUrl: value }))}
-                    />
-                    <TextField
-                      label="Portfolio"
-                      value={personalDetailsForm.portfolioUrl}
-                      onChange={(value) => setPersonalDetailsForm((prev) => ({ ...prev, portfolioUrl: value }))}
-                    />
-                  </div>
-
-                  {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
-
-                  <button
-                    type="button"
-                    onClick={() => void savePersonalDetails()}
-                    disabled={savingPersonalDetails}
-                    className={`${SKY_BTN_PRIMARY} w-full`}
-                  >
-                    {savingPersonalDetails ? "Saving changes..." : "Save changes"}
-                  </button>
-                </div>
-              )}
-            </Card>
-            </div>
-
-            <section id="professional-links" className="order-2 scroll-mt-28">
-              <Card className="p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      Professional Links
-                    </div>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Add the links recruiters and application flows are most likely
-                      to use.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openPersonalDetailsEditor}
-                    className={SKY_BTN_SOFT_SM}
-                  >
-                    <PencilSquareIcon className="h-4 w-4" />
-                    Edit links
-                  </button>
-                </div>
-
-                <div className="mt-4 grid gap-3">
-                  <FieldRow
-                    label="LinkedIn"
-                    value={profile?.linkedinUrl ?? "Not provided in database"}
-                  />
-                  <FieldRow
-                    label="Personal website"
-                    value={profile?.portfolioUrl ?? "Not provided in database"}
-                  />
-                </div>
-
-                <p className="mt-3 text-xs text-slate-500">
-                  Additional link types like GitHub, Dribbble, Behance, and X are not
-                  wired into editable profile fields yet.
-                </p>
-              </Card>
-            </section>
-
-            {/* =======================
-                PREFERENCES
-               ======================= */}
-            <section id="job-preferences" className="order-7 scroll-mt-28">
-            <Card className="p-6 mt-2">
-              <div className={`text-sm font-semibold ${NON_DB_TEXT_CLASS}`}>Job-matching signals</div>
-              <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                Add more details (roles, locations, salary, availability) to boost match quality.
-              </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <FieldRow label="Target role" value={savedTargetRole} />
-                <FieldRow
-                  label="Smart Matches default location"
-                  value={savedSmartMatchesLocation}
-                />
-              </div>
-              <p className="mt-2 text-sm text-slate-600">
-                Minimum salary: <span className="font-semibold">{formattedMinCompensation}</span>
-              </p>
-              <p className="mt-2 text-xs text-slate-500">
-                Target role is saved in Job-matching signals. Smart Matches default
-                location comes from Personal details city and state, and only falls
-                back to the saved location preference if city/state is blank.
-              </p>
-
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={() => setShowPreferenceEditor((prev) => !prev)}
-                  className="flex-1 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  {showPreferenceEditor ? "Hide Preferences" : "Update Preferences"}
-                </button>
-                <button
-                  type="button"
-                  onClick={openSmartMatchesLocationEditor}
-                  className={SKY_BTN_MUTED}
-                >
-                  Edit City & State
-                </button>
-              </div>
-
-              {showPreferenceEditor ? (
-                <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <TextField
-                      label="Target role"
-                      value={preferencesForm.roleFocus}
-                      onChange={(value) => setPreferencesForm((prev) => ({ ...prev, roleFocus: value }))}
-                    />
-
-                    <SelectField
-                      label="Availability"
-                      value={preferencesForm.availability}
-                      onChange={(value) => setPreferencesForm((prev) => ({ ...prev, availability: value }))}
-                      options={AVAILABILITY_OPTIONS}
-                    />
-
-                    <SelectField
-                      label="Employment type"
-                      value={preferencesForm.employmentType}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({ ...prev, employmentType: value }))
-                      }
-                      options={EMPLOYMENT_TYPE_OPTIONS}
-                    />
-
-                    <SelectField
-                      label="Seniority level"
-                      value={preferencesForm.seniorityLevel}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({ ...prev, seniorityLevel: value }))
-                      }
-                      options={SENIORITY_LEVEL_OPTIONS}
-                    />
-
-                    <SelectField
-                      label="Salary type"
-                      value={preferencesForm.compensationType}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          compensationType: value === "hourly" ? "hourly" : "yearly",
-                        }))
-                      }
-                      options={["yearly", "hourly"]}
-                    />
-
-                    <TextField
-                      label="Minimum salary"
-                      value={String(preferencesForm.minCompensation)}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          // keep only digits, then convert
-                          minCompensation: Number(value.replace(/[^\d]/g, "")) || 0,
-                        }))
-                      }
-                    />
-
-                    <LocationAutocompleteField
-                      label="Fallback location (used only when city/state is blank)"
-                      value={preferencesForm.workplaceLocations[0] ?? ""}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          workplaceLocations: value.trim() ? [value] : [],
-                        }))
-                      }
-                    />
-
-                    <ToggleField
-                      label="Remote"
-                      checked={preferencesForm.includeRemote}
-                      checkedLabel="On"
-                      uncheckedLabel="Off"
-                      onChange={(checked) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          includeRemote: checked,
-                        }))
-                      }
-                    />
-
-                    {/* <SelectField
-                      label="Benefits plan"
-                      value={preferencesForm.selectedPlan}
-                      onChange={(value) =>
-                        setPreferencesForm((prev) => ({
-                          ...prev,
-                          selectedPlan: value === "annual" ? "annual" : "trial",
-                        }))
-                      }
-                      options={["trial", "annual"]}
-                    /> */}
-                  </div>
-
-                  <div>
-                    <div className="mb-2 text-xs font-semibold text-slate-700">Benefit selections</div>
-                    <div className="flex flex-wrap gap-2">
-                      {ALL_BENEFIT_OPTIONS.map((benefit) => (
-                        <button
-                          key={benefit}
-                          type="button"
-                          onClick={() => toggleBenefit(benefit)}
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                            preferencesForm.benefits.includes(benefit)
-                              ? "border-sky-300 bg-sky-50 text-sky-700"
-                              : "border-slate-300 bg-white text-slate-700"
-                          }`}
-                        >
-                          {benefit}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {preferencesError ? <p className="text-xs text-red-600">{preferencesError}</p> : null}
-
-                  <button
-                    type="button"
-                    onClick={() => void savePreferences()}
-                    disabled={savingPreferences}
-                    className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {savingPreferences ? "Saving..." : "Save Preferences"}
-                  </button>
-                </div>
-              ) : null}
-            </Card>
-            </section>
-
-            {/* =======================
-                SUBSCRIPTION
-               ======================= */}
-            <section id="settings" className="order-6 scroll-mt-28">
-            <Card className="p-6 mt-2">
-              <div className="text-sm font-semibold text-slate-900">Billing & Access</div>
-              <p className="mt-2 text-sm text-slate-600">
-                Manage product status, billing, and interview access from the current
-                profile view or open full controls in Settings.
-              </p>
-
-              <div className="mt-4 space-y-4">
-                <BillingStatusCard
-                  title="Hirexa AI"
-                  subtitle="Core Hirexa AI subscription and billing status"
-                  status={hirexaBillingActive ? "Active" : "Inactive"}
-                  compact={!hirexaBillingActive}
-                  actions={
-                    <>
-                      <a
-                        href="/settings/subscription"
-                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        {hirexaBillingActive ? "Manage Billing" : "View Plans & Billing"}
-                      </a>
-                      <a
-                        href="/settings/subscription"
-                        className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                      >
-                        Open Subscription Settings
-                      </a>
-                    </>
-                  }
-                >
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <FieldRow label="Plan status" value={subscriptionSummary.planStatus || "Active"} />
-                    <FieldRow label="Billing email" value={subscriptionSummary.email} />
-                    <FieldRow label="Purchased at" value={subscriptionSummary.purchasedAt} />
-                    <FieldRow label="Last checked" value={subscriptionSummary.checkedAt} />
-                  </div>
-                </BillingStatusCard>
-
-                <BillingStatusCard
-                  title="HirePilot"
-                  subtitle="Interview billing, recurring plan state, and available credits"
-                  status={hirepilotBillingActive ? "Active" : "Inactive"}
-                  compact={!hirepilotBillingActive}
-                  actions={
-                    <a
-                      href="/hirepilot"
-                      className={[
-                        "rounded-xl px-4 py-2 text-sm font-semibold",
-                        hirepilotBillingActive
-                          ? "bg-sky-500 text-white hover:bg-sky-600"
-                          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",
-                      ].join(" ")}
-                    >
-                      {hirepilotBillingActive ? "Open HirePilot" : "Unlock HirePilot"}
-                    </a>
-                  }
-                >
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <FieldRow
-                      label="Access"
-                      value={
-                        hirePilotStatus?.hirePilotUnlimited
-                          ? "Unlimited access"
-                          : `Credits remaining: ${hirePilotStatus?.hirePilotCredits ?? 0}`
-                      }
-                    />
-                    <FieldRow
-                      label="Recurring status"
-                      value={
-                        hirePilotStatus?.hirePilotUnlimited
-                          ? "Active"
-                          : (hirePilotStatus?.hirePilotCredits ?? 0) > 0
-                            ? "Credits available"
-                            : "Inactive"
-                      }
-                    />
-                  </div>
-                </BillingStatusCard>
-              </div>
-            </Card>
-            </section>
-
-            <section id="notifications" className="order-8 scroll-mt-28">
-              <Card className="p-6 mt-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">Notifications</div>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Track how Hirexa can reach you about product updates and job-search activity.
-                    </p>
-                  </div>
-                  <Link href="/settings/notifications" className={SKY_BTN_SOFT_SM}>
-                    Open Notifications
-                  </Link>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldRow label="Marketing email status" value={newsletterStatus} />
-                  <FieldRow
-                    label="Primary contact email"
-                    value={profile?.email ?? "Not provided in database"}
-                  />
-                </div>
-
-                <p className="mt-3 text-xs text-slate-500">
-                  Notification toggles live in Settings so product emails and marketing
-                  preferences stay in one place.
-                </p>
-              </Card>
-            </section>
-
-            <section id="privacy-security" className="order-9 scroll-mt-28">
-              <Card className="p-6 mt-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      Privacy & Security
-                    </div>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Review verification status and jump to the account controls that already exist.
-                    </p>
-                  </div>
-                  <Link href="/settings/account/password" className={SKY_BTN_SOFT_SM}>
-                    Change Password
-                  </Link>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <FieldRow label="Email status" value={securityStatus} />
-                  <FieldRow
-                    label="Registration status"
-                    value={profile?.registrationStatus ?? "Not found"}
-                  />
-                  <FieldRow label="Created" value={formatProfileDate(profile?.createdAt)} />
-                  <FieldRow label="Updated" value={formatProfileDate(profile?.updatedAt)} />
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <Link
-                    href="/settings/account/password"
-                    className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Password & Security
-                  </Link>
-                  <Link
-                    href="/settings"
-                    className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                    Delete Profile
-                  </Link>
-                </div>
-              </Card>
-            </section>
-
-            {/* =======================
-                SNAPSHOT
-               ======================= */}
-            {/* <Card className="p-6">
-              <div className="text-sm font-semibold text-slate-900">Database profile snapshot</div>
-              <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>
-                Live data returned from <code>/api/profile</code> for the logged-in user.
-              </p>
-              <pre className="mt-4 max-h-[28rem] overflow-auto rounded-2xl border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100">
-                {databaseSnapshot}
-              </pre>
-            </Card> */}
-          </section>
-
-          {/* =======================
-              RIGHT COLUMN
-             ======================= */}
-          <section className="contents">
             <div className="space-y-6">
-              <section id="skills" className="order-5 scroll-mt-28">
-                <Card className="p-6">
-                  <div className="text-sm font-semibold text-slate-900">Skills</div>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Hirexa uses saved skills from onboarding and resume parsing to
-                    personalize matching and AI output.
-                  </p>
-
-                  {combinedSkills.length ? (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {combinedSkills.map((skill) => (
-                        <span
-                          key={skill}
-                          className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className={`mt-4 text-sm ${NON_DB_TEXT_CLASS}`}>
-                      No skills found yet. Upload a resume or complete onboarding to
-                      populate your skill profile.
-                    </p>
-                  )}
-
-                  <p className="mt-3 text-xs text-slate-500">
-                    {combinedSkills.length
-                      ? `${combinedSkills.length} skill${combinedSkills.length === 1 ? "" : "s"} currently available across your saved profile and resume data.`
-                      : "Adding at least 3 skills will improve your profile strength and job matching."}
-                  </p>
-                </Card>
-              </section>
-
-              <section id="experience" className="order-4 scroll-mt-28">
-              <Card className="p-6">
-                <div className="flex-col items-start justify-between gap-4">
-                  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-md font-semibold text-slate-700">Resume:</div>
-                      <button
-                        type="button"
-                        onClick={() => resumeInputRef.current?.click()}
-                        disabled={uploadingResume}
-                        className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
-                      >
-                        <ArrowUpTrayIcon className="h-4 w-4" />
-                        {uploadingResume ? "Uploading…" : "Upload resume"}
-                      </button>
-                      <input
-                        ref={resumeInputRef}
-                        type="file"
-                        accept="application/pdf"
-                        className="hidden"
-                        onChange={handleResumeChange}
-                      />
-                    </div>
-                    {profile?.resume ? (
-                      <div className="mt-2 space-y-1 text-sm text-slate-700">
-                        <p>
-                          <span className="font-semibold">File:</span> {profile.resume.filename}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Type:</span> {profile.resume.mimeType}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className={`mt-2 text-sm ${NON_DB_TEXT_CLASS}`}>No resume record found in database.</p>
-                    )}
-                    {resumeUploadSuccess ? <p className="mt-2 text-xs text-sky-500">{resumeUploadSuccess}</p> : null}
-                    {resumeUploadError ? <p className="mt-2 text-xs text-red-600">{resumeUploadError}</p> : null}
-                  </div>
-
-                  <div className="mt-6">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-md font-semibold text-slate-700">Experience: </div>
-
-                      <button
-                        type="button"
-                        onClick={startAddExperience}
-                        className={`${SKY_BTN_SOFT_SM} ${NON_DB_TEXT_CLASS}`}
-                      >
-                        + Add experience
-                      </button>
-                    </div>
-
-                    <div className="mt-3 space-y-3">
-                      {isAddingExperience ? (
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <TextField
-                              label="Job title"
-                              value={newExperienceForm.title}
-                              onChange={(value) => updateNewExperienceField("title", value)}
-                            />
-                            <TextField
-                              label="Company"
-                              value={newExperienceForm.company}
-                              onChange={(value) => updateNewExperienceField("company", value)}
-                            />
-                            <TextField
-                              label="Location"
-                              value={newExperienceForm.location}
-                              onChange={(value) => updateNewExperienceField("location", value)}
-                            />
-                            <TextField
-                              label="Date range"
-                              value={newExperienceForm.dateRange}
-                              onChange={(value) => updateNewExperienceField("dateRange", value)}
-                            />
-                          </div>
-
-                          <div className="mt-4 space-y-2">
-                            <div className="text-xs font-semibold text-slate-700">Highlights</div>
-                            {newExperienceForm.bullets.map((bullet, index) => (
-                              <div key={`new-bullet-${index}`} className="space-y-1">
-                                <textarea
-                                  value={bullet}
-                                  onChange={(event) =>
-                                    updateNewExperienceBullet(index, event.target.value)
-                                  }
-                                  rows={2}
-                                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
-                                  placeholder="Add a responsibility or accomplishment"
-                                />
-                                {newExperienceForm.bullets.length > 1 ? (
-                                  <button
-                                    type="button"
-                                    className="text-xs font-semibold text-slate-500 hover:text-slate-700"
-                                    onClick={() => removeNewExperienceBullet(index)}
-                                  >
-                                    Remove bullet
-                                  </button>
-                                ) : null}
-                              </div>
-                            ))}
-
-                            <button
-                              type="button"
-                              onClick={addNewExperienceBullet}
-                              className="text-xs font-semibold text-sky-600 hover:text-sky-700"
-                            >
-                              + Add bullet
-                            </button>
-                          </div>
-
-                          <div className="mt-4 flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => void saveNewExperience()}
-                              disabled={addingExperience}
-                              className={SKY_BTN_SOFT_SM}
-                            >
-                              {addingExperience ? "Saving..." : "Save experience"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsAddingExperience(false);
-                                resetNewExperienceForm();
-                              }}
-                              className={SKY_BTN_MUTED}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {experience.length > 4 && !showAllExperiences ? (
-                        <p className={`text-xs ${NON_DB_TEXT_CLASS}`}>Showing the 4 most recent experience records.</p>
-                      ) : null}
-
-                      {visibleExperience.length === 0 ? (
-                        <p className={`text-sm ${NON_DB_TEXT_CLASS}`}>No experience rows found in database.</p>
-                      ) : null}
-
-                      {visibleExperience.map((exp) => {
-                        const open = !!expandedExp[exp.id];
-                        const bullets = open ? exp.bullets : exp.bullets.slice(0, 2);
-                        const showToggle = exp.bullets.length > 2;
-                        const isEditing = editingExperienceId === exp.id;
-
-                        return (
-                          <div key={exp.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                  <div className="text-sm font-semibold text-slate-900">{exp.title}</div>
-                                  <span className="text-sm text-slate-300">|</span>
-                                  <div className="text-sm font-semibold text-slate-700">{exp.company}</div>
-                                </div>
-
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {exp.location} • {exp.dateRange}
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  aria-label="Edit experience"
-                                  className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
-                                  onClick={() => startEditExperience(exp)}
-                                >
-                                  <PencilSquareIcon className="h-5 w-5" />
-                                </button>
-
-                                <button
-                                  type="button"
-                                  aria-label="Delete experience"
-                                  className="rounded-xl p-2 text-sky-500 hover:bg-slate-50"
-                                  onClick={() => removeFromList(exp.id)}
-                                >
-                                  <TrashIcon className="h-5 w-5" />
-                                </button>
-                              </div>
-                            </div>
-
-                            {isEditing ? (
-                              <div className="mt-3 space-y-2">
-                                {editingBullets.map((bullet, index) => (
-                                  <div key={`${exp.id}-edit-${index}`} className="space-y-1">
-                                    <textarea
-                                      value={bullet}
-                                      onChange={(event) => updateEditingBullet(index, event.target.value)}
-                                      rows={2}
-                                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-sky-400 focus:outline-none"
-                                      placeholder="Enter bullet"
-                                    />
-                                    {editingBullets.length > 1 ? (
-                                      <button
-                                        type="button"
-                                        className="text-xs font-semibold text-slate-500 hover:text-slate-700"
-                                        onClick={() => removeEditingBullet(index)}
-                                      >
-                                        Remove bullet
-                                      </button>
-                                    ) : null}
-                                  </div>
-                                ))}
-
-                                <button
-                                  type="button"
-                                  onClick={addEditingBullet}
-                                  className="text-xs font-semibold text-sky-600 hover:text-sky-700"
-                                >
-                                  + Add bullet
-                                </button>
-
-                                <div className="flex items-center gap-2 pt-1">
-                                  <button
-                                    type="button"
-                                    onClick={saveExperienceBullets}
-                                    disabled={savingExperience}
-                                    className={SKY_BTN_SOFT_SM}
-                                  >
-                                    {savingExperience ? "Saving…" : "Save"}
-                                  </button>
-                                  <button type="button" onClick={cancelEditExperience} className={SKY_BTN_MUTED}>
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                                {bullets.map((b, i) => (
-                                  <li key={i}>{b}</li>
-                                ))}
-                              </ul>
-                            )}
-
-                            {showToggle && !isEditing ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleExp(exp.id)}
-                                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-sky-500 hover:text-sky-600"
-                              >
-                                {open ? "Show less" : "Show more"}
-                                {open ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-
-                      {/* ✅ SHOW MORE / SHOW LESS (ALL EXPERIENCES) */}
-                      {experience.length > 4 ? (
-                        <div className="pt-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowAllExperiences((prev) => !prev)}
-                            className="w-full rounded-2xl bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
-                          >
-                            {showAllExperiences ? `Show less` : `Show more (${experience.length - 4} more)`}
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-              </section>
-
-              <section id="education" className="order-3 scroll-mt-28">
-                <Card className="p-6">
-                  <div className="text-sm font-semibold text-slate-900">Education</div>
-                  <p className="mt-2 text-sm text-slate-600">
-                    School history, certifications, and training can live here as profile editing expands.
-                  </p>
-
-                  <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
-                    <div className="text-sm font-semibold text-slate-900">
-                      Standalone education editing is not connected yet.
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">
-                      For now, uploading your latest resume is the best way to keep
-                      education and certifications attached to your profile during
-                      generation and autofill workflows.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => resumeInputRef.current?.click()}
-                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                    >
-                      <ArrowUpTrayIcon className="h-4 w-4" />
-                      Upload resume
-                    </button>
-                  </div>
-                </Card>
-              </section>
-
-              <section id="ai-profile-sync" className="order-10 scroll-mt-28">
-                <Card className="p-6">
-                  <div className="text-sm font-semibold text-slate-900">AI Profile Sync</div>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Keep your profile aligned with the workflows you already use in Hirexa.
-                  </p>
-
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <FieldRow
-                      label="Resume sync"
-                      value={
-                        profileStrength.hasResume
-                          ? "Active from uploaded resume"
-                          : "Waiting for a resume upload"
-                      }
-                    />
-                    <FieldRow
-                      label="Profile sync status"
-                      value="Onboarding and profile saves sync automatically"
-                    />
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-slate-600">
-                    Resume uploads, onboarding answers, and supported generate flows
-                    already feed your saved Hirexa profile. Dedicated external-platform
-                    sync controls can live here later without changing your current data.
-                  </p>
-                </Card>
-              </section>
-            </div>
-          </section>
+              {PROFILE_SECTIONS.map((section) => (
+                <section
+                  key={section.id}
+                  id={section.id}
+                  ref={section.id === "personal-info" ? personalDetailsCardRef : undefined}
+                  className="scroll-mt-28"
+                  aria-label={section.label}
+                >
+                  {renderProfileSectionContent(section.id)}
+                </section>
+              ))}
             </div>
           </div>
         </div>
@@ -2166,55 +2521,10 @@ async function readJsonResponse<T>(res: Response): Promise<T | null> {
   }
 }
 
-function isActiveBillingStatus(value?: string | null) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  return ["active", "trialing", "past_due", "unpaid"].includes(normalized);
-}
-
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={["rounded-3xl border border-slate-200 bg-white shadow-sm", className].join(" ")}>
       {children}
-    </div>
-  );
-}
-
-function BillingStatusCard({
-  title,
-  subtitle,
-  status,
-  compact,
-  actions,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  status: "Active" | "Inactive";
-  compact?: boolean;
-  actions?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  const active = status === "Active";
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-slate-900">{title}</div>
-          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
-        </div>
-        <span
-          className={[
-            "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold",
-            active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600",
-          ].join(" ")}
-        >
-          {status}
-        </span>
-      </div>
-
-      {!compact && children ? <div className="mt-4">{children}</div> : null}
-      {actions ? <div className="mt-4 flex flex-wrap gap-3">{actions}</div> : null}
     </div>
   );
 }

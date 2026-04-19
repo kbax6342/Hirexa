@@ -12,12 +12,10 @@ import {
 import JobOrdersTable from "@/app/components/recruiter/JobOrdersTable";
 import CandidatesTable from "@/app/components/recruiter/CandidatesTable";
 import RecruiterCard from "@/app/components/recruiter/RecruiterCard";
-import RecruiterProfileCard from "@/app/recruiter/dashboard/components/RecruiterProfileCard";
 import type {
   RecruiterCandidateRecord,
   RecruiterDashboardSummary,
   RecruiterJobOrderRecord,
-  RecruiterProfileRecord,
 } from "@/app/components/recruiter/types";
 
 const summaryCards = [
@@ -52,23 +50,17 @@ export default function RecruiterDashboardClient({
   summary,
   recentJobOrders,
   recentCandidates,
-  recruiterProfile,
-  recruiterProfileCompletion,
-  recruiterProfileChecklist,
 }: {
   summary: RecruiterDashboardSummary;
   recentJobOrders: RecruiterJobOrderRecord[];
   recentCandidates: RecruiterCandidateRecord[];
-  recruiterProfile: RecruiterProfileRecord;
-  recruiterProfileCompletion: number;
-  recruiterProfileChecklist: string[];
 }) {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-600">
-            Recruiter Dashboard
+            Agency Dashboard
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
             Agency workflow with AI-ranked matches
@@ -79,22 +71,28 @@ export default function RecruiterDashboardClient({
         </div>
         <div className="flex flex-wrap gap-2">
           <Link
-            href="/recruiter/job-orders"
+            href="/agency/job-orders"
             className="inline-flex items-center rounded-full bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700"
           >
             Add job order
           </Link>
           <Link
-            href="/recruiter/candidates"
+            href="/agency/candidates"
             className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             Upload resumes
           </Link>
           <Link
+            href="/agency/profile"
+            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            View profile
+          </Link>
+          <Link
             href={
               recentJobOrders[0]
-                ? `/recruiter/job-orders/${recentJobOrders[0].id}`
-                : "/recruiter/job-orders"
+                ? `/agency/job-orders/${recentJobOrders[0].id}`
+                : "/agency/job-orders"
             }
             className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
@@ -126,12 +124,6 @@ export default function RecruiterDashboardClient({
         })}
       </div>
 
-      <RecruiterProfileCard
-        initialProfile={recruiterProfile}
-        initialCompletion={recruiterProfileCompletion}
-        initialChecklist={recruiterProfileChecklist}
-      />
-
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.9fr)]">
         <RecruiterCard className="rounded-2xl border-slate-200 p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -142,7 +134,7 @@ export default function RecruiterDashboardClient({
               </p>
             </div>
             <Link
-              href="/recruiter/job-orders"
+              href="/agency/job-orders"
               className="text-sm font-medium text-sky-600 hover:text-sky-700"
             >
               View all
@@ -160,7 +152,7 @@ export default function RecruiterDashboardClient({
               </p>
             </div>
             <Link
-              href="/recruiter/candidates"
+              href="/agency/candidates"
               className="text-sm font-medium text-sky-600 hover:text-sky-700"
             >
               View all

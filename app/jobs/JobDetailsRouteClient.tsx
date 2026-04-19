@@ -682,12 +682,6 @@ export default function JobDetailsRouteClient({
     router.push(`/job-tools/career-coach?jobId=${encodeURIComponent(jobId)}`);
   }
 
-  function handleOutreach() {
-    router.push(
-      `/job-tools/agents/linkedin-outreach?jobId=${encodeURIComponent(jobId)}`
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-4">
@@ -719,7 +713,6 @@ export default function JobDetailsRouteClient({
           aiApplyLoadingLabel="Starting auto apply..."
           onAiApply={handleAutoApply}
           onCareerCoach={handleCareerCoach}
-          onOutreach={handleOutreach}
         />
 
         {externalApplyUrl ? (

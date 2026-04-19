@@ -81,12 +81,12 @@ async function loadProfileSnapshot(userId: string) {
 export async function GET(req: Request) {
   const userId = await getAuthedUserId();
   const baseUrl = getBaseUrl(req);
-  const redirectToOutreach = new URL("/job-tools/agents/linkedin-outreach", baseUrl);
+  const redirectToDashboard = new URL("/dashboard", baseUrl);
 
   if (!userId) {
-    redirectToOutreach.searchParams.set("linkedin_error", "unauthorized");
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", "unauthorized");
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   }
 
   const { searchParams } = new URL(req.url);
@@ -95,15 +95,15 @@ export async function GET(req: Request) {
   const error = searchParams.get("error");
 
   if (error) {
-    redirectToOutreach.searchParams.set("linkedin_error", error);
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", error);
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   }
 
   if (!code || !state) {
-    redirectToOutreach.searchParams.set("linkedin_error", "missing_code");
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", "missing_code");
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   }
 
   const cookieStore = await cookies();
@@ -111,16 +111,16 @@ export async function GET(req: Request) {
   cookieStore.delete("linkedin_oauth_state");
 
   if (!storedState || storedState !== state) {
-    redirectToOutreach.searchParams.set("linkedin_error", "invalid_state");
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", "invalid_state");
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   }
 
-    const clientId = process.env.LINKEDIN_CLIENT_ID;
-    const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
+  const clientId = process.env.LINKEDIN_CLIENT_ID;
+  const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    redirectToOutreach.searchParams.set("linkedin_error", "missing_credentials");
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", "missing_credentials");
+    return NextResponse.redirect(redirectToDashboard);
   }
 
   try {
@@ -198,12 +198,12 @@ export async function GET(req: Request) {
       },
     });
 
-    redirectToOutreach.searchParams.set("linkedin", "connected");
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin", "connected");
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   } catch {
-    redirectToOutreach.searchParams.set("linkedin_error", "oauth_failed");
-    console.info("[linkedin] redirect", redirectToOutreach.toString());
-    return NextResponse.redirect(redirectToOutreach);
+    redirectToDashboard.searchParams.set("linkedin_error", "oauth_failed");
+    console.info("[linkedin] redirect", redirectToDashboard.toString());
+    return NextResponse.redirect(redirectToDashboard);
   }
 }

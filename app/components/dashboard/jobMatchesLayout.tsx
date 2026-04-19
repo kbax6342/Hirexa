@@ -389,6 +389,7 @@ export default function JobMatchesLayout({
 
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
 
   const seen = useRef<Set<string>>(new Set());
   const hadJobParam = useRef(false);
@@ -404,6 +405,7 @@ export default function JobMatchesLayout({
   );
   const selectedJobParam = searchParams.get("job")?.trim() || "";
   const autoApplyPollInFlightRef = useRef(false);
+  const copyResetTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const visibleJobs = useMemo(
     () =>
       appliedFilters.includeRemote
@@ -486,6 +488,68 @@ export default function JobMatchesLayout({
   const right = selectedDetails ?? selectedSummaryDetail;
   const rightAiApplyLabel = AUTO_APPLY_CTA_LABEL;
   const rightAiApplyLoadingLabel = AUTO_APPLY_LOADING_LABEL;
+  const shareJobUrl = right?.jobUrl?.trim() ?? "";
+  const displayCompany = right?.company?.trim() || "Unknown company";
+  const displayLocation = right?.location?.trim() || "Location not provided";
+  const canShareRightJob = Boolean(right && shareJobUrl);
+
+  useEffect(() => {
+    setCopiedShareLink(false);
+    if (copyResetTimeoutRef.current !== null) {
+      window.clearTimeout(copyResetTimeoutRef.current);
+      copyResetTimeoutRef.current = null;
+    }
+  }, [right?.id, shareJobUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!shareJobUrl) return;
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable");
+      }
+
+      await navigator.clipboard.writeText(shareJobUrl);
+      setCopiedShareLink(true);
+
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedShareLink(false);
+        copyResetTimeoutRef.current = null;
+      }, 2000);
+    } catch (error) {
+      console.error("[SMART_MATCHES] failed to copy job URL", error);
+    }
+  }, [shareJobUrl]);
+
+  const handleEmailShareJob = useCallback(() => {
+    if (!shareJobUrl) return;
+
+    const subject = `Check out this job: ${right?.title ?? "Job opportunity"} at ${displayCompany}`;
+    const body = [
+      "I found this job and wanted to share it with you.",
+      "",
+      right?.title ?? "Job opportunity",
+      displayCompany,
+      displayLocation,
+      "",
+      "Apply here:",
+      shareJobUrl,
+    ].join("\n");
+
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }, [displayCompany, displayLocation, right?.title, shareJobUrl]);
 
   const replaceSelectedJobParam = useCallback((jobId: string | null) => {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -1493,10 +1557,6 @@ export default function JobMatchesLayout({
     };
   }, [selectedId, visibleJobs]);
 
-  const handleOutreachFromDetails = () => {
-    router.push("/job-tools/agents/linkedin-outreach");
-  };
-
   const readPlanStatus = useCallback(
     async (forceSync: boolean, callbackHref: string) => {
       const res = await fetch(
@@ -2118,77 +2178,6 @@ export default function JobMatchesLayout({
                         </div>
                       </div>
 
-                      {/* <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            addOutreachJob(job, setOutreachActions, "Outreach added")
-                          }
-                          disabled={outreachActions[job.id]?.loading}
-                          className="rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[11px] font-semibold text-[#374151] hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {outreachActions[job.id]?.loading ? "Adding..." : "Outreach"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const ok = await addOutreachJob(
-                              job,
-                              setApplyOutreachActions,
-                              "Outreach added"
-                            );
-                            if (!ok) return;
-                            const appliedOk = await addAppliedJob(job, { navigate: false });
-                            if (appliedOk) {
-                              setActionState(setApplyOutreachActions, job.id, {
-                                success: "Applied + outreach ready",
-                              });
-                              clearActionFeedback(setApplyOutreachActions, job.id);
-                              const jobUrl = job.jobUrl ? encodeURIComponent(job.jobUrl) : "";
-                              setTimeout(() => {
-                                router.push(
-                                  `/job-tools/generate${jobUrl ? `?jobUrl=${jobUrl}` : ""}`
-                                );
-                              }, 500);
-                            }
-                          }}
-                          disabled={applyOutreachActions[job.id]?.loading}
-                          className="rounded-md border border-transparent bg-[#111827] px-2 py-1 text-[11px] font-semibold text-white hover:bg-[#0f172a] disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {applyOutreachActions[job.id]?.loading
-                            ? "Working..."
-                            : "Apply + Outreach"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => router.push("/job-tools/agents/linkedin-outreach")}
-                          className="rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[11px] font-semibold text-[#374151] hover:bg-gray-50"
-                        >
-                          Open Outreach Copilot
-                        </button>
-                      </div>
-
-                      {(outreachActions[job.id]?.success ||
-                        outreachActions[job.id]?.error ||
-                        applyOutreachActions[job.id]?.success ||
-                        applyOutreachActions[job.id]?.error) && (
-                        <div
-                          className={[
-                            "mt-2 text-[11px] font-medium",
-                            outreachActions[job.id]?.error ||
-                            applyOutreachActions[job.id]?.error
-                              ? "text-red-600"
-                              : "text-emerald-600",
-                          ].join(" ")}
-                        >
-                          {outreachActions[job.id]?.error ||
-                            applyOutreachActions[job.id]?.error ||
-                            applyOutreachActions[job.id]?.success ||
-                            outreachActions[job.id]?.success}
-                        </div>
-                      )} */}
                     </div>
                   </div>
                 </div>
@@ -2231,7 +2220,16 @@ export default function JobMatchesLayout({
             autoApplyStopPoint={rightAutoApplyStopPoint}
             onAiApply={handleAiApplyFromDetails}
             onCareerCoach={handleCareerCoachFromDetails}
-            onOutreach={handleOutreachFromDetails}
+            shareActions={
+              right
+                ? {
+                    canShare: canShareRightJob,
+                    copied: copiedShareLink,
+                    onCopyLink: () => void handleCopyShareLink(),
+                    onEmailJob: handleEmailShareJob,
+                  }
+                : null
+            }
             hideAdzunaAttribution
           />
         </section>

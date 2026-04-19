@@ -3,7 +3,6 @@ import {
   Zap,
   FileText,
   PenTool,
-  MessageSquare,
   Bot,
 } from "lucide-react"
 
@@ -52,17 +51,6 @@ const features = [
       "Personalized for each job",
       "Natural, professional language",
       "Generated instantly",
-    ],
-  },
-  {
-    icon: MessageSquare,
-    title: "Outreach Copilot",
-    description:
-      "AI-assisted recruiter outreach for your best-fit job matches.",
-    bullets: [
-      "Personalized outreach templates",
-      "Expand your professional network",
-      "Discover hidden job opportunities",
     ],
   },
   {

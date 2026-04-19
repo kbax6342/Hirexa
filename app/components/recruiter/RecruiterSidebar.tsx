@@ -6,6 +6,7 @@ import {
   BriefcaseIcon,
   HomeIcon,
   MegaphoneIcon,
+  UserCircleIcon,
   UsersIcon,
 } from "@heroicons/react/24/outline";
 
@@ -13,10 +14,11 @@ import RecruiterCard from "@/app/components/recruiter/RecruiterCard";
 import { cn } from "@/app/lib/utils";
 
 const recruiterNavItems = [
-  { href: "/recruiter/dashboard", label: "Dashboard", icon: HomeIcon },
-  { href: "/recruiter/job-orders", label: "Job Orders", icon: BriefcaseIcon },
-  { href: "/recruiter/candidates", label: "Candidates", icon: UsersIcon },
-  { href: "/recruiter/outreach", label: "Outreach", icon: MegaphoneIcon },
+  { href: "/agency/dashboard", label: "Dashboard", icon: HomeIcon },
+  { href: "/agency/job-orders", label: "Job Orders", icon: BriefcaseIcon },
+  { href: "/agency/candidates", label: "Candidates", icon: UsersIcon },
+  { href: "/agency/outreach", label: "Outreach", icon: MegaphoneIcon },
+  { href: "/agency/profile", label: "Profile", icon: UserCircleIcon },
 ];
 
 export default function RecruiterSidebar({

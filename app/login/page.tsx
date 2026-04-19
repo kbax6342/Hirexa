@@ -16,7 +16,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const isRecruiterMode = mode === "recruiter";
   const callbackUrl = toSafeRelativeCallbackUrl(
     readFirstParam(params.callbackUrl),
-    isRecruiterMode ? "/recruiter/dashboard" : "/resume"
+    isRecruiterMode ? "/agency/dashboard" : "/resume"
   );
 
   return (

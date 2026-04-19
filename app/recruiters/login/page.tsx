@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { getRecruiterAccessResult } from "@/app/lib/recruiter/server";
 
-const RECRUITER_DASHBOARD_CALLBACK = "/recruiter/dashboard";
+const RECRUITER_DASHBOARD_CALLBACK = "/agency/dashboard";
 
 export default async function RecruiterLoginPage() {
   const access = await getRecruiterAccessResult();
@@ -27,16 +27,16 @@ export default async function RecruiterLoginPage() {
           Recruiters
         </span>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900">
-          Recruiter Dashboard Login
+          Agency Dashboard Login
         </h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-slate-600 sm:text-base">
           Sign in to access Hirexa's private recruiter workspace for job orders, candidate matching, outreach, and pipeline tracking.
         </p>
         <Link
-          href="/login?mode=recruiter&callbackUrl=%2Frecruiter%2Fdashboard"
+          href="/login?mode=recruiter&callbackUrl=%2Fagency%2Fdashboard"
           className="mt-6 inline-flex items-center rounded-2xl bg-sky-500 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-sky-600"
         >
-          Continue to recruiter dashboard
+          Continue to Agency Dashboard
         </Link>
       </div>
     </main>

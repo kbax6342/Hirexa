@@ -12,6 +12,7 @@ const AUTH_REQUIRED_PREFIXES = [
   "/settings",
   "/profile",
   "/applications",
+  "/agency",
   "/recruiter",
 ];
 
@@ -33,7 +34,6 @@ const ONBOARDING_REDIRECT_PREFIXES = [
 const INCOMPLETE_ONBOARDING_BLOCKED_PREFIXES = [
   "/dashboard",
   "/job-tools/generate",
-  "/job-tools/agents/linkedin-outreach",
   "/hirepilot",
   "/job-tools/ai-assistant",
   "/settings",
@@ -92,7 +92,7 @@ export default auth(async (req) => {
     AUTH_REQUIRED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
     const loginUrl = new URL("/login", origin);
-    if (pathname.startsWith("/recruiter")) {
+    if (pathname.startsWith("/recruiter") || pathname.startsWith("/agency")) {
       loginUrl.searchParams.set("mode", "recruiter");
     }
     loginUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
@@ -111,13 +111,13 @@ export const config = {
     "/hirepilot",
     "/job-tools/:path*",
     "/job-tools/generate",
-    "/job-tools/agents/linkedin-outreach/:path*",
     "/job-tools/ai-assistant/:path*",
     "/benefits/:path*",
     "/plans/:path*",
     "/settings/:path*",
     "/profile",
     "/applications/:path*",
+    "/agency/:path*",
     "/recruiter/:path*",
     "/saved-jobs",
     "/onboarding/profile/:path*",

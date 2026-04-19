@@ -19,8 +19,8 @@ export default function RecruiterAccessNotice({
 
   const message =
     reason === "not-recruiter"
-      ? "This account does not have recruiter access. To access the recruiter dashboard, please log in with your recruiter account."
-      : "You're currently signed in as a job seeker account. To access the recruiter dashboard, please log in with your recruiter account.";
+      ? "This account does not have recruiter access. To access the Agency Dashboard, please log in with your recruiter account."
+      : "You're currently signed in as a job seeker account. To access the Agency Dashboard, please log in with your recruiter account.";
 
   return (
     <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">

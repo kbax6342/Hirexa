@@ -194,7 +194,6 @@ export default async function CareerCoachPage() {
       uploadHref="/resume"
       jobMatchesHref={userId ? "/dashboard" : "/jobs"}
       aiApplyHref="/job-tools/generate"
-      linkedInOutreachHref="/job-tools/agents/linkedin-outreach"
       hirePilotHref="/hirepilot"
       initialForm={buildInitialForm(profile)}
       profileSummary={buildProfileSummary(profile)}

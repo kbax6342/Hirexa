@@ -82,7 +82,6 @@ type CareerCoachClientProps = {
   uploadHref: string;
   jobMatchesHref: string;
   aiApplyHref: string;
-  linkedInOutreachHref: string;
   hirePilotHref: string;
   initialForm: CareerCoachFormState;
   profileSummary: CareerCoachProfileSummary | null;
@@ -128,7 +127,6 @@ export default function CareerCoachClient({
   uploadHref,
   jobMatchesHref,
   aiApplyHref,
-  linkedInOutreachHref,
   hirePilotHref,
   initialForm,
   profileSummary,
@@ -645,9 +643,6 @@ export default function CareerCoachClient({
                       <Link href={aiApplyHref}>Go to AI Apply</Link>
                     </Button>
                     <Button asChild variant="outline" className="rounded-xl border-slate-300">
-                      <Link href={linkedInOutreachHref}>Go to LinkedIn Outreach</Link>
-                    </Button>
-                    <Button asChild variant="outline" className="rounded-xl border-slate-300">
                       <Link href={hirePilotHref}>Go to HirePilot</Link>
                     </Button>
                     {!profileSummary?.resumeAvailable ? (
@@ -673,7 +668,7 @@ export default function CareerCoachClient({
                 {[
                   "Smart Matches for aligned job discovery",
                   "AI Apply for tailored application materials",
-                  "LinkedIn Outreach for recruiter momentum",
+                  "Career Coach for clearer next steps",
                   "HirePilot for interview support",
                 ].map((item) => (
                   <div

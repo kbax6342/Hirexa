@@ -61,11 +61,6 @@ const authedNav: NavItem[] = [
         href: "/job-tools/career-coach",
       },
       {
-        label: "Outreach Copilot",
-        description: "AI-assisted recruiter outreach for your best-fit job matches",
-        href: "/job-tools/agents/linkedin-outreach",
-      },
-      {
         label: "HirePilot",
         description: "Real-time interview answers powered by your Hirexa profile",
         href: "/hirepilot",
@@ -74,6 +69,13 @@ const authedNav: NavItem[] = [
       },
     ],
   },
+];
+
+const agencyNav: NavItem[] = [
+  { label: "Add job order", href: "/agency/job-orders" },
+  { label: "Upload resumes", href: "/agency/candidates" },
+  { label: "View profile", href: "/agency/profile" },
+  { label: "Run AI match", href: "/agency/job-orders" },
 ];
 
 function DesktopNav({ items }: { items: NavItem[] }) {
@@ -170,6 +172,8 @@ export function Navbar() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
   const isAuthed = status === "authenticated";
+  const isAgencyWorkspace =
+    pathname?.startsWith("/agency") || pathname?.startsWith("/recruiter");
   const hideOnMobile =
     pathname === "/" ||
     pathname === "/onboarding/job-interest" ||
@@ -195,7 +199,7 @@ export function Navbar() {
     pathname || "/"
   )}`;
 
-  const navLinks = isAuthed ? authedNav : guestNav;
+  const navLinks = !isAuthed ? guestNav : isAgencyWorkspace ? agencyNav : authedNav;
 
   function handleSignOut() {
     clearAppliedJobsSession();
@@ -203,7 +207,7 @@ export function Navbar() {
   }
 
   useEffect(() => {
-    if (!isAuthed) {
+    if (!isAuthed || isAgencyWorkspace) {
       setHirePilotStatus(null);
       setHirePilotLoading(false);
       return;
@@ -250,7 +254,7 @@ export function Navbar() {
       active = false;
       controller.abort();
     };
-  }, [isAuthed]);
+  }, [isAgencyWorkspace, isAuthed]);
 
   const hirePilotDesktopLabel = hirePilotLoading
     ? "HirePilot: --"
@@ -283,6 +287,7 @@ export function Navbar() {
           </div>
           <span className="text-lg font-bold tracking-tight text-white sm:text-xl">
             Hirexa <span className="text-sky-400">AI</span>
+            {isAgencyWorkspace ? <span className="font-normal text-white"> Agency</span> : null}
           </span>
         </Link>
 
@@ -297,13 +302,15 @@ export function Navbar() {
             </Button>
           ) : (
             <>
-              <Link
-                href="/settings/subscription"
-                title={hirePilotTooltip}
-                className="inline-flex items-center rounded-full border border-sky-200/80 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
-              >
-                {hirePilotDesktopLabel}
-              </Link>
+              {!isAgencyWorkspace ? (
+                <Link
+                  href="/settings/subscription"
+                  title={hirePilotTooltip}
+                  className="inline-flex items-center rounded-full border border-sky-200/80 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
+                >
+                  {hirePilotDesktopLabel}
+                </Link>
+              ) : null}
 
               <div className="relative ml-4 group">
                 <div className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
@@ -347,13 +354,15 @@ export function Navbar() {
                 </div>
               </div>
 
-              <Link
-                href="/recruiter/dashboard"
-                title="Recruiter accounts only"
-                className="ml-6 inline-flex items-center rounded-full border border-sky-600 bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
-              >
-                Recruiter Dashboard
-              </Link>
+              {!isAgencyWorkspace ? (
+                <Link
+                  href="/agency/dashboard"
+                  title="Recruiter accounts only"
+                  className="ml-6 inline-flex items-center rounded-full border border-sky-600 bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-700"
+                >
+                  Agency Dashboard
+                </Link>
+              ) : null}
             </>
           )}
         </div>
@@ -500,33 +509,37 @@ export function Navbar() {
                 </>
               ) : (
                 <>
-                  <Link
-                    href="/settings/subscription"
-                    className="inline-flex items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-100"
-                    onClick={() => {
-                      setMobileOpen(false);
-                      setMobileAgentsOpen(false);
-                    }}
-                  >
-                    {hirePilotDesktopLabel}
-                  </Link>
-
-                  <Button
-                    asChild
-                    variant="ghost"
-                    className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
-                  >
+                  {!isAgencyWorkspace ? (
                     <Link
-                      href="/recruiter/dashboard"
-                      title="Recruiter accounts only"
+                      href="/settings/subscription"
+                      className="inline-flex items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-100"
                       onClick={() => {
                         setMobileOpen(false);
                         setMobileAgentsOpen(false);
                       }}
                     >
-                      Recruiter Dashboard
+                      {hirePilotDesktopLabel}
                     </Link>
-                  </Button>
+                  ) : null}
+
+                  {!isAgencyWorkspace ? (
+                    <Button
+                      asChild
+                      variant="ghost"
+                      className="justify-start rounded-2xl text-sm text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                    >
+                      <Link
+                        href="/agency/dashboard"
+                        title="Recruiter accounts only"
+                        onClick={() => {
+                          setMobileOpen(false);
+                          setMobileAgentsOpen(false);
+                        }}
+                      >
+                        Agency Dashboard
+                      </Link>
+                    </Button>
+                  ) : null}
 
                   <Button
                     asChild

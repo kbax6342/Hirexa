@@ -35,13 +35,13 @@ const overviewCards = [
   {
     title: "Turn advice into action",
     description:
-      "Use AI Apply, LinkedIn Outreach, and HirePilot to act on opportunities faster without losing control over the final output.",
+      "Use AI Apply, Career Coach, and HirePilot to act on opportunities faster without losing control over the final output.",
     icon: BoltIcon,
   },
 ];
 
 const safetyPoints = [
-  "Always review AI-generated resumes, outreach, and answers before sending them.",
+  "Always review AI-generated resumes, coaching guidance, and answers before you use them.",
   "Your saved profile and resume context improves quality, but human judgment still matters.",
   "Use Settings to manage billing, credits, cancellations, and account controls in one place.",
 ];
@@ -49,7 +49,7 @@ const safetyPoints = [
 const supportLinks = [
   { label: "Smart Matches", href: "/dashboard" },
   { label: "AI Apply", href: "/job-tools/generate" },
-  { label: "LinkedIn Outreach", href: "/job-tools/agents/linkedin-outreach" },
+  { label: "Career Coach", href: "/job-tools/career-coach" },
   { label: "HirePilot", href: "/hirepilot" },
 ];
 
@@ -68,7 +68,7 @@ export default function HowItWorksPage() {
             </h1>
             <p className="mt-4 max-w-3xl text-base leading-7 text-slate-700 sm:text-lg">
               Hirexa AI helps you move from profile setup to job discovery, applications,
-              recruiter outreach, and interview preparation with one connected workflow.
+              coaching, and interview preparation with one connected workflow.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
@@ -118,7 +118,7 @@ export default function HowItWorksPage() {
               <ul className="list-disc space-y-2 pl-5">
                 <li>Smart Matches uses your saved preferences to prioritize relevant roles.</li>
                 <li>AI application tools help draft tailored application materials faster.</li>
-                <li>LinkedIn Outreach helps you turn strong matches into recruiter contact plans.</li>
+                <li>Career Coach helps you turn strong matches into a clearer action plan.</li>
               </ul>
             </CardContent>
           </Card>
@@ -204,7 +204,7 @@ export default function HowItWorksPage() {
             <CardContent className="space-y-4 text-sm leading-6 text-slate-600">
               <p>
                 Hirexa AI is designed to help you move faster, not to replace your judgment.
-                Review AI-generated answers, resumes, and outreach before you use them.
+                Review AI-generated answers, resumes, and coaching guidance before you use them.
               </p>
               <ul className="list-disc space-y-2 pl-5">
                 {safetyPoints.map((point) => (

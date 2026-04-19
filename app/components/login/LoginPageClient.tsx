@@ -45,7 +45,7 @@ export default function LoginPageClient({
   const safeCallbackUrl = useMemo(
     () => normalizeClientCallbackUrl(
       callbackUrl,
-      isRecruiterMode ? "/recruiter/dashboard" : "/resume"
+      isRecruiterMode ? "/agency/dashboard" : "/resume"
     ),
     [callbackUrl, isRecruiterMode]
   );

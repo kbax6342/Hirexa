@@ -26,7 +26,7 @@ export type RecruiterAccessResult =
       userId?: string;
     };
 
-const DEFAULT_RECRUITER_CALLBACK_URL = "/recruiter/dashboard";
+const DEFAULT_RECRUITER_CALLBACK_URL = "/agency/dashboard";
 
 function getRecruiterAgencyDelegate() {
   const delegate = (

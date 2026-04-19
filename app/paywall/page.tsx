@@ -15,7 +15,7 @@ export default async function PaywallPage() {
           Unlock Hirexa premium tools
         </h1>
         <p className="mt-4 text-base leading-7 text-slate-600">
-          LinkedIn Outreach and Career Coach require an active trial, monthly, or yearly plan.
+          Career Coach and other premium tools require an active trial, monthly, or yearly plan.
         </p>
 
         <div className="mt-8 flex flex-wrap justify-center gap-3">

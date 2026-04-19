@@ -30,7 +30,7 @@ const sections = [
     title: "Smart Matches and applications",
     items: [
       "Use Smart Matches filters for role, location, and remote preferences to narrow the feed.",
-      "Apply Tool, LinkedIn Outreach, and other actions are designed to work from the same saved profile signals.",
+      "Apply Tool, Career Coach, and other actions are designed to work from the same saved profile signals.",
       "If a match looks stale or sparse, refresh your preferences and target role on the Profile page.",
     ],
   },

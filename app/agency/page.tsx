@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function RecruiterRootPage() {
+export default function AgencyRootPage() {
   redirect("/agency/dashboard");
 }

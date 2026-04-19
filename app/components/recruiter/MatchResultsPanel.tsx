@@ -80,7 +80,7 @@ export default function MatchResultsPanel({
 
               <div className="flex flex-wrap gap-2">
                 <Link
-                  href={`/recruiter/outreach?jobOrderId=${encodeURIComponent(jobOrderId)}&candidateId=${encodeURIComponent(match.candidateId)}&stage=${encodeURIComponent(stage)}`}
+                  href={`/agency/outreach?jobOrderId=${encodeURIComponent(jobOrderId)}&candidateId=${encodeURIComponent(match.candidateId)}&stage=${encodeURIComponent(stage)}`}
                   className="inline-flex items-center rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-600"
                 >
                   Generate outreach

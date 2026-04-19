@@ -92,7 +92,7 @@ export default function JobOrdersTable({
             <TableCell>
               <div className="flex items-center justify-end gap-2">
                 <Link
-                  href={`/recruiter/job-orders/${jobOrder.id}`}
+                  href={`/agency/job-orders/${jobOrder.id}`}
                   className="inline-flex h-9 items-center justify-center rounded-full border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                 >
                   <ArrowTopRightOnSquareIcon className="h-4 w-4" />

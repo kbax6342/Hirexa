@@ -19,7 +19,7 @@ const PUNCTUATION_BULLET_PATTERN = /^(?:[-*]|\u2022|\u00b7)+\s*[\W_]+$/;
 const ORPHAN_LABEL_PATTERN =
   /^(required|required:|preferred|qualifications?:|responsibilities?:|benefits?:|apply:?)$/i;
 const UI_CHROME_PATTERN =
-  /^(ai assistant apply|career coach|outreach copilot|apply|apply now|learn more|view posting)$/i;
+  /^(ai assistant apply|career coach|apply|apply now|learn more|view posting)$/i;
 
 function normalizeWhitespace(value: string) {
   return value

@@ -10,16 +10,13 @@ export async function GET(req: Request) {
 
   if (!userId) {
     const loginUrl = new URL("/login", baseUrl);
-    loginUrl.searchParams.set(
-      "callbackUrl",
-      "/job-tools/agents/linkedin-outreach"
-    );
+    loginUrl.searchParams.set("callbackUrl", "/dashboard");
     return NextResponse.redirect(loginUrl);
   }
 
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   if (!clientId) {
-    const errorUrl = new URL("/job-tools/agents/linkedin-outreach", baseUrl);
+    const errorUrl = new URL("/dashboard", baseUrl);
     errorUrl.searchParams.set("linkedin_error", "missing_credentials");
     return NextResponse.redirect(errorUrl);
   }

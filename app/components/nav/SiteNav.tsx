@@ -125,11 +125,11 @@ export default function SiteHeaderClient() {
             </div>
 
             <Link
-              href="/recruiter/dashboard"
+              href="/agency/dashboard"
               title="Recruiter accounts only"
               className="ml-6 rounded-full border border-sky-600 bg-sky-600 px-4 py-2 text-white hover:bg-sky-700"
             >
-              Recruiter Dashboard
+              Agency Dashboard
             </Link>
           </div>
         )}

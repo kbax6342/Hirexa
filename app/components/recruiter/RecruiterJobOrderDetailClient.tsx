@@ -79,7 +79,7 @@ export default function RecruiterJobOrderDetailClient({
             {loadingMatch ? "Running match..." : "Run AI match"}
           </Button>
           <Link
-            href="/recruiter/job-orders"
+            href="/agency/job-orders"
             className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
           >
             Back to job orders

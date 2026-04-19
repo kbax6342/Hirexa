@@ -1,15 +1,5 @@
-import RecruiterCandidatesClient from "@/app/components/recruiter/RecruiterCandidatesClient";
-import RecruiterShell from "@/app/components/recruiter/RecruiterShell";
-import { listRecruiterCandidates } from "@/app/lib/recruiter/queries";
-import { requireRecruiterContextOrRedirect } from "@/app/lib/recruiter/server";
+import { redirect } from "next/navigation";
 
-export default async function RecruiterCandidatesPage() {
-  const { agency } = await requireRecruiterContextOrRedirect("/recruiter/candidates");
-  const candidates = await listRecruiterCandidates(agency.id);
-
-  return (
-    <RecruiterShell agencyName={agency.name}>
-      <RecruiterCandidatesClient initialCandidates={JSON.parse(JSON.stringify(candidates))} />
-    </RecruiterShell>
-  );
+export default function RecruiterCandidatesPage() {
+  redirect("/agency/candidates");
 }

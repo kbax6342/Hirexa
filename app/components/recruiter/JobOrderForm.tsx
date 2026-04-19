@@ -239,7 +239,7 @@ export default function JobOrderForm({
           <Button
             type="submit"
             disabled={saving}
-            className="rounded-full !border-slate-200 !bg-white px-5 !text-slate-700 shadow-sm hover:!bg-slate-50"
+            className="rounded-full !bg-sky-600 px-5 !text-white shadow-sm hover:!bg-sky-700"
           >
             {saving ? "Saving..." : isEditing ? "Save job order" : "Create job order"}
           </Button>

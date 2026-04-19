@@ -330,7 +330,6 @@ export default function DashboardJobDetailsPage() {
           aiApplyLoadingLabel={aiApplyLoadingLabel}
           onAiApply={handleAiApply}
           onCareerCoach={() => router.push("/job-tools/career-coach")}
-          onOutreach={() => router.push("/job-tools/agents/linkedin-outreach")}
           hideAiApplyOnDesktop
           hideAdzunaAttribution
         />

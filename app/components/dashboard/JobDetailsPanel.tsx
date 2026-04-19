@@ -2,6 +2,11 @@
 
 import { useMemo } from "react";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import {
+  CheckIcon,
+  EnvelopeIcon,
+  LinkIcon,
+} from "@heroicons/react/24/outline";
 import { extractCompanyLocationFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import {
   cleanJobListItem,
@@ -42,7 +47,12 @@ type JobDetailsPanelProps = {
   aiApplyLoadingLabel?: string;
   onAiApply?: () => void;
   onCareerCoach?: () => void;
-  onOutreach?: () => void;
+  shareActions?: {
+    canShare: boolean;
+    copied: boolean;
+    onCopyLink: () => void;
+    onEmailJob: () => void;
+  } | null;
   hideAiApplyOnDesktop?: boolean;
   hideAdzunaAttribution?: boolean;
   autoApplyStopPoint?: {
@@ -178,7 +188,7 @@ export default function JobDetailsPanel({
   aiApplyLoadingLabel = "Opening...",
   onAiApply,
   onCareerCoach,
-  onOutreach,
+  shareActions = null,
   hideAiApplyOnDesktop = false,
   hideAdzunaAttribution = false,
   autoApplyStopPoint = null,
@@ -343,41 +353,65 @@ export default function JobDetailsPanel({
           <AdzunaAttribution className="mt-3" />
         ) : null}
 
-        {(onAiApply || onCareerCoach || onOutreach) && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {onAiApply ? (
-              <button
-                type="button"
-                onClick={onAiApply}
-                disabled={!job?.id || aiApplyLoading || aiApplyDisabled}
-                className={[
-                  "w-full rounded-lg bg-[#ed5c0e] px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(237,92,14,0.24)] transition hover:bg-[#d6520d] hover:shadow-[0_10px_22px_rgba(237,92,14,0.3)] active:bg-[#c84d0c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(237,92,14,0.25)] sm:w-auto",
-                  hideAiApplyOnDesktop ? "lg:hidden" : "",
-                ].join(" ")}
-              >
-                {aiApplyLoading ? aiApplyLoadingLabel : aiApplyLabel}
-              </button>
-            ) : null}
+        {(onAiApply || onCareerCoach || (job && shareActions)) && (
+          <div className="mt-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex w-full min-w-max items-center gap-4">
+              {(onAiApply || onCareerCoach) && (
+                <div className="flex items-center gap-2">
+                  {onAiApply ? (
+                    <button
+                      type="button"
+                      onClick={onAiApply}
+                      disabled={!job?.id || aiApplyLoading || aiApplyDisabled}
+                      className={[
+                        "shrink-0 rounded-lg bg-[#ed5c0e] px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_18px_rgba(237,92,14,0.24)] transition hover:bg-[#d6520d] hover:shadow-[0_10px_22px_rgba(237,92,14,0.3)] active:bg-[#c84d0c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(237,92,14,0.25)]",
+                        hideAiApplyOnDesktop ? "lg:hidden" : "",
+                      ].join(" ")}
+                    >
+                      {aiApplyLoading ? aiApplyLoadingLabel : aiApplyLabel}
+                    </button>
+                  ) : null}
 
-            {onCareerCoach ? (
-              <button
-                type="button"
-                onClick={onCareerCoach}
-                className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
-              >
-                Career Coach
-              </button>
-            ) : null}
+                  {onCareerCoach ? (
+                    <button
+                      type="button"
+                      onClick={onCareerCoach}
+                      className="shrink-0 rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50"
+                    >
+                      Career Coach
+                    </button>
+                  ) : null}
+                </div>
+              )}
 
-            {onOutreach ? (
-              <button
-                type="button"
-                onClick={onOutreach}
-                className="w-full rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] hover:bg-gray-50 sm:w-auto"
-              >
-                Outreach Copilot
-              </button>
-            ) : null}
+              {job && shareActions ? (
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={shareActions.onCopyLink}
+                    disabled={!shareActions.canShare}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-400"
+                  >
+                    {shareActions.copied ? (
+                      <CheckIcon className="h-4 w-4" />
+                    ) : (
+                      <LinkIcon className="h-4 w-4" />
+                    )}
+                    {shareActions.copied ? "Copied" : "Copy link"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={shareActions.onEmailJob}
+                    disabled={!shareActions.canShare}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-semibold text-[#374151] transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-400"
+                  >
+                    <EnvelopeIcon className="h-4 w-4" />
+                    Email job
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 

@@ -405,7 +405,7 @@ export default function JobMatchesLayout({
   );
   const selectedJobParam = searchParams.get("job")?.trim() || "";
   const autoApplyPollInFlightRef = useRef(false);
-  const copyResetTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const copyResetTimeoutRef = useRef<number | null>(null);
   const visibleJobs = useMemo(
     () =>
       appliedFilters.includeRemote

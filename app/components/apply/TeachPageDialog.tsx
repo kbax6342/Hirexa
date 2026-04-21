@@ -15,6 +15,7 @@ import { Textarea } from "@/app/components/ui/textarea";
 import {
   APPLY_SITE_STRATEGY_UPDATED_EVENT,
   getApplySiteStrategy,
+  refreshApplySiteStrategies,
   resolveStrategyHostname,
   saveApplySiteStrategy,
   type ApplySiteStrategyRecord,
@@ -30,6 +31,7 @@ type TeachPageDialogProps = {
   currentUrl?: string | null;
   lastAction?: string | null;
   stopReason?: string | null;
+  errorMessage?: string | null;
   stopClassification?: ApplyStopClassification | null;
   triggerLabel?: string;
   triggerClassName?: string;
@@ -61,6 +63,7 @@ export default function TeachPageDialog({
   currentUrl,
   lastAction,
   stopReason,
+  errorMessage,
   stopClassification,
   triggerLabel,
   triggerClassName,
@@ -85,10 +88,21 @@ export default function TeachPageDialog({
   const [lastTrainedUrl, setLastTrainedUrl] = useState<string | null>(null);
   const [trainingMessage, setTrainingMessage] = useState<string | null>(null);
   const [trainingError, setTrainingError] = useState<string | null>(null);
+  const [existingStrategy, setExistingStrategy] = useState<ApplySiteStrategyRecord | null>(
+    null,
+  );
+  const [teachMode, setTeachMode] = useState<"fresh" | "review">("fresh");
+  const [saving, setSaving] = useState(false);
+  const [generatedCodexPrompt, setGeneratedCodexPrompt] = useState("");
+  const [generatedSummary, setGeneratedSummary] = useState("");
+  const [promptGeneratedAt, setPromptGeneratedAt] = useState<string | null>(null);
+  const [promptModel, setPromptModel] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   const resolvedUrl = finalUrl ?? currentUrl ?? "";
   const resolvedStopReason = stopReason ?? "HUMAN_INTERVENTION_REQUIRED";
   const resolvedLastAction = lastAction ?? "";
+  const resolvedErrorMessage = errorMessage ?? "";
   const resolvedHostname = useMemo(
     () => resolveStrategyHostname(urlOrHostname || resolvedUrl),
     [resolvedUrl, urlOrHostname],
@@ -104,28 +118,69 @@ export default function TeachPageDialog({
     [currentUrl, finalUrl, lastAction, stopClassification],
   );
   const teachFieldClassName = "bg-white text-black";
+  const canShowGeneratedPrompt = generatedCodexPrompt.trim().length > 0;
+
+  const setPromptFields = useCallback((strategy: ApplySiteStrategyRecord | null) => {
+    const promptValue =
+      strategy?.generatedCodexPrompt ?? strategy?.automationPrompt ?? "";
+    const summaryValue = strategy?.aiSummary ?? strategy?.derivedInstruction ?? "";
+
+    setGeneratedCodexPrompt(promptValue);
+    setGeneratedSummary(summaryValue);
+    setPromptGeneratedAt(strategy?.promptGeneratedAt ?? strategy?.updatedAt ?? null);
+    setPromptModel(strategy?.promptModel ?? null);
+  }, []);
+
+  const hydrateFromExistingStrategy = useCallback(
+    (strategy: ApplySiteStrategyRecord) => {
+      setTeachMode("review");
+      setInstructions(strategy.instructions ?? "");
+      setSelectors(strategy.selectors ?? "");
+      setRecordedSteps(strategy.rawSteps ?? strategy.steps ?? []);
+      setRecordingStepCount(
+        strategy.rawSteps?.length ?? strategy.steps?.length ?? 0,
+      );
+      setLastTrainedUrl(strategy.lastTrainedUrl ?? resolvedUrl ?? null);
+      setPromptFields(strategy);
+    },
+    [resolvedUrl, setPromptFields],
+  );
 
   useEffect(() => {
     if (!open) return;
 
     const initialTarget = resolvedUrl || resolvedHostname;
-    const existing = getApplySiteStrategy(
-      resolveStrategyHostname(initialTarget) || initialTarget,
-    );
+    const initialHostname =
+      resolveStrategyHostname(initialTarget) || initialTarget;
 
     setUrlOrHostname(initialTarget);
-    setInstructions(existing?.instructions ?? "");
-    setSelectors(existing?.selectors ?? "");
-    setSavedStrategy(existing);
-    setRecordedSteps(existing?.steps ?? []);
-    setRecordingStepCount(existing?.steps?.length ?? 0);
-    setLastTrainedUrl(existing?.lastTrainedUrl ?? resolvedUrl ?? null);
     setTrainingSessionId(null);
     setTrainingStatus("idle");
     setTrainingMessage(null);
     setTrainingError(null);
+    setInstructions("");
+    setSelectors("");
+    setRecordedSteps([]);
+    setRecordingStepCount(0);
+    setLastTrainedUrl(resolvedUrl || null);
     setSaveMessage(null);
     setSaveError(null);
+    setExistingStrategy(null);
+    setSavedStrategy(null);
+    setTeachMode("fresh");
+    setSaving(false);
+    setGeneratedCodexPrompt("");
+    setGeneratedSummary("");
+    setPromptGeneratedAt(null);
+    setPromptModel(null);
+    setCopyMessage(null);
+
+    void (async () => {
+      await refreshApplySiteStrategies().catch(() => undefined);
+      const existing = getApplySiteStrategy(initialHostname);
+      setExistingStrategy(existing ?? null);
+      setSavedStrategy(existing);
+    })();
   }, [open, resolvedHostname, resolvedUrl]);
 
   useEffect(() => {
@@ -136,7 +191,11 @@ export default function TeachPageDialog({
       if (!activeTarget) return;
 
       const next = getApplySiteStrategy(activeTarget);
+      setExistingStrategy(next ?? null);
       setSavedStrategy(next);
+      if (teachMode === "review" && next) {
+        setPromptFields(next);
+      }
     };
 
     window.addEventListener(
@@ -150,7 +209,7 @@ export default function TeachPageDialog({
         handleStrategiesUpdated,
       );
     };
-  }, [open, resolvedHostname, resolvedUrl, urlOrHostname]);
+  }, [open, resolvedHostname, resolvedUrl, setPromptFields, teachMode, urlOrHostname]);
 
   useEffect(() => {
     if (!open || !trainingSessionId || trainingStatus !== "recording") {
@@ -189,6 +248,69 @@ export default function TeachPageDialog({
 
   const isRecording = trainingStatus === "recording";
   const canSaveStrategy = Boolean(resolvedHostname) && trainingStatus !== "starting";
+  const saveStrategy = useCallback(
+    async (mode: "save" | "regenerate") => {
+      if (!canSaveStrategy || isRecording) return;
+
+      try {
+        setSaving(true);
+        setCopyMessage(null);
+        const next = await saveApplySiteStrategy({
+          hostname: urlOrHostname || resolvedHostname,
+          finalUrl: resolvedUrl || urlOrHostname,
+          lastAction: resolvedLastAction,
+          stopReason: resolvedStopReason,
+          supportedReasons: [resolvedStopClassification.reason],
+          instructions,
+          selectors,
+          errorMessage: resolvedErrorMessage,
+          steps: recordedSteps,
+          trainingSource:
+            recordedSteps.length > 0 ? "playwright_recording" : undefined,
+          lastTrainedUrl:
+            recordedSteps.at(-1)?.currentUrl ?? lastTrainedUrl ?? resolvedUrl,
+          pageType: resolvedStopClassification.pageType,
+        });
+
+        setSavedStrategy(next);
+        setExistingStrategy(next);
+        setPromptFields(next);
+        setSaveMessage(
+          mode === "save"
+            ? `Saved strategy for ${next.hostname} and generated a Codex prompt.`
+            : `Regenerated Codex prompt for ${next.hostname}.`,
+        );
+        setSaveError(null);
+        onStrategySaved?.(next);
+      } catch (error) {
+        setSaveMessage(null);
+        setSaveError(
+          error instanceof Error ? error.message : "Failed to save strategy.",
+        );
+      } finally {
+        setSaving(false);
+      }
+    },
+    [
+      canSaveStrategy,
+      instructions,
+      isRecording,
+      lastTrainedUrl,
+      onStrategySaved,
+      recordedSteps,
+      resolvedErrorMessage,
+      resolvedHostname,
+      resolvedLastAction,
+      resolvedStopClassification.pageType,
+      resolvedStopClassification.reason,
+      resolvedStopReason,
+      resolvedUrl,
+      selectors,
+      setPromptFields,
+      urlOrHostname,
+    ],
+  );
+
   const startRecording = useCallback(async () => {
     try {
       setTrainingStatus("starting");
@@ -294,6 +416,15 @@ export default function TeachPageDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-800">Hostname</label>
+              <Input
+                className={teachFieldClassName}
+                value={resolvedHostname}
+                readOnly
+              />
+            </div>
+
+            <div className="space-y-1">
               <label className="text-sm font-medium text-gray-800">
                 Detected stop reason
               </label>
@@ -301,6 +432,20 @@ export default function TeachPageDialog({
                 className={teachFieldClassName}
                 value={resolvedStopReason}
                 readOnly
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-800">
+                Error message
+              </label>
+              <Textarea
+                className={teachFieldClassName}
+                value={resolvedErrorMessage}
+                readOnly
+                rows={3}
               />
             </div>
 
@@ -320,6 +465,44 @@ export default function TeachPageDialog({
             <p className="text-xs text-gray-500">
               Saving under hostname: {resolvedHostname}
             </p>
+          ) : null}
+
+          {existingStrategy ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
+              <span className="font-medium text-gray-900">Mode:</span>
+              <span className="text-gray-700">
+                {teachMode === "fresh"
+                  ? "Fresh entry (default)"
+                  : "Review previous attempt"}
+              </span>
+              {teachMode === "fresh" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => hydrateFromExistingStrategy(existingStrategy)}
+                >
+                  Review previous attempt
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setTeachMode("fresh");
+                    setInstructions("");
+                    setSelectors("");
+                    setRecordedSteps([]);
+                    setRecordingStepCount(0);
+                    setLastTrainedUrl(resolvedUrl || null);
+                    setPromptFields(null);
+                  }}
+                >
+                  Back to fresh entry
+                </Button>
+              )}
+            </div>
           ) : null}
 
           <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -518,13 +701,91 @@ export default function TeachPageDialog({
                 </p>
               ) : null}
               <p className="mt-1 text-xs text-gray-500">
-                Saved steps: {savedStrategy.steps?.length ?? 0}
+                Replay-safe steps: {savedStrategy.steps?.length ?? 0}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Raw recorded steps: {savedStrategy.rawSteps?.length ?? savedStrategy.steps?.length ?? 0}
               </p>
               <p className="mt-1 text-xs text-gray-500">
                 Updated: {new Date(savedStrategy.updatedAt).toLocaleString()}
               </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Prompt generation: {savedStrategy.promptGenerationSucceeded ? "Ready" : "Pending"}
+              </p>
+              {savedStrategy.derivedInstruction ? (
+                <p className="mt-2 text-xs text-gray-600">
+                  Lesson: {savedStrategy.derivedInstruction}
+                </p>
+              ) : null}
             </div>
           ) : null}
+
+          <div className="w-full rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium text-gray-900">Generated Codex Prompt</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!canShowGeneratedPrompt}
+                  onClick={() => {
+                    if (!canShowGeneratedPrompt) return;
+                    void (async () => {
+                      try {
+                        await navigator.clipboard.writeText(generatedCodexPrompt);
+                        setCopyMessage("Copied prompt to clipboard.");
+                      } catch {
+                        setCopyMessage("Unable to copy prompt.");
+                      }
+                    })();
+                  }}
+                >
+                  Copy
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!canSaveStrategy || isRecording || saving}
+                  onClick={() => {
+                    void saveStrategy("regenerate");
+                  }}
+                >
+                  Regenerate
+                </Button>
+              </div>
+            </div>
+
+            {generatedSummary ? (
+              <p className="mt-2 text-xs text-gray-600">{generatedSummary}</p>
+            ) : (
+              <p className="mt-2 text-xs text-gray-500">
+                Save strategy to generate a Codex-ready prompt.
+              </p>
+            )}
+
+            <Textarea
+              className="mt-2 min-h-40 bg-white text-black"
+              value={generatedCodexPrompt}
+              readOnly
+              placeholder="Codex prompt appears here after save."
+            />
+
+            {(promptGeneratedAt || promptModel) && canShowGeneratedPrompt ? (
+              <p className="mt-2 text-xs text-gray-500">
+                Generated{" "}
+                {promptGeneratedAt
+                  ? new Date(promptGeneratedAt).toLocaleString()
+                  : "just now"}
+                {promptModel ? ` using ${promptModel}` : ""}
+              </p>
+            ) : null}
+
+            {copyMessage ? (
+              <p className="mt-2 text-xs text-gray-600">{copyMessage}</p>
+            ) : null}
+          </div>
 
           {saveMessage ? (
             <p className="text-sm text-emerald-700">{saveMessage}</p>
@@ -539,36 +800,11 @@ export default function TeachPageDialog({
           <Button
             type="button"
             onClick={() => {
-              try {
-                const next = saveApplySiteStrategy({
-                  hostname: urlOrHostname || resolvedHostname,
-                  finalUrl: resolvedUrl || urlOrHostname,
-                  lastAction: resolvedLastAction,
-                  stopReason: resolvedStopReason,
-                  supportedReasons: [resolvedStopClassification.reason],
-                  instructions,
-                  selectors,
-                  steps: recordedSteps,
-                  trainingSource:
-                    recordedSteps.length > 0 ? "playwright_recording" : undefined,
-                  lastTrainedUrl:
-                    recordedSteps.at(-1)?.currentUrl ?? lastTrainedUrl ?? resolvedUrl,
-                });
-
-                setSavedStrategy(next);
-                setSaveMessage(`Saved strategy for ${next.hostname}.`);
-                setSaveError(null);
-                onStrategySaved?.(next);
-              } catch (error) {
-                setSaveMessage(null);
-                setSaveError(
-                  error instanceof Error ? error.message : "Failed to save strategy.",
-                );
-              }
+              void saveStrategy("save");
             }}
-            disabled={!canSaveStrategy || isRecording}
+            disabled={!canSaveStrategy || isRecording || saving}
           >
-            Save strategy
+            {saving ? "Saving..." : "Save strategy"}
           </Button>
         </DialogFooter>
       </DialogContent>

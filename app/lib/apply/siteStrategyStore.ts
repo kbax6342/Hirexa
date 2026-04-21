@@ -4,92 +4,27 @@ import {
   isApplyStopReason,
   type ApplyStopReason,
 } from "@/app/lib/apply/stopClassification";
+import {
+  matchPlaywrightStrategy,
+  resolveStrategyHostname,
+} from "@/app/lib/apply/playwrightStrategyMatcher";
+import {
+  deriveApplySiteStrategyStatus,
+  type ApplySiteStrategyExportEnvelope,
+  type ApplySiteStrategyRecord,
+  type ApplySiteStrategyReplayResult,
+  type ApplySiteStrategyReplayStatus,
+  type ApplySiteStrategyReplayUpdateInput,
+  type ApplySiteStrategySaveInput,
+  type ApplySiteStrategyStatus,
+  type ApplySiteStrategyStep,
+  type ApplySiteStrategyStore,
+} from "@/app/lib/apply/playwrightStrategyTypes";
 
 export const APPLY_SITE_STRATEGY_STORAGE_KEY =
   "hirexa_auto_apply_site_strategies";
 export const APPLY_SITE_STRATEGY_UPDATED_EVENT =
   "hirexa:site-strategies-updated";
-
-export type ApplySiteStrategyStep = {
-  id: string;
-  type: "goto" | "navigation" | "click" | "fill" | "select_option" | "toggle";
-  selector?: string;
-  label?: string;
-  text?: string;
-  value?: string;
-  checked?: boolean;
-  currentUrl: string;
-  timestamp: string;
-};
-
-export type ApplySiteStrategyReplayStatus =
-  | "IDLE"
-  | "RUNNING"
-  | "COMPLETED"
-  | "FAILED";
-
-export type ApplySiteStrategyReplayResult = {
-  status: "COMPLETED" | "FAILED";
-  currentUrl?: string;
-  reason?: string;
-  failingStepId?: string;
-  completedStepCount?: number;
-  totalStepCount?: number;
-};
-
-export type ApplySiteStrategyStatus =
-  | "draft"
-  | "tested_once"
-  | "working"
-  | "unstable";
-
-export type ApplySiteStrategyRecord = {
-  hostname: string;
-  finalUrl: string;
-  lastAction: string;
-  stopReason: string;
-  supportedReasons?: ApplyStopReason[];
-  status: ApplySiteStrategyStatus;
-  successCount: number;
-  failureCount: number;
-  lastReplaySucceeded?: boolean;
-  lastFailureReason?: string;
-  instructions: string;
-  selectors?: string;
-  steps?: ApplySiteStrategyStep[];
-  trainingSource?: "playwright_recording";
-  lastTrainedUrl?: string;
-  replayStatus?: ApplySiteStrategyReplayStatus;
-  lastReplayedAt?: string;
-  lastReplayResult?: ApplySiteStrategyReplayResult;
-  failingStepId?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type ApplySiteStrategyStore = Record<string, ApplySiteStrategyRecord>;
-type ApplySiteStrategyExportEnvelope = {
-  version: 1;
-  exportedAt: string;
-  overwriteExisting: boolean;
-  strategies: ApplySiteStrategyStore;
-};
-
-const APPLY_SITE_STRATEGY_STEP_TYPES = new Set<
-  ApplySiteStrategyStep["type"]
->(["goto", "navigation", "click", "fill", "select_option", "toggle"]);
-const APPLY_SITE_STRATEGY_REPLAY_STATUSES = new Set<
-  ApplySiteStrategyReplayStatus
->(["IDLE", "RUNNING", "COMPLETED", "FAILED"]);
-const APPLY_SITE_STRATEGY_STATUSES = new Set<ApplySiteStrategyStatus>([
-  "draft",
-  "tested_once",
-  "working",
-  "unstable",
-]);
-const APPLY_SITE_STRATEGY_REPLAY_RESULT_STATUSES = new Set<
-  NonNullable<ApplySiteStrategyReplayResult["status"]>
->(["COMPLETED", "FAILED"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -113,16 +48,54 @@ function readOptionalBoolean(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function canUseLocalStorage() {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function normalizeStep(step: unknown) {
+  if (!isRecord(step)) return null;
+
+  const id = readString(step.id);
+  const type = readString(step.type);
+  const currentUrl = readString(step.currentUrl);
+  const timestamp = readString(step.timestamp);
+
+  if (!id || !type || !currentUrl || !timestamp) {
+    return null;
+  }
+
+  return {
+    id,
+    type: type as ApplySiteStrategyStep["type"],
+    selector: readOptionalString(step.selector),
+    label: readOptionalString(step.label),
+    text: readOptionalString(step.text),
+    value: readOptionalString(step.value),
+    checked:
+      typeof step.checked === "boolean" ? step.checked : undefined,
+    currentUrl,
+    timestamp,
+  } satisfies ApplySiteStrategyStep;
+}
+
+function normalizeSteps(value: unknown) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+
+  const normalized = value
+    .map(normalizeStep)
+    .filter((step): step is NonNullable<ReturnType<typeof normalizeStep>> =>
+      Boolean(step),
+    );
+
+  return normalized;
+}
+
 function normalizeSupportedReasons(
   value: unknown,
 ): ApplyStopReason[] | undefined | null {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (!Array.isArray(value)) {
-    return null;
-  }
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
 
   const normalized = value
     .map((entry) => readString(entry))
@@ -135,102 +108,40 @@ function normalizeSupportedReasons(
   return Array.from(new Set(normalized)) as ApplyStopReason[];
 }
 
-function normalizeStrategyStep(step: unknown) {
-  if (!isRecord(step)) return null;
+function normalizeReplayResult(value: unknown) {
+  if (!isRecord(value)) return undefined;
 
-  const id = readString(step.id);
-  const type = readString(step.type);
-  const currentUrl = readString(step.currentUrl);
-  const timestamp = readString(step.timestamp);
-
-  if (!id || !type || !currentUrl || !timestamp) {
-    return null;
+  const status = readString(value.status);
+  if (status !== "COMPLETED" && status !== "FAILED") {
+    return undefined;
   }
-
-  if (!APPLY_SITE_STRATEGY_STEP_TYPES.has(type as ApplySiteStrategyStep["type"])) {
-    return null;
-  }
-
-  const checked =
-    typeof step.checked === "boolean" ? step.checked : undefined;
 
   return {
-    id,
-    type: type as ApplySiteStrategyStep["type"],
-    selector: readOptionalString(step.selector),
-    label: readOptionalString(step.label),
-    text: readOptionalString(step.text),
-    value: readOptionalString(step.value),
-    checked,
-    currentUrl,
-    timestamp,
-  } satisfies ApplySiteStrategyStep;
+    status,
+    currentUrl: readOptionalString(value.currentUrl),
+    reason: readOptionalString(value.reason),
+    failingStepId: readOptionalString(value.failingStepId),
+    completedStepCount: readOptionalNumber(value.completedStepCount),
+    totalStepCount: readOptionalNumber(value.totalStepCount),
+  } satisfies ApplySiteStrategyReplayResult;
 }
 
 function normalizeStrategyStatus(
   value: unknown,
 ): ApplySiteStrategyStatus | undefined | null {
-  if (value === undefined) {
-    return undefined;
-  }
-
+  if (value === undefined) return undefined;
   const status = readString(value);
-  if (!status) {
-    return null;
+  if (!status) return null;
+
+  switch (status) {
+    case "draft":
+    case "tested_once":
+    case "working":
+    case "unstable":
+      return status;
+    default:
+      return null;
   }
-
-  if (!APPLY_SITE_STRATEGY_STATUSES.has(status as ApplySiteStrategyStatus)) {
-    return null;
-  }
-
-  return status as ApplySiteStrategyStatus;
-}
-
-function deriveStrategyStatus(args: {
-  successCount: number;
-  failureCount: number;
-  lastReplaySucceeded?: boolean;
-}) {
-  if (args.lastReplaySucceeded === false && args.successCount > 0) {
-    return "unstable" satisfies ApplySiteStrategyStatus;
-  }
-
-  if (args.successCount >= 2) {
-    return "working" satisfies ApplySiteStrategyStatus;
-  }
-
-  if (args.successCount === 1) {
-    return "tested_once" satisfies ApplySiteStrategyStatus;
-  }
-
-  if (args.failureCount > 0 && args.successCount === 0) {
-    return "draft" satisfies ApplySiteStrategyStatus;
-  }
-
-  return "draft" satisfies ApplySiteStrategyStatus;
-}
-
-function normalizeReplayResult(result: unknown) {
-  if (!isRecord(result)) return undefined;
-
-  const status = readString(result.status);
-  if (
-    !status ||
-    !APPLY_SITE_STRATEGY_REPLAY_RESULT_STATUSES.has(
-      status as NonNullable<ApplySiteStrategyReplayResult["status"]>,
-    )
-  ) {
-    return undefined;
-  }
-
-  return {
-    status: status as NonNullable<ApplySiteStrategyReplayResult["status"]>,
-    currentUrl: readOptionalString(result.currentUrl),
-    reason: readOptionalString(result.reason),
-    failingStepId: readOptionalString(result.failingStepId),
-    completedStepCount: readOptionalNumber(result.completedStepCount),
-    totalStepCount: readOptionalNumber(result.totalStepCount),
-  } satisfies ApplySiteStrategyReplayResult;
 }
 
 function normalizeStrategyRecord(
@@ -239,67 +150,39 @@ function normalizeStrategyRecord(
 ): ApplySiteStrategyRecord | null {
   if (!isRecord(value)) return null;
 
-  const resolvedKey = resolveStrategyHostname(key);
-  const recordHostname = resolveStrategyHostname(
-    readString(value.hostname, { trim: true }) ?? key,
+  const sourceHost = resolveStrategyHostname(readString(value.sourceHost) ?? "");
+  const hostnameFallback = resolveStrategyHostname(readString(value.hostname) ?? "");
+  const destinationHost = resolveStrategyHostname(
+    readString(value.destinationHost) ?? "",
   );
-  const hostname = recordHostname || resolvedKey;
+  const hostname = sourceHost || hostnameFallback || destinationHost || resolveStrategyHostname(key);
 
-  if (!hostname || (resolvedKey && hostname !== resolvedKey)) {
+  if (!hostname) {
     return null;
   }
 
-  const finalUrl = readString(value.finalUrl);
-  const lastAction = readString(value.lastAction, { trim: false });
-  const stopReason = readString(value.stopReason, { trim: false });
-  const instructions = readString(value.instructions, { trim: false });
-  const createdAt = readString(value.createdAt);
-  const updatedAt = readString(value.updatedAt);
   const supportedReasons = normalizeSupportedReasons(value.supportedReasons);
+  if (supportedReasons === null) return null;
 
-  if (
-    finalUrl === null ||
-    lastAction === null ||
-    stopReason === null ||
-    instructions === null ||
-    createdAt === null ||
-    updatedAt === null ||
-    supportedReasons === null
-  ) {
-    return null;
-  }
-
-  let steps: ApplySiteStrategyStep[] | undefined;
-  if (value.steps !== undefined) {
-    if (!Array.isArray(value.steps)) return null;
-    const normalizedSteps = value.steps.map(normalizeStrategyStep);
-    if (normalizedSteps.some((step) => step === null)) {
-      return null;
-    }
-    steps = normalizedSteps as ApplySiteStrategyStep[];
-  }
-
-  const replayStatus = readOptionalString(value.replayStatus);
-  if (
-    replayStatus &&
-    !APPLY_SITE_STRATEGY_REPLAY_STATUSES.has(
-      replayStatus as ApplySiteStrategyReplayStatus,
-    )
-  ) {
-    return null;
-  }
-
-  const trainingSource = readOptionalString(value.trainingSource);
-  if (trainingSource && trainingSource !== "playwright_recording") {
+  const steps = normalizeSteps(value.steps);
+  const rawSteps = normalizeSteps(value.rawSteps);
+  const sanitizedSteps = normalizeSteps(value.sanitizedSteps);
+  if (steps === null || rawSteps === null || sanitizedSteps === null) {
     return null;
   }
 
   const replayResult = normalizeReplayResult(value.lastReplayResult);
   const explicitStatus = normalizeStrategyStatus(value.status);
-  if (explicitStatus === null) {
-    return null;
-  }
+  if (explicitStatus === null) return null;
 
+  const successfulReplays =
+    readOptionalNumber(value.successfulReplays) ??
+    readOptionalNumber(value.successCount) ??
+    0;
+  const failedReplays =
+    readOptionalNumber(value.failedReplays) ??
+    readOptionalNumber(value.failureCount) ??
+    0;
   const lastReplaySucceeded =
     readOptionalBoolean(value.lastReplaySucceeded) ??
     (replayResult?.status === "COMPLETED"
@@ -307,58 +190,126 @@ function normalizeStrategyRecord(
       : replayResult?.status === "FAILED"
         ? false
         : undefined);
-  const successCount =
-    readOptionalNumber(value.successCount) ??
-    (lastReplaySucceeded === true ? 1 : 0);
-  const failureCount =
-    readOptionalNumber(value.failureCount) ??
-    (lastReplaySucceeded === false ? 1 : 0);
-  const lastFailureReason =
-    readOptionalString(value.lastFailureReason) ??
-    (lastReplaySucceeded === false ? replayResult?.reason : undefined);
-  const status =
-    explicitStatus ??
-    deriveStrategyStatus({
-      successCount,
-      failureCount,
-      lastReplaySucceeded,
-    });
 
   return {
+    id: readOptionalString(value.id),
+    strategyKey:
+      readOptionalString(value.strategyKey) ||
+      `${hostname}::legacy`,
     hostname,
-    finalUrl,
-    lastAction,
-    stopReason,
+    sourceHost: sourceHost || hostname,
+    destinationHost: destinationHost || undefined,
+    strategyType: readOptionalString(value.strategyType),
+    pageType: readOptionalString(value.pageType),
+    finalUrl: readString(value.finalUrl, { trim: false }) ?? "",
+    lastAction: readString(value.lastAction, { trim: false }) ?? "",
+    stopReason: readString(value.stopReason, { trim: false }) ?? "",
     supportedReasons,
-    status,
-    successCount,
-    failureCount,
+    status:
+      explicitStatus ??
+      deriveApplySiteStrategyStatus({
+        successCount: successfulReplays,
+        failureCount: failedReplays,
+        lastReplaySucceeded,
+      }),
+    successCount: successfulReplays,
+    failureCount: failedReplays,
+    successfulReplays,
+    failedReplays,
     lastReplaySucceeded,
-    lastFailureReason,
-    instructions,
+    lastFailureReason: readOptionalString(value.lastFailureReason),
+    instructions: readString(value.instructions, { trim: false }) ?? "",
     selectors: readOptionalString(value.selectors),
-    steps,
-    trainingSource: trainingSource as "playwright_recording" | undefined,
+    steps: sanitizedSteps ?? steps ?? rawSteps,
+    rawSteps: rawSteps ?? steps,
+    sanitizedSteps: sanitizedSteps ?? steps,
+    jobTitle: readOptionalString(value.jobTitle),
+    company: readOptionalString(value.company),
+    location: readOptionalString(value.location),
+    derivedInstruction: readOptionalString(value.derivedInstruction),
+    automationPrompt: readOptionalString(value.automationPrompt),
+    aiSummary:
+      readOptionalString(value.aiSummary) ??
+      readOptionalString(value.derivedInstruction),
+    generatedCodexPrompt:
+      readOptionalString(value.generatedCodexPrompt) ??
+      readOptionalString(value.automationPrompt),
+    promptGeneratedAt:
+      readOptionalString(value.promptGeneratedAt) ??
+      (readOptionalString(value.generatedCodexPrompt) ||
+      readOptionalString(value.automationPrompt) ||
+      readOptionalString(value.aiSummary) ||
+      readOptionalString(value.derivedInstruction)
+        ? readOptionalString(value.updatedAt)
+        : undefined),
+    promptModel: readOptionalString(value.promptModel),
+    promptGenerationSucceeded:
+      readOptionalBoolean(value.promptGenerationSucceeded) ??
+      Boolean(
+        readOptionalString(value.derivedInstruction) &&
+          readOptionalString(value.automationPrompt),
+      ),
+    trainingSource:
+      readOptionalString(value.trainingSource) === "playwright_recording"
+        ? "playwright_recording"
+        : undefined,
     lastTrainedUrl: readOptionalString(value.lastTrainedUrl),
-    replayStatus: replayStatus as ApplySiteStrategyReplayStatus | undefined,
-    lastReplayedAt: readOptionalString(value.lastReplayedAt),
+    replayStatus: readOptionalString(value.replayStatus) as
+      | ApplySiteStrategyReplayStatus
+      | undefined,
+    lastReplayedAt:
+      readOptionalString(value.lastReplayedAt) ??
+      readOptionalString(value.lastReplayAt),
+    lastReplayAt:
+      readOptionalString(value.lastReplayAt) ??
+      readOptionalString(value.lastReplayedAt),
     lastReplayResult: replayResult,
     failingStepId: readOptionalString(value.failingStepId),
-    createdAt,
-    updatedAt,
+    createdAt: readString(value.createdAt) ?? new Date().toISOString(),
+    updatedAt: readString(value.updatedAt) ?? new Date().toISOString(),
   } satisfies ApplySiteStrategyRecord;
 }
 
 function normalizeStrategyStore(value: unknown) {
-  if (!isRecord(value)) {
-    return {};
-  }
+  if (!isRecord(value)) return {};
 
   return Object.fromEntries(
     Object.entries(value)
-      .map(([key, record]) => [key, normalizeStrategyRecord(key, record)] as const)
+      .map(([key, record]) => {
+        const normalized = normalizeStrategyRecord(key, record);
+        const nextKey = normalized?.strategyKey ?? normalized?.hostname ?? key;
+        return [nextKey, normalized] as const;
+      })
       .filter((entry): entry is [string, ApplySiteStrategyRecord] => Boolean(entry[1])),
-  ) as ApplySiteStrategyStore;
+  ) satisfies ApplySiteStrategyStore;
+}
+
+function sortStrategyStore(store: ApplySiteStrategyStore) {
+  return Object.fromEntries(
+    Object.entries(store).sort(([left], [right]) => left.localeCompare(right)),
+  ) satisfies ApplySiteStrategyStore;
+}
+
+function persistApplySiteStrategies(store: ApplySiteStrategyStore) {
+  if (!canUseLocalStorage()) return;
+
+  window.localStorage.setItem(
+    APPLY_SITE_STRATEGY_STORAGE_KEY,
+    JSON.stringify(sortStrategyStore(store)),
+  );
+  window.dispatchEvent(new CustomEvent(APPLY_SITE_STRATEGY_UPDATED_EVENT));
+}
+
+function upsertStrategyRecord(record: ApplySiteStrategyRecord) {
+  const current = loadApplySiteStrategies();
+  const key = record.strategyKey ?? record.id ?? record.hostname;
+  const next = {
+    ...current,
+    [key]: record,
+  } satisfies ApplySiteStrategyStore;
+
+  persistApplySiteStrategies(next);
+  return record;
 }
 
 function parseStrategiesImportJson(json: string) {
@@ -375,14 +326,13 @@ function parseStrategiesImportJson(json: string) {
   }
 
   if ("strategies" in parsed) {
-    const strategies = parsed.strategies;
-    if (!isRecord(strategies)) {
-      throw new Error("Import JSON must contain an object of hostname-keyed strategies.");
+    if (!isRecord(parsed.strategies)) {
+      throw new Error("Import JSON must contain an object of saved strategies.");
     }
 
     return {
       overwriteExisting: parsed.overwriteExisting === true,
-      strategies,
+      strategies: parsed.strategies,
     };
   }
 
@@ -390,39 +340,6 @@ function parseStrategiesImportJson(json: string) {
     overwriteExisting: false,
     strategies: parsed,
   };
-}
-
-function sortStrategyStore(store: ApplySiteStrategyStore) {
-  return Object.fromEntries(
-    Object.entries(store).sort(([left], [right]) => left.localeCompare(right)),
-  ) as ApplySiteStrategyStore;
-}
-
-function persistApplySiteStrategies(store: ApplySiteStrategyStore) {
-  window.localStorage.setItem(
-    APPLY_SITE_STRATEGY_STORAGE_KEY,
-    JSON.stringify(sortStrategyStore(store)),
-  );
-  window.dispatchEvent(new CustomEvent(APPLY_SITE_STRATEGY_UPDATED_EVENT));
-}
-
-function canUseLocalStorage() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
-
-export function resolveStrategyHostname(value: string | null | undefined) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-
-  try {
-    return new URL(raw).hostname.toLowerCase();
-  } catch {
-    return raw
-      .replace(/^https?:\/\//i, "")
-      .replace(/\/.*$/, "")
-      .trim()
-      .toLowerCase();
-  }
 }
 
 export function loadApplySiteStrategies(): ApplySiteStrategyStore {
@@ -439,10 +356,111 @@ export function loadApplySiteStrategies(): ApplySiteStrategyStore {
 }
 
 export function getApplySiteStrategy(hostname: string | null | undefined) {
-  const resolvedHostname = resolveStrategyHostname(hostname);
-  if (!resolvedHostname) return null;
+  return getApplySiteStrategyMatch({ hostname }).strategy;
+}
 
-  return loadApplySiteStrategies()[resolvedHostname] ?? null;
+function listStrategies() {
+  return Object.values(loadApplySiteStrategies());
+}
+
+async function readJsonResponse(response: Response) {
+  const payload = (await response.json()) as Record<string, unknown>;
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(
+      typeof payload.error === "string"
+        ? payload.error
+        : "Unable to load saved strategies.",
+    );
+  }
+
+  return payload;
+}
+
+export async function refreshApplySiteStrategies() {
+  if (typeof window === "undefined") return {};
+
+  const response = await fetch("/api/apply/strategies", {
+    cache: "no-store",
+  });
+  const payload = await readJsonResponse(response);
+  const nextStrategies = Array.isArray(payload.strategies)
+    ? payload.strategies
+        .map((entry, index) => normalizeStrategyRecord(String(index), entry))
+        .filter((entry): entry is ApplySiteStrategyRecord => Boolean(entry))
+    : [];
+  const mergedStore = { ...loadApplySiteStrategies() };
+
+  for (const strategy of nextStrategies) {
+    const key = strategy.strategyKey ?? strategy.id ?? strategy.hostname;
+    mergedStore[key] = strategy;
+  }
+
+  persistApplySiteStrategies(mergedStore);
+  return mergedStore;
+}
+
+function toRequestPayload(input: ApplySiteStrategySaveInput) {
+  return {
+    ...input,
+    hostname: resolveStrategyHostname(input.hostname ?? input.sourceHost),
+  };
+}
+
+export async function saveApplySiteStrategy(input: ApplySiteStrategySaveInput) {
+  const response = await fetch("/api/apply/strategies", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(toRequestPayload(input)),
+  });
+  const payload = await readJsonResponse(response);
+  const strategyPayload = payload.strategy as Record<string, unknown> | undefined;
+  const enrichedStrategyPayload = {
+    ...(strategyPayload ?? {}),
+    aiSummary: payload.aiSummary ?? strategyPayload?.aiSummary,
+    generatedCodexPrompt:
+      payload.generatedCodexPrompt ?? strategyPayload?.generatedCodexPrompt,
+    promptGeneratedAt:
+      payload.promptGeneratedAt ?? strategyPayload?.promptGeneratedAt,
+    promptModel: payload.promptModel ?? strategyPayload?.promptModel,
+  };
+  const strategy = normalizeStrategyRecord(
+    readString(payload.strategyKey) ?? readString(strategyPayload?.strategyKey) ?? "",
+    enrichedStrategyPayload,
+  );
+
+  if (!strategy) {
+    throw new Error("Strategy save returned an invalid record.");
+  }
+
+  return upsertStrategyRecord(strategy);
+}
+
+export async function updateApplySiteStrategyReplayState(
+  input: ApplySiteStrategyReplayUpdateInput,
+) {
+  const response = await fetch("/api/apply/strategies", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...input,
+      hostname: resolveStrategyHostname(input.hostname),
+    }),
+  });
+  const payload = await readJsonResponse(response);
+  const strategy = normalizeStrategyRecord(
+    readString((payload.strategy as Record<string, unknown> | undefined)?.strategyKey) ?? "",
+    payload.strategy,
+  );
+
+  if (!strategy) {
+    throw new Error("Strategy update returned an invalid record.");
+  }
+
+  return upsertStrategyRecord(strategy);
 }
 
 function getLegacySupportedReasons(
@@ -471,179 +489,32 @@ export function strategyMatchesStopReason(args: {
 export function getApplySiteStrategyMatch(args: {
   hostname: string | null | undefined;
   reason?: string | null;
+  destinationHost?: string | null;
+  pageType?: string | null;
+  strategyType?: string | null;
+  company?: string | null;
+  location?: string | null;
 }) {
-  const strategy = getApplySiteStrategy(args.hostname);
-  if (!strategy) {
-    return { strategy: null, matchedByReason: false };
-  }
+  const strategies = listStrategies();
+  const match = matchPlaywrightStrategy({
+    strategies,
+    sourceHost: resolveStrategyHostname(args.hostname),
+    destinationHost: resolveStrategyHostname(args.destinationHost),
+    pageType: args.pageType,
+    strategyType: args.strategyType,
+    company: args.company,
+    location: args.location,
+  });
 
   return {
-    strategy,
-    matchedByReason: strategyMatchesStopReason({
-      strategy,
-      reason: args.reason,
-    }),
+    strategy: match.strategy,
+    matchedByReason: match.strategy
+      ? strategyMatchesStopReason({
+          strategy: match.strategy,
+          reason: args.reason,
+        })
+      : false,
   };
-}
-
-export function saveApplySiteStrategy(args: {
-  hostname: string;
-  finalUrl: string;
-  lastAction: string;
-  stopReason: string;
-  supportedReasons?: ApplyStopReason[];
-  instructions: string;
-  selectors?: string;
-  steps?: ApplySiteStrategyStep[];
-  trainingSource?: "playwright_recording";
-  lastTrainedUrl?: string;
-}) {
-  const resolvedHostname = resolveStrategyHostname(args.hostname);
-  if (!resolvedHostname) {
-    throw new Error("Hostname is required.");
-  }
-
-  if (!canUseLocalStorage()) {
-    throw new Error("Local storage is unavailable in this browser.");
-  }
-
-  const store = loadApplySiteStrategies();
-  const existing = store[resolvedHostname];
-  const now = new Date().toISOString();
-
-  const record: ApplySiteStrategyRecord = {
-    hostname: resolvedHostname,
-    finalUrl: String(args.finalUrl ?? "").trim(),
-    lastAction: String(args.lastAction ?? "").trim(),
-    stopReason: String(args.stopReason ?? "").trim(),
-    supportedReasons:
-      Array.isArray(args.supportedReasons) && args.supportedReasons.length > 0
-        ? Array.from(
-            new Set([
-              ...(existing?.supportedReasons ?? []),
-              ...args.supportedReasons.filter((reason) => isApplyStopReason(reason)),
-            ]),
-          )
-        : existing?.supportedReasons,
-    status: existing?.status ?? "draft",
-    successCount: existing?.successCount ?? 0,
-    failureCount: existing?.failureCount ?? 0,
-    lastReplaySucceeded: existing?.lastReplaySucceeded,
-    lastFailureReason: existing?.lastFailureReason,
-    instructions: String(args.instructions ?? "").trim(),
-    selectors: String(args.selectors ?? "").trim() || undefined,
-    steps: Array.isArray(args.steps)
-      ? args.steps.map((step) => ({
-          ...step,
-          selector: step.selector?.trim() || undefined,
-          label: step.label?.trim() || undefined,
-          text: step.text?.trim() || undefined,
-          value: step.value?.trim() || undefined,
-        }))
-      : existing?.steps,
-    trainingSource:
-      args.trainingSource ??
-      (Array.isArray(args.steps) && args.steps.length > 0
-        ? "playwright_recording"
-        : existing?.trainingSource),
-    lastTrainedUrl:
-      String(args.lastTrainedUrl ?? "").trim() ||
-      existing?.lastTrainedUrl ||
-      undefined,
-    replayStatus: existing?.replayStatus,
-    lastReplayedAt: existing?.lastReplayedAt,
-    lastReplayResult: existing?.lastReplayResult,
-    failingStepId: existing?.failingStepId,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  };
-
-  persistApplySiteStrategies({
-    ...store,
-    [resolvedHostname]: record,
-  });
-
-  return record;
-}
-
-export function updateApplySiteStrategyReplayState(args: {
-  hostname: string;
-  replayStatus: ApplySiteStrategyReplayStatus;
-  lastReplayedAt?: string;
-  lastReplayResult?: ApplySiteStrategyReplayResult | null;
-  failingStepId?: string | null;
-}) {
-  const resolvedHostname = resolveStrategyHostname(args.hostname);
-  if (!resolvedHostname) {
-    throw new Error("Hostname is required.");
-  }
-
-  if (!canUseLocalStorage()) {
-    throw new Error("Local storage is unavailable in this browser.");
-  }
-
-  const store = loadApplySiteStrategies();
-  const existing = store[resolvedHostname];
-
-  if (!existing) {
-    throw new Error(`Strategy not found for hostname: ${resolvedHostname}`);
-  }
-
-  const replayOutcome = args.lastReplayResult?.status;
-  const lastReplaySucceeded =
-    replayOutcome === "COMPLETED"
-      ? true
-      : replayOutcome === "FAILED"
-        ? false
-        : existing.lastReplaySucceeded;
-  const successCount =
-    replayOutcome === "COMPLETED"
-      ? existing.successCount + 1
-      : existing.successCount;
-  const failureCount =
-    replayOutcome === "FAILED"
-      ? existing.failureCount + 1
-      : existing.failureCount;
-  const nextStatus =
-    replayOutcome === undefined
-      ? existing.status
-      : deriveStrategyStatus({
-          successCount,
-          failureCount,
-          lastReplaySucceeded,
-        });
-
-  const record: ApplySiteStrategyRecord = {
-    ...existing,
-    status: nextStatus,
-    successCount,
-    failureCount,
-    lastReplaySucceeded,
-    lastFailureReason:
-      replayOutcome === "FAILED"
-        ? args.lastReplayResult?.reason ?? existing.lastFailureReason
-        : replayOutcome === "COMPLETED"
-          ? undefined
-          : existing.lastFailureReason,
-    replayStatus: args.replayStatus,
-    lastReplayedAt: args.lastReplayedAt ?? existing.lastReplayedAt,
-    lastReplayResult:
-      args.lastReplayResult === undefined
-        ? existing.lastReplayResult
-        : args.lastReplayResult ?? undefined,
-    failingStepId:
-      args.failingStepId === undefined
-        ? existing.failingStepId
-        : args.failingStepId ?? undefined,
-    updatedAt: new Date().toISOString(),
-  };
-
-  persistApplySiteStrategies({
-    ...store,
-    [resolvedHostname]: record,
-  });
-
-  return record;
 }
 
 export function getApplySiteStrategyStatusLabel(status: ApplySiteStrategyStatus) {
@@ -671,34 +542,47 @@ export function exportStrategies() {
   return JSON.stringify(envelope, null, 2);
 }
 
-export function importStrategies(json: string) {
-  if (!canUseLocalStorage()) {
-    throw new Error("Local storage is unavailable in this browser.");
-  }
-
+export async function importStrategies(json: string) {
   const { overwriteExisting, strategies } = parseStrategiesImportJson(json);
   const currentStore = loadApplySiteStrategies();
-  const nextStore: ApplySiteStrategyStore = { ...currentStore };
   let imported = 0;
   let skipped = 0;
   let overwritten = 0;
 
   for (const [key, value] of Object.entries(strategies)) {
-    const normalizedRecord = normalizeStrategyRecord(key, value);
-    if (!normalizedRecord) {
+    const normalized = normalizeStrategyRecord(key, value);
+    if (!normalized) {
       skipped += 1;
       continue;
     }
 
-    const hostname = normalizedRecord.hostname;
-    const exists = Boolean(nextStore[hostname]);
-
+    const existingKey = normalized.strategyKey ?? normalized.hostname;
+    const exists = Boolean(currentStore[existingKey]);
     if (exists && !overwriteExisting) {
       skipped += 1;
       continue;
     }
 
-    nextStore[hostname] = normalizedRecord;
+    await saveApplySiteStrategy({
+      hostname: normalized.hostname,
+      sourceHost: normalized.sourceHost,
+      destinationHost: normalized.destinationHost,
+      finalUrl: normalized.finalUrl,
+      lastAction: normalized.lastAction,
+      stopReason: normalized.stopReason,
+      supportedReasons: normalized.supportedReasons,
+      instructions: normalized.instructions,
+      selectors: normalized.selectors,
+      steps: normalized.rawSteps ?? normalized.steps,
+      trainingSource: normalized.trainingSource,
+      lastTrainedUrl: normalized.lastTrainedUrl,
+      jobTitle: normalized.jobTitle,
+      company: normalized.company,
+      location: normalized.location,
+      pageType: normalized.pageType as ApplySiteStrategySaveInput["pageType"],
+      strategyType:
+        normalized.strategyType as ApplySiteStrategySaveInput["strategyType"],
+    });
 
     if (exists) {
       overwritten += 1;
@@ -707,9 +591,14 @@ export function importStrategies(json: string) {
     }
   }
 
-  if (imported > 0 || overwritten > 0) {
-    persistApplySiteStrategies(nextStore);
-  }
-
   return { imported, skipped, overwritten };
 }
+
+export type {
+  ApplySiteStrategyRecord,
+  ApplySiteStrategyReplayResult,
+  ApplySiteStrategyReplayStatus,
+  ApplySiteStrategyStep,
+};
+
+export { resolveStrategyHostname };

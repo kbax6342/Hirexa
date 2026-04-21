@@ -1,3 +1,6 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   dedupeJobSearchResults,
   normalizeHostname,
@@ -15,6 +18,10 @@ import {
   isLikelyCompanyCareersUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
+import {
+  buildAdzunaDetailsUrl,
+  normalizeAdzunaProviderId,
+} from "@/app/lib/jobs/adzunaProviderId";
 
 export type DirectJobResolution = {
   ok: boolean;
@@ -74,6 +81,19 @@ type ScoredCandidate = {
   penalty: number;
 };
 
+type DirectJobResolutionCacheEntry = {
+  resolvedDirectUrl: string;
+  host: string;
+  timestamp: number;
+  confidence: number;
+  source: string;
+};
+
+type DirectJobResolutionCacheStore = Record<
+  string,
+  DirectJobResolutionCacheEntry
+>;
+
 const COMPANY_SUFFIXES = new Set([
   "inc",
   "incorporated",
@@ -121,13 +141,103 @@ const ADZUNA_GOOGLE_FIRST_THRESHOLD = 0.64;
 const MIN_CANDIDATE_THRESHOLD = 0.28;
 const MAX_VERIFIED_CANDIDATES = 5;
 const FETCH_TIMEOUT_MS = 8_000;
+const DIRECT_JOB_RESOLUTION_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const KNOWN_DIRECT_URL_THRESHOLD = 0.46;
+const DIRECT_JOB_RESOLUTION_CACHE_DIR = path.join(
+  tmpdir(),
+  "hirexa-direct-job-resolution",
+);
+const DIRECT_JOB_RESOLUTION_CACHE_FILE = path.join(
+  DIRECT_JOB_RESOLUTION_CACHE_DIR,
+  "cache.json",
+);
 const ADZUNA_UNRESOLVED_FAILURE_MESSAGE =
   "No confirmed employer-hosted application URL found from Google-first resolution for Adzuna job";
+
+declare global {
+  var __hirexaDirectJobResolutionCache:
+    | DirectJobResolutionCacheStore
+    | undefined;
+}
 
 function normalizeText(value: string | null | undefined) {
   return String(value ?? "")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function loadDirectJobResolutionCache(): DirectJobResolutionCacheStore {
+  try {
+    const raw = readFileSync(DIRECT_JOB_RESOLUTION_CACHE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => {
+        if (!isRecord(value)) {
+          return false;
+        }
+
+        return (
+          typeof value.resolvedDirectUrl === "string" &&
+          typeof value.host === "string" &&
+          typeof value.timestamp === "number" &&
+          Number.isFinite(value.timestamp) &&
+          typeof value.confidence === "number" &&
+          Number.isFinite(value.confidence) &&
+          typeof value.source === "string"
+        );
+      }),
+    ) as DirectJobResolutionCacheStore;
+  } catch {
+    return {};
+  }
+}
+
+function getDirectJobResolutionCache() {
+  if (!globalThis.__hirexaDirectJobResolutionCache) {
+    globalThis.__hirexaDirectJobResolutionCache =
+      loadDirectJobResolutionCache();
+  }
+
+  return globalThis.__hirexaDirectJobResolutionCache;
+}
+
+function persistDirectJobResolutionCache(store: DirectJobResolutionCacheStore) {
+  try {
+    mkdirSync(DIRECT_JOB_RESOLUTION_CACHE_DIR, { recursive: true });
+    writeFileSync(
+      DIRECT_JOB_RESOLUTION_CACHE_FILE,
+      JSON.stringify(store),
+      "utf8",
+    );
+  } catch (error) {
+    console.error("[DIRECT_JOB_RESOLVER] cache persist failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function pruneDirectJobResolutionCache(store: DirectJobResolutionCacheStore) {
+  let changed = false;
+  const now = Date.now();
+
+  for (const [key, entry] of Object.entries(store)) {
+    if (now - entry.timestamp > DIRECT_JOB_RESOLUTION_CACHE_TTL_MS) {
+      delete store[key];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    persistDirectJobResolutionCache(store);
+  }
 }
 
 function normalizeForSearch(value: string | null | undefined) {
@@ -181,6 +291,10 @@ function dedupeStrings(values: string[]) {
         .filter(Boolean),
     ),
   );
+}
+
+function normalizeCacheKeyPart(value: string | null | undefined) {
+  return normalizeForSearch(value).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function sanitizeQueryTerm(value: string) {
@@ -299,6 +413,144 @@ function detectDirectPageProvider(url: string) {
   return undefined;
 }
 
+function looksLikeResolvableUrl(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return false;
+
+  return (
+    /^https?:\/\//i.test(normalized) ||
+    normalized.startsWith("//") ||
+    normalized.startsWith("/")
+  );
+}
+
+function safeDecodeUrlComponent(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function cleanExtractedUrlValue(value: string) {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\u003A/gi, ":")
+    .replace(/\\\//g, "/")
+    .trim();
+}
+
+function normalizeResolvedCandidateUrl(rawValue: string, baseUrl: string) {
+  const candidate = cleanExtractedUrlValue(rawValue);
+  if (
+    !candidate ||
+    /^(javascript:|mailto:|tel:|#)/i.test(candidate) ||
+    candidate.toLowerCase() === "null"
+  ) {
+    return "";
+  }
+
+  if (!looksLikeResolvableUrl(candidate)) {
+    return "";
+  }
+
+  try {
+    return normalizeJobUrl(new URL(candidate, baseUrl).toString());
+  } catch {
+    return "";
+  }
+}
+
+function expandCandidateUrls(rawValue: string, baseUrl: string) {
+  const queue = dedupeStrings([
+    rawValue,
+    safeDecodeUrlComponent(rawValue),
+    safeDecodeUrlComponent(safeDecodeUrlComponent(rawValue)),
+  ]);
+  const visited = new Set<string>();
+  const resolved = new Set<string>();
+
+  while (queue.length > 0 && visited.size < 32) {
+    const current = queue.shift() ?? "";
+    const normalizedCurrent = cleanExtractedUrlValue(current);
+    if (!normalizedCurrent || visited.has(normalizedCurrent)) {
+      continue;
+    }
+
+    visited.add(normalizedCurrent);
+
+    const normalizedUrl = normalizeResolvedCandidateUrl(
+      normalizedCurrent,
+      baseUrl,
+    );
+    if (!normalizedUrl) {
+      continue;
+    }
+
+    resolved.add(normalizedUrl);
+
+    try {
+      const parsed = new URL(normalizedUrl);
+      for (const [key, value] of parsed.searchParams.entries()) {
+        const normalizedKey = key.trim().toLowerCase();
+        const normalizedValue = cleanExtractedUrlValue(value);
+        if (!normalizedValue) {
+          continue;
+        }
+
+        if (
+          [
+            "url",
+            "dest",
+            "destination",
+            "redirect",
+            "redirect_url",
+            "external",
+            "external_url",
+            "target",
+            "job_url",
+            "apply_url",
+            "continue",
+          ].includes(normalizedKey) ||
+          /^https?:\/\//i.test(normalizedValue) ||
+          normalizedValue.includes("http%3A") ||
+          normalizedValue.includes("https%3A")
+        ) {
+          queue.push(normalizedValue);
+        }
+      }
+    } catch {
+      // ignore invalid URLs while expanding nested redirect params
+    }
+  }
+
+  return Array.from(resolved);
+}
+
+function extractRawCandidateUrlsFromHtml(html: string) {
+  const matches = new Set<string>();
+  const patterns = [
+    /href\s*=\s*["']([^"'#]+)["']/gi,
+    /content\s*=\s*["'][^"']*url=([^"']+)["']/gi,
+    /(?:window\.location|location\.href|location\.assign|document\.location)\s*(?:=|\()\s*["']([^"']+)["']/gi,
+    /https?:\/\/[^\s"'<>\\]+/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null = null;
+    while ((match = pattern.exec(html)) !== null) {
+      const value = match[1] ?? match[0];
+      const normalized = cleanExtractedUrlValue(value);
+      if (normalized) {
+        matches.add(normalized);
+      }
+    }
+  }
+
+  return Array.from(matches);
+}
+
 function classifyCurrentUrl(url: string) {
   if (isAggregatorHandoffUrl(url)) return "aggregator_handoff";
   if (isLikelyAtsUrl(url)) return "direct_ats";
@@ -318,6 +570,196 @@ function hasEmployerOwnedHost(url: string, employerHostCandidates: string[]) {
       normalizedCandidate.endsWith(`.${host}`)
     );
   });
+}
+
+function isKnownDirectEmployerUrl(
+  input: NormalizedResolverInput,
+  url: string,
+  options?: { allowUnknownNonAggregator?: boolean },
+) {
+  const normalizedUrl = normalizeJobUrl(url);
+  if (
+    !normalizedUrl ||
+    isAdzunaUnresolvedHandoffUrl(normalizedUrl) ||
+    isAggregatorHandoffUrl(normalizedUrl)
+  ) {
+    return false;
+  }
+
+  if (
+    isLikelyAtsUrl(normalizedUrl) ||
+    isLikelyCompanyCareersUrl(normalizedUrl) ||
+    hasEmployerOwnedHost(normalizedUrl, input.employerHostCandidates)
+  ) {
+    return true;
+  }
+
+  return options?.allowUnknownNonAggregator === true && !isUnrelatedHost(normalizedUrl);
+}
+
+function buildResolutionCacheKeys(args: {
+  input: NormalizedResolverInput;
+  source?: string | null;
+  sourceJobId?: string | null;
+}) {
+  const source = normalizeCacheKeyPart(args.source ?? args.input.source);
+  const rawSourceJobId = normalizeText(args.sourceJobId);
+  const normalizedSourceJobId =
+    source.includes("adzuna") || rawSourceJobId.toLowerCase().startsWith("adzuna:")
+      ? normalizeCacheKeyPart(normalizeAdzunaProviderId(rawSourceJobId))
+      : normalizeCacheKeyPart(rawSourceJobId.replace(/^[a-z0-9_-]+:/i, ""));
+
+  const companyKey = normalizeCacheKeyPart(
+    normalizeCompanyName(args.input.company) || args.input.company,
+  );
+  const titleKey = normalizeCacheKeyPart(
+    args.input.cleanedTitle || args.input.title,
+  );
+  const locationKey = normalizeCacheKeyPart(
+    args.input.normalizedLocation || args.input.location || "unknown",
+  );
+
+  return dedupeStrings(
+    [
+      source && normalizedSourceJobId
+        ? `source:${source}:${normalizedSourceJobId}`
+        : "",
+      companyKey && titleKey
+        ? `job:${companyKey}:${titleKey}:${locationKey || "unknown"}`
+        : "",
+    ].filter(Boolean),
+  );
+}
+
+function writeResolutionCacheEntry(args: {
+  keys: string[];
+  resolvedUrl: string;
+  confidence: number;
+  source: string;
+}) {
+  if (args.keys.length === 0) {
+    return;
+  }
+
+  const normalizedUrl = normalizeJobUrl(args.resolvedUrl);
+  if (!normalizedUrl) {
+    return;
+  }
+
+  const store = getDirectJobResolutionCache();
+  pruneDirectJobResolutionCache(store);
+
+  const nextEntry = {
+    resolvedDirectUrl: normalizedUrl,
+    host: normalizeHostname(normalizedUrl),
+    timestamp: Date.now(),
+    confidence: Math.max(0, Math.min(0.99, args.confidence)),
+    source: args.source,
+  } satisfies DirectJobResolutionCacheEntry;
+
+  for (const key of args.keys) {
+    store[key] = nextEntry;
+  }
+
+  persistDirectJobResolutionCache(store);
+}
+
+function readResolutionCacheEntry(args: {
+  input: NormalizedResolverInput;
+  keys: string[];
+}) {
+  if (args.keys.length === 0) {
+    return null;
+  }
+
+  const store = getDirectJobResolutionCache();
+  pruneDirectJobResolutionCache(store);
+
+  for (const key of args.keys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+
+    if (!isKnownDirectEmployerUrl(args.input, entry.resolvedDirectUrl)) {
+      continue;
+    }
+
+    return {
+      entry,
+      key,
+    };
+  }
+
+  return null;
+}
+
+function buildKnownUrlResolution(args: {
+  input: NormalizedResolverInput;
+  resolvedUrl: string;
+  confidence: number;
+  matchReason: string;
+  acceptanceRule: string;
+  candidates?: Array<{
+    url: string;
+    title?: string;
+    provider?: string;
+    confidence: number;
+    reason: string;
+  }>;
+  searchProvider?: string;
+}) {
+  const normalizedUrl = normalizeJobUrl(args.resolvedUrl);
+  const provider = detectDirectPageProvider(normalizedUrl);
+
+  return {
+    ok: true,
+    resolvedUrl: normalizedUrl,
+    confidence: Number(args.confidence.toFixed(3)),
+    provider,
+    matchReason: args.matchReason,
+    acceptanceRule: args.acceptanceRule,
+    googleFirstTriggered: args.input.googleFirstTriggered,
+    queries: [],
+    normalizedLocation: args.input.normalizedLocation || undefined,
+    searchProvider: args.searchProvider,
+    adzunaStrategyReplaySkipped: args.input.googleFirstTriggered,
+    candidates:
+      args.candidates ??
+      [
+        {
+          url: normalizedUrl,
+          provider,
+          confidence: Number(args.confidence.toFixed(3)),
+          reason: args.matchReason,
+        },
+      ],
+  } satisfies DirectJobResolution;
+}
+
+function cacheSuccessfulResolution(args: {
+  input: NormalizedResolverInput;
+  source?: string | null;
+  sourceJobId?: string | null;
+  resolution: DirectJobResolution;
+  cacheSource: string;
+}) {
+  if (!args.resolution.ok || !args.resolution.resolvedUrl) {
+    return args.resolution;
+  }
+
+  writeResolutionCacheEntry({
+    keys: buildResolutionCacheKeys({
+      input: args.input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+    }),
+    resolvedUrl: args.resolution.resolvedUrl,
+    confidence: args.resolution.confidence ?? 0.9,
+    source: args.cacheSource,
+  });
+
+  return args.resolution;
 }
 
 function companyHostBonus(companyCoreTokens: string[], url: string) {
@@ -714,6 +1156,160 @@ function extractHtmlTextSnippet(html: string) {
     .slice(0, 1600);
 }
 
+function scoreKnownDirectCandidate(args: {
+  input: NormalizedResolverInput;
+  url: string;
+  title?: string;
+  snippet?: string;
+}) {
+  return scoreCandidate(
+    args.input,
+    {
+      title: (args.title ?? args.input.cleanedTitle) || args.input.title,
+      url: args.url,
+      snippet: args.snippet,
+      source: "known_direct_url",
+    },
+    {
+      resolvedUrl: args.url,
+      verifiedTitle: args.title,
+      verifiedSnippet: args.snippet,
+      verificationBoost: 0.18,
+    },
+  );
+}
+
+async function resolveAdzunaExtractedDirectUrl(args: {
+  input: NormalizedResolverInput;
+  sourceJobId?: string | null;
+}): Promise<DirectJobResolution | null> {
+  const detailsUrl = buildAdzunaDetailsUrl(args.sourceJobId);
+  const fetchTargets = dedupeStrings(
+    [
+      isAggregatorHandoffUrl(args.input.currentUrl) ? args.input.currentUrl : "",
+      detailsUrl ?? "",
+    ].filter(Boolean),
+  );
+
+  if (fetchTargets.length === 0) {
+    return null;
+  }
+
+  const inspectSeedCandidates = (seedUrl: string) => {
+    const candidates = expandCandidateUrls(seedUrl, seedUrl)
+      .filter((candidate) => candidate !== normalizeJobUrl(seedUrl))
+      .filter((candidate) =>
+        isKnownDirectEmployerUrl(args.input, candidate),
+      )
+      .map((candidate) =>
+        scoreKnownDirectCandidate({
+          input: args.input,
+          url: candidate,
+        }),
+      )
+      .sort((left, right) => right.confidence - left.confidence);
+
+    const best = candidates[0];
+    if (!best || best.confidence < KNOWN_DIRECT_URL_THRESHOLD) {
+      return null;
+    }
+
+    return buildKnownUrlResolution({
+      input: args.input,
+      resolvedUrl: best.url,
+      confidence: best.confidence,
+      matchReason:
+        "Resolved direct employer URL from Adzuna outbound parameters.",
+      acceptanceRule: "adzuna_outbound_parameter",
+      candidates: candidates.slice(0, 3).map(toCandidateEvidence),
+    });
+  };
+
+  for (const fetchTarget of fetchTargets) {
+    const seedResolution = inspectSeedCandidates(fetchTarget);
+    if (seedResolution) {
+      return seedResolution;
+    }
+
+    const timeout = createTimeoutSignal(FETCH_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(fetchTarget, {
+        headers: {
+          accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+          "user-agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        },
+        redirect: "follow",
+        signal: timeout.signal,
+      });
+
+      const responseUrl = normalizeJobUrl(response.url || fetchTarget);
+      if (isKnownDirectEmployerUrl(args.input, responseUrl)) {
+        return buildKnownUrlResolution({
+          input: args.input,
+          resolvedUrl: responseUrl,
+          confidence: 0.97,
+          matchReason:
+            "Resolved direct employer URL from Adzuna redirect.",
+          acceptanceRule: "adzuna_response_redirect",
+        });
+      }
+
+      const html = (await response.text().catch(() => "")).trim();
+      if (!html) {
+        continue;
+      }
+
+      const verifiedTitle = extractHtmlTitle(html);
+      const verifiedSnippet = extractHtmlTextSnippet(html);
+      const rawCandidates = dedupeStrings([
+        ...extractRawCandidateUrlsFromHtml(html),
+        ...expandCandidateUrls(responseUrl, responseUrl),
+      ]);
+      const candidates = dedupeStrings(
+        rawCandidates.flatMap((candidate) =>
+          expandCandidateUrls(candidate, responseUrl),
+        ),
+      )
+        .filter((candidate) => candidate !== responseUrl)
+        .filter((candidate) =>
+          isKnownDirectEmployerUrl(args.input, candidate),
+        )
+        .map((candidate) =>
+          scoreKnownDirectCandidate({
+            input: args.input,
+            url: candidate,
+            title: verifiedTitle,
+            snippet: verifiedSnippet,
+          }),
+        )
+        .sort((left, right) => right.confidence - left.confidence);
+
+      const best = candidates[0];
+      if (!best || best.confidence < KNOWN_DIRECT_URL_THRESHOLD) {
+        continue;
+      }
+
+      return buildKnownUrlResolution({
+        input: args.input,
+        resolvedUrl: best.url,
+        confidence: best.confidence,
+        matchReason:
+          "Extracted direct employer URL from Adzuna detail page HTML.",
+        acceptanceRule: "adzuna_detail_html_extract",
+        candidates: candidates.slice(0, 3).map(toCandidateEvidence),
+      });
+    } catch {
+      // keep search fallback available if Adzuna extraction fails
+    } finally {
+      timeout.clear();
+    }
+  }
+
+  return null;
+}
+
 async function verifyCandidate(
   input: NormalizedResolverInput,
   candidate: JobSearchResult,
@@ -888,6 +1484,8 @@ export async function resolveDirectJobUrl(args: {
   location?: string | null;
   currentUrl?: string | null;
   source?: string | null;
+  sourceJobId?: string | null;
+  preferredDirectUrl?: string | null;
 }): Promise<DirectJobResolution> {
   const input = buildNormalizedInput(args);
 
@@ -899,9 +1497,80 @@ export async function resolveDirectJobUrl(args: {
     };
   }
 
+  const preferredDirectUrl = normalizeJobUrl(args.preferredDirectUrl ?? "");
+  if (
+    preferredDirectUrl &&
+    isKnownDirectEmployerUrl(input, preferredDirectUrl, {
+      allowUnknownNonAggregator: true,
+    })
+  ) {
+    return cacheSuccessfulResolution({
+      input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+      cacheSource: "preferred_direct_url",
+      resolution: buildKnownUrlResolution({
+        input,
+        resolvedUrl: preferredDirectUrl,
+        confidence: 0.99,
+        matchReason:
+          "Used the known employer URL supplied by the user or a saved strategy.",
+        acceptanceRule: "preferred_direct_url",
+      }),
+    });
+  }
+
   const currentUrlResolution = buildCurrentUrlResolution(input);
   if (currentUrlResolution) {
-    return currentUrlResolution;
+    return cacheSuccessfulResolution({
+      input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+      cacheSource: "current_url",
+      resolution: currentUrlResolution,
+    });
+  }
+
+  const extractedAdzunaResolution = await resolveAdzunaExtractedDirectUrl({
+    input,
+    sourceJobId: args.sourceJobId,
+  });
+  if (extractedAdzunaResolution) {
+    return cacheSuccessfulResolution({
+      input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+      cacheSource: "adzuna_extract",
+      resolution: extractedAdzunaResolution,
+    });
+  }
+
+  const cachedResolution = readResolutionCacheEntry({
+    input,
+    keys: buildResolutionCacheKeys({
+      input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+    }),
+  });
+  if (cachedResolution) {
+    return buildKnownUrlResolution({
+      input,
+      resolvedUrl: cachedResolution.entry.resolvedDirectUrl,
+      confidence: cachedResolution.entry.confidence,
+      matchReason: `Reused previously resolved employer URL from cache (${cachedResolution.entry.source}).`,
+      acceptanceRule: "cached_resolved_direct_url",
+      candidates: [
+        {
+          url: cachedResolution.entry.resolvedDirectUrl,
+          provider: detectDirectPageProvider(
+            cachedResolution.entry.resolvedDirectUrl,
+          ),
+          confidence: Number(cachedResolution.entry.confidence.toFixed(3)),
+          reason: `cache_hit:${cachedResolution.key}`,
+        },
+      ],
+    });
   }
 
   const queries = buildSearchQueries(input);
@@ -1011,7 +1680,12 @@ export async function resolveDirectJobUrl(args: {
       searchProvider,
     });
 
-    return {
+    return cacheSuccessfulResolution({
+      input,
+      source: args.source,
+      sourceJobId: args.sourceJobId,
+      cacheSource: "search",
+      resolution: {
       ok: true,
       resolvedUrl: bestCandidate.url,
       confidence: Number(bestCandidate.confidence.toFixed(3)),
@@ -1024,7 +1698,8 @@ export async function resolveDirectJobUrl(args: {
       searchProvider: String(searchProvider),
       adzunaStrategyReplaySkipped: input.googleFirstTriggered,
       candidates: scoredCandidates.map(toCandidateEvidence),
-    };
+      },
+    });
   }
 
   return {

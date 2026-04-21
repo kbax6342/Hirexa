@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "ApplySiteStrategy_userProfileId_sourceHost_pageType_strategyTyp" RENAME TO "ApplySiteStrategy_userProfileId_sourceHost_pageType_strateg_idx";

@@ -4,6 +4,8 @@ export type PageSignals = {
   html: string;
   pageText: string;
   verificationSignals: string[];
+  searchEngineChallengeSignals: string[];
+  searchEngineChallengeDetected: boolean;
   confirmationSignals: string[];
   confirmationTextFound: boolean;
   confirmationTextSnippet?: string | null;
@@ -14,9 +16,19 @@ export type PageSignals = {
   formDetected: boolean;
 };
 
-const HUMAN_VERIFICATION_CHECKS = [
+export type MeaningfulFormControlSummary = {
+  controlCount: number;
+  hasPassword: boolean;
+};
+
+export const HUMAN_VERIFICATION_CHECKS = [
+  "just a moment",
   "verify you are human",
   "human verification",
+  "checking your browser",
+  "please enable javascript and cookies",
+  "press & hold",
+  "press and hold",
   "captcha",
   "recaptcha",
   "turnstile",
@@ -33,6 +45,16 @@ const HUMAN_VERIFICATION_CHECKS = [
   "one-time code",
   "one time code",
   "otp",
+] as const;
+
+export const SEARCH_ENGINE_CHALLENGE_CHECKS = [
+  "unusual traffic",
+  "automated queries",
+  "sorry, but your computer or network",
+  "prove you are human",
+  "please solve this challenge",
+  "security challenge",
+  "are you a robot",
 ] as const;
 
 const CONFIRMATION_CHECKS = [
@@ -94,23 +116,76 @@ function matchesSuccessUrl(rawUrl: string) {
 }
 
 async function detectForm(page: Page) {
-  const result = await page
+  const result = await readMeaningfulFormControlSummary(page).catch(() => ({
+    controlCount: 0,
+    hasPassword: false,
+  }));
+
+  return {
+    formDetected: result.controlCount > 0,
+    hasPassword: result.hasPassword,
+  };
+}
+
+export async function readMeaningfulFormControlSummary(
+  page: Page,
+): Promise<MeaningfulFormControlSummary> {
+  return page
     .evaluate(() => {
-      const selector =
-        "form input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']), form textarea, form select, input[type='file']";
+      const selector = "input, textarea, select";
       const nodes = Array.from(document.querySelectorAll(selector));
 
-      const visibleControls = nodes.filter((node) => {
-        if (!(node instanceof HTMLElement)) return false;
+      function isVisible(node: HTMLElement) {
         const style = window.getComputedStyle(node);
         const rect = node.getBoundingClientRect();
         return (
           style.display !== "none" &&
           style.visibility !== "hidden" &&
           rect.width > 0 &&
-          rect.height > 0 &&
-          !node.hasAttribute("disabled")
+          rect.height > 0
         );
+      }
+
+      function hasCookieContext(node: Element) {
+        const container = node.closest(
+          '[id*="cookie"], [class*="cookie"], [id*="consent"], [class*="consent"], [aria-label*="cookie"], [aria-label*="consent"], [data-testid*="cookie"], [data-testid*="consent"]',
+        );
+        if (!container) return false;
+        const text = (container.textContent ?? "").toLowerCase();
+        return (
+          text.includes("cookie") ||
+          text.includes("consent") ||
+          text.includes("privacy") ||
+          text.includes("preference")
+        );
+      }
+
+      const visibleControls = nodes.filter((node) => {
+        if (!(node instanceof HTMLElement)) return false;
+        if (!isVisible(node)) return false;
+        if (node.hasAttribute("disabled")) return false;
+        if (node.getAttribute("aria-disabled") === "true") return false;
+        if (node.closest("header, nav, footer, [role='navigation']")) {
+          return false;
+        }
+        if (hasCookieContext(node)) return false;
+
+        if (node instanceof HTMLInputElement) {
+          const type = (node.type || "text").toLowerCase();
+          if (
+            type === "hidden" ||
+            type === "submit" ||
+            type === "button" ||
+            type === "reset" ||
+            type === "image" ||
+            type === "checkbox" ||
+            type === "radio"
+          ) {
+            return false;
+          }
+        }
+
+        return true;
       });
 
       return {
@@ -121,11 +196,31 @@ async function detectForm(page: Page) {
       };
     })
     .catch(() => ({ controlCount: 0, hasPassword: false }));
+}
 
-  return {
-    formDetected: result.controlCount > 0,
-    hasPassword: result.hasPassword,
-  };
+export async function waitForMeaningfulFormControls(
+  page: Page,
+  options?: {
+    timeoutMs?: number;
+    minCount?: number;
+    pollMs?: number;
+  },
+) {
+  const timeoutMs = options?.timeoutMs ?? 15_000;
+  const minCount = options?.minCount ?? 1;
+  const pollMs = options?.pollMs ?? 300;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const summary = await readMeaningfulFormControlSummary(page);
+    if (summary.controlCount >= minCount) {
+      return summary;
+    }
+
+    await page.waitForTimeout(pollMs).catch(() => undefined);
+  }
+
+  return null;
 }
 
 export async function waitForDomAndSettle(page: Page) {
@@ -146,6 +241,9 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
   const verificationSignals = [
     ...new Set(containsSignal(verificationText, HUMAN_VERIFICATION_CHECKS)),
   ];
+  const searchEngineChallengeSignals = [
+    ...new Set(containsSignal(verificationText, SEARCH_ENGINE_CHALLENGE_CHECKS)),
+  ];
   const confirmationSignals = [
     ...new Set(containsSignal(visibleText, CONFIRMATION_CHECKS)),
   ];
@@ -163,6 +261,8 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
     html,
     pageText,
     verificationSignals,
+    searchEngineChallengeSignals,
+    searchEngineChallengeDetected: searchEngineChallengeSignals.length > 0,
     confirmationSignals,
     confirmationTextFound,
     confirmationTextSnippet,
@@ -170,6 +270,7 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
     accountSignals,
     needsHuman:
       verificationSignals.length > 0 ||
+      currentTitle.toLowerCase().includes("just a moment") ||
       accountSignals.length > 0 ||
       form.hasPassword,
     confirmationDetected: confirmationTextFound,

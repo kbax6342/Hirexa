@@ -43,7 +43,7 @@ export function getStopSuggestedActionUi(
       return {
         label: getStopSuggestedActionLabel(suggestedAction),
         recommendationText:
-          "Review the stopped page, then retry or teach Hirexa the correct sequence.",
+          "Review the previous attempt details first, then use Retry with Fresh Session or Teach this page.",
       };
   }
 }

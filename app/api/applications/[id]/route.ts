@@ -5,6 +5,7 @@ import { prisma } from "@/app/lib/prisma";
 const ALLOWED_STATUSES = [
   "IN_PREPARATION",
   "READY_TO_SEND",
+  "VERIFICATION_REQUIRED",
   "IN_PROGRESS",
   "SENT",
 ] as const;

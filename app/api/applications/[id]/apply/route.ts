@@ -24,6 +24,10 @@ import {
   type DirectJobResolution,
 } from "@/app/lib/apply/directJobResolver";
 import {
+  REAL_POSTING_NOT_FOUND_CODE,
+  selectInitialAutomationTarget,
+} from "@/app/lib/apply/jobSourceResolution";
+import {
   prepareApplyPayload,
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
@@ -45,12 +49,18 @@ import {
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
 import {
+  findBestApplySiteStrategyForRun,
+  recordApplySiteStrategyReplayForUser,
+} from "@/app/lib/apply/playwrightStrategyRepository";
+import {
   classifyJobUrlKind,
   isAggregatorHandoffUrl,
   isAdzunaUrl,
-  isAppcastUrl,
+  isLikelyAtsUrl,
+  isLikelyCompanyCareersUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
+import { validateAutomationStartUrl } from "@/app/lib/apply/urlValidation";
 
 export const runtime = "nodejs";
 
@@ -154,13 +164,233 @@ type DirectResolutionContext = {
   usedResolvedDirectUrl: boolean;
 };
 
+type MatchedStrategyGuidance = NonNullable<
+  Awaited<ReturnType<typeof findBestApplySiteStrategyForRun>>
+>;
+
+type DirectResolutionAttemptResult =
+  | {
+      context: DirectResolutionContext;
+      blocked?: false;
+    }
+  | {
+      context: DirectResolutionContext;
+      blocked: true;
+      message: string;
+      errorCode: typeof EMPLOYER_URL_RESOLUTION_FAILED_CODE;
+      failureReason: string;
+    };
+
 const ADZUNA_UNRESOLVED_TARGET_MESSAGE =
   "Adzuna handoff unresolved: no confirmed employer-hosted application URL found after search fallback";
 const ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE =
   "No confirmed employer-hosted application URL found from Google-first resolution for Adzuna job";
+const EMPLOYER_URL_RESOLUTION_FAILED_CODE =
+  "EMPLOYER_URL_RESOLUTION_FAILED" as const;
+const EMPLOYER_URL_RESOLUTION_FAILED_MESSAGE =
+  "Could not resolve employer job page.";
+const VERIFICATION_REQUIRED_STATUS = "VERIFICATION_REQUIRED" as const;
+const VERIFICATION_REQUIRED_MESSAGE =
+  "Application paused because the employer site asked for verification.";
+const VERIFICATION_STOP_SIGNALS = [
+  "just a moment",
+  "verify you are human",
+  "checking your browser",
+  "please enable javascript and cookies",
+  "press & hold",
+  "press and hold",
+  "security check",
+  "cloudflare",
+] as const;
+
+function parseHostname(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isRtxHostname(hostname: string) {
+  return (
+    hostname === "rtx.com" ||
+    hostname.endsWith(".rtx.com") ||
+    hostname.endsWith(".myworkdayjobs.com") ||
+    hostname.endsWith(".workdayjobs.com")
+  );
+}
+
+function buildRtxStopPayload(args: {
+  finalUrl?: string | null;
+  currentUrl?: string | null;
+  finalReason?: string | null;
+  rtxFlowAttempted?: boolean;
+  rtxFlowCompleted?: boolean;
+  rtxProgressMarkers?: string[] | null;
+  rtxFailureReason?: string | null;
+  rtxJobId?: string | null;
+}) {
+  const finalHost = parseHostname(args.finalUrl);
+  const currentHost = parseHostname(args.currentUrl);
+  const finalReason = String(args.finalReason ?? "").trim();
+  const hasRtxSignal =
+    args.rtxFlowAttempted === true ||
+    isRtxHostname(finalHost) ||
+    isRtxHostname(currentHost) ||
+    finalReason.toUpperCase().includes("RTX_");
+
+  if (!hasRtxSignal) {
+    return null;
+  }
+
+  return {
+    flowAttempted: args.rtxFlowAttempted === true,
+    flowCompleted: args.rtxFlowCompleted === true,
+    failureReason:
+      args.rtxFailureReason ?? (finalReason.length > 0 ? finalReason : null),
+    jobId: args.rtxJobId ?? null,
+    progressMarkers: [
+      ...new Set([
+        ...(args.rtxProgressMarkers ?? []),
+        "RTX_STOP_REASON_CLASSIFIED",
+      ]),
+    ],
+  };
+}
+
+function logRtxStopReasonClassified(args: {
+  stopClassification: ApplyStopClassification;
+  finalUrl?: string | null;
+  currentUrl?: string | null;
+  finalReason?: string | null;
+  rtxFlowAttempted?: boolean;
+  rtxFlowCompleted?: boolean;
+  rtxProgressMarkers?: string[] | null;
+  rtxFailureReason?: string | null;
+  rtxJobId?: string | null;
+}) {
+  const payload = buildRtxStopPayload(args);
+  if (!payload) return;
+
+  console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+    marker: "RTX_STOP_REASON_CLASSIFIED",
+    stopReason: args.stopClassification.reason,
+    suggestedAction: args.stopClassification.suggestedAction,
+    pageType: args.stopClassification.pageType,
+    finalUrl: args.finalUrl ?? null,
+    currentUrl: args.currentUrl ?? null,
+    rtx: payload,
+  });
+}
+
+function looksLikeVerificationBlocker(value: string | null | undefined) {
+  if (!value) return false;
+
+  const normalized = value.toLowerCase();
+  return VERIFICATION_STOP_SIGNALS.some((signal) =>
+    normalized.includes(signal),
+  );
+}
+
+function isVerificationStopClassification(
+  stopClassification: ApplyStopClassification | null | undefined,
+) {
+  return (
+    stopClassification?.reason === "verification_required" ||
+    stopClassification?.suggestedAction === "complete_verification"
+  );
+}
+
+function hasVerificationDebugSignal(args: {
+  verificationDetected?: boolean;
+  stopClassification?: ApplyStopClassification | null;
+  stoppedAtTitle?: string | null;
+  currentUrl?: string | null;
+  finalReason?: string | null;
+  verificationSignals?: string[] | null;
+  message?: string | null;
+  finalUrl?: string | null;
+}) {
+  if (args.verificationDetected === true) {
+    return true;
+  }
+
+  if (isVerificationStopClassification(args.stopClassification)) {
+    return true;
+  }
+
+  const verificationText = [
+    ...(args.verificationSignals ?? []),
+    args.stoppedAtTitle,
+    args.currentUrl,
+    args.finalReason,
+    args.message,
+    args.finalUrl,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+
+  return looksLikeVerificationBlocker(verificationText);
+}
+
+function isVerificationRawResult(result: RawPlaywrightResult) {
+  return hasVerificationDebugSignal({
+    verificationDetected: result.debug?.verificationDetected,
+    stopClassification: result.debug?.stopClassification,
+    stoppedAtTitle: result.debug?.stoppedAtTitle,
+    currentUrl: result.debug?.currentUrl,
+    finalReason: result.debug?.finalReason ?? null,
+    verificationSignals: result.debug?.verificationSignals ?? [],
+    message: result.message ?? null,
+    finalUrl: result.finalUrl ?? result.openUrl ?? result.debug?.finalUrl ?? null,
+  });
+}
+
+function isVerificationExecutionResult(result: ApplyExecutionResult) {
+  return (
+    result.status === VERIFICATION_REQUIRED_STATUS ||
+    hasVerificationDebugSignal({
+      verificationDetected: result.debug.verificationDetected,
+      stopClassification: result.debug.stopClassification,
+      stoppedAtTitle: result.debug.stoppedAtTitle ?? null,
+      currentUrl: result.debug.currentUrl ?? null,
+      finalReason: result.debug.finalReason ?? null,
+      message: result.message ?? null,
+      finalUrl: result.finalUrl ?? result.debug.finalUrl ?? null,
+    })
+  );
+}
 
 function normalizeSourceLabel(value: string | null | undefined) {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function isKnownDirectEmployerJobUrl(url: string | null | undefined) {
+  const normalizedUrl = normalizeJobUrl(url ?? "");
+  if (!normalizedUrl || isAggregatorHandoffUrl(normalizedUrl)) {
+    return false;
+  }
+
+  return (
+    isLikelyAtsUrl(normalizedUrl) || isLikelyCompanyCareersUrl(normalizedUrl)
+  );
+}
+
+function readPreferredKnownDirectUrl(application: LoadedApplication) {
+  const debug = readAutomationAudit(application.auditJson).state.debug ?? {};
+  const candidates = [
+    normalizeJobUrl(String(debug.resolvedDirectUrl ?? "")),
+    normalizeJobUrl(String(debug.targetUrl ?? "")),
+    normalizeJobUrl(application.jobUrl ?? ""),
+  ].filter(Boolean);
+
+  return (
+    candidates.find((candidate) => isKnownDirectEmployerJobUrl(candidate)) ??
+    null
+  );
 }
 
 function shouldAttemptDirectResolution(application: LoadedApplication) {
@@ -190,15 +420,10 @@ function shouldContinueWithOriginalUrl(url: string) {
   const normalizedUrl = normalizeJobUrl(url);
   if (!normalizedUrl) return false;
 
-  if (isAdzunaUnresolvedHandoffUrl(normalizedUrl)) {
-    return false;
-  }
-
-  if (isAppcastUrl(normalizedUrl)) {
-    return true;
-  }
-
-  return !isAggregatorHandoffUrl(normalizedUrl);
+  return validateAutomationStartUrl(normalizedUrl, {
+    rejectAggregator: true,
+    rejectSearchEngine: true,
+  }).isValid;
 }
 
 function buildDirectResolutionDebug(args: {
@@ -301,7 +526,7 @@ function buildUrlDecisionFields(
 
 async function resolveApplicationDirectJobUrl(args: {
   application: LoadedApplication;
-}) {
+}): Promise<DirectResolutionAttemptResult> {
   const originalUrl = normalizeJobUrl(args.application.jobUrl ?? "");
   const source = args.application.source ?? null;
   const adzunaSourceDetected = isAdzunaApplySource({
@@ -309,6 +534,7 @@ async function resolveApplicationDirectJobUrl(args: {
     jobUrl: originalUrl,
   });
   const shouldAttempt = shouldAttemptDirectResolution(args.application);
+  const preferredDirectUrl = readPreferredKnownDirectUrl(args.application);
 
   if (!shouldAttempt) {
     return {
@@ -331,6 +557,8 @@ async function resolveApplicationDirectJobUrl(args: {
     location: args.application.location,
     currentUrl: originalUrl,
     source,
+    sourceJobId: args.application.sourceJobId ?? null,
+    preferredDirectUrl,
   });
 
   const resolvedDirectUrl =
@@ -400,18 +628,29 @@ async function resolveApplicationDirectJobUrl(args: {
   }
 
   if (!resolution.ok && !shouldContinueWithOriginalUrl(originalUrl)) {
-    const message = adzunaSourceDetected
+    const fallbackReason = adzunaSourceDetected
       ? resolution.error ?? ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE
       : isAdzunaUnresolvedHandoffUrl(originalUrl)
         ? resolution.error ?? ADZUNA_UNRESOLVED_TARGET_MESSAGE
-      : resolution.error ??
+        : resolution.error ??
         "Could not resolve a confident direct employer/ATS application URL";
+
+    console.warn(
+      "[AUTO_APPLY_ROUTE] direct resolution deferred to browser routing",
+      {
+        applicationId: args.application.id,
+        originalUrl,
+        source,
+        fallbackReason,
+        directJobResolutionQueries: resolution.queries ?? [],
+      },
+    );
 
     await prisma.jobApplication.update({
       where: { id: args.application.id },
       data: {
         auditJson: nextAudit as Prisma.InputJsonValue,
-        failureReason: message,
+        failureReason: null,
         verificationRequired: false,
       },
     });
@@ -421,15 +660,13 @@ async function resolveApplicationDirectJobUrl(args: {
         application: {
           ...args.application,
           auditJson: nextAudit,
-          failureReason: message,
+          failureReason: null,
         } as LoadedApplication,
         originalUrl,
         debug,
         resolution,
         usedResolvedDirectUrl: false,
       },
-      blocked: true,
-      message,
     };
   }
 
@@ -538,6 +775,10 @@ function looksLikeLoginRequired(value: string | null | undefined) {
 function deriveLastActionFromRawResult(
   result: RawPlaywrightResult,
 ): AutoApplyLastAction {
+  if (isVerificationRawResult(result)) {
+    return "verification_required";
+  }
+
   const applyCtaClicked = result.debug?.applyCtaClicked === true;
   const hopCount =
     typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0;
@@ -564,6 +805,10 @@ function deriveLastActionFromRawResult(
 function deriveLastActionFromExecutionResult(
   result: ApplyExecutionResult,
 ): AutoApplyLastAction {
+  if (isVerificationExecutionResult(result)) {
+    return "verification_required";
+  }
+
   const applyCtaClicked = result.debug.applyCtaClicked === true;
   const hopCount =
     typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0;
@@ -602,6 +847,44 @@ function buildStopDebugFromRawResult(
     result.finalUrl ?? result.openUrl ?? result.debug?.finalUrl ?? null;
   const currentUrl = result.debug?.currentUrl ?? finalUrl;
   const lastAction = deriveLastActionFromRawResult(result);
+  const stopClassification = deriveStopClassification({
+    targetUrl: result.debug?.targetUrl ?? null,
+    finalUrl,
+    currentUrl,
+    applyCtaFound: result.debug?.applyCtaFound === true,
+    applyCtaClicked: result.debug?.applyCtaClicked === true,
+    hopCount:
+      typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0,
+    submitButtonFound: result.debug?.submitButtonFound === true,
+    submitButtonClicked: result.debug?.submitButtonClicked === true,
+    confirmationTextFound: result.debug?.confirmationTextFound === true,
+    verificationSignals: result.debug?.verificationSignals ?? [],
+    pageText: result.debug?.pageText,
+    finalReason:
+      result.debug?.rtxFailureReason ??
+      result.debug?.finalReason ??
+      result.message ??
+      null,
+    message: result.message,
+    lastAction,
+    formDetected: result.debug?.formDetected === true,
+  });
+
+  logRtxStopReasonClassified({
+    stopClassification,
+    finalUrl,
+    currentUrl,
+    finalReason:
+      result.debug?.rtxFailureReason ??
+      result.debug?.finalReason ??
+      result.message ??
+      null,
+    rtxFlowAttempted: result.debug?.rtxFlowAttempted === true,
+    rtxFlowCompleted: result.debug?.rtxFlowCompleted === true,
+    rtxProgressMarkers: result.debug?.rtxProgressMarkers ?? [],
+    rtxFailureReason: result.debug?.rtxFailureReason,
+    rtxJobId: result.debug?.rtxJobId,
+  });
 
   return {
     stopReason: "HUMAN_INTERVENTION_REQUIRED",
@@ -625,24 +908,7 @@ function buildStopDebugFromRawResult(
       result.debug?.handoffCtaClickedSelector ??
       result.debug?.entryCtaClickedSelector ??
       null,
-    stopClassification: deriveStopClassification({
-      targetUrl: result.debug?.targetUrl ?? null,
-      finalUrl,
-      currentUrl,
-      applyCtaFound: result.debug?.applyCtaFound === true,
-      applyCtaClicked: result.debug?.applyCtaClicked === true,
-      hopCount:
-        typeof result.debug?.hopCount === "number" ? result.debug.hopCount : 0,
-      submitButtonFound: result.debug?.submitButtonFound === true,
-      submitButtonClicked: result.debug?.submitButtonClicked === true,
-      confirmationTextFound: result.debug?.confirmationTextFound === true,
-      verificationSignals: result.debug?.verificationSignals ?? [],
-      pageText: result.debug?.pageText,
-      finalReason: result.debug?.finalReason ?? result.message ?? null,
-      message: result.message,
-      lastAction,
-      formDetected: result.debug?.formDetected === true,
-    }),
+    stopClassification,
   };
 }
 
@@ -662,6 +928,44 @@ function buildStopDebugFromExecutionResult(
   const currentUrl = result.debug.currentUrl ?? finalUrl;
   const lastAction =
     result.debug.lastAction ?? deriveLastActionFromExecutionResult(result);
+  const stopClassification =
+    result.debug.stopClassification ??
+    deriveStopClassification({
+      targetUrl: result.debug.targetUrl ?? null,
+      finalUrl,
+      currentUrl,
+      applyCtaFound: result.debug.applyCtaFound === true,
+      applyCtaClicked: result.debug.applyCtaClicked === true,
+      hopCount:
+        typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0,
+      submitButtonFound: result.debug.submitButtonFound === true,
+      submitButtonClicked: result.debug.submitButtonClicked === true,
+      confirmationTextFound: result.debug.confirmationTextFound === true,
+      finalReason:
+        result.debug.rtxFailureReason ??
+        result.debug.finalReason ??
+        result.message ??
+        null,
+      message: result.message,
+      lastAction,
+      formDetected: result.debug.formDetected === true,
+    });
+
+  logRtxStopReasonClassified({
+    stopClassification,
+    finalUrl,
+    currentUrl,
+    finalReason:
+      result.debug.rtxFailureReason ??
+      result.debug.finalReason ??
+      result.message ??
+      null,
+    rtxFlowAttempted: result.debug.rtxFlowAttempted === true,
+    rtxFlowCompleted: result.debug.rtxFlowCompleted === true,
+    rtxProgressMarkers: result.debug.rtxProgressMarkers ?? [],
+    rtxFailureReason: result.debug.rtxFailureReason,
+    rtxJobId: result.debug.rtxJobId,
+  });
 
   return {
     stopReason: "HUMAN_INTERVENTION_REQUIRED",
@@ -685,24 +989,85 @@ function buildStopDebugFromExecutionResult(
       result.debug.handoffCtaClickedSelector ??
       result.debug.entryCtaClickedSelector ??
       null,
-    stopClassification:
-      result.debug.stopClassification ??
-      deriveStopClassification({
-        targetUrl: result.debug.targetUrl ?? null,
-        finalUrl,
-        currentUrl,
-        applyCtaFound: result.debug.applyCtaFound === true,
-        applyCtaClicked: result.debug.applyCtaClicked === true,
-        hopCount:
-          typeof result.debug.hopCount === "number" ? result.debug.hopCount : 0,
-        submitButtonFound: result.debug.submitButtonFound === true,
-        submitButtonClicked: result.debug.submitButtonClicked === true,
-        confirmationTextFound: result.debug.confirmationTextFound === true,
-        finalReason: result.debug.finalReason ?? result.message ?? null,
-        message: result.message,
-        lastAction,
-        formDetected: result.debug.formDetected === true,
-      }),
+    stopClassification,
+  };
+}
+
+function coerceVerificationExecutionResult(
+  result: ApplyExecutionResult,
+): ApplyExecutionResult {
+  if (result.ok || !isVerificationExecutionResult(result)) {
+    return result;
+  }
+
+  const finalUrl = result.finalUrl ?? result.debug.finalUrl ?? null;
+  const currentUrl = result.debug.currentUrl ?? finalUrl;
+  const existingStopClassification = result.debug.stopClassification;
+  const stopClassification =
+    existingStopClassification &&
+    isVerificationStopClassification(existingStopClassification)
+      ? existingStopClassification
+      : deriveStopClassification({
+          targetUrl: result.debug.targetUrl ?? null,
+          finalUrl,
+          currentUrl,
+          applyCtaFound: result.debug.applyCtaFound === true,
+          applyCtaClicked: result.debug.applyCtaClicked === true,
+          hopCount:
+            typeof result.debug.hopCount === "number"
+              ? result.debug.hopCount
+              : 0,
+          submitButtonFound: result.debug.submitButtonFound === true,
+          submitButtonClicked: result.debug.submitButtonClicked === true,
+          confirmationTextFound: result.debug.confirmationTextFound === true,
+          finalReason: result.debug.finalReason ?? result.message ?? null,
+          message: result.message,
+          lastAction: "verification_required",
+          formDetected: result.debug.formDetected === true,
+        });
+  const stopDebug: AutoApplyStopDebug = {
+    stopReason: "HUMAN_INTERVENTION_REQUIRED",
+    finalUrl,
+    currentUrl,
+    lastAction: "verification_required",
+    stopClassification,
+    stoppedAtUrl:
+      result.debug.stoppedAtUrl ?? currentUrl ?? finalUrl,
+    stoppedAtTitle: result.debug.stoppedAtTitle ?? null,
+    lastActionText: result.debug.lastActionText ?? null,
+    lastActionSelector: result.debug.lastActionSelector ?? null,
+  };
+
+  return {
+    ...withStopDebug(
+      {
+        ...result,
+        ok: false,
+        status: VERIFICATION_REQUIRED_STATUS,
+        message: VERIFICATION_REQUIRED_MESSAGE,
+        unavailable: false,
+        needsHuman: true,
+        debug: {
+          ...result.debug,
+          finalUrl: finalUrl ?? undefined,
+          currentUrl: currentUrl ?? undefined,
+          stoppedAtUrl: stopDebug.stoppedAtUrl ?? undefined,
+          stoppedAtTitle: stopDebug.stoppedAtTitle ?? undefined,
+          stopReason: "HUMAN_INTERVENTION_REQUIRED",
+          lastAction: "verification_required",
+          stopClassification,
+          verificationDetected: true,
+          submissionConfirmed: false,
+          finalReason:
+            result.debug.finalReason ??
+            result.message ??
+            VERIFICATION_REQUIRED_MESSAGE,
+        },
+      },
+      stopDebug,
+    ),
+    rawStatus: result.rawStatus,
+    rawSubmissionConfirmed: result.rawSubmissionConfirmed,
   };
 }
 
@@ -916,7 +1281,10 @@ function applyRouteLevelSubmissionGuard(args: {
   });
 
   let guardedResult = args.rawResult;
-  if (shouldForceApplyNotStarted(evidence)) {
+  if (
+    shouldForceApplyNotStarted(evidence) &&
+    !isVerificationRawResult(args.rawResult)
+  ) {
     guardedResult = {
       ...args.rawResult,
       ok: false,
@@ -938,9 +1306,11 @@ function applyRouteLevelSubmissionGuard(args: {
     };
   }
 
-  const normalized = withStopDebug(
-    normalizePlaywrightResult(guardedResult),
-    buildStopDebugFromRawResult(guardedResult),
+  const normalized = coerceVerificationExecutionResult(
+    withStopDebug(
+      normalizePlaywrightResult(guardedResult),
+      buildStopDebugFromRawResult(guardedResult),
+    ),
   );
   console.log("[AUTO_APPLY_ROUTE] playwright final promotion", {
     applicationId: args.applicationId,
@@ -981,6 +1351,10 @@ function applyFinalWriteGuard(args: {
   applySessionId?: string;
   storageTarget: "jobApplication" | "applySession";
 }): ApplyExecutionResult {
+  if (isVerificationExecutionResult(args.result)) {
+    return coerceVerificationExecutionResult(args.result);
+  }
+
   const evidence = readExecutionEvidence(args.result);
   if (!shouldForceApplyNotStarted(evidence)) {
     return args.result;
@@ -1381,10 +1755,22 @@ function logAutoApplyStopPoint(args: {
 function buildStopResponseFields(result: ApplyExecutionResult) {
   const stopDebug = buildStopDebugFromExecutionResult(result);
   const finalUrl = stopDebug?.finalUrl ?? result.finalUrl ?? result.debug.finalUrl ?? null;
+  const verificationRequired = isVerificationExecutionResult(result);
+  const rtxStop = buildRtxStopPayload({
+    finalUrl: stopDebug?.finalUrl ?? result.finalUrl ?? result.debug.finalUrl,
+    currentUrl: stopDebug?.currentUrl ?? result.debug.currentUrl,
+    finalReason: result.debug.finalReason ?? result.message ?? null,
+    rtxFlowAttempted: result.debug.rtxFlowAttempted === true,
+    rtxFlowCompleted: result.debug.rtxFlowCompleted === true,
+    rtxProgressMarkers: result.debug.rtxProgressMarkers ?? [],
+    rtxFailureReason: result.debug.rtxFailureReason,
+    rtxJobId: result.debug.rtxJobId,
+  });
 
   if (!stopDebug) {
     return {
       finalUrl,
+      rtxStop,
     };
   }
 
@@ -1398,7 +1784,86 @@ function buildStopResponseFields(result: ApplyExecutionResult) {
     lastActionText: stopDebug.lastActionText,
     lastActionSelector: stopDebug.lastActionSelector,
     stopClassification: stopDebug.stopClassification,
+    suggestedAction: stopDebug.stopClassification.suggestedAction,
+    canResumeAfterHumanStep: verificationRequired,
+    userMessage: verificationRequired
+      ? VERIFICATION_REQUIRED_MESSAGE
+      : undefined,
+    rtxStop,
   };
+}
+
+function isRealPostingNotFoundResult(result: ApplyExecutionResult) {
+  const normalizedReason = String(result.debug.finalReason ?? "")
+    .trim()
+    .toUpperCase();
+  const normalizedMessage = String(result.message ?? "")
+    .trim()
+    .toUpperCase();
+
+  return (
+    normalizedReason === REAL_POSTING_NOT_FOUND_CODE ||
+    normalizedMessage.includes("REAL POSTING NOT FOUND")
+  );
+}
+
+async function resolveMatchedStrategyGuidance(args: {
+  application: LoadedApplication;
+  sourceUrl?: string | null;
+  targetUrl?: string | null;
+}) {
+  return findBestApplySiteStrategyForRun({
+    userProfileId: args.application.userProfileId,
+    sourceUrl: args.sourceUrl,
+    targetUrl: args.targetUrl,
+    company: args.application.company,
+    location: args.application.location,
+  });
+}
+
+function buildStrategyReplayResult(result: ApplyExecutionResult) {
+  return {
+    status: result.ok ? "COMPLETED" : "FAILED",
+    currentUrl: result.finalUrl ?? result.debug.finalUrl,
+    reason: result.ok
+      ? undefined
+      : result.message ?? result.debug.finalReason ?? result.status,
+  } as const;
+}
+
+async function recordMatchedStrategyOutcome(args: {
+  application: LoadedApplication;
+  strategyGuidance?: MatchedStrategyGuidance | null;
+  result: ApplyExecutionResult;
+  phase: "background" | "foreground";
+  applicationId: string;
+  applySessionId?: string;
+}) {
+  const strategyId = args.strategyGuidance?.strategy.id;
+  if (!strategyId) {
+    return;
+  }
+
+  try {
+    await recordApplySiteStrategyReplayForUser({
+      userProfileId: args.application.userProfileId,
+      input: {
+        strategyId,
+        strategyKey: args.strategyGuidance?.strategy.strategyKey,
+        replayStatus: args.result.ok ? "COMPLETED" : "FAILED",
+        lastReplayedAt: new Date().toISOString(),
+        lastReplayResult: buildStrategyReplayResult(args.result),
+      },
+    });
+  } catch (error) {
+    console.error("[AUTO_APPLY_STRATEGY] replay health update failed", {
+      applicationId: args.applicationId,
+      applySessionId: args.applySessionId ?? null,
+      phase: args.phase,
+      strategyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function sendStatusChangeEmail(args: {
@@ -1578,12 +2043,14 @@ async function persistAutomationOutcome(args: {
   phase: "background" | "foreground";
   applySessionId?: string;
 }): Promise<PersistAutomationOutcomeResult> {
-  const finalResult = applyFinalWriteGuard({
-    result: args.result,
-    applicationId: args.application.id,
-    applySessionId: args.applySessionId,
-    storageTarget: "jobApplication",
-  });
+  const finalResult = coerceVerificationExecutionResult(
+    applyFinalWriteGuard({
+      result: args.result,
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId,
+      storageTarget: "jobApplication",
+    }),
+  );
   logAutoApplyDebug({
     applicationId: args.application.id,
     applySessionId: args.applySessionId,
@@ -1667,6 +2134,41 @@ async function persistAutomationOutcome(args: {
     };
   }
 
+  if (isVerificationExecutionResult(finalResult)) {
+    logFinalWrite({
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId,
+      rawStatus: finalResult.rawStatus,
+      rawSubmissionConfirmed: finalResult.rawSubmissionConfirmed,
+      finalStatus: VERIFICATION_REQUIRED_STATUS,
+      finalSubmissionConfirmed: false,
+      emailStatus: "SKIPPED",
+      storageTarget: "jobApplication",
+    });
+
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        status: VERIFICATION_REQUIRED_STATUS,
+        answersJson: args.answers,
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason: VERIFICATION_REQUIRED_MESSAGE,
+        verificationRequired: true,
+      },
+    });
+
+    return {
+      submissionStatus: "NOT_SUBMITTED",
+      emailStatus: "SKIPPED",
+      message: VERIFICATION_REQUIRED_MESSAGE,
+      result: {
+        ...finalResult,
+        status: VERIFICATION_REQUIRED_STATUS,
+        message: VERIFICATION_REQUIRED_MESSAGE,
+      },
+    };
+  }
+
   logFinalWrite({
     applicationId: args.application.id,
     applySessionId: args.applySessionId,
@@ -1717,6 +2219,7 @@ async function runBackgroundApply(args: {
   targetUrl?: string;
   resumePath: string;
   urlResolution: DirectResolutionContext;
+  strategyGuidance?: MatchedStrategyGuidance | null;
 }) {
   try {
     const result = applyRouteLevelSubmissionGuard({
@@ -1730,6 +2233,23 @@ async function runBackgroundApply(args: {
           title: args.application.title ?? args.application.jobTitle,
           company: args.application.company,
           location: args.application.location,
+          strategy: args.strategyGuidance
+            ? {
+                id: args.strategyGuidance.strategy.id ?? null,
+                sourceHost: args.strategyGuidance.strategy.sourceHost ?? null,
+                destinationHost:
+                  args.strategyGuidance.strategy.destinationHost ?? null,
+                strategyType:
+                  args.strategyGuidance.strategy.strategyType ?? null,
+                pageType: args.strategyGuidance.strategy.pageType ?? null,
+                derivedInstruction:
+                  args.strategyGuidance.derivedInstruction ?? null,
+                automationPrompt:
+                  args.strategyGuidance.automationPrompt ?? null,
+                startUrl: args.strategyGuidance.startUrl ?? null,
+                steps: args.strategyGuidance.sanitizedSteps,
+              }
+            : undefined,
           directJobResolution: {
             attempted:
               args.urlResolution.debug.directJobResolutionAttempted === true,
@@ -1746,6 +2266,7 @@ async function runBackgroundApply(args: {
         },
         values: args.finalValuesToSubmit,
         resumePath: args.resumePath,
+        freshSession: true,
         onStatus: ({ status, lastUrl, error, message, openUrl, remoteSessionId }) => {
           const sessionStatus = status === "SUBMITTED" ? "WAITING_CONFIRMATION" : status;
           const sessionMessage =
@@ -1788,6 +2309,14 @@ async function runBackgroundApply(args: {
       phase: "background",
       applySessionId: args.applySessionId,
     });
+    await recordMatchedStrategyOutcome({
+      application: args.application,
+      strategyGuidance: args.strategyGuidance,
+      result: persistedOutcome.result,
+      phase: "background",
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId,
+    });
 
     const finalResult = ensureTerminalApplySessionResult({
       result: persistedOutcome.result,
@@ -1826,6 +2355,22 @@ async function runBackgroundApply(args: {
       applicationId: args.application.id,
       applySessionId: args.applySessionId,
       error: message,
+    });
+
+    await recordMatchedStrategyOutcome({
+      application: args.application,
+      strategyGuidance: args.strategyGuidance,
+      result: {
+        ok: false,
+        status: "FAILED",
+        message,
+        debug: { finalReason: message },
+        rawStatus: "FAILED",
+        rawSubmissionConfirmed: false,
+      },
+      phase: "background",
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId,
     });
 
     const existingAudit = readAutomationAudit(args.application.auditJson).audit;
@@ -1948,7 +2493,9 @@ export async function POST(
         {
           ok: false,
           status: "APPLY_NOT_STARTED",
-          error: directResolution.message,
+          error: directResolution.failureReason,
+          message: directResolution.message,
+          errorCode: directResolution.errorCode,
           ...buildUrlDecisionFields(urlResolution.debug),
         },
         { status: 409 },
@@ -1959,10 +2506,88 @@ export async function POST(
       application,
       requestAnswers: body.answers,
     });
-    const adzunaSourceDetected = isAdzunaApplySource({
-      source: application.source,
-      jobUrl: urlResolution.originalUrl || application.jobUrl,
+    const initialRoutingDecision = selectInitialAutomationTarget({
+      sourceProvider: application.source,
+      candidates: [
+        {
+          label: "resolved_direct_url",
+          url: urlResolution.resolvedDirectUrl,
+        },
+        {
+          label: "prepared_target_url",
+          url: prepared.targetUrl,
+        },
+        {
+          label: "application_job_url",
+          url: application.jobUrl,
+        },
+        {
+          label: "original_job_url",
+          url: urlResolution.originalUrl,
+        },
+      ],
     });
+
+    if (initialRoutingDecision.aggregatorSourceDetected) {
+      console.info("[AUTO_APPLY_ROUTE] aggregator source detected", {
+        applicationId: application.id,
+        source: application.source ?? null,
+        originalUrl: urlResolution.originalUrl ?? null,
+      });
+    }
+
+    if (initialRoutingDecision.rejectedCandidates.length > 0) {
+      console.info("[AUTO_APPLY_ROUTE] invalid start URL rejected", {
+        applicationId: application.id,
+        rejectedCandidates: initialRoutingDecision.rejectedCandidates,
+      });
+    }
+
+    const matchedStrategyGuidance = initialRoutingDecision.selectedUrl
+      ? await resolveMatchedStrategyGuidance({
+          application,
+          sourceUrl: urlResolution.originalUrl || application.jobUrl,
+          targetUrl: initialRoutingDecision.selectedUrl,
+        })
+      : null;
+    const finalRoutingDecision = selectInitialAutomationTarget({
+      sourceProvider: application.source,
+      candidates: [
+        {
+          label: "strategy_start_url",
+          url: matchedStrategyGuidance?.startUrl,
+        },
+        {
+          label: "initial_selected_url",
+          url: initialRoutingDecision.selectedUrl,
+        },
+        {
+          label: "resolved_direct_url",
+          url: urlResolution.resolvedDirectUrl,
+        },
+        {
+          label: "prepared_target_url",
+          url: prepared.targetUrl,
+        },
+        {
+          label: "application_job_url",
+          url: application.jobUrl,
+        },
+        {
+          label: "original_job_url",
+          url: urlResolution.originalUrl,
+        },
+      ],
+    });
+    const effectiveTargetUrl = finalRoutingDecision.selectedUrl;
+
+    if (finalRoutingDecision.requiresEcosiaSearch) {
+      console.info("[AUTO_APPLY_ROUTE] resolving real posting via Ecosia", {
+        applicationId: application.id,
+        source: application.source ?? null,
+        selectedFrom: finalRoutingDecision.selectedFrom ?? null,
+      });
+    }
 
     console.log("[AUTO_APPLY_ROUTE] prepared apply payload", {
       applicationId: application.id,
@@ -1979,83 +2604,30 @@ export async function POST(
         urlResolution.debug.directJobResolutionQueries ?? [],
       adzunaStrategyReplaySkipped:
         urlResolution.debug.adzunaStrategyReplaySkipped === true,
+      strategyMatched: Boolean(matchedStrategyGuidance),
+      strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+      strategyStartUrl: matchedStrategyGuidance?.startUrl ?? null,
       usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
-      targetUrl: prepared.targetUrl ?? application.jobUrl,
+      targetUrl: effectiveTargetUrl ?? null,
+      selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
+      requiresEcosiaSearch: finalRoutingDecision.requiresEcosiaSearch,
+      rejectedStartUrlCount: finalRoutingDecision.rejectedCandidates.length,
       usesExternalPostingUrl:
-        (prepared.targetUrl ?? application.jobUrl) === application.jobUrl,
+        effectiveTargetUrl === normalizeJobUrl(application.jobUrl ?? ""),
       applyProvider: prepared.applyProvider ?? null,
       missingRequired: prepared.missingRequired,
       answerCount: Object.keys(prepared.finalValuesToSubmit).length,
     });
 
-    const chosenTargetUrl = normalizeJobUrl(
-      prepared.targetUrl ?? application.jobUrl ?? "",
-    );
-    if (
-      (adzunaSourceDetected && isAdzunaUrl(chosenTargetUrl)) ||
-      isAdzunaUnresolvedHandoffUrl(chosenTargetUrl)
-    ) {
-      const message = adzunaSourceDetected
-        ? ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE
-        : ADZUNA_UNRESOLVED_TARGET_MESSAGE;
-
-      console.warn("[AUTO_APPLY_ROUTE] blocking unresolved Adzuna target", {
-        applicationId: application.id,
-        originalUrl: urlResolution.originalUrl || null,
-        resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
-        chosenTargetUrl,
-        applySource: urlResolution.debug.applySource ?? null,
-        googleFirstResolutionTriggered:
-          urlResolution.debug.googleFirstResolutionTriggered === true,
-        directJobResolutionQueries:
-          urlResolution.debug.directJobResolutionQueries ?? [],
-      });
-
-      const nextAudit = buildAutomationAudit({
-        existingAudit: application.auditJson,
-        provider: prepared.applyProvider ?? application.source ?? "playwright",
-        finalValuesToSubmit: prepared.finalValuesToSubmit,
-        automation: {
-          provider: "playwright",
-          status: "FAILED",
-          message,
-          finalReason: message,
-          debug: {
-            ...(readAutomationAudit(application.auditJson).state.debug ?? {}),
-            ...urlResolution.debug,
-            targetUrl: chosenTargetUrl,
-          },
-        },
-      });
-
-      await prisma.jobApplication.update({
-        where: { id: application.id },
-        data: {
-          auditJson: nextAudit as Prisma.InputJsonValue,
-          failureReason: message,
-          verificationRequired: false,
-        },
-      });
-
-      return NextResponse.json(
-        {
-          ok: false,
-          status: "APPLY_NOT_STARTED",
-          error: message,
-          ...buildUrlDecisionFields({
-            ...urlResolution.debug,
-            targetUrl: chosenTargetUrl,
-          }),
-        },
-        { status: 409 },
-      );
-    }
-
     console.log("[AUTO_APPLY_ROUTE] final target selected", {
       applicationId: application.id,
       originalUrl: urlResolution.originalUrl || null,
       resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
-      targetUrl: chosenTargetUrl,
+      targetUrl: effectiveTargetUrl ?? null,
+      strategyMatched: Boolean(matchedStrategyGuidance),
+      strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+      selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
+      requiresEcosiaSearch: finalRoutingDecision.requiresEcosiaSearch,
       usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
       applyProvider: prepared.applyProvider ?? null,
     });
@@ -2135,7 +2707,7 @@ export async function POST(
     if (body.background) {
       const applySession = createSession(application.id, {
         status: "STARTING",
-        lastUrl: prepared.targetUrl,
+        lastUrl: effectiveTargetUrl,
         message: "Starting Playwright automation.",
       }, {
         caller: "POST /api/applications/[id]/apply",
@@ -2160,9 +2732,10 @@ export async function POST(
         applyProvider: prepared.applyProvider,
         answers: prepared.answers,
         finalValuesToSubmit: prepared.finalValuesToSubmit,
-        targetUrl: prepared.targetUrl,
+        targetUrl: effectiveTargetUrl,
         resumePath: tempResume.path,
         urlResolution,
+        strategyGuidance: matchedStrategyGuidance,
       });
 
       return NextResponse.json({
@@ -2174,7 +2747,7 @@ export async function POST(
         message: "Starting Playwright automation.",
         ...buildUrlDecisionFields({
           ...urlResolution.debug,
-          targetUrl: prepared.targetUrl,
+          targetUrl: effectiveTargetUrl,
         }),
       });
     }
@@ -2183,7 +2756,7 @@ export async function POST(
       const result = applyRouteLevelSubmissionGuard({
         rawResult: await applyWithPlaywright({
           jobUrl: application.jobUrl ?? "",
-          form: prepared.targetUrl ? { embedUrl: prepared.targetUrl } : undefined,
+          form: effectiveTargetUrl ? { embedUrl: effectiveTargetUrl } : undefined,
           metadata: {
             originalUrl: urlResolution.originalUrl,
             resolvedUrl: urlResolution.resolvedDirectUrl,
@@ -2191,6 +2764,24 @@ export async function POST(
             title: application.title ?? application.jobTitle,
             company: application.company,
             location: application.location,
+            strategy: matchedStrategyGuidance
+              ? {
+                  id: matchedStrategyGuidance.strategy.id ?? null,
+                  sourceHost:
+                    matchedStrategyGuidance.strategy.sourceHost ?? null,
+                  destinationHost:
+                    matchedStrategyGuidance.strategy.destinationHost ?? null,
+                  strategyType:
+                    matchedStrategyGuidance.strategy.strategyType ?? null,
+                  pageType: matchedStrategyGuidance.strategy.pageType ?? null,
+                  derivedInstruction:
+                    matchedStrategyGuidance.derivedInstruction ?? null,
+                  automationPrompt:
+                    matchedStrategyGuidance.automationPrompt ?? null,
+                  startUrl: matchedStrategyGuidance.startUrl ?? null,
+                  steps: matchedStrategyGuidance.sanitizedSteps,
+                }
+              : undefined,
             directJobResolution: {
               attempted:
                 urlResolution.debug.directJobResolutionAttempted === true,
@@ -2207,6 +2798,7 @@ export async function POST(
           },
           values: prepared.finalValuesToSubmit,
           resumePath: tempResume.path,
+          freshSession: true,
         }),
         applicationId: application.id,
         phase: "foreground",
@@ -2228,6 +2820,13 @@ export async function POST(
         result,
         phase: "foreground",
       });
+      await recordMatchedStrategyOutcome({
+        application,
+        strategyGuidance: matchedStrategyGuidance,
+        result: persistedOutcome.result,
+        phase: "foreground",
+        applicationId: application.id,
+      });
       const finalResult = persistedOutcome.result;
 
       if (finalResult.ok) {
@@ -2242,12 +2841,32 @@ export async function POST(
         });
       }
 
+      if (
+        finalResult.status === VERIFICATION_REQUIRED_STATUS ||
+        isVerificationExecutionResult(finalResult)
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            status: VERIFICATION_REQUIRED_STATUS,
+            error: persistedOutcome.message ?? VERIFICATION_REQUIRED_MESSAGE,
+            message: persistedOutcome.message ?? VERIFICATION_REQUIRED_MESSAGE,
+            ...buildStopResponseFields(finalResult),
+            ...buildUrlDecisionFields(finalResult.debug),
+            submissionStatus: persistedOutcome.submissionStatus,
+            emailStatus: persistedOutcome.emailStatus,
+          },
+          { status: 409 },
+        );
+      }
+
       if (finalResult.needsHuman) {
         return NextResponse.json(
           {
             ok: false,
-            status: "WAITING_HUMAN",
-            error: finalResult.message ?? "Human verification required.",
+            status: finalResult.status,
+            error: finalResult.message ?? "Human intervention required.",
+            message: finalResult.message ?? "Human intervention required.",
             ...buildStopResponseFields(finalResult),
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
@@ -2258,13 +2877,21 @@ export async function POST(
       }
 
       if (finalResult.status === "APPLY_NOT_STARTED") {
+        const realPostingNotFound = isRealPostingNotFoundResult(finalResult);
+        const message = realPostingNotFound
+          ? "Real posting not found."
+          : finalResult.message ??
+            "Opened job page but could not start application.";
+
         return NextResponse.json(
           {
             ok: false,
             status: finalResult.status,
-            error:
-              finalResult.message ??
-              "Opened job page but could not start application.",
+            error: message,
+            message,
+            errorCode: realPostingNotFound
+              ? REAL_POSTING_NOT_FOUND_CODE
+              : undefined,
             ...buildStopResponseFields(finalResult),
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,

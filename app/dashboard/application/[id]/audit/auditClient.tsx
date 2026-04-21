@@ -333,6 +333,7 @@ export default function AuditClient({
           }
 
           if (
+            sessionStatus === "VERIFICATION_REQUIRED" ||
             sessionStatus === "APPLY_NOT_STARTED" ||
             sessionStatus === "AUTO_APPLY_UNAVAILABLE" ||
             sessionStatus === "WAITING_HUMAN"
@@ -348,7 +349,9 @@ export default function AuditClient({
               stoppedAtUrl
                 ? "Stopped at:"
                 : payload.session.message ??
-                    (sessionStatus === "APPLY_NOT_STARTED"
+                    (sessionStatus === "VERIFICATION_REQUIRED"
+                      ? "Application paused because the employer site asked for verification."
+                      : sessionStatus === "APPLY_NOT_STARTED"
                       ? "Opened job page but could not start application."
                       : "Auto apply is not available for this job application."),
             );
@@ -356,7 +359,9 @@ export default function AuditClient({
               stopClassification
                 ? `Why it stopped: ${getStopReasonLabel(stopClassification.reason)}`
                 : payload.session.message ??
-                    (sessionStatus === "APPLY_NOT_STARTED"
+                    (sessionStatus === "VERIFICATION_REQUIRED"
+                      ? "Application paused because the employer site asked for verification."
+                      : sessionStatus === "APPLY_NOT_STARTED"
                       ? "Opened job page but could not start application."
                       : "Auto apply is not available for this job application."),
             );
@@ -953,6 +958,7 @@ export default function AuditClient({
               currentUrl={applyDebug.currentUrl}
               lastAction={applyDebug.lastAction}
               stopReason={applyDebug.stopReason}
+              errorMessage={applyDebug.reason}
               stopClassification={applyDebug.stopClassification}
               tone="amber"
               className="mt-3"

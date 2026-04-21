@@ -20,6 +20,7 @@ type StartReplayBody = {
   hostname?: string;
   finalUrl?: string;
   currentUrl?: string;
+  retryMode?: "fresh" | "last_url";
   stopReason?: string;
   lastAction?: string;
   strategy?: {
@@ -60,12 +61,20 @@ export async function POST(request: Request) {
     const body = (await request.json()) as StartReplayBody;
     const strategy = body.strategy;
     const steps = Array.isArray(strategy?.steps) ? strategy.steps : [];
-    const startUrl = pickFirstNonEmpty(
-      body.currentUrl,
+    const retryMode = body.retryMode === "last_url" ? "last_url" : "fresh";
+    const startUrlFresh = pickFirstNonEmpty(
+      strategy?.finalUrl,
       body.finalUrl,
       strategy?.lastTrainedUrl,
+      body.currentUrl,
+    );
+    const startUrlFromLast = pickFirstNonEmpty(
+      body.currentUrl,
+      strategy?.lastTrainedUrl,
+      body.finalUrl,
       strategy?.finalUrl,
     );
+    const startUrl = retryMode === "last_url" ? startUrlFromLast : startUrlFresh;
     const finalUrl = pickFirstNonEmpty(body.finalUrl, strategy?.finalUrl, startUrl);
     const hostname = resolveHostname(
       pickFirstNonEmpty(body.hostname, startUrl, finalUrl),

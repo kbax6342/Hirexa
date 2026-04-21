@@ -31,8 +31,14 @@ import {
   type JobSearchFallbackCandidate,
 } from "@/app/lib/apply/jobSearchFallback";
 import {
+  REAL_POSTING_NOT_FOUND_CODE,
+  resolveRealPostingViaEcosia,
+  selectInitialAutomationTarget,
+} from "@/app/lib/apply/jobSourceResolution";
+import {
   APPLY_SETTLE_DELAY_MS,
   detectPageSignals,
+  waitForMeaningfulFormControls,
   waitForDomAndSettle,
   type PageSignals,
 } from "@/app/lib/apply/playwrightSignals";
@@ -41,6 +47,7 @@ import {
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
 import type { DirectJobResolution } from "@/app/lib/apply/directJobResolver";
+import type { ApplySiteStrategyStep } from "@/app/lib/apply/playwrightStrategyTypes";
 import type {
   ApplySessionCtaAttemptRecord,
   ApplySessionClickRecord,
@@ -235,9 +242,24 @@ export type PlaywrightApplyResult = {
     resolvedHandoffClickedText?: string;
     resolvedHandoffUrlBefore?: string;
     resolvedHandoffUrlAfter?: string;
+    strategyMatched?: boolean;
+    strategyId?: string;
+    strategySourceHost?: string;
+    strategyDestinationHost?: string;
+    strategyType?: string;
+    strategyPageType?: string;
+    strategyDerivedInstruction?: string;
+    strategyAutomationPrompt?: string;
+    strategyStartUrl?: string;
+    strategySanitizedStepCount?: number;
     playwrightLaunchStrategy?: "remote" | "local_ephemeral" | "local_persistent";
     playwrightPersistentContext?: boolean;
     playwrightUserDataDir?: string;
+    rtxFlowAttempted?: boolean;
+    rtxFlowCompleted?: boolean;
+    rtxProgressMarkers?: string[];
+    rtxFailureReason?: string;
+    rtxJobId?: string;
   };
 };
 
@@ -256,6 +278,23 @@ function asArray(value: AnswerValue) {
   return Array.isArray(value)
     ? value.map((item) => String(item))
     : [String(value ?? "")];
+}
+
+function shouldAllowChoiceControls(
+  fieldName: string,
+  rawValue: AnswerValue,
+) {
+  const normalized = fieldName.toLowerCase();
+  const namedChoiceField = /(consent|agree|terms|authorization|authorisation|authorized|authorised|veteran|disability|gender|race|ethnicity|sponsor|work[-_\\s]?authorization|eeo|opt[-_\\s]?in|subscribe|newsletter|checkbox|radio)/i.test(
+    normalized,
+  );
+
+  if (namedChoiceField) return true;
+  if (!Array.isArray(rawValue)) return false;
+
+  return /(consent|terms|authorization|authorisation|veteran|disability|gender|race|ethnicity|eeo)/i.test(
+    normalized,
+  );
 }
 
 function parseBooleanEnv(value: string | undefined) {
@@ -301,6 +340,7 @@ function buildPersistentUserDataDir(baseDir: string) {
 
 function resolveLocalLaunchOptions(
   mode: "AUTO" | "HUMAN_ASSIST" | undefined,
+  freshSession: boolean,
 ): LocalPlaywrightLaunchOptions {
   const headedDebug =
     parseBooleanEnv(process.env.PLAYWRIGHT_HEADED_DEBUG) === true;
@@ -308,7 +348,7 @@ function resolveLocalLaunchOptions(
     parseBooleanEnv(process.env.PLAYWRIGHT_PERSISTENT_CONTEXT) === true;
   const headless = headedDebug ? false : resolveLocalHeadless(mode);
 
-  if (!requestedPersistent) {
+  if (freshSession || !requestedPersistent) {
     return {
       strategy: "local_ephemeral",
       headless,
@@ -329,6 +369,70 @@ function resolveLocalLaunchOptions(
     userDataDir,
     headedDebug,
   };
+}
+
+function resolveUrlOrigin(value: string | null | undefined) {
+  const normalized = normalizeJobUrl(value ?? "");
+  if (!normalized) return null;
+
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return null;
+  }
+}
+
+async function resetRuntimeSessionState(args: {
+  context: BrowserContext;
+  page: Page;
+  targetUrl?: string;
+}) {
+  await args.context.clearCookies().catch(() => undefined);
+  await args.context
+    .addInitScript(() => {
+      try {
+        window.localStorage.clear();
+      } catch {
+        // Ignore blocked localStorage access.
+      }
+      try {
+        window.sessionStorage.clear();
+      } catch {
+        // Ignore blocked sessionStorage access.
+      }
+    })
+    .catch(() => undefined);
+
+  const origin = resolveUrlOrigin(args.targetUrl);
+  if (!origin) return;
+
+  const cdpSession = await args.context.newCDPSession(args.page).catch(() => null);
+  if (cdpSession) {
+    await cdpSession
+      .send("Storage.clearDataForOrigin", {
+        origin,
+        storageTypes:
+          "appcache,cookies,file_systems,indexeddb,local_storage,service_workers,websql,cache_storage",
+      })
+      .catch(() => undefined);
+    await cdpSession.detach().catch(() => undefined);
+  }
+
+  await args.page.goto(origin, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+  await args.page
+    .evaluate(() => {
+      try {
+        window.localStorage.clear();
+      } catch {
+        // Ignore blocked localStorage access.
+      }
+      try {
+        window.sessionStorage.clear();
+      } catch {
+        // Ignore blocked sessionStorage access.
+      }
+    })
+    .catch(() => undefined);
 }
 
 function shouldUseCdp(connectUrl: string) {
@@ -837,6 +941,19 @@ const REAL_APPLY_URL_PATTERNS = [
   "question",
 ] as const;
 
+const RTX_HOST_PATTERNS = [
+  "rtx.com",
+  "careers.rtx.com",
+] as const;
+
+const RTX_WORKDAY_HOST_PATTERNS = [
+  "myworkdayjobs.com",
+  "workdayjobs.com",
+  "myworkdaysite.com",
+] as const;
+
+const RTX_CAREERS_ENTRY_URL = "https://careers.rtx.com/global/en/search-results";
+
 const LOW_VALUE_RESOLVER_TEXT_PATTERNS = [
   "job alert",
   "job alerts",
@@ -1079,9 +1196,24 @@ function buildDebugPayload(args: {
   resolvedHandoffClickedText?: string;
   resolvedHandoffUrlBefore?: string;
   resolvedHandoffUrlAfter?: string;
+  strategyMatched?: boolean;
+  strategyId?: string;
+  strategySourceHost?: string;
+  strategyDestinationHost?: string;
+  strategyType?: string;
+  strategyPageType?: string;
+  strategyDerivedInstruction?: string;
+  strategyAutomationPrompt?: string;
+  strategyStartUrl?: string;
+  strategySanitizedStepCount?: number;
   playwrightLaunchStrategy?: "remote" | "local_ephemeral" | "local_persistent";
   playwrightPersistentContext?: boolean;
   playwrightUserDataDir?: string;
+  rtxFlowAttempted?: boolean;
+  rtxFlowCompleted?: boolean;
+  rtxProgressMarkers?: string[];
+  rtxFailureReason?: string;
+  rtxJobId?: string;
 }) {
   return {
     attemptedSelectors: args.attemptedSelectors,
@@ -1296,9 +1428,24 @@ function buildDebugPayload(args: {
     resolvedHandoffClickedText: args.resolvedHandoffClickedText,
     resolvedHandoffUrlBefore: args.resolvedHandoffUrlBefore,
     resolvedHandoffUrlAfter: args.resolvedHandoffUrlAfter,
+    strategyMatched: args.strategyMatched ?? false,
+    strategyId: args.strategyId,
+    strategySourceHost: args.strategySourceHost,
+    strategyDestinationHost: args.strategyDestinationHost,
+    strategyType: args.strategyType,
+    strategyPageType: args.strategyPageType,
+    strategyDerivedInstruction: args.strategyDerivedInstruction,
+    strategyAutomationPrompt: args.strategyAutomationPrompt,
+    strategyStartUrl: args.strategyStartUrl,
+    strategySanitizedStepCount: args.strategySanitizedStepCount ?? 0,
     playwrightLaunchStrategy: args.playwrightLaunchStrategy,
     playwrightPersistentContext: args.playwrightPersistentContext ?? false,
     playwrightUserDataDir: args.playwrightUserDataDir,
+    rtxFlowAttempted: args.rtxFlowAttempted ?? false,
+    rtxFlowCompleted: args.rtxFlowCompleted ?? false,
+    rtxProgressMarkers: args.rtxProgressMarkers ?? [],
+    rtxFailureReason: args.rtxFailureReason,
+    rtxJobId: args.rtxJobId,
   };
 }
 
@@ -1430,6 +1577,104 @@ function detectApplyDomainFromHostname(hostname: string): KnownApplyDomain {
 function detectApplyDomain(url: string): KnownApplyDomain {
   const hostname = parseHostname(url);
   return detectApplyDomainFromHostname(hostname);
+}
+
+function isRtxHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return hostnameMatches(normalized, RTX_HOST_PATTERNS);
+}
+
+function isRtxWorkdayUrl(rawUrl: string) {
+  const hostname = parseHostname(rawUrl);
+  return hostnameMatches(hostname, RTX_WORKDAY_HOST_PATTERNS);
+}
+
+function looksLikeRtxRedirectOrPrivacyPage(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    if (!isRtxHostname(hostname)) return false;
+    return (
+      pathname.includes("/404") ||
+      pathname.includes("/privacy") ||
+      pathname.includes("/not-found") ||
+      pathname.includes("/error")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function extractRtxJobId(args: {
+  targetUrl?: string;
+  originalJobUrl?: string;
+  resolvedDirectUrl?: string;
+  title?: string;
+}) {
+  const combined = [
+    args.targetUrl,
+    args.originalJobUrl,
+    args.resolvedDirectUrl,
+    args.title,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ");
+  const match = combined.match(/\b0?\d{8}\b/);
+  return match?.[0] ?? undefined;
+}
+
+function normalizeWhitespace(value: string | null | undefined) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function buildRtxTitleQuery(title: string | undefined) {
+  const normalized = normalizeWhitespace(title);
+  if (!normalized) return "";
+  const words = normalized.split(" ").slice(0, 6);
+  return words.join(" ");
+}
+
+async function clickLocatorPlanWithNavigation(args: {
+  page: Page;
+  context: BrowserContext;
+  plan: LocatorPlan;
+  onPageReady?: (
+    page: Page,
+    context: BrowserContext,
+  ) => Promise<void> | void;
+}) {
+  const popupPromise = args.page
+    .waitForEvent("popup", { timeout: 6_000 })
+    .catch(() => null);
+  const contextPagePromise = args.context
+    .waitForEvent("page", { timeout: 6_000 })
+    .catch(() => null);
+  const navigationPromise = args.page
+    .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 })
+    .catch(() => null);
+
+  await args.plan.locator
+    .click({ timeout: 8_000 })
+    .catch(() => args.plan.locator.click({ force: true, timeout: 8_000 }));
+
+  const [popupPage, contextPage] = await Promise.all([
+    popupPromise,
+    contextPagePromise,
+  ]);
+  let nextPage = args.page;
+
+  if (popupPage) {
+    nextPage = popupPage;
+  } else if (contextPage && contextPage !== args.page) {
+    nextPage = contextPage;
+  } else {
+    await navigationPromise;
+  }
+
+  await waitForDomAndSettle(nextPage);
+  await args.onPageReady?.(nextPage, args.context);
+  return nextPage;
 }
 
 function classifyAdzunaLandPage(rawUrl: string): AdzunaLandPageState {
@@ -2238,6 +2483,46 @@ async function findFirstVisibleEnabledLocator(
   }
 
   return null;
+}
+
+async function isInteractableChoiceLocator(locator: Locator) {
+  return locator
+    .evaluate((element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        return false;
+      }
+      if (
+        element.hasAttribute("disabled") ||
+        element.getAttribute("aria-disabled") === "true"
+      ) {
+        return false;
+      }
+
+      const cookieContainer = element.closest(
+        '[id*="cookie"], [class*="cookie"], [id*="consent"], [class*="consent"], [aria-label*="cookie"], [aria-label*="consent"], [data-testid*="cookie"], [data-testid*="consent"]',
+      );
+      if (cookieContainer) {
+        const text = (cookieContainer.textContent ?? "").toLowerCase();
+        if (
+          text.includes("cookie") ||
+          text.includes("consent") ||
+          text.includes("privacy")
+        ) {
+          return false;
+        }
+      }
+
+      return true;
+    })
+    .catch(() => false);
 }
 
 async function findFirstMatchingLocatorPlan(
@@ -6043,6 +6328,304 @@ async function hasVisibleApplyCue(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
+type RtxPreludeResult = {
+  page: Page;
+  attempted: boolean;
+  reachedWorkday: boolean;
+  markers: string[];
+  failureReason?: string;
+};
+
+async function runRtxManualApplyPrelude(args: {
+  page: Page;
+  context: BrowserContext;
+  targetUrl: string;
+  originalJobUrl?: string;
+  resolvedDirectUrl?: string;
+  title?: string;
+  company?: string;
+  onPageReady?: (
+    page: Page,
+    context: BrowserContext,
+  ) => Promise<void> | void;
+  onStatus?: (update: ApplyStatusUpdate) => Promise<void> | void;
+  viewerUrl?: string;
+  remoteSessionId?: string;
+}): Promise<RtxPreludeResult> {
+  let activePage = args.page;
+  const markers: string[] = [];
+  const companyText = normalizeWhitespace(args.company).toLowerCase();
+  const rtxContextDetected =
+    isRtxHostname(parseHostname(args.targetUrl)) ||
+    isRtxHostname(parseHostname(args.originalJobUrl)) ||
+    isRtxHostname(parseHostname(args.resolvedDirectUrl)) ||
+    isRtxHostname(parseHostname(activePage.url())) ||
+    companyText === "rtx" ||
+    companyText.includes("rtx corporation");
+
+  if (!rtxContextDetected) {
+    return {
+      page: activePage,
+      attempted: false,
+      reachedWorkday: false,
+      markers,
+    };
+  }
+
+  const emit = async (marker: string, detail?: Record<string, unknown>) => {
+    markers.push(marker);
+    console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+      marker,
+      currentUrl: activePage.url(),
+      ...detail,
+    });
+    await args.onStatus?.({
+      status: "STARTING",
+      message: marker,
+      lastUrl: activePage.url(),
+      openUrl: activePage.url(),
+      viewerUrl: args.viewerUrl,
+      remoteSessionId: args.remoteSessionId,
+    });
+  };
+
+  try {
+    await emit("RTX_STEP_START");
+
+    if (isRtxWorkdayUrl(activePage.url())) {
+      await emit("RTX_WORKDAY_REACHED");
+      return {
+        page: activePage,
+        attempted: true,
+        reachedWorkday: true,
+        markers,
+      };
+    }
+
+    if (
+      looksLikeRtxRedirectOrPrivacyPage(activePage.url()) ||
+      (!isRtxWorkdayUrl(activePage.url()) &&
+        !parseHostname(activePage.url()).includes("careers.rtx.com"))
+    ) {
+      await activePage.goto(RTX_CAREERS_ENTRY_URL, {
+        waitUntil: "domcontentloaded",
+      });
+      await waitForDomAndSettle(activePage);
+      await args.onPageReady?.(activePage, args.context);
+      await emit("RTX_RECOVER_FROM_REDIRECT");
+    }
+
+    const cookiePlans: LocatorPlan[] = [
+      {
+        locator: activePage.getByRole("button", {
+          name: /accept|allow all|agree|recommended settings/i,
+        }),
+        selector: "role=button[cookie-accept]",
+      },
+      {
+        locator: activePage.getByRole("link", {
+          name: /accept|allow all|agree|recommended settings/i,
+        }),
+        selector: "role=link[cookie-accept]",
+      },
+    ];
+    const cookiePlan = await findFirstMatchingLocatorPlan(cookiePlans);
+    if (cookiePlan) {
+      await cookiePlan.locator.click({ timeout: 4_000 }).catch(() => undefined);
+      await waitForDomAndSettle(activePage);
+      await emit("RTX_COOKIE_HANDLED");
+    }
+
+    if (!parseHostname(activePage.url()).includes("careers.rtx.com")) {
+      const careersPlan = await findFirstMatchingLocatorPlan([
+        {
+          locator: activePage.getByRole("link", { name: /careers/i }),
+          selector: "role=link[name=careers]",
+        },
+        {
+          locator: activePage.getByRole("button", { name: /careers/i }),
+          selector: "role=button[name=careers]",
+        },
+      ]);
+      if (careersPlan) {
+        activePage = await clickLocatorPlanWithNavigation({
+          page: activePage,
+          context: args.context,
+          plan: careersPlan,
+          onPageReady: args.onPageReady,
+        });
+        await emit("RTX_CAREERS_OPENED");
+      }
+    }
+
+    const allowModalPlan = await findFirstMatchingLocatorPlan([
+      {
+        locator: activePage.getByRole("button", { name: /^allow$/i }),
+        selector: "role=button[name=allow]",
+      },
+      {
+        locator: activePage.getByRole("button", { name: /allow|continue/i }),
+        selector: "role=button[name*=allow|continue]",
+      },
+    ]);
+    if (allowModalPlan) {
+      await allowModalPlan.locator.click({ timeout: 4_000 }).catch(() => undefined);
+      await waitForDomAndSettle(activePage);
+    }
+
+    const jobId = extractRtxJobId({
+      targetUrl: args.targetUrl,
+      originalJobUrl: args.originalJobUrl,
+      resolvedDirectUrl: args.resolvedDirectUrl,
+      title: args.title,
+    });
+    const searchQuery = jobId ?? buildRtxTitleQuery(args.title);
+    const searchPlan = await findFirstMatchingLocatorPlan([
+      {
+        locator: activePage.locator("#typehead"),
+        selector: "#typehead",
+      },
+      {
+        locator: activePage.getByRole("textbox", { name: /search/i }),
+        selector: "role=textbox[name=search]",
+      },
+      {
+        locator: activePage.getByPlaceholder(/search/i),
+        selector: "placeholder*=search",
+      },
+    ]);
+
+    if (searchPlan && searchQuery) {
+      await searchPlan.locator.fill(searchQuery).catch(() => undefined);
+      await searchPlan.locator.press("Enter").catch(() => undefined);
+      await waitForDomAndSettle(activePage);
+      await emit("RTX_SEARCH_FILLED", {
+        query: searchQuery,
+        jobId: jobId ?? null,
+      });
+
+      const resultPlans: LocatorPlan[] = [];
+      if (jobId) {
+        const jobIdPattern = new RegExp(escapeRegExp(jobId), "i");
+        resultPlans.push(
+          {
+            locator: activePage.getByRole("link", { name: jobIdPattern }),
+            selector: `role=link[name*=${jobId}]`,
+          },
+          {
+            locator: activePage.getByRole("button", { name: jobIdPattern }),
+            selector: `role=button[name*=${jobId}]`,
+          },
+          {
+            locator: activePage.locator(`a:has-text("${jobId}")`),
+            selector: `a:has-text(${jobId})`,
+          },
+        );
+      }
+
+      if (resultPlans.length === 0 && searchQuery) {
+        const fallbackPattern = new RegExp(escapeRegExp(searchQuery), "i");
+        resultPlans.push(
+          {
+            locator: activePage.getByRole("link", { name: fallbackPattern }),
+            selector: `role=link[name*=${searchQuery}]`,
+          },
+          {
+            locator: activePage.locator(`a:has-text("${searchQuery}")`),
+            selector: `a:has-text(${searchQuery})`,
+          },
+        );
+      }
+
+      const resultPlan = await findFirstMatchingLocatorPlan(resultPlans);
+      if (resultPlan) {
+        activePage = await clickLocatorPlanWithNavigation({
+          page: activePage,
+          context: args.context,
+          plan: resultPlan,
+          onPageReady: args.onPageReady,
+        });
+        await emit("RTX_RESULT_SELECTED");
+      }
+    }
+
+    if (!isRtxWorkdayUrl(activePage.url())) {
+      const applyPlan = await findFirstMatchingLocatorPlan([
+        {
+          locator: activePage.getByRole("button", {
+            name: /^apply( now)?$/i,
+          }),
+          selector: "role=button[name=apply]",
+        },
+        {
+          locator: activePage.getByRole("link", {
+            name: /^apply( now)?$/i,
+          }),
+          selector: "role=link[name=apply]",
+        },
+      ]);
+      if (applyPlan) {
+        activePage = await clickLocatorPlanWithNavigation({
+          page: activePage,
+          context: args.context,
+          plan: applyPlan,
+          onPageReady: args.onPageReady,
+        });
+        await emit("RTX_APPLY_CLICKED");
+      }
+    }
+
+    if (!isRtxWorkdayUrl(activePage.url())) {
+      const applyManuallyPlan = await findFirstMatchingLocatorPlan([
+        {
+          locator: activePage.getByRole("button", { name: /apply manually/i }),
+          selector: "role=button[name*=apply manually]",
+        },
+        {
+          locator: activePage.getByRole("link", { name: /apply manually/i }),
+          selector: "role=link[name*=apply manually]",
+        },
+      ]);
+      if (applyManuallyPlan) {
+        activePage = await clickLocatorPlanWithNavigation({
+          page: activePage,
+          context: args.context,
+          plan: applyManuallyPlan,
+          onPageReady: args.onPageReady,
+        });
+        await emit("RTX_APPLY_MANUALLY_CLICKED");
+      }
+    }
+
+    if (isRtxWorkdayUrl(activePage.url())) {
+      await emit("RTX_WORKDAY_REACHED");
+      return {
+        page: activePage,
+        attempted: true,
+        reachedWorkday: true,
+        markers,
+      };
+    }
+
+    return {
+      page: activePage,
+      attempted: true,
+      reachedWorkday: false,
+      markers,
+      failureReason: "RTX_WORKDAY_NOT_REACHED",
+    };
+  } catch (error) {
+    return {
+      page: activePage,
+      attempted: true,
+      reachedWorkday: false,
+      markers,
+      failureReason:
+        error instanceof Error ? `RTX_PRELUDE_ERROR:${error.message}` : "RTX_PRELUDE_ERROR",
+    };
+  }
+}
+
 async function scanEntryCtaConfigs(
   page: Page,
   domain: KnownApplyDomain,
@@ -9084,6 +9667,17 @@ export async function applyWithPlaywright(args: {
     title?: string | null;
     company?: string | null;
     location?: string | null;
+    strategy?: {
+      id?: string | null;
+      sourceHost?: string | null;
+      destinationHost?: string | null;
+      strategyType?: string | null;
+      pageType?: string | null;
+      derivedInstruction?: string | null;
+      automationPrompt?: string | null;
+      startUrl?: string | null;
+      steps?: ApplySiteStrategyStep[] | null;
+    };
     directJobResolution?: Pick<
       DirectJobResolution,
       | "confidence"
@@ -9096,6 +9690,7 @@ export async function applyWithPlaywright(args: {
   values: Record<string, string | string[]>;
   resumePath?: string | null;
   mode?: "AUTO" | "HUMAN_ASSIST";
+  freshSession?: boolean;
   onPageReady?: (
     page: Page,
     context: BrowserContext,
@@ -9119,8 +9714,12 @@ export async function applyWithPlaywright(args: {
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
+  const forceFreshSession = args.freshSession !== false;
   const entryUrl = args.jobUrl;
-  const targetUrl = args.form?.embedUrl ?? args.jobUrl;
+  const strategyStartUrl = args.metadata?.strategy?.startUrl
+    ? normalizeJobUrl(args.metadata.strategy.startUrl)
+    : undefined;
+  let targetUrl = strategyStartUrl ?? args.form?.embedUrl ?? args.jobUrl;
   const originalJobUrl = args.metadata?.originalUrl
     ? normalizeJobUrl(args.metadata.originalUrl)
     : undefined;
@@ -9131,6 +9730,22 @@ export async function applyWithPlaywright(args: {
   const searchJobTitle = args.metadata?.title?.trim() || undefined;
   const searchCompany = args.metadata?.company?.trim() || undefined;
   const searchLocation = args.metadata?.location?.trim() || undefined;
+  const strategyMatched =
+    Boolean(strategyStartUrl) ||
+    Boolean(args.metadata?.strategy?.automationPrompt) ||
+    Boolean(args.metadata?.strategy?.derivedInstruction);
+  const strategyId = args.metadata?.strategy?.id?.trim() || undefined;
+  const strategySourceHost = args.metadata?.strategy?.sourceHost?.trim() || undefined;
+  const strategyDestinationHost =
+    args.metadata?.strategy?.destinationHost?.trim() || undefined;
+  const strategyType = args.metadata?.strategy?.strategyType?.trim() || undefined;
+  const strategyPageType = args.metadata?.strategy?.pageType?.trim() || undefined;
+  const strategyDerivedInstruction =
+    args.metadata?.strategy?.derivedInstruction?.trim() || undefined;
+  const strategyAutomationPrompt =
+    args.metadata?.strategy?.automationPrompt?.trim() || undefined;
+  const strategySanitizedStepCount =
+    args.metadata?.strategy?.steps?.length ?? 0;
   const directJobResolutionAttempted =
     args.metadata?.directJobResolution?.attempted === true;
   const directJobResolutionConfidence =
@@ -9155,7 +9770,7 @@ export async function applyWithPlaywright(args: {
     Boolean(resolvedDirectUrl) &&
     originalJobUrl !== resolvedDirectUrl;
   const startingUrlKind = classifyJobUrlKind(originalJobUrl ?? entryUrl);
-  const finalChosenUrlKind = classifyJobUrlKind(targetUrl);
+  let finalChosenUrlKind = classifyJobUrlKind(targetUrl);
   let currentUrl = targetUrl;
   let initialLoadedUrl = targetUrl;
   let domain = parseHostname(entryUrl) || parseHostname(targetUrl);
@@ -9291,6 +9906,30 @@ export async function applyWithPlaywright(args: {
   let resolvedHandoffUrlAfter: string | undefined;
   let latestActionText: string | undefined;
   let latestActionSelector: string | undefined;
+  const rtxJobId = extractRtxJobId({
+    targetUrl,
+    originalJobUrl,
+    resolvedDirectUrl,
+    title: searchJobTitle,
+  });
+  let rtxFlowAttempted = false;
+  let rtxFlowCompleted = false;
+  let rtxFailureReason: string | undefined;
+  let rtxProgressMarkers: string[] = [];
+
+  if (strategyMatched) {
+    console.log("[AUTO_APPLY_STRATEGY_GUIDANCE]", {
+      strategyId: strategyId ?? null,
+      strategySourceHost: strategySourceHost ?? null,
+      strategyDestinationHost: strategyDestinationHost ?? null,
+      strategyType: strategyType ?? null,
+      strategyPageType: strategyPageType ?? null,
+      strategyStartUrl: strategyStartUrl ?? null,
+      strategySanitizedStepCount,
+      targetUrl,
+      strategyAutomationPrompt: strategyAutomationPrompt ?? null,
+    });
+  }
 
   const captureCurrentUrl = (pageOrUrl?: Page | string | null) => {
     if (typeof pageOrUrl === "string") {
@@ -9450,9 +10089,24 @@ export async function applyWithPlaywright(args: {
     resolvedHandoffClickedText,
     resolvedHandoffUrlBefore,
     resolvedHandoffUrlAfter,
+    strategyMatched,
+    strategyId,
+    strategySourceHost,
+    strategyDestinationHost,
+    strategyType,
+    strategyPageType,
+    strategyDerivedInstruction,
+    strategyAutomationPrompt,
+    strategyStartUrl,
+    strategySanitizedStepCount,
     playwrightLaunchStrategy,
     playwrightPersistentContext,
     playwrightUserDataDir,
+    rtxFlowAttempted,
+    rtxFlowCompleted,
+    rtxProgressMarkers,
+    rtxFailureReason,
+    rtxJobId,
   });
 
   const readPageTitle = async (page?: Page | null) => {
@@ -9982,7 +10636,7 @@ export async function applyWithPlaywright(args: {
   try {
     await args.onStatus?.({
       status: "STARTING",
-      openUrl: targetUrl,
+      openUrl: undefined,
     });
 
     if (shouldUseRemoteBrowser()) {
@@ -9999,7 +10653,7 @@ export async function applyWithPlaywright(args: {
         sessionId: remoteSession.sessionId,
       });
     } else {
-      const launchOptions = resolveLocalLaunchOptions(args.mode);
+      const launchOptions = resolveLocalLaunchOptions(args.mode, forceFreshSession);
       headless = launchOptions.headless;
       playwrightLaunchStrategy = launchOptions.strategy;
       playwrightPersistentContext = launchOptions.persistentContext;
@@ -10057,6 +10711,234 @@ export async function applyWithPlaywright(args: {
     page = context.pages()[0] ?? (await context.newPage());
     activePage = page;
     await args.onPageReady?.(page, context);
+    if (forceFreshSession) {
+      await resetRuntimeSessionState({
+        context,
+        page,
+      });
+      await args.onPageReady?.(page, context);
+    }
+
+    const startRoutingDecision = selectInitialAutomationTarget({
+      sourceProvider: applySource,
+      candidates: [
+        {
+          label: "strategy_start_url",
+          url: strategyStartUrl,
+        },
+        {
+          label: "form_embed_url",
+          url: args.form?.embedUrl,
+        },
+        {
+          label: "resolved_direct_url",
+          url: resolvedDirectUrl,
+        },
+        {
+          label: "job_url",
+          url: args.jobUrl,
+        },
+        {
+          label: "original_job_url",
+          url: originalJobUrl,
+        },
+      ],
+    });
+    let destinationResolvedViaEcosia = false;
+
+    if (startRoutingDecision.aggregatorSourceDetected) {
+      await args.onStatus?.({
+        status: "STARTING",
+        message: "Aggregator source detected",
+        lastUrl: captureCurrentUrl(page),
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: captureCurrentUrl(page),
+        remoteSessionId: remoteSession?.sessionId,
+      });
+      console.info("[AUTO_APPLY_ROUTING] aggregator source detected", {
+        source: applySource ?? null,
+        entryUrl,
+        originalJobUrl: originalJobUrl ?? null,
+      });
+    }
+
+    if (startRoutingDecision.rejectedCandidates.length > 0) {
+      await args.onStatus?.({
+        status: "STARTING",
+        message: "Invalid start URL rejected",
+        lastUrl: captureCurrentUrl(page),
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: captureCurrentUrl(page),
+        remoteSessionId: remoteSession?.sessionId,
+      });
+      console.info("[AUTO_APPLY_ROUTING] invalid start URL rejected", {
+        rejectedCandidates: startRoutingDecision.rejectedCandidates,
+      });
+    }
+
+    if (startRoutingDecision.requiresEcosiaSearch) {
+      await args.onStatus?.({
+        status: "STARTING",
+        message: "Resolving real posting via Ecosia",
+        lastUrl: captureCurrentUrl(page),
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: captureCurrentUrl(page),
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      const ecosiaResolution = await resolveRealPostingViaEcosia({
+        page,
+        title: searchJobTitle,
+        company: searchCompany,
+        location: searchLocation,
+      });
+
+      searchFallbackTriggered = true;
+      searchFallbackQueries = ecosiaResolution.query ? [ecosiaResolution.query] : [];
+      searchFallbackCandidates = ecosiaResolution.candidates;
+      searchFallbackChosenCandidate = ecosiaResolution.ok
+        ? ecosiaResolution.chosenCandidateUrl
+        : undefined;
+      searchFallbackAttemptCount = ecosiaResolution.attemptedCandidateCount;
+      searchFallbackSuccess = ecosiaResolution.ok;
+      searchFallbackFailureReason = ecosiaResolution.ok
+        ? undefined
+        : ecosiaResolution.failureCode;
+
+      if (!ecosiaResolution.ok) {
+        const finalUrl = captureCurrentUrl(page);
+        const verificationRequired =
+          ecosiaResolution.failureCode === "VERIFICATION_REQUIRED";
+        const finalStatus = verificationRequired
+          ? "VERIFICATION_REQUIRED"
+          : "APPLY_NOT_STARTED";
+        const message = verificationRequired
+          ? "Application paused because the employer site asked for verification."
+          : "Real posting not found";
+
+        await args.onStatus?.({
+          status: finalStatus,
+          lastUrl: finalUrl,
+          error: message,
+          message: verificationRequired
+            ? message
+            : "Real posting not found",
+          viewerUrl: remoteSession?.viewerUrl,
+          openUrl: finalUrl,
+          remoteSessionId: remoteSession?.sessionId,
+        });
+
+        logPlaywrightEvidence({
+          attemptedSelectors,
+          applyCtaFound: false,
+          applyCtaClicked: false,
+          currentUrl: finalUrl,
+          hopCount: 0,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          finalStatus,
+          submissionConfirmed: false,
+        });
+
+        return {
+          ok: false,
+          status: finalStatus,
+          needsHuman: verificationRequired,
+          unavailable: !verificationRequired,
+          finalUrl,
+          openUrl: finalUrl,
+          viewerUrl: remoteSession?.viewerUrl,
+          message,
+          debug: buildDebugPayload({
+            attemptedSelectors,
+            missingNames,
+            ...debugContext(),
+            ...(await captureStopPoint(page)),
+            finalUrl,
+            verificationSignals:
+              ecosiaResolution.verificationSignals ?? [],
+            confirmationSignals: [],
+            pageText: undefined,
+            pageHtml: undefined,
+            sessionId: remoteSession?.sessionId,
+            viewerUrl: remoteSession?.viewerUrl,
+            targetUrl,
+            applyCtaFound: false,
+            applyCtaClicked: false,
+            currentUrl: finalUrl,
+            submitButtonFound: false,
+            submitButtonClicked: false,
+            confirmationTextFound: false,
+            confirmationTextSnippet: null,
+            successUrlPatternMatched: false,
+            submissionConfirmed: false,
+            finalStatus,
+            success: false,
+            needsHuman: verificationRequired,
+            unavailable: !verificationRequired,
+            hopCount: 0,
+            urlsVisited: ecosiaResolution.visitedUrls,
+            clicks: [],
+            formDetected: false,
+            confirmationDetected: false,
+            verificationDetected: verificationRequired,
+            finalReason: verificationRequired
+              ? "verification_required"
+              : REAL_POSTING_NOT_FOUND_CODE,
+            resolverAttemptedLinks,
+            resolverSelectedLink,
+            resolverSuccess,
+            resolverNewUrl,
+          }),
+        };
+      }
+
+      destinationResolvedViaEcosia = true;
+      targetUrl = ecosiaResolution.resolvedUrl;
+      finalChosenUrlKind = classifyJobUrlKind(targetUrl);
+
+      await args.onStatus?.({
+        status: "STARTING",
+        message: "Employer/ATS posting found",
+        lastUrl: captureCurrentUrl(page),
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: captureCurrentUrl(page),
+        remoteSessionId: remoteSession?.sessionId,
+      });
+    } else if (startRoutingDecision.selectedUrl) {
+      targetUrl = startRoutingDecision.selectedUrl;
+      finalChosenUrlKind = classifyJobUrlKind(targetUrl);
+    }
+
+    if (forceFreshSession) {
+      await args.onStatus?.({
+        status: "STARTING",
+        message: "Starting fresh browser session",
+        lastUrl: captureCurrentUrl(page),
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: captureCurrentUrl(page),
+        remoteSessionId: remoteSession?.sessionId,
+      });
+      await resetRuntimeSessionState({
+        context,
+        page,
+        targetUrl,
+      });
+      await args.onPageReady?.(page, context);
+      captureCurrentUrl(page);
+    }
+
+    await args.onStatus?.({
+      status: "STARTING",
+      message: "Starting automation from resolved destination",
+      lastUrl: targetUrl,
+      viewerUrl: remoteSession?.viewerUrl,
+      openUrl: targetUrl,
+      remoteSessionId: remoteSession?.sessionId,
+    });
 
     console.log("[AUTO_APPLY_PLAYWRIGHT] navigating", {
       entryUrl,
@@ -10067,6 +10949,7 @@ export async function applyWithPlaywright(args: {
       applySource: applySource ?? null,
       startingUrlKind,
       finalChosenUrlKind,
+      destinationResolvedViaEcosia,
     });
     await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
     await waitForDomAndSettle(page);
@@ -10242,6 +11125,31 @@ export async function applyWithPlaywright(args: {
     page = initialCookiePhase.page;
     captureCurrentUrl(page);
     mergeCookiePromptPhase(initialCookiePhase);
+
+    const rtxPrelude = await runRtxManualApplyPrelude({
+      page,
+      context,
+      targetUrl,
+      originalJobUrl,
+      resolvedDirectUrl,
+      title: searchJobTitle,
+      company: searchCompany,
+      onPageReady: args.onPageReady,
+      onStatus: args.onStatus,
+      viewerUrl: remoteSession?.viewerUrl,
+      remoteSessionId: remoteSession?.sessionId,
+    });
+    page = rtxPrelude.page;
+    captureCurrentUrl(page);
+    rtxFlowAttempted = rtxFlowAttempted || rtxPrelude.attempted;
+    rtxFlowCompleted = rtxFlowCompleted || rtxPrelude.reachedWorkday;
+    rtxProgressMarkers = dedupeUrls([
+      ...rtxProgressMarkers,
+      ...rtxPrelude.markers,
+    ]);
+    if (rtxPrelude.failureReason) {
+      rtxFailureReason = rtxPrelude.failureReason;
+    }
 
     if (
       isAdzunaLandRedirectPage(page.url()) ||
@@ -10498,6 +11406,13 @@ export async function applyWithPlaywright(args: {
 
     page = chase.page;
     captureCurrentUrl(page);
+    if (isRtxWorkdayUrl(page.url())) {
+      rtxFlowCompleted = true;
+      rtxProgressMarkers = dedupeUrls([
+        ...rtxProgressMarkers,
+        "RTX_WORKDAY_REACHED",
+      ]);
+    }
     let rawChaseEvidence = buildCtaEvidence(
       chase,
       page.url(),
@@ -11292,12 +12207,17 @@ export async function applyWithPlaywright(args: {
     if (chase.signals.needsHuman && knownChainAllowedToFail) {
       keepBrowserOpen = true;
       const finalUrl = page.url();
-      const message = chase.signals.accountSignals.length
-        ? "Account creation or verification needs human completion."
-        : "Human verification required";
+      const verificationRequired =
+        chase.signals.verificationSignals.length > 0;
+      const humanStatus = verificationRequired
+        ? "VERIFICATION_REQUIRED"
+        : "WAITING_HUMAN";
+      const message = verificationRequired
+        ? "Application paused because the employer site asked for verification."
+        : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         lastUrl: finalUrl,
         message,
         viewerUrl: remoteSession?.viewerUrl,
@@ -11313,13 +12233,13 @@ export async function applyWithPlaywright(args: {
         confirmationTextFound: chase.signals.confirmationTextFound,
         confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
         successUrlPatternMatched: chase.signals.successUrlPatternMatched,
-        finalStatus: "WAITING_HUMAN",
+        finalStatus: humanStatus,
         submissionConfirmed: false,
       });
 
       return {
         ok: false,
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -11331,10 +12251,7 @@ export async function applyWithPlaywright(args: {
           ...debugContext(),
           ...(await captureStopPoint(page)),
           finalUrl,
-          verificationSignals: [
-            ...chase.signals.verificationSignals,
-            ...chase.signals.accountSignals,
-          ],
+          verificationSignals: chase.signals.verificationSignals,
           confirmationSignals: chase.signals.confirmationSignals,
           pageText: chase.signals.pageText,
           pageHtml: chase.signals.html,
@@ -11348,7 +12265,7 @@ export async function applyWithPlaywright(args: {
           confirmationTextSnippet: chase.signals.confirmationTextSnippet ?? null,
           successUrlPatternMatched: chase.signals.successUrlPatternMatched,
           submissionConfirmed: false,
-          finalStatus: "WAITING_HUMAN",
+          finalStatus: humanStatus,
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -11357,7 +12274,7 @@ export async function applyWithPlaywright(args: {
           clicks: effectiveChase.clicks,
           formDetected: chase.signals.formDetected,
           confirmationDetected: chase.signals.confirmationDetected,
-          verificationDetected: true,
+          verificationDetected: verificationRequired,
           finalReason: chase.finalReason,
           resolverAttemptedLinks,
           resolverSelectedLink,
@@ -11457,9 +12374,15 @@ export async function applyWithPlaywright(args: {
       remoteSessionId: remoteSession?.sessionId,
     });
 
-    await page.waitForSelector("input, textarea, select", {
-      timeout: 15_000,
+    const meaningfulFormControls = await waitForMeaningfulFormControls(page, {
+      timeoutMs: 15_000,
+      minCount: 1,
+      pollMs: 350,
     });
+    if (!meaningfulFormControls && rtxFlowAttempted) {
+      rtxFailureReason =
+        rtxFailureReason ?? "RTX_MEANINGFUL_FORM_CONTROL_NOT_FOUND";
+    }
 
     await args.onStatus?.({
       status: "FILLING_FORM",
@@ -11470,7 +12393,10 @@ export async function applyWithPlaywright(args: {
     });
 
     for (const [name, rawValue] of Object.entries(args.values)) {
-      const locator = await findMatchingLocator(page, name, attemptedSelectors);
+      const allowChoiceControls = shouldAllowChoiceControls(name, rawValue);
+      const locator = await findMatchingLocator(page, name, attemptedSelectors, {
+        allowChoiceControls,
+      });
       if (!locator) {
         missingNames.push(name);
         continue;
@@ -11502,6 +12428,9 @@ export async function applyWithPlaywright(args: {
         const values = asArray(rawValue);
         for (let i = 0; i < count; i += 1) {
           const checkbox = locator.nth(i);
+          if (!(await isInteractableChoiceLocator(checkbox))) {
+            continue;
+          }
           const elementValue = await checkbox.getAttribute("value");
           const labelText = (await extractLocatorText(checkbox)).toLowerCase().trim();
 
@@ -11523,6 +12452,9 @@ export async function applyWithPlaywright(args: {
         const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
         for (let i = 0; i < count; i += 1) {
           const option = locator.nth(i);
+          if (!(await isInteractableChoiceLocator(option))) {
+            continue;
+          }
           const optionValue = await option.getAttribute("value");
           const optionText = (await extractLocatorText(option)).toLowerCase().trim();
           const normalizedValue = String(value).toLowerCase().trim();
@@ -11561,12 +12493,17 @@ export async function applyWithPlaywright(args: {
     if (preSubmitSignals.needsHuman) {
       keepBrowserOpen = true;
       const finalUrl = page.url();
-      const message = preSubmitSignals.accountSignals.length
-        ? "Account creation or verification needs human completion."
-        : "Human verification required";
+      const verificationRequired =
+        preSubmitSignals.verificationSignals.length > 0;
+      const humanStatus = verificationRequired
+        ? "VERIFICATION_REQUIRED"
+        : "WAITING_HUMAN";
+      const message = verificationRequired
+        ? "Application paused because the employer site asked for verification."
+        : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         lastUrl: finalUrl,
         message,
         viewerUrl: remoteSession?.viewerUrl,
@@ -11583,13 +12520,13 @@ export async function applyWithPlaywright(args: {
         confirmationTextFound: preSubmitSignals.confirmationTextFound,
         confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
         successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
-        finalStatus: "WAITING_HUMAN",
+        finalStatus: humanStatus,
         submissionConfirmed: false,
       });
 
       return {
         ok: false,
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -11601,10 +12538,7 @@ export async function applyWithPlaywright(args: {
           ...debugContext(),
           ...(await captureStopPoint(page)),
           finalUrl,
-          verificationSignals: [
-            ...preSubmitSignals.verificationSignals,
-            ...preSubmitSignals.accountSignals,
-          ],
+          verificationSignals: preSubmitSignals.verificationSignals,
           confirmationSignals: preSubmitSignals.confirmationSignals,
           pageText: preSubmitSignals.pageText,
           pageHtml: preSubmitSignals.html,
@@ -11619,7 +12553,7 @@ export async function applyWithPlaywright(args: {
           confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
           successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
           submissionConfirmed: false,
-          finalStatus: "WAITING_HUMAN",
+          finalStatus: humanStatus,
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -11628,7 +12562,7 @@ export async function applyWithPlaywright(args: {
           clicks: effectiveChase.clicks,
           formDetected: true,
           confirmationDetected: preSubmitSignals.confirmationDetected,
-          verificationDetected: true,
+          verificationDetected: verificationRequired,
           finalReason: "Verification detected before submission.",
           resolverAttemptedLinks,
           resolverSelectedLink,
@@ -11786,12 +12720,17 @@ export async function applyWithPlaywright(args: {
 
     if (finalSignals.needsHuman) {
       keepBrowserOpen = true;
-      const message = finalSignals.accountSignals.length
-        ? "Account creation or verification needs human completion."
-        : "Human verification required";
+      const verificationRequired =
+        finalSignals.verificationSignals.length > 0;
+      const humanStatus = verificationRequired
+        ? "VERIFICATION_REQUIRED"
+        : "WAITING_HUMAN";
+      const message = verificationRequired
+        ? "Application paused because the employer site asked for verification."
+        : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         lastUrl: finalUrl,
         message,
         viewerUrl: remoteSession?.viewerUrl,
@@ -11801,7 +12740,7 @@ export async function applyWithPlaywright(args: {
 
       return {
         ok: false,
-        status: "WAITING_HUMAN",
+        status: humanStatus,
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -11819,10 +12758,7 @@ export async function applyWithPlaywright(args: {
           })),
           finalUrl,
           submitSelectorUsed: submitUsed,
-          verificationSignals: [
-            ...finalSignals.verificationSignals,
-            ...finalSignals.accountSignals,
-          ],
+          verificationSignals: finalSignals.verificationSignals,
           confirmationSignals: finalSignals.confirmationSignals,
           pageText: finalSignals.pageText,
           pageHtml: finalSignals.html,
@@ -11837,7 +12773,7 @@ export async function applyWithPlaywright(args: {
           confirmationTextSnippet: finalSignals.confirmationTextSnippet ?? null,
           successUrlPatternMatched: finalSignals.successUrlPatternMatched,
           submissionConfirmed: false,
-          finalStatus: "WAITING_HUMAN",
+          finalStatus: humanStatus,
           success: false,
           needsHuman: true,
           unavailable: false,
@@ -11846,7 +12782,7 @@ export async function applyWithPlaywright(args: {
           clicks: effectiveChase.clicks,
           formDetected: true,
           confirmationDetected: success,
-          verificationDetected: true,
+          verificationDetected: verificationRequired,
           finalReason: "Verification detected after submit.",
           resolverAttemptedLinks,
           resolverSelectedLink,
@@ -12197,5 +13133,10 @@ export function toApplySessionDebug(
     playwrightPersistentContext:
       result.playwrightPersistentContext,
     playwrightUserDataDir: result.playwrightUserDataDir,
+    rtxFlowAttempted: result.rtxFlowAttempted,
+    rtxFlowCompleted: result.rtxFlowCompleted,
+    rtxProgressMarkers: result.rtxProgressMarkers ?? [],
+    rtxFailureReason: result.rtxFailureReason,
+    rtxJobId: result.rtxJobId,
   } as ApplySessionDebug;
 }

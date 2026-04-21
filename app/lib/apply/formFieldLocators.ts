@@ -23,6 +23,90 @@ function normalizeFieldAliases(name: string) {
   return [...new Set([name, normalized, ...(FIELD_ALIASES[name] ?? [])])];
 }
 
+async function pickPreferredFieldLocator(args: {
+  locator: Locator;
+  allowChoiceControls: boolean;
+}) {
+  const count = await args.locator.count().catch(() => 0);
+  const max = Math.min(count, 12);
+
+  for (let index = 0; index < max; index += 1) {
+    const candidate = args.locator.nth(index);
+    const verdict = await candidate
+      .evaluate((element, options) => {
+        if (!(element instanceof HTMLElement)) {
+          return { usable: false };
+        }
+
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          rect.width <= 0 ||
+          rect.height <= 0
+        ) {
+          return { usable: false };
+        }
+
+        if (
+          element.hasAttribute("disabled") ||
+          element.getAttribute("aria-disabled") === "true"
+        ) {
+          return { usable: false };
+        }
+
+        if (element.closest("header, nav, footer, [role='navigation']")) {
+          return { usable: false };
+        }
+
+        const cookieContainer = element.closest(
+          '[id*="cookie"], [class*="cookie"], [id*="consent"], [class*="consent"], [aria-label*="cookie"], [aria-label*="consent"], [data-testid*="cookie"], [data-testid*="consent"]',
+        );
+        if (cookieContainer) {
+          const contextText = (cookieContainer.textContent ?? "").toLowerCase();
+          if (
+            contextText.includes("cookie") ||
+            contextText.includes("consent") ||
+            contextText.includes("privacy") ||
+            contextText.includes("preferences")
+          ) {
+            return { usable: false };
+          }
+        }
+
+        if (element instanceof HTMLInputElement) {
+          const type = (element.type || "text").toLowerCase();
+          if (
+            type === "hidden" ||
+            type === "submit" ||
+            type === "button" ||
+            type === "reset" ||
+            type === "image"
+          ) {
+            return { usable: false };
+          }
+
+          if (
+            (type === "checkbox" || type === "radio") &&
+            options.allowChoiceControls !== true
+          ) {
+            return { usable: false };
+          }
+        }
+
+        return { usable: true };
+      }, { allowChoiceControls: args.allowChoiceControls })
+      .catch(() => ({ usable: false }));
+
+    if (verdict.usable) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 export async function extractLocatorText(locator: Locator) {
   return locator
     .evaluate((element) => {
@@ -47,13 +131,22 @@ export async function findMatchingLocator(
   page: Page,
   name: string,
   attemptedSelectors: string[],
+  options?: {
+    allowChoiceControls?: boolean;
+  },
 ): Promise<Locator | null> {
+  const allowChoiceControls = options?.allowChoiceControls === true;
   const exactSelector = `[name="${cssEscape(name)}"]`;
   attemptedSelectors.push(exactSelector);
 
   const exactLocator = page.locator(exactSelector).first();
   if ((await exactLocator.count()) > 0) {
-    return exactLocator;
+    if (allowChoiceControls) return page.locator(exactSelector);
+    const preferred = await pickPreferredFieldLocator({
+      locator: page.locator(exactSelector),
+      allowChoiceControls,
+    });
+    if (preferred) return preferred;
   }
 
   for (const alias of normalizeFieldAliases(name)) {
@@ -62,9 +155,48 @@ export async function findMatchingLocator(
 
     const labelPattern = new RegExp(escapeRegex(trimmedAlias), "i");
     attemptedSelectors.push(`label:${trimmedAlias}`);
-    const labelLocator = page.getByLabel(labelPattern).first();
+    const labelLocator = page.getByLabel(labelPattern);
     if ((await labelLocator.count()) > 0) {
-      return labelLocator;
+      if (allowChoiceControls) return labelLocator;
+      const preferred = await pickPreferredFieldLocator({
+        locator: labelLocator,
+        allowChoiceControls,
+      });
+      if (preferred) return preferred;
+    }
+
+    attemptedSelectors.push(`placeholder:${trimmedAlias}`);
+    const placeholderLocator = page.getByPlaceholder(labelPattern);
+    if ((await placeholderLocator.count()) > 0) {
+      const preferred = await pickPreferredFieldLocator({
+        locator: placeholderLocator,
+        allowChoiceControls,
+      });
+      if (preferred) return preferred;
+    }
+
+    attemptedSelectors.push(`role:textbox:${trimmedAlias}`);
+    const roleTextboxLocator = page.getByRole("textbox", {
+      name: labelPattern,
+    });
+    if ((await roleTextboxLocator.count()) > 0) {
+      const preferred = await pickPreferredFieldLocator({
+        locator: roleTextboxLocator,
+        allowChoiceControls,
+      });
+      if (preferred) return preferred;
+    }
+
+    attemptedSelectors.push(`role:combobox:${trimmedAlias}`);
+    const roleComboLocator = page.getByRole("combobox", {
+      name: labelPattern,
+    });
+    if ((await roleComboLocator.count()) > 0) {
+      const preferred = await pickPreferredFieldLocator({
+        locator: roleComboLocator,
+        allowChoiceControls,
+      });
+      if (preferred) return preferred;
     }
 
     const fuzzySelector = [
@@ -82,9 +214,14 @@ export async function findMatchingLocator(
     ].join(", ");
 
     attemptedSelectors.push(fuzzySelector);
-    const fuzzyLocator = page.locator(fuzzySelector).first();
+    const fuzzyLocator = page.locator(fuzzySelector);
     if ((await fuzzyLocator.count()) > 0) {
-      return fuzzyLocator;
+      if (allowChoiceControls) return fuzzyLocator;
+      const preferred = await pickPreferredFieldLocator({
+        locator: fuzzyLocator,
+        allowChoiceControls,
+      });
+      if (preferred) return preferred;
     }
   }
 

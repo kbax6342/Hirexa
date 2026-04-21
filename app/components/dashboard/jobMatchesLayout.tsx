@@ -22,6 +22,12 @@ import {
   buildApplyProviderPayload,
   detectApplyProviderFromJob,
 } from "@/app/lib/apply/providerDetection";
+import {
+  isAggregatorHandoffUrl,
+  isLikelyAtsUrl,
+  isLikelyCompanyCareersUrl,
+  normalizeJobUrl as normalizeEmployerJobUrl,
+} from "@/app/lib/jobSources";
 import { storeJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
 import {
   clearAutoApplyPopupState,
@@ -102,6 +108,7 @@ type AutoApplyStartResponse = {
   applicationId?: string;
   applySessionId?: string;
   status?: string;
+  errorCode?: string;
   submissionStatus?: string;
   emailStatus?: string;
   message?: string;
@@ -173,10 +180,55 @@ function isMissingResumeAutoApplyError(payload: AutoApplyStartResponse | null | 
   );
 }
 
+function isTrustedEmployerJobUrl(url: string | null | undefined) {
+  const normalizedUrl = normalizeEmployerJobUrl(String(url ?? ""));
+  if (!normalizedUrl || isAggregatorHandoffUrl(normalizedUrl)) {
+    return false;
+  }
+
+  return (
+    isLikelyAtsUrl(normalizedUrl) ||
+    isLikelyCompanyCareersUrl(normalizedUrl)
+  );
+}
+
+function pickPreferredDirectJobUrl(job: SupportedAutoApplyJob, detail?: JobDetail | null) {
+  const candidates = [
+    detail?.externalUrl,
+    detail?.applyUrl,
+    detail?.jobUrl,
+    job.jobUrl,
+  ]
+    .map((value) => normalizeEmployerJobUrl(String(value ?? "")))
+    .filter(Boolean);
+
+  return (
+    candidates.find((candidate) => isTrustedEmployerJobUrl(candidate)) ?? null
+  );
+}
+
+function isEmployerUrlResolutionFailure(
+  payload: AutoApplyStartResponse | null | undefined,
+) {
+  return payload?.errorCode === "EMPLOYER_URL_RESOLUTION_FAILED";
+}
+
+function getAutoApplyStartFailureMessage(
+  payload: AutoApplyStartResponse | null | undefined,
+) {
+  if (isEmployerUrlResolutionFailure(payload)) {
+    return "Could not resolve employer job page.";
+  }
+
+  return payload?.message ?? payload?.error ?? "Unable to start auto apply.";
+}
+
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
   const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
 
   switch (normalized) {
+    case "VERIFICATION_REQUIRED":
+      return "Verification required";
     case "APPLY_NOT_STARTED":
       return "Could not start";
     case "AUTO_APPLY_UNAVAILABLE":
@@ -196,6 +248,7 @@ function formatAutoApplyStatusLabel(status: string | null | undefined) {
 
 function isStoppedAutoApplyStatus(status: string | null | undefined) {
   return (
+    status === "VERIFICATION_REQUIRED" ||
     status === "APPLY_NOT_STARTED" ||
     status === "WAITING_HUMAN" ||
     status === "FAILED"
@@ -1651,10 +1704,20 @@ export default function JobMatchesLayout({
         }
       }
 
+      const cachedDetail = detailCache.current.get(job.id)?.job ?? null;
+      const preferredDetail =
+        (selectedId === job.id ? selectedDetails : null) ?? cachedDetail;
+      const preferredDirectUrl = pickPreferredDirectJobUrl(
+        job,
+        preferredDetail,
+      );
       const createRes = await fetch("/api/auto-apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildApplyProviderPayload(job)),
+        body: JSON.stringify({
+          ...buildApplyProviderPayload(job),
+          preferredDirectUrl,
+        }),
       });
 
       const createData = (await createRes.json()) as AutoApplyStartResponse;
@@ -1668,7 +1731,7 @@ export default function JobMatchesLayout({
           applicationId,
           applySessionId: null,
           jobId: job.id,
-          jobUrl: job.jobUrl,
+          jobUrl: preferredDirectUrl ?? job.jobUrl,
           jobTitle: job.title,
           company: job.company,
           location: job.location,
@@ -1692,12 +1755,16 @@ export default function JobMatchesLayout({
 
       const startData = (await startRes.json()) as AutoApplyStartResponse;
       if (!startRes.ok || !startData?.ok || !startData.applySessionId) {
-        const message = startData?.error ?? "Unable to start auto apply.";
+        const message = getAutoApplyStartFailureMessage(startData);
         const missingResume = isMissingResumeAutoApplyError(startData);
         const status =
-          startData?.status === "AUTO_APPLY_UNAVAILABLE"
+          toApplySessionDisplayStatus(startData?.status) ??
+          startData?.status ??
+          (startData?.status === "AUTO_APPLY_UNAVAILABLE"
             ? "AUTO_APPLY_UNAVAILABLE"
-            : "FAILED";
+            : isEmployerUrlResolutionFailure(startData)
+              ? "APPLY_NOT_STARTED"
+              : "FAILED");
         const popupMessage = missingResume
           ? AUTO_APPLY_MISSING_RESUME_MESSAGE
           : message;
@@ -1706,7 +1773,7 @@ export default function JobMatchesLayout({
           applicationId,
           applySessionId: null,
           jobId: job.id,
-          jobUrl: job.jobUrl,
+          jobUrl: preferredDirectUrl ?? job.jobUrl,
           jobTitle: job.title,
           company: job.company,
           location: job.location,
@@ -1739,7 +1806,7 @@ export default function JobMatchesLayout({
         applicationId,
         applySessionId: startData.applySessionId,
         jobId: job.id,
-        jobUrl: job.jobUrl,
+        jobUrl: preferredDirectUrl ?? job.jobUrl,
         jobTitle: job.title,
         company: job.company,
         location: job.location,
@@ -1763,6 +1830,8 @@ export default function JobMatchesLayout({
       readCreditStatus,
       readPlanStatus,
       router,
+      selectedDetails,
+      selectedId,
       upsertAutoApplyPopupItem,
     ]
   );
@@ -2326,6 +2395,7 @@ export default function JobMatchesLayout({
                               currentUrl={item.currentUrl}
                               lastAction={item.lastAction}
                               stopReason={item.stopReason}
+                              errorMessage={item.message}
                               stopClassification={item.stopClassification}
                               compact
                               className="mt-2"
@@ -2354,6 +2424,7 @@ export default function JobMatchesLayout({
                             currentUrl={item.currentUrl}
                             lastAction={item.lastAction}
                             stopReason={item.stopReason}
+                            errorMessage={item.message}
                             stopClassification={item.stopClassification}
                             compact
                             className="mt-2"

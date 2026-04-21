@@ -12,6 +12,7 @@ import {
   formatAdzunaDescription,
   type FormattedAdzunaDescription,
 } from "@/app/lib/jobs/formatAdzunaDescription";
+import { normalizeAdzunaProviderId } from "@/app/lib/jobs/adzunaProviderId";
 
 type JsonLdNode = Record<string, unknown>;
 
@@ -1276,10 +1277,16 @@ function mergeExtractedContent(base: ExtractedJobContent, enriched: ExtractedJob
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const id = searchParams.get("id");
+    const rawId = searchParams.get("id");
+    const id = normalizeAdzunaProviderId(rawId);
 
     if (!id) {
-      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Missing or invalid Adzuna id",
+        },
+        { status: 400 },
+      );
     }
 
     const detailsUrl = `https://www.adzuna.com/details/${encodeURIComponent(id)}`;

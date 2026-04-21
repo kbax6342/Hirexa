@@ -6,6 +6,7 @@ export const APPLY_SESSION_STATUSES = [
   "SUBMITTING",
   "WAITING_CONFIRMATION",
   "WAITING_HUMAN",
+  "VERIFICATION_REQUIRED",
   "APPLY_NOT_STARTED",
   "UNCONFIRMED",
   "SUBMITTED",
@@ -18,6 +19,8 @@ export const APPLY_SESSION_STATUSES = [
 export type ApplySessionStatus = (typeof APPLY_SESSION_STATUSES)[number];
 
 const TERMINAL_STATUSES = new Set<ApplySessionStatus>([
+  "WAITING_HUMAN",
+  "VERIFICATION_REQUIRED",
   "APPLY_NOT_STARTED",
   "UNCONFIRMED",
   "SUBMITTED",
@@ -62,8 +65,6 @@ export function toApplySessionDisplayStatus(
       return "SUBMITTED";
     case "RUNNING":
       return "STARTING";
-    case "WAITING_HUMAN":
-      return "AUTO_APPLY_UNAVAILABLE";
     default:
       return normalized;
   }

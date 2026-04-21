@@ -19,6 +19,7 @@ import {
   getApplySiteStrategyStatusLabel,
   importStrategies,
   loadApplySiteStrategies,
+  refreshApplySiteStrategies,
   resolveStrategyHostname,
   strategyMatchesStopReason,
   updateApplySiteStrategyReplayState,
@@ -31,6 +32,7 @@ type SavedStrategyPanelProps = {
   currentUrl?: string | null;
   lastAction?: string | null;
   stopReason?: string | null;
+  errorMessage?: string | null;
   stopClassification?: ApplyStopClassification | null;
   compact?: boolean;
   tone?: "neutral" | "amber";
@@ -161,6 +163,7 @@ export default function SavedStrategyPanel({
   currentUrl,
   lastAction,
   stopReason,
+  errorMessage,
   stopClassification,
   compact = false,
   tone = "neutral",
@@ -240,7 +243,10 @@ export default function SavedStrategyPanel({
   }, [resolvedHostname, resolvedStopClassification.reason]);
 
   useEffect(() => {
-    refreshStrategy();
+    void (async () => {
+      await refreshApplySiteStrategies().catch(() => undefined);
+      refreshStrategy();
+    })();
     setPreviewOpen(false);
     setReplaySessionId(null);
     setReplaySession(null);
@@ -298,7 +304,9 @@ export default function SavedStrategyPanel({
 
             if (resolvedHostname) {
               try {
-                const next = updateApplySiteStrategyReplayState({
+                const next = await updateApplySiteStrategyReplayState({
+                  strategyId: savedStrategy?.id,
+                  strategyKey: savedStrategy?.strategyKey,
                   hostname: resolvedHostname,
                   replayStatus:
                     payload.session.status === "FAILED" ? "FAILED" : "COMPLETED",
@@ -351,6 +359,8 @@ export default function SavedStrategyPanel({
     replaySessionId,
     resolvedHostname,
     resolvedStopClassification.reason,
+    savedStrategy?.id,
+    savedStrategy?.strategyKey,
   ]);
 
   const palette =
@@ -394,6 +404,7 @@ export default function SavedStrategyPanel({
       currentUrl={currentUrl}
       lastAction={lastAction}
       stopReason={stopReason}
+      errorMessage={errorMessage}
       stopClassification={resolvedStopClassification}
       triggerLabel={triggerLabel}
       triggerClassName={sharedButtonClassName}
@@ -407,6 +418,7 @@ export default function SavedStrategyPanel({
       currentUrl={currentUrl}
       lastAction={lastAction}
       stopReason={stopReason}
+      errorMessage={errorMessage}
       stopClassification={resolvedStopClassification}
       triggerLabel="Walk through in Teach Mode"
       triggerClassName={sharedButtonClassName}
@@ -499,7 +511,12 @@ export default function SavedStrategyPanel({
               const importedKeys = getImportedHostnameKeys(rawJson);
               const duplicateCount = importedKeys.filter((key) => {
                 const hostname = resolveStrategyHostname(key);
-                return Boolean(hostname && currentStrategies[hostname]);
+                return Boolean(
+                  hostname &&
+                    Object.values(currentStrategies).some(
+                      (strategy) => strategy.hostname === hostname,
+                    ),
+                );
               }).length;
 
               const overwriteExisting =
@@ -511,10 +528,11 @@ export default function SavedStrategyPanel({
                     )
                   : false;
 
-              const importResult = importStrategies(
+              const importResult = await importStrategies(
                 withOverwriteFlag(rawJson, overwriteExisting),
               );
 
+              await refreshApplySiteStrategies().catch(() => undefined);
               refreshStrategy();
               setLibraryMessage(
                 `Import complete. Imported ${importResult.imported}, overwritten ${importResult.overwritten}, skipped ${importResult.skipped}.`,
@@ -577,6 +595,88 @@ export default function SavedStrategyPanel({
         Import strategies
       </Button>
     </>
+  );
+
+  const startStrategyReplay = useCallback(
+    async (mode: "fresh" | "last_url") => {
+      if (!savedStrategy) return;
+
+      try {
+        setPreviewOpen(true);
+        setReplayError(null);
+        setReplayMessage(null);
+
+        const response = await fetch("/api/apply-replay/start", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            hostname: savedStrategy.hostname,
+            finalUrl: finalUrl ?? savedStrategy.finalUrl,
+            currentUrl: currentUrl ?? finalUrl ?? savedStrategy.lastTrainedUrl,
+            retryMode: mode,
+            stopReason:
+              stopReason ??
+              savedStrategy.stopReason ??
+              "HUMAN_INTERVENTION_REQUIRED",
+            lastAction: lastAction ?? savedStrategy.lastAction ?? "",
+            strategy: {
+              finalUrl: savedStrategy.finalUrl,
+              lastTrainedUrl: savedStrategy.lastTrainedUrl,
+              steps: savedStrategy.steps ?? [],
+            },
+          }),
+        });
+
+        const payload = (await response.json()) as ReplaySessionResponse;
+        if (!response.ok || !payload.ok || !payload.session) {
+          throw new Error(payload.error ?? "Unable to start saved strategy replay.");
+        }
+
+        setReplaySession(payload.session);
+        setReplaySessionId(payload.session.id);
+        setReplayMessage(
+          mode === "fresh"
+            ? "Retry started with a fresh browser session."
+            : "Retry started from the last URL.",
+        );
+
+        try {
+          const next = await updateApplySiteStrategyReplayState({
+            strategyId: savedStrategy.id,
+            strategyKey: savedStrategy.strategyKey,
+            hostname: savedStrategy.hostname,
+            replayStatus: "RUNNING",
+            lastReplayResult: null,
+            failingStepId: null,
+          });
+          setSavedStrategy(next);
+          setSavedStrategyMatchesCurrentStop(
+            strategyMatchesStopReason({
+              strategy: next,
+              reason: resolvedStopClassification.reason,
+            }),
+          );
+        } catch {
+          // Replay can still proceed if local persistence is unavailable.
+        }
+      } catch (error) {
+        setReplayError(
+          error instanceof Error
+            ? error.message
+            : "Unable to start saved strategy replay.",
+        );
+      }
+    },
+    [
+      currentUrl,
+      finalUrl,
+      lastAction,
+      resolvedStopClassification.reason,
+      savedStrategy,
+      stopReason,
+    ],
   );
 
   if (!resolvedUrl && !resolvedHostname) {
@@ -647,11 +747,19 @@ export default function SavedStrategyPanel({
           Last replay: {lastReplayOutcomeLabel}
         </p>
         <p className={cn("mt-1", palette.subtle)}>
+          Prompt generation: {savedStrategy.promptGenerationSucceeded ? "Ready" : "Pending"}
+        </p>
+        <p className={cn("mt-1", palette.subtle)}>
           Replay status: {savedStrategy.replayStatus ?? "IDLE"}
         </p>
         {savedStrategy.lastReplayedAt ? (
           <p className={cn("mt-1", palette.subtle)}>
             Last replayed: {new Date(savedStrategy.lastReplayedAt).toLocaleString()}
+          </p>
+        ) : null}
+        {savedStrategy.derivedInstruction ? (
+          <p className={cn("mt-1", palette.subtle)}>
+            Lesson: {savedStrategy.derivedInstruction}
           </p>
         ) : null}
         {savedStrategy.lastFailureReason ? (
@@ -681,7 +789,7 @@ export default function SavedStrategyPanel({
           className={sharedButtonClassName}
           onClick={() => setPreviewOpen((current) => !current)}
         >
-          Preview strategy
+          Review previous attempt
         </Button>
 
         <Button
@@ -691,76 +799,26 @@ export default function SavedStrategyPanel({
           className={sharedButtonClassName}
           disabled={strategySteps.length === 0 || isReplayRunning}
           onClick={() => {
-            void (async () => {
-              if (!savedStrategy) return;
-
-              try {
-                setPreviewOpen(true);
-                setReplayError(null);
-                setReplayMessage(null);
-
-                const response = await fetch("/api/apply-replay/start", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    hostname: savedStrategy.hostname,
-                    finalUrl: finalUrl ?? savedStrategy.finalUrl,
-                    currentUrl: currentUrl ?? finalUrl ?? savedStrategy.lastTrainedUrl,
-                    stopReason:
-                      stopReason ?? savedStrategy.stopReason ?? "HUMAN_INTERVENTION_REQUIRED",
-                    lastAction: lastAction ?? savedStrategy.lastAction ?? "",
-                    strategy: {
-                      finalUrl: savedStrategy.finalUrl,
-                      lastTrainedUrl: savedStrategy.lastTrainedUrl,
-                      steps: savedStrategy.steps ?? [],
-                    },
-                  }),
-                });
-
-                const payload = (await response.json()) as ReplaySessionResponse;
-                if (!response.ok || !payload.ok || !payload.session) {
-                  throw new Error(
-                    payload.error ?? "Unable to start saved strategy replay.",
-                  );
-                }
-
-                setReplaySession(payload.session);
-                setReplaySessionId(payload.session.id);
-                setReplayMessage(
-                  "Visible Playwright browser opened. Replaying saved steps now.",
-                );
-
-                try {
-                  const next = updateApplySiteStrategyReplayState({
-                    hostname: savedStrategy.hostname,
-                    replayStatus: "RUNNING",
-                    lastReplayResult: null,
-                    failingStepId: null,
-                  });
-                  setSavedStrategy(next);
-                  setSavedStrategyMatchesCurrentStop(
-                    strategyMatchesStopReason({
-                      strategy: next,
-                      reason: resolvedStopClassification.reason,
-                    }),
-                  );
-                } catch {
-                  // Replay can still proceed if local persistence is unavailable.
-                }
-              } catch (error) {
-                setReplayError(
-                  error instanceof Error
-                    ? error.message
-                    : "Unable to start saved strategy replay.",
-                );
-              }
-            })();
+            void startStrategyReplay("fresh");
           }}
         >
-          {isReplayRunning ? "Replaying..." : "Use saved strategy"}
+          {isReplayRunning ? "Replaying..." : "Retry with fresh session"}
         </Button>
+
+        {savedStrategy.lastTrainedUrl ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={sharedButtonClassName}
+            disabled={strategySteps.length === 0 || isReplayRunning}
+            onClick={() => {
+              void startStrategyReplay("last_url");
+            }}
+          >
+            Retry from last URL
+          </Button>
+        ) : null}
 
         {renderTeachDialog("Retrain")}
 

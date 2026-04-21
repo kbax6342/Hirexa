@@ -164,6 +164,8 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       const status =
         application.status === "SENT"
           ? "SENT"
+          : application.status === "VERIFICATION_REQUIRED"
+            ? "VERIFICATION_REQUIRED"
           : computed.missing.length > 0
             ? "IN_PREPARATION"
             : "READY_TO_SEND";
@@ -276,7 +278,12 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       }
     }
 
-    const status = missingRequired.length > 0 ? "IN_PREPARATION" : "READY_TO_SEND";
+    const status =
+      application.status === "VERIFICATION_REQUIRED"
+        ? "VERIFICATION_REQUIRED"
+        : missingRequired.length > 0
+          ? "IN_PREPARATION"
+          : "READY_TO_SEND";
 
     console.log("GH fields count:", form.fields.length, "method:", form.method, "action:", form.action);
 

@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 type ApplicationStatus =
   | "IN_PREPARATION"
   | "READY_TO_SEND"
+  | "VERIFICATION_REQUIRED"
   | "IN_PROGRESS"
   | "SENT";
 
@@ -23,6 +24,7 @@ type JobApplication = {
 const STATUS_OPTIONS: Array<{ value: ApplicationStatus; label: string }> = [
   { value: "IN_PREPARATION", label: "In preparation" },
   { value: "READY_TO_SEND", label: "Ready to send" },
+  { value: "VERIFICATION_REQUIRED", label: "Verification required" },
   { value: "IN_PROGRESS", label: "In progress" },
   { value: "SENT", label: "Sent" },
 ];

@@ -2,6 +2,8 @@ export type ApplyStopReason =
   | "no_apply_cta"
   | "login_required"
   | "verification_required"
+  | "invalid_start_url"
+  | "real_posting_not_found"
   | "aggregator_no_cta"
   | "external_redirect_needed"
   | "unknown_human_intervention";
@@ -30,6 +32,8 @@ export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "no_apply_cta",
   "login_required",
   "verification_required",
+  "invalid_start_url",
+  "real_posting_not_found",
   "aggregator_no_cta",
   "external_redirect_needed",
   "unknown_human_intervention",
@@ -53,7 +57,7 @@ type StopClassificationInput = {
   formDetected?: boolean;
 };
 
-const AGGREGATOR_HOST_PATTERNS = [
+export const APPLY_STOP_AGGREGATOR_HOST_PATTERNS = [
   "adzuna.",
   "indeed.",
   "ziprecruiter.",
@@ -75,8 +79,13 @@ const LOGIN_KEYWORDS = [
 ];
 
 const VERIFICATION_KEYWORDS = [
+  "just a moment",
   "verify you are human",
   "human verification",
+  "checking your browser",
+  "please enable javascript and cookies",
+  "press & hold",
+  "press and hold",
   "captcha",
   "recaptcha",
   "turnstile",
@@ -93,6 +102,25 @@ const VERIFICATION_KEYWORDS = [
   "one time code",
   "otp",
   "check your email",
+];
+
+const INVALID_START_URL_KEYWORDS = [
+  "invalid start url",
+  "favicon_asset",
+  "static_asset_extension",
+  "known_asset_host",
+];
+
+const REAL_POSTING_NOT_FOUND_KEYWORDS = [
+  "real posting not found",
+  "real_posting_not_found",
+];
+
+const RTX_RECOVERY_KEYWORDS = [
+  "rtx_",
+  "rtx_prelude_error",
+  "rtx_workday_not_reached",
+  "rtx_meaningful_form_control_not_found",
 ];
 
 function parseHostname(value: string | null | undefined) {
@@ -130,8 +158,10 @@ function normalizeSignalText(args: StopClassificationInput) {
     .toLowerCase();
 }
 
-function isAggregatorHostname(hostname: string) {
-  return AGGREGATOR_HOST_PATTERNS.some((pattern) => hostname.includes(pattern));
+export function isAggregatorStopHostname(hostname: string) {
+  return APPLY_STOP_AGGREGATOR_HOST_PATTERNS.some((pattern) =>
+    hostname.includes(pattern),
+  );
 }
 
 export function isApplyStopReason(value: string): value is ApplyStopReason {
@@ -158,7 +188,7 @@ export function deriveStopClassification(
     (Array.isArray(args.verificationSignals) &&
       args.verificationSignals.length > 0) ||
     includesAnySignal(signalText, VERIFICATION_KEYWORDS);
-  const aggregatorHost = isAggregatorHostname(activeHostname);
+  const aggregatorHost = isAggregatorStopHostname(activeHostname);
   const hostChanged =
     Boolean(targetHostname) &&
     Boolean(activeHostname) &&
@@ -185,6 +215,30 @@ export function deriveStopClassification(
       reason: "verification_required",
       pageType: "auth_gate",
       suggestedAction: "complete_verification",
+    };
+  }
+
+  if (includesAnySignal(signalText, REAL_POSTING_NOT_FOUND_KEYWORDS)) {
+    return {
+      reason: "real_posting_not_found",
+      pageType: "aggregator",
+      suggestedAction: "open_original_job_site",
+    };
+  }
+
+  if (includesAnySignal(signalText, INVALID_START_URL_KEYWORDS)) {
+    return {
+      reason: "invalid_start_url",
+      pageType: "aggregator",
+      suggestedAction: "open_original_job_site",
+    };
+  }
+
+  if (includesAnySignal(signalText, RTX_RECOVERY_KEYWORDS)) {
+    return {
+      reason: "unknown_human_intervention",
+      pageType: args.formDetected ? "application_form" : "employer_site",
+      suggestedAction: "review_and_retry",
     };
   }
 
@@ -224,6 +278,10 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
       return "Sign-in required";
     case "verification_required":
       return "Verification required";
+    case "invalid_start_url":
+      return "Start URL was invalid";
+    case "real_posting_not_found":
+      return "Real posting was not found";
     case "aggregator_no_cta":
       return "No apply button was found on the aggregator page";
     case "external_redirect_needed":

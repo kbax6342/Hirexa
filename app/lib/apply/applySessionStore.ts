@@ -181,6 +181,11 @@ export type ApplySessionDebug = {
   playwrightLaunchStrategy?: "remote" | "local_ephemeral" | "local_persistent";
   playwrightPersistentContext?: boolean;
   playwrightUserDataDir?: string;
+  rtxFlowAttempted?: boolean;
+  rtxFlowCompleted?: boolean;
+  rtxProgressMarkers?: string[];
+  rtxFailureReason?: string;
+  rtxJobId?: string;
 };
 
 export type ApplySubmissionStatus = "PENDING" | "SUBMITTED" | "NOT_SUBMITTED";

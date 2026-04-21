@@ -226,29 +226,51 @@ model ApplySiteStrategy {
   userProfileId String
   userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
+  strategyKey String
   hostname       String
+  sourceHost     String?
+  destinationHost String?
+  strategyType   String      @default("generic_navigation")
+  pageType       String      @default("unknown")
   finalUrl       String?
   lastAction     String?
   stopReason     String?
+  supportedReasons String[]  @default([])
   instructions   String?
   selectors      String?
   stepsJson      Json?
+  rawStepsJson   Json?
+  sanitizedStepsJson Json?
+  jobTitle       String?
+  company        String?
+  location       String?
+  derivedInstruction String?
+  automationPrompt String?
   trainingSource String?
   lastTrainedUrl String?
 
   status              String    @default("draft")
   successCount        Int       @default(0)
   failureCount        Int       @default(0)
+  successfulReplays   Int       @default(0)
+  failedReplays       Int       @default(0)
   lastReplaySucceeded Boolean?
   lastFailureReason   String?
+  replayStatus        String?
+  lastReplayResult    Json?
+  failingStepId       String?
   lastReplayedAt      DateTime?
+  lastReplayAt        DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userProfileId, hostname])
+  @@unique([userProfileId, strategyKey])
   @@index([userProfileId])
   @@index([hostname])
+  @@index([sourceHost])
+  @@index([destinationHost])
+  @@index([userProfileId, sourceHost, pageType, strategyType])
   @@index([userProfileId, status])
 }
 

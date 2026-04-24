@@ -2439,6 +2439,7 @@ export default function JobMatchesLayout({
           ) : null}
 
           <button
+            id="applied-jobs-popout-toggle"
             type="button"
             onClick={toggleAutoApplyPopup}
             className="fixed bottom-4 right-4 z-50 inline-flex min-w-[110px] flex-col items-center rounded-full bg-blue-600 px-4 py-3 text-white shadow-lg transition hover:bg-blue-700 sm:bottom-5 sm:px-5"

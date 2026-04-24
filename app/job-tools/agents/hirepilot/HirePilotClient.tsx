@@ -46,7 +46,8 @@ import type {
 import { cn } from "@/app/lib/utils";
 
 type RewriteMode = "default" | "shorten" | "expand" | "professional";
-type PracticeMode = "live" | "practice";
+type PracticeMode = "live" | "practice" | "mock";
+type MockInterviewTrack = "behavioral" | "technical" | "leadership";
 type DetectionStatus = "idle" | "found" | "none";
 type ListeningSource = "microphone" | "computer";
 
@@ -185,13 +186,65 @@ const defaultTips = [
   "End by connecting your story back to the role you want next.",
 ];
 
+const mockInterviewTrackOrder: MockInterviewTrack[] = [
+  "behavioral",
+  "technical",
+  "leadership",
+];
+
+const mockInterviewQuestionSets: Record<
+  MockInterviewTrack,
+  {
+    label: string;
+    description: string;
+    questions: string[];
+  }
+> = {
+  behavioral: {
+    label: "Behavioral",
+    description: "STAR-style mock questions about collaboration, ownership, and outcomes.",
+    questions: [
+      "Tell me about yourself.",
+      "Describe a time you handled a difficult challenge at work.",
+      "Tell me about a project you are proud of.",
+      "Tell me about a time you resolved conflict on a team.",
+      "Describe a time you had to adapt quickly to change.",
+      "Why should we hire you?",
+    ],
+  },
+  technical: {
+    label: "Technical",
+    description: "Mock questions focused on technical depth, decisions, and tradeoffs.",
+    questions: [
+      "Walk me through a technical problem you solved recently.",
+      "How do you debug a production issue under time pressure?",
+      "How do you balance speed and quality when delivering features?",
+      "Describe a design decision you made and the tradeoffs involved.",
+      "How do you ensure your code is maintainable over time?",
+      "How would you explain a complex technical concept to a non-technical stakeholder?",
+    ],
+  },
+  leadership: {
+    label: "Leadership",
+    description: "Mock questions for ownership, influence, mentorship, and execution.",
+    questions: [
+      "Tell me about a time you led an initiative without direct authority.",
+      "How do you prioritize competing requests from stakeholders?",
+      "Describe how you mentor or support teammates.",
+      "Tell me about a time you recovered from a missed goal.",
+      "How do you keep a team aligned during ambiguity?",
+      "What leadership impact do you want to make in your next role?",
+    ],
+  },
+};
+
 const practiceQuestions = [
   "Tell me about yourself.",
+  "What is one project you are most proud of and why?",
+  "How do you approach solving a difficult problem under pressure?",
+  "Describe a time you received feedback and how you used it.",
   "Why are you interested in this role?",
-  "What is one of your biggest strengths?",
-  "Describe a time you handled a difficult challenge at work.",
-  "Tell me about a project you are proud of.",
-  "Why should we hire you?",
+  "What strengths will help you succeed on this team?",
 ];
 
 const compatibilityPlatforms = [
@@ -307,7 +360,10 @@ export default function HirePilotClient() {
   const [activeRewrite, setActiveRewrite] = useState<Exclude<RewriteMode, "default"> | null>(null);
   const [copied, setCopied] = useState(false);
   const [responseSource, setResponseSource] = useState<"openai" | "fallback" | null>(null);
+  const [mockInterviewTrack, setMockInterviewTrack] =
+    useState<MockInterviewTrack>("behavioral");
   const [practiceIndex, setPracticeIndex] = useState(0);
+  const [mockIndex, setMockIndex] = useState(0);
   const [autoGeneratePractice, setAutoGeneratePractice] = useState(true);
   const [billingStatus, setBillingStatus] = useState<HirePilotStatusResponse>({
     hasHirePilotAccess: false,
@@ -336,7 +392,16 @@ export default function HirePilotClient() {
   const [completedSessionSource, setCompletedSessionSource] =
     useState<HirePilotSessionInputSource | null>(null);
 
-  const practiceQuestion = practiceQuestions[practiceIndex] ?? practiceQuestions[0];
+  const activeMockInterviewSet = mockInterviewQuestionSets[mockInterviewTrack];
+  const activeMockQuestions = activeMockInterviewSet.questions;
+  const practiceQuestion =
+    practiceQuestions[practiceIndex] ??
+    practiceQuestions[0] ??
+    "Tell me about yourself.";
+  const mockQuestion =
+    activeMockQuestions[mockIndex] ??
+    activeMockQuestions[0] ??
+    "Tell me about yourself.";
   const isComputerAudioListening = activeListeningSource === "computer";
   const isAnyListening = isListening || isComputerAudioListening;
 
@@ -556,8 +621,8 @@ export default function HirePilotClient() {
     if (isGenerating) {
       return activeRewrite ? "Refining answer..." : "Generating answer...";
     }
-    if (activeMode === "practice" && !answer.trim()) {
-      return "Practice mode uses your uploaded resume to generate interview answers.";
+    if ((activeMode === "practice" || activeMode === "mock") && !answer.trim()) {
+      return "Practice and mock interview modes use your uploaded resume to generate interview answers.";
     }
     if (!hasPaidHirePilotAccess) {
       return "Practice questions are free. Upgrade to unlock live AI answer suggestions and interview coaching.";
@@ -864,7 +929,7 @@ export default function HirePilotClient() {
   ) {
     const normalizedQuestion = normalizeSpace(question);
     if (!normalizedQuestion) return;
-    const practiceMode = options?.practiceMode ?? activeMode === "practice";
+    const practiceMode = options?.practiceMode ?? (activeMode === "practice" || activeMode === "mock");
 
     debugHirePilot("answer generation started", {
       mode,
@@ -1129,7 +1194,13 @@ export default function HirePilotClient() {
     setCompletedSessionSource(null);
     setInterviewReport(null);
     const safeIndex = typeof nextIndex === "number" ? nextIndex : practiceIndex;
-    const question = practiceQuestions[safeIndex] ?? practiceQuestions[0];
+    if (typeof nextIndex === "number") {
+      setPracticeIndex(safeIndex);
+    }
+    const question =
+      practiceQuestions[safeIndex] ??
+      practiceQuestions[0] ??
+      "Tell me about yourself.";
     const normalizedQuestion =
       extractInterviewQuestion(question) ?? `${normalizeSpace(question).replace(/[?!.]+$/, "")}?`;
     lastQuestionKeyRef.current = normalizeQuestionKey(normalizedQuestion);
@@ -1151,9 +1222,62 @@ export default function HirePilotClient() {
   }
 
   function handleNextPracticeQuestion() {
-    const nextIndex = (practiceIndex + 1) % practiceQuestions.length;
+    const nextIndex = (practiceIndex + 1) % Math.max(1, practiceQuestions.length);
     setPracticeIndex(nextIndex);
     void handlePracticeQuestion(nextIndex);
+  }
+
+  async function handleMockInterviewQuestion(
+    nextIndex?: number,
+    options?: { forceGenerate?: boolean; questionPool?: string[] }
+  ) {
+    setCompletedSessionSource(null);
+    setInterviewReport(null);
+    const questionPool =
+      options?.questionPool && options.questionPool.length > 0
+        ? options.questionPool
+        : activeMockQuestions;
+    const safeIndex = typeof nextIndex === "number" ? nextIndex : mockIndex;
+    if (typeof nextIndex === "number") {
+      setMockIndex(safeIndex);
+    }
+    const question =
+      questionPool[safeIndex] ??
+      questionPool[0] ??
+      "Tell me about yourself.";
+    const normalizedQuestion =
+      extractInterviewQuestion(question) ?? `${normalizeSpace(question).replace(/[?!.]+$/, "")}?`;
+    lastQuestionKeyRef.current = normalizeQuestionKey(normalizedQuestion);
+    setDetectedQuestion(normalizedQuestion);
+    setDetectionStatus("found");
+    setLiveTranscript("");
+    transcriptRef.current = "";
+    combinedTranscriptRef.current = "";
+    setRequestError(null);
+    setAnswer("");
+    setResponseSource(null);
+    setTips(defaultTips);
+
+    if (options?.forceGenerate || autoGeneratePractice) {
+      void generateAnswer(normalizedQuestion, "default", undefined, {
+        practiceMode: true,
+      });
+    }
+  }
+
+  function handleNextMockInterviewQuestion() {
+    const nextIndex = (mockIndex + 1) % Math.max(1, activeMockQuestions.length);
+    setMockIndex(nextIndex);
+    void handleMockInterviewQuestion(nextIndex, { questionPool: activeMockQuestions });
+  }
+
+  function handleSelectMockInterviewTrack(track: MockInterviewTrack) {
+    setMockInterviewTrack(track);
+    setMockIndex(0);
+    setActiveMode("mock");
+    void handleMockInterviewQuestion(0, {
+      questionPool: mockInterviewQuestionSets[track].questions,
+    });
   }
 
   return (
@@ -1229,7 +1353,21 @@ export default function HirePilotClient() {
                           className="w-full rounded-xl border-white/15 bg-white/[0.08] text-white hover:bg-white/[0.12] hover:text-white sm:w-auto"
                         >
                           <PlayCircleIcon className="h-5 w-5" />
-                          Watch Demo
+                          Practice Interview
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setActiveMode("mock");
+                            void handleMockInterviewQuestion(0);
+                          }}
+                          disabled={startingInterview}
+                          className="w-full rounded-xl border-white/15 bg-white/[0.08] text-white hover:bg-white/[0.12] hover:text-white sm:w-auto"
+                        >
+                          <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                          Mock Interview
                         </Button>
 
                         <div className="grid grid-cols-2 gap-2">
@@ -1278,7 +1416,7 @@ export default function HirePilotClient() {
                           ))}
                         </div>
 
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid gap-3 sm:grid-cols-3">
                           <Button
                             type="button"
                             onClick={() => {
@@ -1302,7 +1440,20 @@ export default function HirePilotClient() {
                             className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                           >
                             <PlayCircleIcon className="h-5 w-5" />
-                            View Demo
+                            Practice Interview
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setActiveMode("mock");
+                              void handleMockInterviewQuestion(0);
+                            }}
+                            disabled={startingInterview}
+                            className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                          >
+                            <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                            Mock Interview
                           </Button>
                         </div>
                       </div>
@@ -1559,7 +1710,20 @@ export default function HirePilotClient() {
                           className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
                         >
                           <SparklesIcon className="h-5 w-5" />
-                          View Demo
+                          Practice Interview
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setActiveMode("mock");
+                            void handleMockInterviewQuestion(0);
+                          }}
+                          disabled={startingInterview}
+                          className="w-full rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                        >
+                          <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                          Mock Interview
                         </Button>
                       </div>
                     </div>
@@ -1583,7 +1747,7 @@ export default function HirePilotClient() {
             )}
 
             <div className="space-y-6">
-              <div className="inline-flex rounded-2xl border border-white/10 bg-white/[0.05] p-1 shadow-sm backdrop-blur">
+              <div className="inline-flex flex-wrap rounded-2xl border border-white/10 bg-white/[0.05] p-1 shadow-sm backdrop-blur">
                 <button
                   type="button"
                   onClick={() => setActiveMode("live")}
@@ -1607,6 +1771,18 @@ export default function HirePilotClient() {
                   )}
                 >
                   Practice Interview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveMode("mock")}
+                  className={cn(
+                    "rounded-xl px-4 py-2 text-sm font-medium transition",
+                    activeMode === "mock"
+                      ? "bg-sky-600 text-white"
+                      : "text-slate-300 hover:bg-white/10"
+                  )}
+                >
+                  Mock Interview
                 </button>
               </div>
 
@@ -1682,7 +1858,7 @@ export default function HirePilotClient() {
 
                     {!hasPaidHirePilotAccess ? (
                       <div className="rounded-2xl border border-sky-300/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-                        Practice Interview Questions are free. Live microphone listening and the
+                        Practice and mock interview questions are free. Live microphone listening and the
                         full HirePilot AI assistant still require a paid plan.
                       </div>
                     ) : null}
@@ -1729,7 +1905,7 @@ export default function HirePilotClient() {
                   <CardHeader>
                     <CardTitle className="text-xl text-white">Practice Interview Questions</CardTitle>
                     <CardDescription className="text-slate-300">
-                      Rehearse with guided interview questions before the real conversation.
+                      Warm up with common interview prompts before your live session.
                       Practice mode is free to use.
                     </CardDescription>
                   </CardHeader>
@@ -1804,6 +1980,116 @@ export default function HirePilotClient() {
                   </CardContent>
                 </Card>
               ) : null}
+
+              {activeMode === "mock" ? (
+                <Card className="rounded-[24px] border border-white/10 bg-white/[0.06] shadow-[0_16px_40px_rgba(5,8,22,0.35)] backdrop-blur-xl">
+                  <CardHeader>
+                    <CardTitle className="text-xl text-white">Mock Interview Questions</CardTitle>
+                    <CardDescription className="text-slate-300">
+                      Rehearse with guided mock interviews before the real conversation.
+                      Practice mode is free to use.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                      <div className="text-sm font-semibold text-white">Mock interview set</div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {activeMockInterviewSet.description}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {mockInterviewTrackOrder.map((track) => {
+                          const active = mockInterviewTrack === track;
+                          return (
+                            <button
+                              key={track}
+                              type="button"
+                              onClick={() => handleSelectMockInterviewTrack(track)}
+                              className={cn(
+                                "rounded-full px-3 py-1.5 text-xs font-semibold transition",
+                                active
+                                  ? "bg-sky-600 text-white"
+                                  : "bg-white/10 text-slate-200 hover:bg-white/15"
+                              )}
+                            >
+                              {mockInterviewQuestionSets[track].label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {hasPaidHirePilotAccess ? (
+                      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div>
+                          <div className="text-sm font-semibold text-white">
+                            Auto-generate answer
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            Generate a fresh answer as soon as the practice question changes.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAutoGeneratePractice((value) => !value)}
+                          aria-pressed={autoGeneratePractice}
+                          className={cn(
+                            "inline-flex h-10 items-center rounded-full px-4 text-sm font-semibold transition",
+                            autoGeneratePractice
+                              ? "bg-sky-600 text-white hover:bg-sky-500"
+                              : "bg-white/10 text-slate-200 hover:bg-white/15"
+                          )}
+                        >
+                          {autoGeneratePractice ? "On" : "Off"}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-emerald-300/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                        Practice questions are free to use. Upgrade only if you want live
+                        listening and AI-generated answer suggestions.
+                      </div>
+                    )}
+
+                    {requestError?.toLowerCase().includes("upload your resume") ? (
+                      <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                        Please upload your resume to use practice questions.
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-2xl border border-sky-300/20 bg-sky-500/10 p-5">
+                      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
+                        HirePilot asks
+                      </div>
+                      <div className="mt-2 text-xl font-semibold text-white">
+                        {mockQuestion}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      <Button
+                        type="button"
+                        onClick={() =>
+                          void handleMockInterviewQuestion(undefined, { forceGenerate: true })
+                        }
+                        disabled={startingInterview}
+                        className="rounded-xl bg-sky-600 px-5 py-3 text-white hover:bg-sky-500"
+                      >
+                        <SparklesIcon className="h-5 w-5" />
+                        {startingInterview ? "Starting..." : "Use This Question"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleNextMockInterviewQuestion}
+                        disabled={startingInterview}
+                        className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
+                      >
+                        <ArrowPathIcon className="h-5 w-5" />
+                        Next Question
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
 
             <Card className="rounded-[24px] border border-white/10 bg-white/[0.06] shadow-[0_16px_40px_rgba(5,8,22,0.35)] backdrop-blur-xl">
@@ -1846,7 +2132,7 @@ export default function HirePilotClient() {
                       variant="outline"
                       onClick={() =>
                         generateAnswer(detectedQuestion, "shorten", undefined, {
-                          practiceMode: activeMode === "practice",
+                          practiceMode: activeMode !== "live",
                         })
                       }
                       disabled={!detectedQuestion || answerActionsDisabled}
@@ -1859,7 +2145,7 @@ export default function HirePilotClient() {
                       variant="outline"
                       onClick={() =>
                         generateAnswer(detectedQuestion, "expand", undefined, {
-                          practiceMode: activeMode === "practice",
+                          practiceMode: activeMode !== "live",
                         })
                       }
                       disabled={!detectedQuestion || answerActionsDisabled}
@@ -1871,7 +2157,7 @@ export default function HirePilotClient() {
                       type="button"
                       onClick={() =>
                         generateAnswer(detectedQuestion, "professional", undefined, {
-                          practiceMode: activeMode === "practice",
+                          practiceMode: activeMode !== "live",
                         })
                       }
                       disabled={!detectedQuestion || answerActionsDisabled}

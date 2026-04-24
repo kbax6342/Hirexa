@@ -13,6 +13,7 @@ import {
   normalizeResume,
   normalizedResumeToText,
 } from "@/app/lib/documents/normalizeResume";
+import AppliedJobsPopout from "@/app/components/apply/AppliedJobsPopout";
 import {
   ArrowPathIcon,
   ArrowDownTrayIcon,
@@ -171,11 +172,13 @@ function JobToolsGeneratePageContent() {
   const [creditStatus, setCreditStatus] = useState<CreditStatusResponse | null>(null);
   const [accessStatusLoading, setAccessStatusLoading] = useState(true);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "error">("idle");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const activeDocumentTitleRef = useRef<HTMLDivElement | null>(null);
   const shouldFocusGeneratedCoverLetterRef = useRef(false);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+  const copyResetTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const prefillUrl = searchParams.get("jobUrl")?.trim();
@@ -271,6 +274,15 @@ function JobToolsGeneratePageContent() {
       document.removeEventListener("keydown", handleEscape);
     };
   }, [downloadMenuOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+        copyResetTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const canSubmit = useMemo(() => {
     try {
@@ -686,14 +698,59 @@ function JobToolsGeneratePageContent() {
     return normalizeDocumentText(getActiveEditableText(tab));
   }
 
+  async function writeTextToClipboard(text: string) {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Fall through to legacy copy path.
+      }
+    }
+
+    if (typeof document === "undefined") return false;
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    } finally {
+      textarea.remove();
+    }
+
+    return copied;
+  }
+
   async function copyActive() {
     const text = getMeaningfulDocText(activeTab);
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // ignore
+    if (!text) {
+      setCopyStatus("error");
+      return;
     }
+
+    const copied = await writeTextToClipboard(text);
+    setCopyStatus(copied ? "success" : "error");
+
+    if (copyResetTimeoutRef.current !== null) {
+      window.clearTimeout(copyResetTimeoutRef.current);
+      copyResetTimeoutRef.current = null;
+    }
+    copyResetTimeoutRef.current = window.setTimeout(() => {
+      setCopyStatus("idle");
+      copyResetTimeoutRef.current = null;
+    }, 2200);
   }
 
   function downloadBlob(filename: string, blob: Blob) {
@@ -1535,7 +1592,11 @@ function JobToolsGeneratePageContent() {
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 <ClipboardIcon className="h-4 w-4" />
-                Copy
+                {copyStatus === "success"
+                  ? "Copied"
+                  : copyStatus === "error"
+                  ? "Copy failed"
+                  : "Copy"}
               </button>
 
               <div className="relative" ref={downloadMenuRef}>
@@ -1723,6 +1784,8 @@ function JobToolsGeneratePageContent() {
           </div>
         </div>
       </div>
+
+      <AppliedJobsPopout buttonId="applied-jobs-popout-toggle" />
     </div>
   );
 }

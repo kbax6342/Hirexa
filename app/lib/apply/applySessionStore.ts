@@ -120,6 +120,7 @@ export type ApplySessionDebug = {
   confirmationTextSnippet?: string | null;
   successUrlPatternMatched?: boolean;
   verificationDetected?: boolean;
+  verificationSignals?: string[];
   submissionConfirmed?: boolean;
   stopReason?: "HUMAN_INTERVENTION_REQUIRED";
   lastAction?: "no_apply_cta" | "login_required" | "verification_required";

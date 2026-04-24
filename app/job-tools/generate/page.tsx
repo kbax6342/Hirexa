@@ -6,8 +6,17 @@ import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import {
+  normalizeCoverLetter,
+  normalizedCoverLetterToText,
+} from "@/app/lib/documents/normalizeCoverLetter";
+import {
+  normalizeResume,
+  normalizedResumeToText,
+} from "@/app/lib/documents/normalizeResume";
+import {
   ArrowPathIcon,
   ArrowDownTrayIcon,
+  ChevronDownIcon,
   ClipboardIcon,
   CloudArrowUpIcon,
   LinkIcon,
@@ -17,6 +26,9 @@ import {
 
 type Result = {
   candidateName?: string | null;
+  candidateFirstName?: string | null;
+  candidateLastName?: string | null;
+  candidateEmail?: string | null;
   savedResume?: {
     id: string;
     fileName?: string | null;
@@ -53,7 +65,9 @@ type Result = {
 };
 
 type Tone = "professional" | "conversational" | "enthusiastic";
+type LlmProvider = "auto" | "openai" | "claude" | "gemini";
 type TabKey = "coverLetter" | "updatedResume" | "preInterview" | "postInterview";
+type DownloadFormat = "pdf" | "txt" | "docx";
 type PlanStatusResponse = {
   ok?: boolean;
   userId?: string | null;
@@ -81,6 +95,23 @@ type CreditStatusResponse = {
   purchasedCredits?: number;
 };
 
+type ResultCompatibilityFields = {
+  revisedResume?: string;
+  updatedResume?: string;
+  preInterview?: string;
+  preInterviewEmail?: string;
+  postInterview?: string;
+  postInterviewEmail?: string;
+  emails?: {
+    beforeInterview?: string;
+    afterInterview?: string;
+    preInterview?: string;
+    preInterviewEmail?: string;
+    postInterview?: string;
+    postInterviewEmail?: string;
+  };
+};
+
 const textEncoder = new TextEncoder();
 
 const tabs: Array<{ key: TabKey; label: string }> = [
@@ -89,12 +120,28 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "preInterview", label: "Pre-Interview Email" },
   { key: "postInterview", label: "Post Interview Email" },
 ];
+const allDocTabs: TabKey[] = ["coverLetter", "updatedResume", "preInterview", "postInterview"];
+
+function createEmptyEditableDocs(): Record<TabKey, string | null> {
+  return {
+    coverLetter: null,
+    updatedResume: null,
+    preInterview: null,
+    postInterview: null,
+  };
+}
 
 const focusOptions = [
   { key: "technical", label: "Technical Skills" },
   { key: "leadership", label: "Leadership Experience" },
   { key: "projects", label: "Project Achievements" },
 ] as const;
+const llmProviderOptions: Array<{ value: LlmProvider; label: string }> = [
+  { value: "auto", label: "Auto / Recommended" },
+  { value: "openai", label: "OpenAI" },
+  { value: "claude", label: "Claude" },
+  { value: "gemini", label: "Gemini" },
+];
 
 function JobToolsGeneratePageContent() {
   const searchParams = useSearchParams();
@@ -110,17 +157,25 @@ function JobToolsGeneratePageContent() {
   });
 
   const [instructions, setInstructions] = useState("");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("auto");
 
   const [activeTab, setActiveTab] = useState<TabKey>("coverLetter");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
+  const [editableDocs, setEditableDocs] = useState<Record<TabKey, string | null>>(
+    createEmptyEditableDocs()
+  );
   const [planStatus, setPlanStatus] = useState<PlanStatusResponse | null>(null);
   const [creditStatus, setCreditStatus] = useState<CreditStatusResponse | null>(null);
   const [accessStatusLoading, setAccessStatusLoading] = useState(true);
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const activeDocumentTitleRef = useRef<HTMLDivElement | null>(null);
+  const shouldFocusGeneratedCoverLetterRef = useRef(false);
+  const downloadMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const prefillUrl = searchParams.get("jobUrl")?.trim();
@@ -178,6 +233,45 @@ function JobToolsGeneratePageContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!result || activeTab !== "coverLetter") return;
+    if (!shouldFocusGeneratedCoverLetterRef.current) return;
+
+    const target = activeDocumentTitleRef.current;
+    if (!target) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.focus({ preventScroll: true });
+      shouldFocusGeneratedCoverLetterRef.current = false;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, result]);
+
+  useEffect(() => {
+    if (!downloadMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!downloadMenuRef.current) return;
+      if (!downloadMenuRef.current.contains(event.target as Node)) {
+        setDownloadMenuOpen(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDownloadMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [downloadMenuOpen]);
+
   const canSubmit = useMemo(() => {
     try {
       const u = new URL(url.trim());
@@ -200,64 +294,400 @@ function JobToolsGeneratePageContent() {
     setPastedJobText("");
     setFocus({ technical: true, leadership: false, projects: false });
     setInstructions("");
+    setLlmProvider("auto");
     setActiveTab("coverLetter");
     setError(null);
     setResult(null);
+    setEditableDocs(createEmptyEditableDocs());
   }
 
-  function getActiveDocText(r: Result | null, tab: TabKey) {
-    if (!r) return "";
-    const candidateName = r.candidateName?.trim() || "";
-    const withCandidateHeader = (text: string) => {
-      const normalized = text.trim();
-      if (!candidateName || !normalized) return normalized;
-      if (normalized.toLowerCase().includes(candidateName.toLowerCase())) return normalized;
-      return `${candidateName}\n\n${normalized}`;
-    };
-
-    if (tab === "coverLetter") return withCandidateHeader(r.coverLetter || "");
-    if (tab === "preInterview") return withCandidateHeader(r.emails?.beforeInterview || "");
-    if (tab === "postInterview") return withCandidateHeader(r.emails?.afterInterview || "");
-    if (r.fullResumeText?.trim()) return r.fullResumeText.trim();
-
-    // updatedResume: turn the structured resume updates into a readable “draft”
-    const parts: string[] = [];
-    if (r.resumeUpdates?.summaryRewrite) {
-      parts.push("SUMMARY (Suggested Rewrite)\n" + r.resumeUpdates.summaryRewrite);
+  function pickFirstNonEmpty(...values: Array<string | null | undefined>) {
+    for (const value of values) {
+      const normalized = String(value ?? "").trim();
+      if (normalized) return value ?? "";
     }
-    if (r.resumeUpdates?.skillsToAdd?.length) {
-      parts.push("SKILLS TO ADD\n- " + r.resumeUpdates.skillsToAdd.join("\n- "));
-    }
-    if (r.resumeUpdates?.atsKeywords?.length) {
-      parts.push("ATS KEYWORDS\n- " + r.resumeUpdates.atsKeywords.join("\n- "));
-    }
-    if (r.resumeUpdates?.bulletEdits?.length) {
-      parts.push(
-        "BULLET EDITS\n" +
-          r.resumeUpdates.bulletEdits
-            .map((b) => {
-              return [
-                `• ${b.section}`,
-                `  Before: ${b.before}`,
-                `  After:  ${b.after}`,
-              ].join("\n");
-            })
-            .join("\n\n")
-      );
-    }
-    return withCandidateHeader(parts.join("\n\n").trim());
+    return "";
   }
 
   function normalizeDocumentText(value: string) {
-    return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    return value
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+$/g, ""))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
-  function getMeaningfulDocText(r: Result | null, tab: TabKey) {
-    return normalizeDocumentText(getActiveDocText(r, tab));
+  function getCandidateName(r: Result | null) {
+    if (!r) return "";
+    return (
+      r.candidateName?.trim() ||
+      [r.candidateFirstName?.trim(), r.candidateLastName?.trim()].filter(Boolean).join(" ").trim()
+    );
+  }
+
+  function getJobCompany(r: Result | null) {
+    return r?.job?.company?.trim() || "";
+  }
+
+  function getJobTitle(r: Result | null) {
+    return r?.job?.title?.trim() || "";
+  }
+
+  function stripPlaceholders(
+    value: string,
+    context: {
+      candidateName: string;
+      company: string;
+      role: string;
+      dateLabel: string;
+    }
+  ) {
+    const replacements: Array<{ pattern: RegExp; replacement: string }> = [
+      {
+        pattern: /\[(your name|candidate name|name)\]/gi,
+        replacement: context.candidateName,
+      },
+      {
+        pattern: /\[(company|company name)\]/gi,
+        replacement: context.company,
+      },
+      {
+        pattern: /\[(hiring manager|recruiter|interviewer)\]/gi,
+        replacement: "Hiring Team",
+      },
+      {
+        pattern: /\[(date)\]/gi,
+        replacement: context.dateLabel,
+      },
+      {
+        pattern: /\[(role|job title|position)\]/gi,
+        replacement: context.role,
+      },
+    ];
+
+    let normalized = String(value ?? "")
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\*\*(.*?)\*\*/g, "$1")
+      .replace(/__(.*?)__/g, "$1")
+      .replace(/\*(.*?)\*/g, "$1")
+      .replace(/_(.*?)_/g, "$1")
+      .replace(/\b(undefined|null)\b/gi, "");
+
+    for (const { pattern, replacement } of replacements) {
+      normalized = normalized.replace(pattern, replacement || "");
+    }
+
+    if (context.candidateName) {
+      normalized = normalized.replace(/\bcandidate\b/gi, context.candidateName);
+    }
+
+    normalized = normalized.replace(/\[(?:[^\]]+)\]/g, "");
+    return normalizeDocumentText(normalized);
+  }
+
+  function splitParagraphs(value: string) {
+    return normalizeDocumentText(value)
+      .split(/\n\s*\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
+  }
+
+  function dedupeTextItems(values: string[]) {
+    const seen = new Set<string>();
+    const items: string[] = [];
+
+    for (const value of values) {
+      const normalized = normalizeDocumentText(value);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(normalized);
+    }
+
+    return items;
+  }
+
+  function getRawDocumentText(r: Result | null, tab: TabKey) {
+    if (!r) return "";
+    const compatibility = r as Result & ResultCompatibilityFields;
+
+    if (tab === "coverLetter") {
+      return pickFirstNonEmpty(r.coverLetter);
+    }
+    if (tab === "preInterview") {
+      return pickFirstNonEmpty(
+        r.emails?.beforeInterview,
+        compatibility.preInterviewEmail,
+        compatibility.preInterview,
+        compatibility.emails?.preInterviewEmail,
+        compatibility.emails?.preInterview
+      );
+    }
+    if (tab === "postInterview") {
+      return pickFirstNonEmpty(
+        r.emails?.afterInterview,
+        compatibility.postInterviewEmail,
+        compatibility.postInterview,
+        compatibility.emails?.postInterviewEmail,
+        compatibility.emails?.postInterview
+      );
+    }
+
+    return pickFirstNonEmpty(
+      r.fullResumeText,
+      compatibility.revisedResume,
+      compatibility.updatedResume
+    );
+  }
+
+  function formatCoverLetterDocument(r: Result | null) {
+    if (!r) return "";
+    const candidateName = getCandidateName(r);
+    const company = getJobCompany(r);
+    const dateLabel = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date());
+    const role = getJobTitle(r);
+    const context = { candidateName, company, role, dateLabel };
+    const rawCoverLetter = stripPlaceholders(
+      getRawDocumentText(r, "coverLetter"),
+      context
+    );
+    const normalized = normalizeCoverLetter({
+      rawText: rawCoverLetter,
+      candidateName: candidateName || null,
+      candidateContactLines: dedupeTextItems([r.candidateEmail ?? ""]),
+      company: company || null,
+      dateLine: dateLabel,
+      defaultGreeting: "Dear Hiring Team,",
+      defaultClosing: "Sincerely,",
+    });
+    if (normalized.bodyParagraphs.length === 0) {
+      const roleText = role || "the role";
+      normalized.bodyParagraphs = [
+        `I am writing to express my interest in ${roleText}${company ? ` at ${company}` : ""}.`,
+        "My background aligns with the role requirements, and I can contribute quickly in a team-focused environment.",
+        "Thank you for your consideration. I would welcome the opportunity to discuss my qualifications further.",
+      ];
+    }
+    return normalizeDocumentText(normalizedCoverLetterToText(normalized));
+  }
+
+  function formatResumeDocument(r: Result | null) {
+    if (!r) return "";
+    const candidateName = getCandidateName(r);
+    const company = getJobCompany(r);
+    const role = getJobTitle(r);
+    const dateLabel = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date());
+    const context = { candidateName, company, role, dateLabel };
+    const fullResumeText = stripPlaceholders(getRawDocumentText(r, "updatedResume"), context);
+    const summary = stripPlaceholders(
+      pickFirstNonEmpty(r.resumeUpdates?.summaryRewrite, r.job?.summary),
+      context
+    );
+    const skills = dedupeTextItems([
+      ...(r.resumeUpdates?.skillsToAdd ?? []),
+      ...(r.resumeUpdates?.atsKeywords ?? []),
+    ]);
+    const bulletEdits = (r.resumeUpdates?.bulletEdits ?? [])
+      .map((edit) => ({
+        section: normalizeDocumentText(stripPlaceholders(edit.section, context)),
+        bullet: normalizeDocumentText(
+          stripPlaceholders(pickFirstNonEmpty(edit.after, edit.before), context)
+        ),
+      }))
+      .filter((edit) => edit.section && edit.bullet);
+
+    const groupedExperience = new Map<string, string[]>();
+    for (const edit of bulletEdits) {
+      const current = groupedExperience.get(edit.section) ?? [];
+      current.push(edit.bullet);
+      groupedExperience.set(edit.section, current);
+    }
+
+    const fallbackLines: string[] = [];
+    if (candidateName) fallbackLines.push(candidateName);
+    if (r.candidateEmail?.trim()) fallbackLines.push(r.candidateEmail.trim());
+    if (fallbackLines.length > 0) fallbackLines.push("");
+
+    if (summary) {
+      fallbackLines.push("PROFESSIONAL SUMMARY", summary, "");
+    }
+
+    if (skills.length > 0) {
+      fallbackLines.push("SKILLS", ...skills.map((skill) => `- ${skill}`), "");
+    }
+
+    if (groupedExperience.size > 0) {
+      fallbackLines.push("PROFESSIONAL EXPERIENCE", "");
+      for (const [section, sectionBullets] of groupedExperience.entries()) {
+        fallbackLines.push(section);
+        fallbackLines.push(...sectionBullets.map((bullet) => `- ${bullet}`));
+        fallbackLines.push("");
+      }
+    }
+
+    const sourceResumeText = fullResumeText || normalizeDocumentText(fallbackLines.join("\n"));
+    const normalizedResume = normalizeResume({
+      rawText: sourceResumeText,
+      candidateName: candidateName || null,
+      candidateContactLines: dedupeTextItems([r.candidateEmail ?? ""]),
+    });
+    return normalizeDocumentText(normalizedResumeToText(normalizedResume));
+  }
+
+  function extractQuestionLines(value: string) {
+    const sentences = (value.match(/[^?.!]*\?/g) ?? [])
+      .map((question) => normalizeDocumentText(question))
+      .filter((question) => question.length > 10)
+      .map((question) => (question.endsWith("?") ? question : `${question}?`));
+    return dedupeTextItems(sentences).slice(0, 2);
+  }
+
+  function formatPreInterviewEmail(r: Result | null) {
+    if (!r) return "";
+    const candidateName = getCandidateName(r);
+    const company = getJobCompany(r);
+    const role = getJobTitle(r);
+    const dateLabel = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date());
+    const context = { candidateName, company, role, dateLabel };
+    const raw = stripPlaceholders(getRawDocumentText(r, "preInterview"), context);
+    const paragraphs = splitParagraphs(raw).filter(
+      (paragraph) =>
+        !/^subject:/i.test(paragraph) &&
+        !/^hello\s+/i.test(paragraph) &&
+        !/^dear\s+/i.test(paragraph) &&
+        !/^(best|best regards|kind regards|regards|sincerely)[,\s]*$/i.test(paragraph) &&
+        paragraph.toLowerCase() !== candidateName.toLowerCase()
+    );
+
+    const subjectSuffix = role
+      ? ` - ${role}${company ? ` at ${company}` : ""}`
+      : company
+        ? ` - Opportunity at ${company}`
+        : "";
+    const subject = `Subject: Confirming Interview Interest${subjectSuffix}`;
+    const intro =
+      paragraphs[0] ||
+      `Thank you for considering my application${role ? ` for the ${role} role` : ""}${company ? ` at ${company}` : ""}. I remain very interested in the opportunity.`;
+    const alignment =
+      paragraphs[1] ||
+      "My background aligns with your priorities, and I would welcome the chance to discuss how I can contribute.";
+    const questions =
+      extractQuestionLines(raw).length > 0
+        ? extractQuestionLines(raw)
+        : [
+            "Could you share the top priorities for this role in the first 90 days?",
+            "How does the team define success for this position?",
+          ];
+
+    const lines = [
+      subject,
+      "",
+      "Hello Hiring Team,",
+      "",
+      intro,
+      "",
+      alignment,
+      "",
+      "I had two quick questions as I prepare:",
+      ...questions.map((question) => `- ${question}`),
+      "",
+      "Best,",
+    ];
+    if (candidateName) {
+      lines.push(candidateName);
+    }
+
+    return normalizeDocumentText(lines.join("\n"));
+  }
+
+  function formatPostInterviewEmail(r: Result | null) {
+    if (!r) return "";
+    const candidateName = getCandidateName(r);
+    const company = getJobCompany(r);
+    const role = getJobTitle(r);
+    const dateLabel = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date());
+    const context = { candidateName, company, role, dateLabel };
+    const raw = stripPlaceholders(getRawDocumentText(r, "postInterview"), context);
+    const paragraphs = splitParagraphs(raw).filter(
+      (paragraph) =>
+        !/^subject:/i.test(paragraph) &&
+        !/^hello\s+/i.test(paragraph) &&
+        !/^dear\s+/i.test(paragraph) &&
+        !/^(best|best regards|kind regards|regards|sincerely)[,\s]*$/i.test(paragraph) &&
+        paragraph.toLowerCase() !== candidateName.toLowerCase()
+    );
+
+    const roleText = role ? `${role} ` : "";
+    const subject = `Subject: Thank You - ${roleText}Interview`.replace(/\s+/g, " ").trim();
+    const thanksLine =
+      paragraphs[0] ||
+      `Thank you for taking the time to speak with me${role ? ` about the ${role} role` : ""}${company ? ` at ${company}` : ""}.`;
+    const conversationLine =
+      paragraphs[1] ||
+      "I appreciated the conversation and the insight you shared about the team and role expectations.";
+    const reaffirmLine =
+      paragraphs[2] ||
+      "After our discussion, I am even more excited about the opportunity to contribute.";
+
+    const lines: string[] = [
+      subject,
+      "",
+      "Hello Hiring Team,",
+      "",
+      thanksLine,
+      "",
+      conversationLine,
+      "",
+      reaffirmLine,
+      "",
+      "Best,",
+    ];
+    if (candidateName) lines.push(candidateName);
+
+    return normalizeDocumentText(lines.join("\n"));
+  }
+
+  function getFormattedDocumentText(r: Result | null, tab: TabKey) {
+    if (!r) return "";
+    if (tab === "coverLetter") return formatCoverLetterDocument(r);
+    if (tab === "updatedResume") return formatResumeDocument(r);
+    if (tab === "preInterview") return formatPreInterviewEmail(r);
+    return formatPostInterviewEmail(r);
+  }
+
+  function getActiveEditableText(tab: TabKey) {
+    const editedValue = editableDocs[tab];
+    if (editedValue !== null) return editedValue;
+    return getFormattedDocumentText(result, tab);
+  }
+
+  function getMeaningfulDocText(tab: TabKey) {
+    return normalizeDocumentText(getActiveEditableText(tab));
   }
 
   async function copyActive() {
-    const text = getMeaningfulDocText(result, activeTab);
+    const text = getMeaningfulDocText(activeTab);
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -267,20 +697,23 @@ function JobToolsGeneratePageContent() {
   }
 
   function downloadBlob(filename: string, blob: Blob) {
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = objectUrl;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(a.href);
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 1200);
   }
 
-  function getDocumentFileMeta(tab: TabKey): { filename: string; title: string } {
-    if (tab === "coverLetter") return { filename: "cover-letter.pdf", title: "Cover Letter" };
-    if (tab === "updatedResume") return { filename: "revised-resume.pdf", title: "Revised Resume" };
-    if (tab === "preInterview") return { filename: "pre-interview-email.pdf", title: "Pre-Interview Email" };
-    return { filename: "post-interview-email.pdf", title: "Post-Interview Email" };
+  function getDocumentFileMeta(tab: TabKey): { baseFilename: string; title: string } {
+    if (tab === "coverLetter") return { baseFilename: "cover-letter", title: "Cover Letter" };
+    if (tab === "updatedResume") return { baseFilename: "revised-resume", title: "Revised Resume" };
+    if (tab === "preInterview") return { baseFilename: "pre-interview-email", title: "Pre-Interview Email" };
+    return { baseFilename: "post-interview-email", title: "Post-Interview Email" };
   }
 
   function normalizePdfText(value: string) {
@@ -351,20 +784,29 @@ function JobToolsGeneratePageContent() {
     return finalLines;
   }
 
-  async function createPdfBlob(text: string, title: string): Promise<Blob> {
+  async function createPdfBlob(
+    text: string,
+    title: string,
+    options?: {
+      showTitle?: boolean;
+      bodySize?: number;
+      lineHeight?: number;
+    }
+  ): Promise<Blob> {
     const normalizedText = normalizeDocumentText(text);
     if (!normalizedText) {
       throw new Error("There is no generated content to download yet.");
     }
 
+    const showTitle = options?.showTitle ?? true;
+    const bodySize = options?.bodySize ?? 11;
+    const lineHeight = options?.lineHeight ?? 16;
     const pdfDoc = await PDFDocument.create();
     const bodyFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const titleFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const pageSize: [number, number] = [612, 792];
     const margin = 50;
     const titleSize = 15;
-    const bodySize = 11;
-    const lineHeight = 16;
     const titleGap = 28;
     const maxWidth = pageSize[0] - margin * 2;
     const safeTitle = normalizePdfText(title);
@@ -376,6 +818,7 @@ function JobToolsGeneratePageContent() {
     let cursorY = pageSize[1] - margin;
 
     const drawPageHeader = () => {
+      if (!showTitle) return;
       page.drawText(safeTitle, {
         x: margin,
         y: cursorY,
@@ -414,6 +857,98 @@ function JobToolsGeneratePageContent() {
       pdfBytes.byteOffset + pdfBytes.byteLength
     ) as ArrayBuffer;
     return new Blob([pdfBuffer], { type: "application/pdf" });
+  }
+
+  async function createCoverLetterPdfBlob(text: string): Promise<Blob> {
+    const cleanCoverLetter = normalizeDocumentText(text);
+    return createPdfBlob(cleanCoverLetter, "Cover Letter", {
+      showTitle: false,
+      lineHeight: 18,
+    });
+  }
+
+  async function createResumePdfBlob(text: string): Promise<Blob> {
+    const cleanResume = normalizeDocumentText(text);
+    return createPdfBlob(cleanResume, "Revised Resume", {
+      showTitle: false,
+      lineHeight: 17,
+    });
+  }
+
+  function escapeXml(value: string) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  function normalizeDocxText(value: string) {
+    return value
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+  }
+
+  function createDocxBlob(text: string, title: string): Blob {
+    const normalizedText = normalizeDocumentText(text);
+    if (!normalizedText) {
+      throw new Error("There is no generated content to download yet.");
+    }
+
+    const safeText = normalizeDocxText(normalizedText);
+    const safeTitle = normalizeDocxText(title);
+    const paragraphs = [`<w:p><w:r><w:t>${escapeXml(safeTitle)}</w:t></w:r></w:p>`]
+      .concat(
+        safeText.split("\n").map((line) => {
+          if (!line.trim()) return "<w:p/>";
+          return `<w:p><w:r><w:t xml:space=\"preserve\">${escapeXml(line)}</w:t></w:r></w:p>`;
+        })
+      )
+      .join("");
+
+    const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+    const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${paragraphs}
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+
+    const docxZip = buildZip([
+      {
+        filename: "[Content_Types].xml",
+        bytes: textEncoder.encode(contentTypesXml),
+      },
+      {
+        filename: "_rels/.rels",
+        bytes: textEncoder.encode(relsXml),
+      },
+      {
+        filename: "word/document.xml",
+        bytes: textEncoder.encode(documentXml),
+      },
+    ]);
+
+    return new Blob([docxZip], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
   }
 
   function crc32(bytes: Uint8Array) {
@@ -496,22 +1031,36 @@ function JobToolsGeneratePageContent() {
     });
   }
 
-  async function downloadActive() {
-    const text = getMeaningfulDocText(result, activeTab);
+  async function downloadActiveAs(format: DownloadFormat) {
+    const text = getMeaningfulDocText(activeTab);
     if (!text) {
       setError("There is no generated content to download yet.");
       return;
     }
 
     try {
-      const { filename, title } = getDocumentFileMeta(activeTab);
-      const pdfBlob = await createPdfBlob(text, title);
-      downloadBlob(filename, pdfBlob);
+      const { baseFilename, title } = getDocumentFileMeta(activeTab);
+      if (format === "pdf") {
+        const pdfBlob =
+          activeTab === "coverLetter"
+            ? await createCoverLetterPdfBlob(text)
+            : activeTab === "updatedResume"
+              ? await createResumePdfBlob(text)
+            : await createPdfBlob(text, title);
+        downloadBlob(`${baseFilename}.pdf`, pdfBlob);
+      } else if (format === "txt") {
+        const txtBlob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        downloadBlob(`${baseFilename}.txt`, txtBlob);
+      } else {
+        const docxBlob = createDocxBlob(text, title);
+        downloadBlob(`${baseFilename}.docx`, docxBlob);
+      }
+      setDownloadMenuOpen(false);
     } catch (downloadError) {
       setError(
         downloadError instanceof Error
           ? downloadError.message
-          : "Unable to generate the PDF right now."
+          : "Unable to generate the document right now."
       );
     }
   }
@@ -522,16 +1071,20 @@ function JobToolsGeneratePageContent() {
       return;
     }
 
-    const allTabs: TabKey[] = ["coverLetter", "updatedResume", "preInterview", "postInterview"];
     const resolvedFiles = await Promise.all(
-      allTabs.map(async (tab) => {
-        const text = getMeaningfulDocText(result, tab);
+      allDocTabs.map(async (tab) => {
+        const text = getMeaningfulDocText(tab);
         if (!text) return null;
 
         const meta = getDocumentFileMeta(tab);
-        const pdfBlob = await createPdfBlob(text, meta.title);
+        const pdfBlob =
+          tab === "coverLetter"
+            ? await createCoverLetterPdfBlob(text)
+            : tab === "updatedResume"
+              ? await createResumePdfBlob(text)
+            : await createPdfBlob(text, meta.title);
         return {
-          filename: meta.filename,
+          filename: `${meta.baseFilename}.pdf`,
           bytes: new Uint8Array(await pdfBlob.arrayBuffer()),
         };
       })
@@ -561,6 +1114,7 @@ function JobToolsGeneratePageContent() {
   async function onGenerate() {
     setError(null);
     setResult(null);
+    setEditableDocs(createEmptyEditableDocs());
 
     setLoading(true);
     try {
@@ -690,6 +1244,7 @@ function JobToolsGeneratePageContent() {
         "tone",
         tone === "professional" ? "professional" : tone === "conversational" ? "friendly" : "bold"
       );
+      formData.set("llmProvider", llmProvider);
       formData.set("focusAreas", JSON.stringify(selectedFocus));
       formData.set("instructions", instructions.trim());
       formData.set("pastedJobText", pastedJobText.trim());
@@ -725,7 +1280,15 @@ function JobToolsGeneratePageContent() {
         throw new Error(data?.error ?? "Failed to generate");
       }
 
+      setActiveTab("coverLetter");
+      shouldFocusGeneratedCoverLetterRef.current = true;
       setResult(data);
+      setEditableDocs({
+        coverLetter: getFormattedDocumentText(data, "coverLetter"),
+        updatedResume: getFormattedDocumentText(data, "updatedResume"),
+        preInterview: getFormattedDocumentText(data, "preInterview"),
+        postInterview: getFormattedDocumentText(data, "postInterview"),
+      });
       if (data?.credits) {
         setCreditStatus((current) => ({
           ...(current ?? {}),
@@ -745,13 +1308,11 @@ function JobToolsGeneratePageContent() {
     }
   }
 
-  const activeText = getActiveDocText(result, activeTab);
-  const hasDownloadableActiveText = Boolean(getMeaningfulDocText(result, activeTab));
+  const activeText = getActiveEditableText(activeTab);
+  const hasDownloadableActiveText = Boolean(getMeaningfulDocText(activeTab));
   const hasAnyDownloadableDocs = Boolean(
     result &&
-      (["coverLetter", "updatedResume", "preInterview", "postInterview"] as TabKey[]).some(
-        (tab) => Boolean(getMeaningfulDocText(result, tab))
-      )
+      allDocTabs.some((tab) => Boolean(getMeaningfulDocText(tab)))
   );
   const activeTitle =
     activeTab === "coverLetter"
@@ -812,15 +1373,33 @@ function JobToolsGeneratePageContent() {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onGenerate}
-              disabled={loading}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-sm "
-            >
-              {loading ? <ArrowPathIcon className="h-5 w-5 animate-spin" /> : <SparklesIcon className="h-5 w-5" />}
-              {loading ? "Generating" : "Generate"}
-            </button>
+            <div className="flex w-full flex-col gap-2 sm:w-56 sm:shrink-0">
+              <label className="text-xs font-semibold text-slate-700" htmlFor="llm-provider-select">
+                AI Model
+              </label>
+              <select
+                id="llm-provider-select"
+                value={llmProvider}
+                onChange={(e) => setLlmProvider(e.target.value as LlmProvider)}
+                className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-900 outline-none focus:border-slate-400"
+              >
+                {llmProviderOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={loading}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-sm "
+              >
+                {loading ? <ArrowPathIcon className="h-5 w-5 animate-spin" /> : <SparklesIcon className="h-5 w-5" />}
+                {loading ? "Generating" : "Generate"}
+              </button>
+            </div>
           </div>
 
           <div className="mt-2 text-xs text-slate-500">
@@ -940,7 +1519,13 @@ function JobToolsGeneratePageContent() {
         {/* Document card + actions */}
         <div className="mt-3 rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm font-semibold text-slate-900">{activeTitle}</div>
+            <div
+              ref={activeDocumentTitleRef}
+              tabIndex={-1}
+              className="text-sm font-semibold text-slate-900 outline-none"
+            >
+              {activeTitle}
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -953,15 +1538,44 @@ function JobToolsGeneratePageContent() {
                 Copy
               </button>
 
-              <button
-                type="button"
-                onClick={downloadActive}
-                disabled={!hasDownloadableActiveText}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                <ArrowDownTrayIcon className="h-4 w-4" />
-                Download
-              </button>
+              <div className="relative" ref={downloadMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setDownloadMenuOpen((current) => !current)}
+                  disabled={!hasDownloadableActiveText}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <ArrowDownTrayIcon className="h-4 w-4" />
+                  Download
+                  <ChevronDownIcon className="h-4 w-4" />
+                </button>
+
+                {downloadMenuOpen ? (
+                  <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => void downloadActiveAs("pdf")}
+                      className="block w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Download as PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadActiveAs("txt")}
+                      className="block w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Download as TXT
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadActiveAs("docx")}
+                      className="block w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Download as DOCX
+                    </button>
+                  </div>
+                ) : null}
+              </div>
 
               <button
                 type="button"
@@ -978,12 +1592,16 @@ function JobToolsGeneratePageContent() {
           <div className="px-5 py-5">
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <textarea
-                readOnly
-                value={
-                  activeText ||
-                  "Your generated document will appear here after processing the job URL."
+                value={activeText}
+                onChange={(e) =>
+                  setEditableDocs((prev) => ({
+                    ...prev,
+                    [activeTab]: e.target.value,
+                  }))
                 }
-                className="h-56 w-full resize-none bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400"
+                disabled={!result}
+                placeholder="Your generated document will appear here after processing the job URL."
+                className="h-56 w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
               />
             </div>
 

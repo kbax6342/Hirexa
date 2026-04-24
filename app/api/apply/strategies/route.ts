@@ -83,13 +83,22 @@ export async function POST(request: Request) {
     const generatedPrompt = await generateStrategyPrompt({
       hostname: strategy.hostname,
       stoppedUrl: input.finalUrl ?? strategy.finalUrl,
+      lastSavedUrl: input.finalUrl ?? strategy.finalUrl,
+      observedFinalUrl:
+        strategy.lastTrainedUrl ??
+        strategy.rawSteps?.at(-1)?.currentUrl ??
+        strategy.steps?.at(-1)?.currentUrl ??
+        input.lastTrainedUrl ??
+        input.steps?.at(-1)?.currentUrl,
       stopReason: input.stopReason ?? strategy.stopReason,
       lastAction: input.lastAction ?? strategy.lastAction,
       errorMessage: input.errorMessage,
       instructions: input.instructions ?? strategy.instructions,
       selectorNotes: input.selectors ?? strategy.selectors,
-      recordedSteps: input.steps ?? strategy.rawSteps ?? strategy.steps,
-      lastTrainedUrl: input.lastTrainedUrl ?? strategy.lastTrainedUrl,
+      replaySafeSteps: strategy.steps ?? input.steps,
+      rawRecordedSteps: strategy.rawSteps ?? strategy.steps ?? input.steps,
+      recordedSteps: strategy.rawSteps ?? strategy.steps ?? input.steps,
+      lastTrainedUrl: strategy.lastTrainedUrl ?? input.lastTrainedUrl,
     });
 
     if (strategy.id) {
@@ -110,6 +119,8 @@ export async function POST(request: Request) {
       generatedCodexPrompt: generatedPrompt.generatedCodexPrompt,
       promptGeneratedAt: generatedPrompt.promptGeneratedAt,
       promptModel: generatedPrompt.promptModel,
+      promptReasoningEffort: generatedPrompt.promptReasoningEffort,
+      promptWarning: generatedPrompt.promptWarning,
       promptGenerationSucceeded: Boolean(
         generatedPrompt.aiSummary && generatedPrompt.generatedCodexPrompt,
       ),
@@ -122,6 +133,8 @@ export async function POST(request: Request) {
       generatedCodexPrompt: generatedPrompt.generatedCodexPrompt,
       promptGeneratedAt: generatedPrompt.promptGeneratedAt,
       promptModel: generatedPrompt.promptModel,
+      promptReasoningEffort: generatedPrompt.promptReasoningEffort,
+      promptWarning: generatedPrompt.promptWarning,
     });
   } catch (error) {
     const message =

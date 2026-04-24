@@ -26,6 +26,7 @@ import {
   type ApplySiteStrategyRecord,
   type ApplySiteStrategyStep,
 } from "@/app/lib/apply/siteStrategyStore";
+import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 
 type SavedStrategyPanelProps = {
   finalUrl?: string | null;
@@ -77,6 +78,9 @@ type ReplaySessionResponse = {
   };
 };
 
+const RTX_VERIFICATION_UI_MESSAGE =
+  APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+
 function formatReplayStatus(status: unknown) {
   if (status == null || status === "") return null;
   if (typeof status !== "string") return "Unknown";
@@ -99,6 +103,30 @@ function formatReplayStatus(status: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseHostname(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return raw
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/.*$/, "")
+      .trim()
+      .toLowerCase();
+  }
+}
+
+function isRtxStopHost(hostname: string) {
+  return (
+    hostname === "rtx.com" ||
+    hostname.endsWith(".rtx.com") ||
+    hostname.endsWith(".myworkdayjobs.com") ||
+    hostname.endsWith(".workdayjobs.com")
+  );
 }
 
 function getImportedHostnameKeys(json: string) {
@@ -183,6 +211,8 @@ export default function SavedStrategyPanel({
   const [libraryMessage, setLibraryMessage] = useState<string | null>(null);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const verificationMessageLoggedRef = useRef(false);
+  const verificationResumeLoggedRef = useRef(false);
 
   const resolvedUrl = currentUrl ?? finalUrl ?? "";
   const resolvedHostname = useMemo(
@@ -196,8 +226,9 @@ export default function SavedStrategyPanel({
         finalUrl,
         currentUrl,
         lastAction,
+        message: errorMessage,
       }),
-    [currentUrl, finalUrl, lastAction, stopClassification],
+    [currentUrl, errorMessage, finalUrl, lastAction, stopClassification],
   );
   const strategySteps = savedStrategy?.steps ?? [];
   const activeReplaySteps = replaySession?.steps ?? strategySteps;
@@ -210,6 +241,34 @@ export default function SavedStrategyPanel({
       : null;
   const recommendedAction = resolvedStopClassification.suggestedAction;
   const recommendedActionUi = getStopSuggestedActionUi(recommendedAction);
+  const verificationUiMessage = useMemo(() => {
+    if (resolvedStopClassification.reason !== "verification_required") {
+      return null;
+    }
+
+    const isRtxContext = [
+      parseHostname(currentUrl),
+      parseHostname(finalUrl),
+      parseHostname(savedStrategy?.finalUrl),
+      parseHostname(savedStrategy?.lastTrainedUrl),
+    ].some((hostname) => hostname.length > 0 && isRtxStopHost(hostname));
+
+    if (isRtxContext) {
+      return RTX_VERIFICATION_UI_MESSAGE;
+    }
+
+    const fallbackMessage = String(errorMessage ?? "").trim();
+    return fallbackMessage.length > 0
+      ? fallbackMessage
+      : APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+  }, [
+    currentUrl,
+    errorMessage,
+    finalUrl,
+    resolvedStopClassification.reason,
+    savedStrategy?.finalUrl,
+    savedStrategy?.lastTrainedUrl,
+  ]);
   const strategyHealthClassName = savedStrategy
     ? savedStrategy.status === "working"
       ? "text-emerald-700"
@@ -226,6 +285,48 @@ export default function SavedStrategyPanel({
         ? "Failed"
         : "Not replayed yet"
     : "Not replayed yet";
+
+  useEffect(() => {
+    if (
+      verificationUiMessage === RTX_VERIFICATION_UI_MESSAGE &&
+      !verificationMessageLoggedRef.current
+    ) {
+      console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+        marker: "RTX_VERIFICATION_REQUIRED_UI_MESSAGE_MAPPED",
+        stoppedAtUrl:
+          currentUrl ?? finalUrl ?? savedStrategy?.lastTrainedUrl ?? savedStrategy?.finalUrl ?? null,
+      });
+      verificationMessageLoggedRef.current = true;
+    }
+
+    if (verificationUiMessage !== RTX_VERIFICATION_UI_MESSAGE) {
+      verificationMessageLoggedRef.current = false;
+    }
+  }, [
+    currentUrl,
+    finalUrl,
+    savedStrategy?.finalUrl,
+    savedStrategy?.lastTrainedUrl,
+    verificationUiMessage,
+  ]);
+
+  useEffect(() => {
+    const resumeAvailable =
+      resolvedStopClassification.reason === "verification_required" &&
+      recommendedAction === "complete_verification";
+
+    if (resumeAvailable && !verificationResumeLoggedRef.current) {
+      console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+        marker: "RTX_VERIFICATION_REQUIRED_RESUME_AVAILABLE",
+        canResumeAfterHumanStep: true,
+      });
+      verificationResumeLoggedRef.current = true;
+    }
+
+    if (!resumeAvailable) {
+      verificationResumeLoggedRef.current = false;
+    }
+  }, [recommendedAction, resolvedStopClassification.reason]);
 
   const refreshStrategy = useCallback(() => {
     if (!resolvedHostname) {
@@ -460,6 +561,9 @@ export default function SavedStrategyPanel({
         Suggested action:{" "}
         {getStopSuggestedActionLabel(resolvedStopClassification.suggestedAction)}
       </p>
+      {verificationUiMessage ? (
+        <p className={cn("mt-2", palette.subtle)}>{verificationUiMessage}</p>
+      ) : null}
     </div>
   );
 
@@ -749,6 +853,16 @@ export default function SavedStrategyPanel({
         <p className={cn("mt-1", palette.subtle)}>
           Prompt generation: {savedStrategy.promptGenerationSucceeded ? "Ready" : "Pending"}
         </p>
+        {savedStrategy.promptModel ? (
+          <p className={cn("mt-1", palette.subtle)}>
+            Model used: {savedStrategy.promptModel}
+          </p>
+        ) : null}
+        {savedStrategy.promptReasoningEffort ? (
+          <p className={cn("mt-1", palette.subtle)}>
+            Reasoning effort: {savedStrategy.promptReasoningEffort}
+          </p>
+        ) : null}
         <p className={cn("mt-1", palette.subtle)}>
           Replay status: {savedStrategy.replayStatus ?? "IDLE"}
         </p>
@@ -759,7 +873,12 @@ export default function SavedStrategyPanel({
         ) : null}
         {savedStrategy.derivedInstruction ? (
           <p className={cn("mt-1", palette.subtle)}>
-            Lesson: {savedStrategy.derivedInstruction}
+            Generated summary: {savedStrategy.derivedInstruction}
+          </p>
+        ) : null}
+        {savedStrategy.promptWarning ? (
+          <p className="mt-1 text-amber-700">
+            {savedStrategy.promptWarning}
           </p>
         ) : null}
         {savedStrategy.lastFailureReason ? (

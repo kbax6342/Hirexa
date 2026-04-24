@@ -243,6 +243,8 @@ function normalizeStrategyRecord(
         ? readOptionalString(value.updatedAt)
         : undefined),
     promptModel: readOptionalString(value.promptModel),
+    promptReasoningEffort: readOptionalString(value.promptReasoningEffort),
+    promptWarning: readOptionalString(value.promptWarning),
     promptGenerationSucceeded:
       readOptionalBoolean(value.promptGenerationSucceeded) ??
       Boolean(
@@ -392,7 +394,15 @@ export async function refreshApplySiteStrategies() {
 
   for (const strategy of nextStrategies) {
     const key = strategy.strategyKey ?? strategy.id ?? strategy.hostname;
-    mergedStore[key] = strategy;
+    const existing = mergedStore[key];
+    mergedStore[key] = {
+      ...existing,
+      ...strategy,
+      promptModel: strategy.promptModel ?? existing?.promptModel,
+      promptReasoningEffort:
+        strategy.promptReasoningEffort ?? existing?.promptReasoningEffort,
+      promptWarning: strategy.promptWarning ?? existing?.promptWarning,
+    };
   }
 
   persistApplySiteStrategies(mergedStore);
@@ -424,6 +434,9 @@ export async function saveApplySiteStrategy(input: ApplySiteStrategySaveInput) {
     promptGeneratedAt:
       payload.promptGeneratedAt ?? strategyPayload?.promptGeneratedAt,
     promptModel: payload.promptModel ?? strategyPayload?.promptModel,
+    promptReasoningEffort:
+      payload.promptReasoningEffort ?? strategyPayload?.promptReasoningEffort,
+    promptWarning: payload.promptWarning ?? strategyPayload?.promptWarning,
   };
   const strategy = normalizeStrategyRecord(
     readString(payload.strategyKey) ?? readString(strategyPayload?.strategyKey) ?? "",

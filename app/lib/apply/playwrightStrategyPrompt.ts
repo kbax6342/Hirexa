@@ -16,6 +16,17 @@ function toSentence(value: string) {
   return value.endsWith(".") ? value : `${value}.`;
 }
 
+function isRtxContextHost(hostname: string) {
+  const value = normalizeText(hostname).toLowerCase();
+  if (!value) return false;
+  return (
+    value.includes("rtx.com") ||
+    value.includes("careers.rtx.com") ||
+    value.includes("workdayjobs.com") ||
+    value.includes("myworkdayjobs.com")
+  );
+}
+
 export function derivePlaywrightStrategyInstruction(args: {
   sourceHost?: string | null;
   destinationHost?: string | null;
@@ -34,6 +45,14 @@ export function derivePlaywrightStrategyInstruction(args: {
       pageType,
       stopReason: args.stopReason,
     });
+  const rtxContext =
+    isRtxContextHost(sourceHost) || isRtxContextHost(destinationHost);
+
+  if (rtxContext) {
+    return toSentence(
+      "For RTX careers flows, use only safe on-site steps (accept cookies, allow, apply now, apply manually, continue) and pause immediately for verification prompts",
+    );
+  }
 
   if (strategyType === "aggregator_handoff") {
     return toSentence(
@@ -78,8 +97,10 @@ export function buildPlaywrightAutomationPrompt(args: {
       destinationHost,
       pageType: args.pageType,
     });
+  const rtxContext =
+    isRtxContextHost(sourceHost) || isRtxContextHost(destinationHost);
 
-  return [
+  const lines = [
     `Current page classification: ${pageTypeLabel}`,
     `Source host: ${sourceHost}`,
     `Destination host: ${destinationHost}`,
@@ -89,5 +110,13 @@ export function buildPlaywrightAutomationPrompt(args: {
     "Routing note: destination routing may use Ecosia before replay starts, but replay itself must stay on employer/ATS pages only.",
     "Structured search guidance: if navigation is needed, use the employer or ATS site directly and use only on-site search/apply controls.",
     "Stop conditions: stop and wait for a human if login, verification, or another non-replayable blocker appears.",
-  ].join("\n");
+  ];
+
+  if (rtxContext) {
+    lines.push(
+      "RTX-specific guidance: safe actions include Accept Cookies, Allow, Apply Now, Apply Manually, and Continue on RTX/Workday pages. If signals like Just a moment, Press & Hold, Verify you are human, or Cloudflare appear, stop with verification required.",
+    );
+  }
+
+  return lines.join("\n");
 }

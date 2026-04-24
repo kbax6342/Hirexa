@@ -97,6 +97,8 @@ export default function TeachPageDialog({
   const [generatedSummary, setGeneratedSummary] = useState("");
   const [promptGeneratedAt, setPromptGeneratedAt] = useState<string | null>(null);
   const [promptModel, setPromptModel] = useState<string | null>(null);
+  const [promptReasoningEffort, setPromptReasoningEffort] = useState<string | null>(null);
+  const [promptWarning, setPromptWarning] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   const resolvedUrl = finalUrl ?? currentUrl ?? "";
@@ -129,6 +131,8 @@ export default function TeachPageDialog({
     setGeneratedSummary(summaryValue);
     setPromptGeneratedAt(strategy?.promptGeneratedAt ?? strategy?.updatedAt ?? null);
     setPromptModel(strategy?.promptModel ?? null);
+    setPromptReasoningEffort(strategy?.promptReasoningEffort ?? null);
+    setPromptWarning(strategy?.promptWarning ?? null);
   }, []);
 
   const hydrateFromExistingStrategy = useCallback(
@@ -173,6 +177,8 @@ export default function TeachPageDialog({
     setGeneratedSummary("");
     setPromptGeneratedAt(null);
     setPromptModel(null);
+    setPromptReasoningEffort(null);
+    setPromptWarning(null);
     setCopyMessage(null);
 
     void (async () => {
@@ -714,7 +720,7 @@ export default function TeachPageDialog({
               </p>
               {savedStrategy.derivedInstruction ? (
                 <p className="mt-2 text-xs text-gray-600">
-                  Lesson: {savedStrategy.derivedInstruction}
+                  Generated summary: {savedStrategy.derivedInstruction}
                 </p>
               ) : null}
             </div>
@@ -741,7 +747,7 @@ export default function TeachPageDialog({
                     })();
                   }}
                 >
-                  Copy
+                  Copy Codex Prompt
                 </Button>
                 <Button
                   type="button"
@@ -773,13 +779,22 @@ export default function TeachPageDialog({
             />
 
             {(promptGeneratedAt || promptModel) && canShowGeneratedPrompt ? (
-              <p className="mt-2 text-xs text-gray-500">
-                Generated{" "}
-                {promptGeneratedAt
-                  ? new Date(promptGeneratedAt).toLocaleString()
-                  : "just now"}
-                {promptModel ? ` using ${promptModel}` : ""}
-              </p>
+              <div className="mt-2 space-y-1 text-xs text-gray-500">
+                <p>
+                  Generated{" "}
+                  {promptGeneratedAt
+                    ? new Date(promptGeneratedAt).toLocaleString()
+                    : "just now"}
+                </p>
+                {promptModel ? <p>Model used: {promptModel}</p> : null}
+                {promptReasoningEffort ? (
+                  <p>Reasoning effort: {promptReasoningEffort}</p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {promptWarning ? (
+              <p className="mt-2 text-xs text-amber-700">{promptWarning}</p>
             ) : null}
 
             {copyMessage ? (

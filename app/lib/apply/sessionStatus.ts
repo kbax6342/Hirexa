@@ -18,6 +18,9 @@ export const APPLY_SESSION_STATUSES = [
 
 export type ApplySessionStatus = (typeof APPLY_SESSION_STATUSES)[number];
 
+export const APPLY_VERIFICATION_REQUIRED_USER_MESSAGE =
+  "Employer verification is required before Hirexa can continue. Complete the verification, then resume the application.";
+
 const TERMINAL_STATUSES = new Set<ApplySessionStatus>([
   "WAITING_HUMAN",
   "VERIFICATION_REQUIRED",

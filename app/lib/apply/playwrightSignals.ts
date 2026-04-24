@@ -24,15 +24,23 @@ export type MeaningfulFormControlSummary = {
 export const HUMAN_VERIFICATION_CHECKS = [
   "just a moment",
   "verify you are human",
+  "verify you're human",
+  "verify that you are human",
+  "prove you are human",
+  "are you human",
+  "are you a human",
   "human verification",
   "checking your browser",
+  "checking if the site connection is secure",
   "please enable javascript and cookies",
   "press & hold",
   "press and hold",
   "captcha",
+  "hcaptcha",
   "recaptcha",
   "turnstile",
   "cloudflare",
+  "cf-chl",
   "security check",
   "security verification",
   "verification required",
@@ -85,6 +93,15 @@ export const APPLY_SETTLE_DELAY_MS = 1200;
 function containsSignal(text: string, checks: readonly string[]) {
   const lower = text.toLowerCase();
   return checks.filter((check) => lower.includes(check));
+}
+
+export function collectVerificationSignals(
+  values: Array<string | null | undefined>,
+) {
+  const text = values
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
+  return [...new Set(containsSignal(text, HUMAN_VERIFICATION_CHECKS))];
 }
 
 function extractSignalSnippet(text: string, signals: string[]) {
@@ -238,9 +255,9 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
 
   const visibleText = [currentTitle, pageText].join("\n");
   const verificationText = [page.url(), currentTitle, pageText, html].join("\n");
-  const verificationSignals = [
-    ...new Set(containsSignal(verificationText, HUMAN_VERIFICATION_CHECKS)),
-  ];
+  const verificationSignals = collectVerificationSignals([
+    verificationText,
+  ]);
   const searchEngineChallengeSignals = [
     ...new Set(containsSignal(verificationText, SEARCH_ENGINE_CHALLENGE_CHECKS)),
   ];

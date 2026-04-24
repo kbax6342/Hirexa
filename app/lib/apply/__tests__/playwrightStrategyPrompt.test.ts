@@ -21,11 +21,12 @@ test("prompt generation stays deterministic for aggregator handoff lessons", () 
   });
 
   expect(instruction).toContain(
-    "continue only on the resolved employer/ATS posting page",
+    "use only safe on-site steps (accept cookies, allow, apply now, apply manually, continue)",
   );
   expect(prompt).toContain("Current page classification: Aggregator");
   expect(prompt).toContain("Source host: adzuna.com");
   expect(prompt).toContain("Destination host: careers.rtx.com");
   expect(prompt).toContain("do not use Google/Bing");
   expect(prompt).toContain("do not replay CAPTCHA");
+  expect(prompt).toContain("RTX-specific guidance");
 });

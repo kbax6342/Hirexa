@@ -9,6 +9,7 @@ import {
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
 import {
+  APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
   isApplySessionSuccessStatus,
   toApplySessionDisplayStatus,
 } from "@/app/lib/apply/sessionStatus";
@@ -350,7 +351,7 @@ export default function AuditClient({
                 ? "Stopped at:"
                 : payload.session.message ??
                     (sessionStatus === "VERIFICATION_REQUIRED"
-                      ? "Application paused because the employer site asked for verification."
+                      ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
                       : sessionStatus === "APPLY_NOT_STARTED"
                       ? "Opened job page but could not start application."
                       : "Auto apply is not available for this job application."),
@@ -360,7 +361,7 @@ export default function AuditClient({
                 ? `Why it stopped: ${getStopReasonLabel(stopClassification.reason)}`
                 : payload.session.message ??
                     (sessionStatus === "VERIFICATION_REQUIRED"
-                      ? "Application paused because the employer site asked for verification."
+                      ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
                       : sessionStatus === "APPLY_NOT_STARTED"
                       ? "Opened job page but could not start application."
                       : "Auto apply is not available for this job application."),

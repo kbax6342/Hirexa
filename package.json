@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "check:apply-stealth": "node scripts/check-apply-stealth.mjs",
     "prisma:generate": "prisma generate",
     "db:migrate:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate"
@@ -70,6 +71,9 @@
     "pdf-parse": "^1.1.1",
     "pg": "^8.17.2",
     "playwright": "^1.58.2",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "^19.2.4",
     "react-day-picker": "^9.14.0",
     "react-dom": "^19.2.4",

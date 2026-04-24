@@ -82,6 +82,8 @@ export type ApplySiteStrategyRecord = {
   generatedCodexPrompt?: string;
   promptGeneratedAt?: string;
   promptModel?: string;
+  promptReasoningEffort?: string;
+  promptWarning?: string;
   promptGenerationSucceeded?: boolean;
   trainingSource?: ApplySiteStrategyTrainingSource;
   lastTrainedUrl?: string;

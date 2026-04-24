@@ -1,6 +1,7 @@
 import type { Page } from "playwright-core";
 import type { JobSearchFallbackCandidate } from "@/app/lib/apply/jobSearchFallback";
 import { detectPageSignals, waitForDomAndSettle } from "@/app/lib/apply/playwrightSignals";
+import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 import { validateAutomationStartUrl } from "@/app/lib/apply/urlValidation";
 import { normalizeLocationLabel } from "@/app/lib/locationOptions";
 import {
@@ -413,7 +414,7 @@ export async function resolveRealPostingViaEcosia(args: {
       ok: false,
       query,
       failureCode: "VERIFICATION_REQUIRED",
-      message: "Application paused because the employer site asked for verification.",
+      message: APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
       finalUrl: args.page.url(),
       candidates: [],
       attemptedCandidateCount: 0,
@@ -467,7 +468,7 @@ export async function resolveRealPostingViaEcosia(args: {
         ok: false,
         query,
         failureCode: "VERIFICATION_REQUIRED",
-        message: "Application paused because the employer site asked for verification.",
+        message: APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
         finalUrl,
         candidates: fallbackCandidates,
         attemptedCandidateCount: visitedUrls.length,

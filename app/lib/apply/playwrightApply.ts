@@ -1,7 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core";
+import {
+  chromium as playwrightChromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "playwright-core";
 import {
   closeRemoteSession,
   createRemoteSession,
@@ -53,7 +58,10 @@ import type {
   ApplySessionClickRecord,
   ApplySessionDebug,
 } from "@/app/lib/apply/applySessionStore";
-import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
+import {
+  APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
+  type ApplySessionStatus,
+} from "@/app/lib/apply/sessionStatus";
 import { classifyJobUrlKind, normalizeJobUrl } from "@/app/lib/jobSources";
 
 export type PlaywrightApplyResult = {
@@ -305,6 +313,132 @@ function parseBooleanEnv(value: string | undefined) {
   if (["0", "false", "no", "off"].includes(normalized)) return false;
 
   return null;
+}
+
+type ApplyChromiumRuntime = typeof playwrightChromium & {
+  use?: (plugin: unknown) => void;
+};
+
+type ApplyBrowserAutomationLibrary = "playwright" | "playwright-extra";
+
+type ApplyBrowserRuntimeResolution = {
+  chromium: ApplyChromiumRuntime;
+  browserAutomationLibrary: ApplyBrowserAutomationLibrary;
+  playwrightExtraAvailable: boolean;
+  puppeteerExtraAvailable: boolean;
+  stealthDependencyInstalled: boolean;
+  stealthRuntimeEnabled: boolean;
+  stealthPluginRegistered: boolean;
+};
+
+let applyStealthPluginRegistered = false;
+
+function buildDefaultApplyBrowserRuntimeResolution(): ApplyBrowserRuntimeResolution {
+  return {
+    chromium: playwrightChromium,
+    browserAutomationLibrary: "playwright",
+    playwrightExtraAvailable: false,
+    puppeteerExtraAvailable: false,
+    stealthDependencyInstalled: false,
+    stealthRuntimeEnabled: false,
+    stealthPluginRegistered: false,
+  };
+}
+
+function resolveStealthPluginFactory(
+  moduleValue: unknown,
+): (() => unknown) | null {
+  if (!moduleValue) return null;
+
+  const fromDefault =
+    typeof (moduleValue as { default?: unknown }).default === "function"
+      ? ((moduleValue as { default: () => unknown }).default as () => unknown)
+      : null;
+
+  if (fromDefault) {
+    return fromDefault;
+  }
+
+  return typeof moduleValue === "function" ? (moduleValue as () => unknown) : null;
+}
+
+async function optionalRuntimeImport(specifier: string): Promise<unknown | null> {
+  try {
+    return await import(/* webpackIgnore: true */ specifier);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveApplyBrowserRuntime(): Promise<ApplyBrowserRuntimeResolution> {
+  const fallback = buildDefaultApplyBrowserRuntimeResolution();
+  const stealthRequested =
+    parseBooleanEnv(process.env.APPLY_STEALTH_ENABLED) === true;
+
+  if (!stealthRequested) {
+    return fallback;
+  }
+
+  let playwrightExtraAvailable = false;
+  let puppeteerExtraAvailable = false;
+  let stealthDependencyInstalled = false;
+
+  try {
+    const [playwrightExtraModule, puppeteerExtraModule, stealthPluginModule] =
+      await Promise.all([
+        optionalRuntimeImport("playwright-extra"),
+        optionalRuntimeImport("puppeteer-extra"),
+        optionalRuntimeImport("puppeteer-extra-plugin-stealth"),
+      ]);
+
+    playwrightExtraAvailable = Boolean(playwrightExtraModule);
+    puppeteerExtraAvailable = Boolean(puppeteerExtraModule);
+    stealthDependencyInstalled = Boolean(stealthPluginModule);
+
+    const runtimeChromium =
+      (playwrightExtraModule as { chromium?: ApplyChromiumRuntime } | null)
+        ?.chromium ?? null;
+    const stealthPluginFactory = resolveStealthPluginFactory(stealthPluginModule);
+
+    if (
+      !runtimeChromium ||
+      typeof runtimeChromium.launch !== "function" ||
+      typeof runtimeChromium.use !== "function" ||
+      !stealthPluginFactory
+    ) {
+      return {
+        ...fallback,
+        playwrightExtraAvailable,
+        puppeteerExtraAvailable,
+        stealthDependencyInstalled,
+      };
+    }
+
+    if (!applyStealthPluginRegistered) {
+      runtimeChromium.use(stealthPluginFactory());
+      applyStealthPluginRegistered = true;
+    }
+
+    return {
+      chromium: runtimeChromium,
+      browserAutomationLibrary: "playwright-extra",
+      playwrightExtraAvailable,
+      puppeteerExtraAvailable,
+      stealthDependencyInstalled,
+      stealthRuntimeEnabled: true,
+      stealthPluginRegistered: applyStealthPluginRegistered,
+    };
+  } catch (error) {
+    console.warn("[AUTO_APPLY_BROWSER_RUNTIME] stealth runtime initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ...fallback,
+      playwrightExtraAvailable,
+      puppeteerExtraAvailable,
+      stealthDependencyInstalled,
+    };
+  }
 }
 
 function resolveLocalHeadless(mode: "AUTO" | "HUMAN_ASSIST" | undefined) {
@@ -6334,6 +6468,12 @@ type RtxPreludeResult = {
   reachedWorkday: boolean;
   markers: string[];
   failureReason?: string;
+  verificationBlocked?: boolean;
+  verificationSignals?: string[];
+  verificationSignal?: string;
+  verificationEvidence?: string;
+  lastActionText?: string;
+  lastActionSelector?: string;
 };
 
 async function runRtxManualApplyPrelude(args: {
@@ -6354,6 +6494,11 @@ async function runRtxManualApplyPrelude(args: {
 }): Promise<RtxPreludeResult> {
   let activePage = args.page;
   const markers: string[] = [];
+  let lastActionText: string | undefined;
+  let lastActionSelector: string | undefined;
+  let verificationSignals: string[] = [];
+  let verificationSignal: string | undefined;
+  let verificationEvidence: string | undefined;
   const companyText = normalizeWhitespace(args.company).toLowerCase();
   const rtxContextDetected =
     isRtxHostname(parseHostname(args.targetUrl)) ||
@@ -6369,6 +6514,8 @@ async function runRtxManualApplyPrelude(args: {
       attempted: false,
       reachedWorkday: false,
       markers,
+      lastActionText,
+      lastActionSelector,
     };
   }
 
@@ -6389,8 +6536,67 @@ async function runRtxManualApplyPrelude(args: {
     });
   };
 
+  const rememberLastAction = (text: string, selector: string) => {
+    lastActionText = text;
+    lastActionSelector = selector;
+  };
+
+  const buildVerificationBlockedResult = (): RtxPreludeResult => ({
+    page: activePage,
+    attempted: true,
+    reachedWorkday: false,
+    markers,
+    failureReason: "RTX_VERIFICATION_REQUIRED",
+    verificationBlocked: true,
+    verificationSignals,
+    verificationSignal,
+    verificationEvidence,
+    lastActionText,
+    lastActionSelector,
+  });
+
+  const detectVerificationBlocker = async (stage: string) => {
+    const signals = await detectPageSignals(activePage);
+    const title = normalizeWhitespace(
+      await activePage.title().catch(() => ""),
+    );
+    const rawSignalText = [activePage.url(), title, signals.pageText]
+      .join("\n")
+      .toLowerCase();
+    const humanInterventionTokenDetected = rawSignalText.includes(
+      "human_intervention_required",
+    );
+    if (
+      signals.verificationSignals.length === 0 &&
+      !humanInterventionTokenDetected
+    ) {
+      return false;
+    }
+
+    verificationSignals = [
+      ...new Set([
+        ...signals.verificationSignals,
+        ...(humanInterventionTokenDetected
+          ? ["human_intervention_required"]
+          : []),
+      ]),
+    ];
+    verificationSignal = verificationSignals[0];
+    verificationEvidence = title || verificationSignal || "verification required";
+
+    await emit("RTX_VERIFICATION_REQUIRED", {
+      stage,
+      signal: verificationSignal ?? null,
+      title: title || null,
+    });
+    return true;
+  };
+
   try {
     await emit("RTX_STEP_START");
+    if (await detectVerificationBlocker("entry")) {
+      return buildVerificationBlockedResult();
+    }
 
     if (isRtxWorkdayUrl(activePage.url())) {
       await emit("RTX_WORKDAY_REACHED");
@@ -6399,6 +6605,8 @@ async function runRtxManualApplyPrelude(args: {
         attempted: true,
         reachedWorkday: true,
         markers,
+        lastActionText,
+        lastActionSelector,
       };
     }
 
@@ -6413,27 +6621,34 @@ async function runRtxManualApplyPrelude(args: {
       await waitForDomAndSettle(activePage);
       await args.onPageReady?.(activePage, args.context);
       await emit("RTX_RECOVER_FROM_REDIRECT");
+      if (await detectVerificationBlocker("post_redirect_recovery")) {
+        return buildVerificationBlockedResult();
+      }
     }
 
     const cookiePlans: LocatorPlan[] = [
       {
         locator: activePage.getByRole("button", {
-          name: /accept|allow all|agree|recommended settings/i,
+          name: /accept(?: all| cookies)?|allow all|agree|cookie preferences|recommended settings/i,
         }),
         selector: "role=button[cookie-accept]",
       },
       {
         locator: activePage.getByRole("link", {
-          name: /accept|allow all|agree|recommended settings/i,
+          name: /accept(?: all| cookies)?|allow all|agree|cookie preferences|recommended settings/i,
         }),
         selector: "role=link[cookie-accept]",
       },
     ];
     const cookiePlan = await findFirstMatchingLocatorPlan(cookiePlans);
     if (cookiePlan) {
+      rememberLastAction("Accept Cookies", cookiePlan.selector);
       await cookiePlan.locator.click({ timeout: 4_000 }).catch(() => undefined);
       await waitForDomAndSettle(activePage);
       await emit("RTX_COOKIE_HANDLED");
+      if (await detectVerificationBlocker("post_cookie")) {
+        return buildVerificationBlockedResult();
+      }
     }
 
     if (!parseHostname(activePage.url()).includes("careers.rtx.com")) {
@@ -6448,6 +6663,7 @@ async function runRtxManualApplyPrelude(args: {
         },
       ]);
       if (careersPlan) {
+        rememberLastAction("Careers", careersPlan.selector);
         activePage = await clickLocatorPlanWithNavigation({
           page: activePage,
           context: args.context,
@@ -6455,6 +6671,9 @@ async function runRtxManualApplyPrelude(args: {
           onPageReady: args.onPageReady,
         });
         await emit("RTX_CAREERS_OPENED");
+        if (await detectVerificationBlocker("post_careers_open")) {
+          return buildVerificationBlockedResult();
+        }
       }
     }
 
@@ -6464,13 +6683,25 @@ async function runRtxManualApplyPrelude(args: {
         selector: "role=button[name=allow]",
       },
       {
-        locator: activePage.getByRole("button", { name: /allow|continue/i }),
-        selector: "role=button[name*=allow|continue]",
+        locator: activePage.getByRole("button", {
+          name: /allow cookies|allow all|allow essential/i,
+        }),
+        selector: "role=button[name*=allow]",
+      },
+      {
+        locator: activePage.getByRole("button", {
+          name: /continue(?: to application)?/i,
+        }),
+        selector: "role=button[name*=continue]",
       },
     ]);
     if (allowModalPlan) {
+      rememberLastAction("Allow", allowModalPlan.selector);
       await allowModalPlan.locator.click({ timeout: 4_000 }).catch(() => undefined);
       await waitForDomAndSettle(activePage);
+      if (await detectVerificationBlocker("post_allow")) {
+        return buildVerificationBlockedResult();
+      }
     }
 
     const jobId = extractRtxJobId({
@@ -6539,6 +6770,7 @@ async function runRtxManualApplyPrelude(args: {
 
       const resultPlan = await findFirstMatchingLocatorPlan(resultPlans);
       if (resultPlan) {
+        rememberLastAction(searchQuery || "Open job result", resultPlan.selector);
         activePage = await clickLocatorPlanWithNavigation({
           page: activePage,
           context: args.context,
@@ -6546,6 +6778,9 @@ async function runRtxManualApplyPrelude(args: {
           onPageReady: args.onPageReady,
         });
         await emit("RTX_RESULT_SELECTED");
+        if (await detectVerificationBlocker("post_result_open")) {
+          return buildVerificationBlockedResult();
+        }
       }
     }
 
@@ -6565,6 +6800,7 @@ async function runRtxManualApplyPrelude(args: {
         },
       ]);
       if (applyPlan) {
+        rememberLastAction("Apply Now", applyPlan.selector);
         activePage = await clickLocatorPlanWithNavigation({
           page: activePage,
           context: args.context,
@@ -6572,6 +6808,9 @@ async function runRtxManualApplyPrelude(args: {
           onPageReady: args.onPageReady,
         });
         await emit("RTX_APPLY_CLICKED");
+        if (await detectVerificationBlocker("post_apply_click")) {
+          return buildVerificationBlockedResult();
+        }
       }
     }
 
@@ -6587,6 +6826,7 @@ async function runRtxManualApplyPrelude(args: {
         },
       ]);
       if (applyManuallyPlan) {
+        rememberLastAction("Apply Manually", applyManuallyPlan.selector);
         activePage = await clickLocatorPlanWithNavigation({
           page: activePage,
           context: args.context,
@@ -6594,6 +6834,39 @@ async function runRtxManualApplyPrelude(args: {
           onPageReady: args.onPageReady,
         });
         await emit("RTX_APPLY_MANUALLY_CLICKED");
+        if (await detectVerificationBlocker("post_apply_manually_click")) {
+          return buildVerificationBlockedResult();
+        }
+      }
+    }
+
+    if (!isRtxWorkdayUrl(activePage.url())) {
+      const continuePlan = await findFirstMatchingLocatorPlan([
+        {
+          locator: activePage.getByRole("button", {
+            name: /continue(?: to application)?/i,
+          }),
+          selector: "role=button[name*=continue]",
+        },
+        {
+          locator: activePage.getByRole("link", {
+            name: /continue(?: to application)?/i,
+          }),
+          selector: "role=link[name*=continue]",
+        },
+      ]);
+      if (continuePlan) {
+        rememberLastAction("Continue", continuePlan.selector);
+        activePage = await clickLocatorPlanWithNavigation({
+          page: activePage,
+          context: args.context,
+          plan: continuePlan,
+          onPageReady: args.onPageReady,
+        });
+        await emit("RTX_CONTINUE_CLICKED");
+        if (await detectVerificationBlocker("post_continue_click")) {
+          return buildVerificationBlockedResult();
+        }
       }
     }
 
@@ -6604,7 +6877,13 @@ async function runRtxManualApplyPrelude(args: {
         attempted: true,
         reachedWorkday: true,
         markers,
+        lastActionText,
+        lastActionSelector,
       };
+    }
+
+    if (await detectVerificationBlocker("final_prelude_check")) {
+      return buildVerificationBlockedResult();
     }
 
     return {
@@ -6613,6 +6892,12 @@ async function runRtxManualApplyPrelude(args: {
       reachedWorkday: false,
       markers,
       failureReason: "RTX_WORKDAY_NOT_REACHED",
+      verificationBlocked: false,
+      verificationSignals,
+      verificationSignal,
+      verificationEvidence,
+      lastActionText,
+      lastActionSelector,
     };
   } catch (error) {
     return {
@@ -6622,6 +6907,12 @@ async function runRtxManualApplyPrelude(args: {
       markers,
       failureReason:
         error instanceof Error ? `RTX_PRELUDE_ERROR:${error.message}` : "RTX_PRELUDE_ERROR",
+      verificationBlocked: false,
+      verificationSignals,
+      verificationSignal,
+      verificationEvidence,
+      lastActionText,
+      lastActionSelector,
     };
   }
 }
@@ -9711,6 +10002,12 @@ export async function applyWithPlaywright(args: {
     | "local_persistent" = "local_ephemeral";
   let playwrightPersistentContext = false;
   let playwrightUserDataDir: string | undefined;
+  let browserAutomationLibrary: ApplyBrowserAutomationLibrary = "playwright";
+  let playwrightExtraAvailable = false;
+  let puppeteerExtraAvailable = false;
+  let stealthDependencyInstalled = false;
+  let stealthRuntimeEnabled = false;
+  let stealthPluginRegistered = false;
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
@@ -10639,15 +10936,42 @@ export async function applyWithPlaywright(args: {
       openUrl: undefined,
     });
 
+    const browserRuntime = await resolveApplyBrowserRuntime();
+    const runtimeChromium = browserRuntime.chromium;
+    browserAutomationLibrary = browserRuntime.browserAutomationLibrary;
+    playwrightExtraAvailable = browserRuntime.playwrightExtraAvailable;
+    puppeteerExtraAvailable = browserRuntime.puppeteerExtraAvailable;
+    stealthDependencyInstalled = browserRuntime.stealthDependencyInstalled;
+    stealthRuntimeEnabled = browserRuntime.stealthRuntimeEnabled;
+    stealthPluginRegistered = browserRuntime.stealthPluginRegistered;
+    const runtimeDomain =
+      parseHostname(targetUrl) || parseHostname(entryUrl) || null;
+
     if (shouldUseRemoteBrowser()) {
       remoteSession = await createRemoteSession();
       const useCdp = shouldUseCdp(remoteSession.connectUrl);
       playwrightLaunchStrategy = "remote";
       playwrightPersistentContext = false;
       playwrightUserDataDir = undefined;
+      headless = true;
+      console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
+        browserAutomationLibrary,
+        playwrightExtraAvailable,
+        puppeteerExtraAvailable,
+        stealthDependencyInstalled,
+        stealthRuntimeEnabled,
+        stealthPluginRegistered,
+        launchStrategy: playwrightLaunchStrategy,
+        headless,
+        persistentContext: playwrightPersistentContext,
+        userDataDir: null,
+        applySource: applySource ?? null,
+        domain: runtimeDomain,
+        targetUrl,
+      });
       browser = useCdp
-        ? await chromium.connectOverCDP(remoteSession.connectUrl)
-        : await chromium.connect(remoteSession.connectUrl);
+        ? await runtimeChromium.connectOverCDP(remoteSession.connectUrl)
+        : await runtimeChromium.connect(remoteSession.connectUrl);
       console.log("[AUTO_APPLY_REMOTE] connected to remote browser", {
         provider: remoteSession.provider,
         sessionId: remoteSession.sessionId,
@@ -10658,10 +10982,25 @@ export async function applyWithPlaywright(args: {
       playwrightLaunchStrategy = launchOptions.strategy;
       playwrightPersistentContext = launchOptions.persistentContext;
       playwrightUserDataDir = launchOptions.userDataDir;
+      console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
+        browserAutomationLibrary,
+        playwrightExtraAvailable,
+        puppeteerExtraAvailable,
+        stealthDependencyInstalled,
+        stealthRuntimeEnabled,
+        stealthPluginRegistered,
+        launchStrategy: playwrightLaunchStrategy,
+        headless,
+        persistentContext: playwrightPersistentContext,
+        userDataDir: playwrightUserDataDir ?? null,
+        applySource: applySource ?? null,
+        domain: runtimeDomain,
+        targetUrl,
+      });
 
       if (launchOptions.persistentContext && launchOptions.userDataDir) {
         mkdirSync(launchOptions.userDataDir, { recursive: true });
-        context = await chromium.launchPersistentContext(
+        context = await runtimeChromium.launchPersistentContext(
           launchOptions.userDataDir,
           {
             headless: launchOptions.headless,
@@ -10669,7 +11008,7 @@ export async function applyWithPlaywright(args: {
         );
         browser = context.browser() ?? undefined;
       } else {
-        browser = await chromium.launch({
+        browser = await runtimeChromium.launch({
           headless: launchOptions.headless,
         });
       }
@@ -10813,7 +11152,7 @@ export async function applyWithPlaywright(args: {
           ? "VERIFICATION_REQUIRED"
           : "APPLY_NOT_STARTED";
         const message = verificationRequired
-          ? "Application paused because the employer site asked for verification."
+          ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
           : "Real posting not found";
 
         await args.onStatus?.({
@@ -11147,8 +11486,115 @@ export async function applyWithPlaywright(args: {
       ...rtxProgressMarkers,
       ...rtxPrelude.markers,
     ]);
+    if (rtxPrelude.lastActionText) {
+      latestActionText = rtxPrelude.lastActionText;
+    }
+    if (rtxPrelude.lastActionSelector) {
+      latestActionSelector = rtxPrelude.lastActionSelector;
+    }
     if (rtxPrelude.failureReason) {
       rtxFailureReason = rtxPrelude.failureReason;
+    }
+    if (rtxPrelude.verificationBlocked) {
+      keepBrowserOpen = true;
+      const finalUrl = page.url();
+      const message = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+      const rtxPreludeAction = normalizeWhitespace(
+        rtxPrelude.lastActionText ?? "",
+      ).toLowerCase();
+      const rtxPreludeClickedApply =
+        rtxPreludeAction.includes("apply now") ||
+        rtxPreludeAction.includes("apply manually");
+
+      await args.onStatus?.({
+        status: "VERIFICATION_REQUIRED",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        applyCtaFound: rtxPreludeClickedApply,
+        applyCtaClicked: rtxPreludeClickedApply,
+        currentUrl: finalUrl,
+        hopCount: 0,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: false,
+        confirmationTextSnippet: null,
+        successUrlPatternMatched: false,
+        finalStatus: "VERIFICATION_REQUIRED",
+        submissionConfirmed: false,
+      });
+
+      return {
+        ok: false,
+        status: "VERIFICATION_REQUIRED",
+        needsHuman: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          ...debugContext(),
+          ...(await captureStopPoint(page, {
+            lastActionText:
+              rtxPrelude.verificationEvidence ??
+              rtxPrelude.verificationSignal ??
+              latestActionText,
+            lastActionSelector: latestActionSelector,
+          })),
+          finalUrl,
+          verificationSignals:
+            rtxPrelude.verificationSignals ?? ["verification required"],
+          confirmationSignals: [],
+          pageText: rtxPrelude.verificationEvidence,
+          pageHtml: undefined,
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          applyCtaFound: rtxPreludeClickedApply,
+          applyCtaClicked: rtxPreludeClickedApply,
+          currentUrl: finalUrl,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          finalStatus: "VERIFICATION_REQUIRED",
+          success: false,
+          needsHuman: true,
+          unavailable: false,
+          hopCount: 0,
+          urlsVisited: dedupeUrls([
+            ...adzunaPhaseUrlsVisited,
+            ...entryPhaseUrlsVisited,
+            ...handoffPhaseUrlsVisited,
+            ...cookiePhaseUrlsVisited,
+            finalUrl,
+          ]),
+          clicks: [
+            ...adzunaPhaseClicks,
+            ...entryPhaseClicks,
+            ...handoffPhaseClicks,
+            ...cookiePhaseClicks,
+          ],
+          formDetected: false,
+          confirmationDetected: false,
+          verificationDetected: true,
+          finalReason: rtxPrelude.failureReason ?? "verification_required",
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
+        }),
+      };
     }
 
     if (
@@ -12213,7 +12659,7 @@ export async function applyWithPlaywright(args: {
         ? "VERIFICATION_REQUIRED"
         : "WAITING_HUMAN";
       const message = verificationRequired
-        ? "Application paused because the employer site asked for verification."
+        ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
         : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({
@@ -12499,7 +12945,7 @@ export async function applyWithPlaywright(args: {
         ? "VERIFICATION_REQUIRED"
         : "WAITING_HUMAN";
       const message = verificationRequired
-        ? "Application paused because the employer site asked for verification."
+        ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
         : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({
@@ -12726,7 +13172,7 @@ export async function applyWithPlaywright(args: {
         ? "VERIFICATION_REQUIRED"
         : "WAITING_HUMAN";
       const message = verificationRequired
-        ? "Application paused because the employer site asked for verification."
+        ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
         : "Account creation or verification needs human completion.";
 
       await args.onStatus?.({

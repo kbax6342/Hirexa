@@ -81,15 +81,22 @@ const LOGIN_KEYWORDS = [
 const VERIFICATION_KEYWORDS = [
   "just a moment",
   "verify you are human",
+  "verify you're human",
+  "verify that you are human",
+  "prove you are human",
+  "are you human",
   "human verification",
   "checking your browser",
+  "checking if the site connection is secure",
   "please enable javascript and cookies",
   "press & hold",
   "press and hold",
   "captcha",
+  "hcaptcha",
   "recaptcha",
   "turnstile",
   "cloudflare",
+  "cf-chl",
   "security check",
   "security verification",
   "verification required",
@@ -194,15 +201,15 @@ export function deriveStopClassification(
     Boolean(activeHostname) &&
     targetHostname !== activeHostname;
 
-  if (aggregatorHost && applyCtaMissing) {
+  if (hasVerificationSignals) {
     return {
-      reason: "aggregator_no_cta",
-      pageType: "aggregator",
-      suggestedAction: "open_original_job_site",
+      reason: "verification_required",
+      pageType: "auth_gate",
+      suggestedAction: "complete_verification",
     };
   }
 
-  if (hasLoginSignals && !hasVerificationSignals) {
+  if (hasLoginSignals) {
     return {
       reason: "login_required",
       pageType: "auth_gate",
@@ -210,11 +217,11 @@ export function deriveStopClassification(
     };
   }
 
-  if (hasVerificationSignals) {
+  if (aggregatorHost && applyCtaMissing) {
     return {
-      reason: "verification_required",
-      pageType: "auth_gate",
-      suggestedAction: "complete_verification",
+      reason: "aggregator_no_cta",
+      pageType: "aggregator",
+      suggestedAction: "open_original_job_site",
     };
   }
 

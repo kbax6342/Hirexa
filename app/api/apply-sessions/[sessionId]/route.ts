@@ -3,10 +3,32 @@ import {
   getApplySessionStorageBackend,
   getSession,
 } from "@/app/lib/apply/applySessionStore";
+import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 
 export const runtime = "nodejs";
-const VERIFICATION_REQUIRED_MESSAGE =
-  "Application paused because the employer site asked for verification.";
+const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+const RTX_VERIFICATION_REQUIRED_MESSAGE =
+  APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+const VERIFICATION_STOP_SIGNALS = [
+  "just a moment",
+  "verify you are human",
+  "verify you're human",
+  "verify that you are human",
+  "prove you are human",
+  "checking your browser",
+  "checking if the site connection is secure",
+  "please enable javascript and cookies",
+  "press & hold",
+  "press and hold",
+  "security check",
+  "security verification",
+  "cloudflare",
+  "captcha",
+  "hcaptcha",
+  "recaptcha",
+  "turnstile",
+  "cf-chl",
+] as const;
 
 function parseHostname(value: string | null | undefined) {
   const raw = String(value ?? "").trim();
@@ -25,6 +47,29 @@ function isRtxHostname(hostname: string) {
     hostname.endsWith(".rtx.com") ||
     hostname.endsWith(".myworkdayjobs.com") ||
     hostname.endsWith(".workdayjobs.com")
+  );
+}
+
+function detectVerificationSignal(value: string | null | undefined) {
+  const text = String(value ?? "").toLowerCase();
+  if (!text) return null;
+  return (
+    VERIFICATION_STOP_SIGNALS.find((signal) => text.includes(signal)) ?? null
+  );
+}
+
+function isVerificationClassification(
+  classification:
+    | {
+        reason?: string | null;
+        suggestedAction?: string | null;
+      }
+    | null
+    | undefined,
+) {
+  return (
+    classification?.reason === "verification_required" ||
+    classification?.suggestedAction === "complete_verification"
   );
 }
 
@@ -64,22 +109,91 @@ function buildVerificationStopPayload(
   session: NonNullable<ReturnType<typeof getSession>>,
 ) {
   const stopClassification = session.debug?.stopClassification ?? null;
+  const debugVerificationSignals = session.debug?.verificationSignals ?? [];
+  const verificationSignalFromDebug = debugVerificationSignals[0] ?? null;
+  const verificationSignalFromText =
+    detectVerificationSignal(
+      [
+        session.message,
+        session.error,
+        session.lastUrl,
+        session.debug?.finalUrl,
+        session.debug?.currentUrl,
+        session.debug?.stoppedAtTitle,
+        session.debug?.finalReason,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join("\n"),
+    ) ?? null;
   const isVerificationStop =
     session.status === "VERIFICATION_REQUIRED" ||
-    stopClassification?.reason === "verification_required";
+    stopClassification?.reason === "verification_required" ||
+    stopClassification?.suggestedAction === "complete_verification" ||
+    session.debug?.verificationDetected === true ||
+    debugVerificationSignals.length > 0 ||
+    Boolean(verificationSignalFromText);
 
   if (!isVerificationStop) {
     return null;
   }
 
+  const normalizedStopClassification =
+    stopClassification && isVerificationClassification(stopClassification)
+      ? stopClassification
+      : {
+          reason: "verification_required" as const,
+          pageType: "auth_gate" as const,
+          suggestedAction: "complete_verification" as const,
+        };
+  const rtxStop = buildRtxStopPayload(session);
+  const stoppedAtUrl =
+    session.debug?.stoppedAtUrl ?? session.debug?.finalUrl ?? session.lastUrl ?? null;
+  const stoppedAtTitle = session.debug?.stoppedAtTitle ?? null;
+  const hostSignal = parseHostname(stoppedAtUrl);
+  const isRtxVerification =
+    Boolean(rtxStop) ||
+    isRtxHostname(hostSignal) ||
+    Boolean(
+      detectVerificationSignal(
+        [stoppedAtTitle, stoppedAtUrl]
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+          .join("\n"),
+      ),
+    );
+  const message = isRtxVerification
+    ? RTX_VERIFICATION_REQUIRED_MESSAGE
+    : VERIFICATION_REQUIRED_MESSAGE;
+
+  if (isRtxVerification) {
+    console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+      marker: "RTX_VERIFICATION_REQUIRED_UI_MESSAGE_MAPPED",
+      sessionId: session.id,
+      stoppedAtUrl,
+      stoppedAtTitle,
+      verificationSignal:
+        verificationSignalFromDebug ?? verificationSignalFromText ?? null,
+    });
+    console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+      marker: "RTX_VERIFICATION_REQUIRED_RESUME_AVAILABLE",
+      sessionId: session.id,
+      canResumeAfterHumanStep: true,
+      suggestedAction: "complete_verification",
+    });
+  }
+
   return {
-    message: VERIFICATION_REQUIRED_MESSAGE,
-    stoppedAtUrl:
-      session.debug?.stoppedAtUrl ?? session.debug?.finalUrl ?? session.lastUrl ?? null,
-    stoppedAtTitle: session.debug?.stoppedAtTitle ?? null,
-    suggestedAction: stopClassification?.suggestedAction ?? "complete_verification",
+    message,
+    stoppedAtUrl,
+    stoppedAtTitle,
+    suggestedAction: normalizedStopClassification.suggestedAction,
+    stopClassification: normalizedStopClassification,
     canResumeAfterHumanStep: true,
-    rtx: buildRtxStopPayload(session),
+    evidence:
+      verificationSignalFromDebug ??
+      verificationSignalFromText ??
+      session.debug?.lastActionText ??
+      null,
+    rtx: rtxStop,
   };
 }
 
@@ -117,7 +231,18 @@ export async function GET(
     session: verificationStop
       ? {
           ...session,
+          status: "VERIFICATION_REQUIRED",
           message: verificationStop.message,
+          debug: {
+            ...(session.debug ?? {}),
+            stopClassification:
+              verificationStop.stopClassification ??
+              session.debug?.stopClassification,
+            lastAction:
+              session.debug?.lastAction === "verification_required"
+                ? session.debug.lastAction
+                : "verification_required",
+          },
         }
       : session,
     stopPoint: verificationStop,

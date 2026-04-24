@@ -20,3 +20,24 @@ Existing behavior is preserved when these variables are not set:
 - local runs stay on the current ephemeral Playwright context
 - remote/browserbase flows keep using the existing remote launch path
 - `PLAYWRIGHT_HEADLESS` continues to work as before for local non-remote runs
+
+## RTX careers safety behavior
+
+RTX (`careers.rtx.com` / Workday) automation supports normal page-flow actions only:
+
+- Accept Cookies / Cookie Preferences / Agree
+- Allow (for normal in-page consent prompts)
+- Apply Now
+- Apply Manually
+- Continue (when it is part of the normal application flow)
+
+Automation does **not** bypass human verification controls such as CAPTCHA, Cloudflare checks, Press & Hold, or similar bot/security challenges.
+
+When verification is detected (`Just a moment`, `Checking your browser`, `Verify you are human`, `Press & Hold`, `Cloudflare`, `CAPTCHA`, etc.):
+
+- run status is set to `VERIFICATION_REQUIRED` / human intervention
+- `stoppedAtUrl` is returned for UI stop-point handling
+- replay-safe evidence is captured (signal text/title/last action)
+- submission is not marked as successful
+
+Teach Mode / saved strategy handling is preserved and now includes RTX-safe guidance so future replays focus on safe RTX controls and pause immediately for verification blockers.

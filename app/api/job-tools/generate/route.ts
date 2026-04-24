@@ -22,6 +22,13 @@ export const runtime = "nodejs";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 type Tone = "professional" | "friendly" | "bold";
+type LlmProvider = "auto" | "openai" | "claude" | "gemini";
+const SUPPORTED_LLM_PROVIDERS = new Set<LlmProvider>([
+  "auto",
+  "openai",
+  "claude",
+  "gemini",
+]);
 
 type GeneratePayload = {
   url: string;
@@ -32,6 +39,8 @@ type GeneratePayload = {
   pastedJobText: string | null;
   resumeFile: File | null;
   usageKey: string | null;
+  llmProvider: LlmProvider;
+  modelProvider: LlmProvider;
 };
 
 type GeneratedDocumentPayload = {
@@ -185,6 +194,13 @@ type CandidateContext = {
 
 function trimText(value: unknown, maxLength = 1200) {
   return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function normalizeLlmProvider(value: unknown): LlmProvider {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase() as LlmProvider;
+  return SUPPORTED_LLM_PROVIDERS.has(normalized) ? normalized : "auto";
 }
 
 function dedupeStrings(values: Array<string | null | undefined>) {
@@ -414,6 +430,58 @@ function replaceNamePlaceholders(text: string, candidateName: string | null) {
   );
 }
 
+function cleanupDocumentPlaceholders(input: {
+  text: string;
+  candidateName: string | null;
+  company: string | null;
+  role: string | null;
+}) {
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date());
+
+  const replacements: Array<{ pattern: RegExp; replacement: string }> = [
+    {
+      pattern: /\[(your name|candidate name|name)\]/gi,
+      replacement: input.candidateName ?? "",
+    },
+    {
+      pattern: /\[(company|company name)\]/gi,
+      replacement: input.company ?? "",
+    },
+    {
+      pattern: /\[(hiring manager|recruiter|interviewer)\]/gi,
+      replacement: "Hiring Team",
+    },
+    {
+      pattern: /\[(date)\]/gi,
+      replacement: dateLabel,
+    },
+    {
+      pattern: /\[(role|job title|position)\]/gi,
+      replacement: input.role ?? "",
+    },
+  ];
+
+  let normalized = String(input.text ?? "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\b(undefined|null)\b/gi, "");
+
+  for (const { pattern, replacement } of replacements) {
+    normalized = normalized.replace(pattern, replacement || "");
+  }
+
+  if (input.candidateName) {
+    normalized = normalized.replace(/\bcandidate\b/gi, input.candidateName);
+  }
+
+  normalized = normalized.replace(/\[(?:[^\]]+)\]/g, "");
+  return cleanText(normalized);
+}
+
 function ensureSignedDocument(
   text: string,
   candidateName: string | null,
@@ -421,7 +489,13 @@ function ensureSignedDocument(
 ) {
   const normalized = replaceNamePlaceholders(text, candidateName);
   if (!candidateName) return normalized;
-  if (normalized.toLowerCase().includes(candidateName.toLowerCase())) return normalized;
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const candidateNameLower = candidateName.toLowerCase();
+  const trailingLines = lines.slice(-3).map((line) => line.toLowerCase());
+  if (trailingLines.includes(candidateNameLower)) return normalized;
 
   if (/(sincerely|best regards|kind regards|regards|best|thank you|thanks),?\s*$/i.test(normalized)) {
     return `${normalized}\n${candidateName}`;
@@ -610,6 +684,8 @@ async function readPayload(req: Request): Promise<GeneratePayload> {
       pastedJobText: form.get("pastedJobText") ? String(form.get("pastedJobText")) : null,
       resumeFile: resumeFile instanceof File ? resumeFile : null,
       usageKey: form.get("usageKey") ? String(form.get("usageKey")).trim() : null,
+      llmProvider: normalizeLlmProvider(form.get("llmProvider") ?? form.get("modelProvider")),
+      modelProvider: normalizeLlmProvider(form.get("modelProvider") ?? form.get("llmProvider")),
     };
   }
 
@@ -623,12 +699,25 @@ async function readPayload(req: Request): Promise<GeneratePayload> {
     pastedJobText: body?.pastedJobText ? String(body.pastedJobText) : null,
     resumeFile: null,
     usageKey: body?.usageKey ? String(body.usageKey).trim() : null,
+    llmProvider: normalizeLlmProvider(body?.llmProvider ?? body?.modelProvider),
+    modelProvider: normalizeLlmProvider(body?.modelProvider ?? body?.llmProvider),
   };
 }
 
 export async function POST(req: Request) {
   try {
     const payload = await readPayload(req);
+    const requestedLlmProvider = normalizeLlmProvider(
+      payload.llmProvider ?? payload.modelProvider
+    );
+    const resolvedLlmProvider =
+      requestedLlmProvider === "auto" ? "openai" : requestedLlmProvider;
+    // Future-safe routing point for alternate providers; preserve existing provider by default.
+    if (resolvedLlmProvider !== "openai") {
+      console.info(
+        `[JOB_TOOLS_GENERATE] llmProvider="${requestedLlmProvider}" requested; using OpenAI until provider routing is implemented.`
+      );
+    }
     const tone = payload.tone ?? "professional";
     const session = await auth();
     const userId = (session?.user as { id?: string } | undefined)?.id ?? null;
@@ -862,6 +951,9 @@ Return ONLY valid JSON matching the schema I give you. No markdown.
 Tone: ${tone}.
 ${candidateName ? `Use the candidate name exactly as provided: ${candidateName}. Never use placeholders like "Candidate" or "[Your Name]".` : ""}
 Use real saved profile details, saved resume context, and saved work experience whenever available.
+Write final user-ready documents that can be copied or exported as-is.
+Do not return template language, patch notes, before/after notes, JSON fragments, or bracketed placeholders.
+Do not include placeholders such as [Your Name], [Company Name], [Hiring Manager], or [Date].
 Prefer omission over fabrication. If data is missing, do not invent employers, dates, degrees, certifications, addresses, or metrics.
 Every resume bullet must read like a polished final resume bullet, not a note to the candidate.
 Start most bullets with strong action verbs such as Delivered, Prepared, Processed, Maintained, Supported, Resolved, Improved, Coordinated, Streamlined, or Strengthened.
@@ -932,10 +1024,16 @@ CANDIDATE NAME: ${candidateName ?? "[not provided]"}
 
 TASK:
 1) Infer job title/company/location if possible.
-2) Generate a tailored cover letter (1 page max).
-3) Generate a complete final resume in plain text that is ready to export directly. It must be a full developed resume, not patch notes. Use clear sections when data exists, such as:
+2) Generate a tailored cover letter (1 page max) as a complete professional letter with:
+   - candidate name/contact line when available
+   - current date
+   - hiring team/company block when available
+   - greeting
+   - 3-5 short paragraphs
+   - professional close and candidate name
+3) Generate a complete final resume in plain text that is ready to export directly. It must be a full developed resume, not patch notes or suggestions. Use clear sections when data exists, such as:
    - Name / Contact
-   - Summary
+   - Professional Summary
    - Skills
    - Professional Experience
    - Education / Certifications
@@ -946,9 +1044,9 @@ TASK:
    - skills to add
    - 4-8 bullet edits: if real resume/experience context exists, rewrite based on that context; if not, keep them conservative and generic instead of inventing unsupported facts.
    - ATS keyword list
-5) Write two emails that reference the revised resume points where relevant:
-   - before interview: confirming interest + asking 1-2 smart questions
-   - after interview: thank-you email
+5) Write two final professional emails that reference the revised resume points where relevant:
+   - before interview email must include: subject line, greeting, short body, 1-2 smart questions, and close
+   - after interview email must include: subject line, greeting, thank-you body, reaffirmed interest, and close
 If a candidate name is provided, make sure each document includes it. The cover letter and both emails must end with the candidate's name. The full resume must start with the candidate's name when provided.
 The full resume should be strong enough to use as the final exported resume document.
 Return JSON ONLY matching this schema shape:
@@ -980,35 +1078,64 @@ ${JSON.stringify(schema, null, 2)}
     }
 
     const generated = (parsed ?? {}) as GeneratedDocumentPayload;
+    const inferredCompany = trimText(generated.job?.company) || null;
+    const inferredRole = trimText(generated.job?.title) || null;
+    const cleanedCoverLetter = cleanupDocumentPlaceholders({
+      text: generated.coverLetter ?? "",
+      candidateName,
+      company: inferredCompany,
+      role: inferredRole,
+    });
+    const cleanedBeforeInterviewEmail = cleanupDocumentPlaceholders({
+      text: generated.emails?.beforeInterview ?? "",
+      candidateName,
+      company: inferredCompany,
+      role: inferredRole,
+    });
+    const cleanedAfterInterviewEmail = cleanupDocumentPlaceholders({
+      text: generated.emails?.afterInterview ?? "",
+      candidateName,
+      company: inferredCompany,
+      role: inferredRole,
+    });
     const fullResumeText = replaceNamePlaceholders(
-      cleanText(
-        generated.fullResumeText ||
-          buildFallbackResumeText(candidateContext, generated, candidateName)
-      ),
+      cleanupDocumentPlaceholders({
+        text:
+          generated.fullResumeText ||
+          buildFallbackResumeText(candidateContext, generated, candidateName),
+        candidateName,
+        company: inferredCompany,
+        role: inferredRole,
+      }),
       candidateName
     );
 
     return NextResponse.json(
       {
         ...generated,
+        llmProvider: requestedLlmProvider,
+        llmProviderResolved: resolvedLlmProvider,
         candidateName,
+        candidateFirstName: candidateContext.candidateProfile.firstName,
+        candidateLastName: candidateContext.candidateProfile.lastName,
+        candidateEmail: candidateContext.candidateProfile.email,
         fullResumeText,
         savedResume,
         profileSync,
         credits: creditStatus,
         coverLetter: ensureSignedDocument(
-          generated.coverLetter ?? "",
+          cleanedCoverLetter,
           candidateName,
           "Sincerely"
         ),
         emails: {
           beforeInterview: ensureSignedDocument(
-            generated.emails?.beforeInterview ?? "",
+            cleanedBeforeInterviewEmail,
             candidateName,
             "Best"
           ),
           afterInterview: ensureSignedDocument(
-            generated.emails?.afterInterview ?? "",
+            cleanedAfterInterviewEmail,
             candidateName,
             "Best"
           ),

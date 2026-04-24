@@ -98,6 +98,57 @@ function toJsonSteps(steps: ApplySiteStrategyStep[]) {
   return steps as unknown as Prisma.InputJsonValue;
 }
 
+function isRtxStrategyHost(hostname: string | null | undefined) {
+  const normalized = resolveStrategyHostname(hostname);
+  if (!normalized) return false;
+
+  return (
+    normalized === "rtx.com" ||
+    normalized.endsWith(".rtx.com") ||
+    normalized.endsWith(".myworkdayjobs.com") ||
+    normalized.endsWith(".workdayjobs.com")
+  );
+}
+
+function strategyStepMentionsApplyManually(step: ApplySiteStrategyStep) {
+  const text = [
+    step.label,
+    step.text,
+    step.selector,
+    step.value,
+    step.type,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  return text.includes("apply manually");
+}
+
+function strategyStepReachesWorkday(step: ApplySiteStrategyStep) {
+  const hostname = resolveStrategyHostname(step.currentUrl);
+  if (!hostname) return false;
+
+  return (
+    hostname.endsWith(".myworkdayjobs.com") ||
+    hostname.endsWith(".workdayjobs.com")
+  );
+}
+
+function summarizeStrategyStepCompleteness(steps: ApplySiteStrategyStep[]) {
+  const reachesWorkday = steps.some((step) => strategyStepReachesWorkday(step));
+  const includesApplyManually = steps.some((step) =>
+    strategyStepMentionsApplyManually(step),
+  );
+
+  return {
+    stepCount: steps.length,
+    reachesWorkday,
+    includesApplyManually,
+    reachesWorkdayOrApplyManually: reachesWorkday || includesApplyManually,
+  };
+}
+
 function toReplayResultJson(result: ApplySiteStrategyReplayResult | null | undefined) {
   if (!result) {
     return Prisma.JsonNull;
@@ -271,6 +322,37 @@ export async function saveApplySiteStrategyForUser(args: {
       strategyKey,
     },
   });
+  const existingRawSteps = parseStepsJson(
+    existing?.rawStepsJson ?? existing?.stepsJson,
+  );
+  const existingStepSummary = summarizeStrategyStepCompleteness(existingRawSteps);
+  const incomingStepSummary = summarizeStrategyStepCompleteness(sanitized.rawSteps);
+  const rtxContextDetected =
+    isRtxStrategyHost(sourceHost) ||
+    isRtxStrategyHost(destinationHost) ||
+    isRtxStrategyHost(existing?.hostname) ||
+    isRtxStrategyHost(existing?.sourceHost) ||
+    isRtxStrategyHost(existing?.destinationHost);
+  const skipLessCompleteRtxOverwrite =
+    Boolean(existing) &&
+    rtxContextDetected &&
+    existingStepSummary.reachesWorkdayOrApplyManually &&
+    !incomingStepSummary.reachesWorkdayOrApplyManually &&
+    (incomingStepSummary.stepCount === 0 ||
+      incomingStepSummary.stepCount < existingStepSummary.stepCount);
+
+  if (skipLessCompleteRtxOverwrite) {
+    console.info("[AUTO_APPLY_RTX_PROGRESS]", {
+      marker: "RTX_STRATEGY_OVERWRITE_SKIPPED_IF_LESS_COMPLETE",
+      strategyKey,
+      existingStepCount: existingStepSummary.stepCount,
+      existingReachesWorkday: existingStepSummary.reachesWorkday,
+      existingIncludesApplyManually: existingStepSummary.includesApplyManually,
+      incomingStepCount: incomingStepSummary.stepCount,
+      incomingReachesWorkday: incomingStepSummary.reachesWorkday,
+      incomingIncludesApplyManually: incomingStepSummary.includesApplyManually,
+    });
+  }
   const supportedReasons = uniqueStopReasons([
     ...(existing?.supportedReasons ?? []),
     ...(args.input.supportedReasons ?? []),
@@ -290,16 +372,24 @@ export async function saveApplySiteStrategyForUser(args: {
     supportedReasons,
     instructions: normalizeOptionalText(args.input.instructions) ?? null,
     selectors: normalizeOptionalText(args.input.selectors) ?? null,
-    stepsJson: toJsonSteps(sanitized.sanitizedSteps),
-    rawStepsJson: toJsonSteps(sanitized.rawSteps),
-    sanitizedStepsJson: toJsonSteps(sanitized.sanitizedSteps),
+    stepsJson: skipLessCompleteRtxOverwrite
+      ? ((existing?.stepsJson ?? existing?.sanitizedStepsJson ?? existing?.rawStepsJson) as Prisma.InputJsonValue)
+      : toJsonSteps(sanitized.sanitizedSteps),
+    rawStepsJson: skipLessCompleteRtxOverwrite
+      ? ((existing?.rawStepsJson ?? existing?.stepsJson ?? existing?.sanitizedStepsJson) as Prisma.InputJsonValue)
+      : toJsonSteps(sanitized.rawSteps),
+    sanitizedStepsJson: skipLessCompleteRtxOverwrite
+      ? ((existing?.sanitizedStepsJson ?? existing?.stepsJson ?? existing?.rawStepsJson) as Prisma.InputJsonValue)
+      : toJsonSteps(sanitized.sanitizedSteps),
     jobTitle: normalizeOptionalText(args.input.jobTitle) ?? null,
     company: normalizeOptionalText(args.input.company) ?? null,
     location: normalizeOptionalText(args.input.location) ?? null,
     derivedInstruction,
     automationPrompt,
     trainingSource: args.input.trainingSource ?? null,
-    lastTrainedUrl: normalizeOptionalText(args.input.lastTrainedUrl) ?? null,
+    lastTrainedUrl: skipLessCompleteRtxOverwrite
+      ? existing?.lastTrainedUrl ?? null
+      : normalizeOptionalText(args.input.lastTrainedUrl) ?? null,
   } satisfies Prisma.ApplySiteStrategyUncheckedUpdateInput;
 
   const saved = existing

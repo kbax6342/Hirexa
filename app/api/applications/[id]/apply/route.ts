@@ -32,6 +32,7 @@ import {
   type AnswersMap,
 } from "@/app/lib/apply/prepareApplyPayload";
 import {
+  APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
   isApplySessionTerminalStatus,
   type ApplySessionStatus,
 } from "@/app/lib/apply/sessionStatus";
@@ -190,17 +191,26 @@ const EMPLOYER_URL_RESOLUTION_FAILED_CODE =
 const EMPLOYER_URL_RESOLUTION_FAILED_MESSAGE =
   "Could not resolve employer job page.";
 const VERIFICATION_REQUIRED_STATUS = "VERIFICATION_REQUIRED" as const;
-const VERIFICATION_REQUIRED_MESSAGE =
-  "Application paused because the employer site asked for verification.";
+const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
 const VERIFICATION_STOP_SIGNALS = [
   "just a moment",
   "verify you are human",
+  "verify you're human",
+  "verify that you are human",
+  "prove you are human",
+  "are you human",
   "checking your browser",
+  "checking if the site connection is secure",
   "please enable javascript and cookies",
   "press & hold",
   "press and hold",
   "security check",
   "cloudflare",
+  "captcha",
+  "hcaptcha",
+  "recaptcha",
+  "turnstile",
+  "cf-chl",
 ] as const;
 
 function parseHostname(value: string | null | undefined) {

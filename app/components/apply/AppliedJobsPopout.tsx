@@ -14,6 +14,11 @@ import {
 } from "@/app/lib/apply/autoApplyPopupSession";
 import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import {
+  getApplyAutomationErrorMessage,
+  normalizeApplyAutomationErrorCode,
+  prefixErrorCodeInMessage,
+} from "@/app/lib/apply/errorCodes";
+import {
   isApplySessionSuccessStatus,
   isApplySessionTerminalStatus,
   toApplySessionDisplayStatus,
@@ -30,6 +35,7 @@ type ApplySessionPollResponse = {
     lastUrl?: string;
     error?: string;
     message?: string;
+    errorCode?: string | null;
     debug?: {
       finalUrl?: string | null;
       stoppedAtUrl?: string | null;
@@ -44,6 +50,19 @@ type ApplySessionPollResponse = {
   };
   error?: string;
 };
+
+function formatAutoApplyMessage(args: {
+  message?: string | null;
+  errorCode?: string | null;
+}) {
+  const normalizedCode = normalizeApplyAutomationErrorCode(args.errorCode);
+  const prefixed = prefixErrorCodeInMessage({
+    errorCode: normalizedCode,
+    message: args.message,
+  });
+  if (prefixed) return prefixed;
+  return normalizedCode ? getApplyAutomationErrorMessage(normalizedCode) : null;
+}
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
   const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
@@ -244,6 +263,10 @@ export default function AppliedJobsPopout({
               toApplySessionDisplayStatus(payload.session.status) ??
               payload.session.status ??
               item.status;
+            const formattedMessage = formatAutoApplyMessage({
+              message: payload.session.message ?? payload.session.error ?? null,
+              errorCode: payload.session.errorCode ?? null,
+            });
 
             nextItems[item.applicationId] = {
               ...nextItems[item.applicationId],
@@ -253,7 +276,10 @@ export default function AppliedJobsPopout({
                   item.applySessionId ??
                   null,
               status: displayStatus,
-              message: payload.session.message ?? payload.session.error ?? null,
+              message: formattedMessage,
+              errorCode:
+                normalizeApplyAutomationErrorCode(payload.session.errorCode) ??
+                null,
               lastUrl:
                 payload.session.debug?.finalUrl ??
                 payload.session.lastUrl ??

@@ -104,6 +104,13 @@ const APPLY_TEXT_PATTERNS = [
 ];
 
 const LOW_VALUE_HOST_FRAGMENTS = [
+  "linkedin.com",
+  "indeed.com",
+  "ziprecruiter.com",
+  "tealhq.com",
+  "theladders.com",
+  "ladders.com",
+  "career.io",
   "facebook.com",
   "instagram.com",
   "x.com",
@@ -111,6 +118,7 @@ const LOW_VALUE_HOST_FRAGMENTS = [
   "youtube.com",
   "wikipedia.org",
   "reddit.com",
+  "maps.google.com",
 ];
 
 function normalizeText(value: string | null | undefined) {
@@ -164,8 +172,8 @@ function buildNormalizedInput(args: {
 }
 
 function buildFallbackQueries(input: NormalizedFallbackInput) {
-  const quotedTitle = `"${sanitizeQueryTerm(input.title)}"`;
-  const quotedCompany = `"${sanitizeQueryTerm(input.company)}"`;
+  const plainTitle = sanitizeQueryTerm(input.title);
+  const plainCompany = sanitizeQueryTerm(input.company);
   const locationPart = input.location ? ` ${sanitizeQueryTerm(input.location)}` : "";
   const atsPrimary =
     "site:greenhouse.io OR site:jobs.lever.co OR site:ashbyhq.com OR site:smartrecruiters.com";
@@ -173,11 +181,11 @@ function buildFallbackQueries(input: NormalizedFallbackInput) {
     "site:myworkdayjobs.com OR site:workdayjobs.com OR site:icims.com OR site:bamboohr.com OR site:jobvite.com";
 
   return dedupeStrings([
-    `${quotedTitle} ${quotedCompany}${locationPart}`,
-    `${quotedTitle} ${quotedCompany}${locationPart} apply`,
-    `${quotedCompany} ${quotedTitle} careers`,
-    `${quotedTitle} ${quotedCompany} ${atsPrimary}`,
-    `${quotedTitle} ${quotedCompany} ${atsSecondary}`,
+    `${plainTitle} ${plainCompany}${locationPart}`,
+    `${plainTitle} ${plainCompany}${locationPart} apply`,
+    `${plainCompany} ${plainTitle} careers`,
+    `${plainTitle} ${plainCompany} ${atsPrimary}`,
+    `${plainTitle} ${plainCompany} ${atsSecondary}`,
   ]).slice(0, JOB_SEARCH_FALLBACK_MAX_QUERY_COUNT);
 }
 

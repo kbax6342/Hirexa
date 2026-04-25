@@ -9,6 +9,7 @@ export type AutomationStartUrlInvalidReason =
   | "known_asset_host"
   | "aggregator_url"
   | "search_engine_results_page"
+  | "non_job_posting_path"
   | "non_html_document";
 
 export type AutomationStartUrlValidation = {
@@ -104,6 +105,16 @@ const SEARCH_ENGINE_CHALLENGE_PATTERNS = [
   "areyouhuman",
 ] as const;
 
+const NON_JOB_POSTING_PATH_PATTERNS = [
+  /\/about(?:-us)?(?:\/|$)/i,
+  /\/benefits(?:\/|$)/i,
+  /\/privacy(?:\/|$)/i,
+  /\/terms(?:\/|$)/i,
+  /\/search-results(?:\/|$)/i,
+  /\/search(?:\/|$)/i,
+  /\/404(?:\/|$)/i,
+] as const;
+
 function normalizeHost(value: string) {
   return value.toLowerCase().replace(/^www\./, "");
 }
@@ -153,6 +164,15 @@ function isLikelyHtmlDocumentPath(pathname: string) {
 function hostMatches(hostname: string, fragments: readonly string[]) {
   return fragments.some(
     (fragment) => hostname === fragment || hostname.endsWith(`.${fragment}`),
+  );
+}
+
+function isLikelyNonJobPostingPath(pathname: string) {
+  const normalized = pathname.toLowerCase();
+  if (!normalized) return false;
+
+  return NON_JOB_POSTING_PATH_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
   );
 }
 
@@ -252,6 +272,8 @@ export function validateAutomationStartUrl(
     reason = "aggregator_url";
   } else if (rejectSearchEngine && isSearchEngine) {
     reason = "search_engine_results_page";
+  } else if (isLikelyNonJobPostingPath(pathname)) {
+    reason = "non_job_posting_path";
   } else if (!likelyHtmlDocument) {
     reason = "non_html_document";
   }

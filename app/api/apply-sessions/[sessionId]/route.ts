@@ -4,34 +4,16 @@ import {
   getSession,
 } from "@/app/lib/apply/applySessionStore";
 import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
+import { detectVerificationGate } from "@/app/lib/apply/verification";
+import {
+  inferApplyAutomationErrorCode,
+  prefixErrorCodeInMessage,
+} from "@/app/lib/apply/errorCodes";
 
 export const runtime = "nodejs";
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
 const RTX_VERIFICATION_REQUIRED_MESSAGE =
   APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
-const VERIFICATION_STOP_SIGNALS = [
-  "just a moment",
-  "performing security verification",
-  "verify you are human",
-  "verify you're human",
-  "verify that you are human",
-  "prove you are human",
-  "checking if you are human",
-  "checking your browser",
-  "checking if the site connection is secure",
-  "please enable javascript and cookies",
-  "press & hold",
-  "press and hold",
-  "security check",
-  "security verification",
-  "cloudflare",
-  "captcha",
-  "hcaptcha",
-  "recaptcha",
-  "turnstile",
-  "cf-chl",
-] as const;
-
 function parseHostname(value: string | null | undefined) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -53,11 +35,10 @@ function isRtxHostname(hostname: string) {
 }
 
 function detectVerificationSignal(value: string | null | undefined) {
-  const text = String(value ?? "").toLowerCase();
-  if (!text) return null;
-  return (
-    VERIFICATION_STOP_SIGNALS.find((signal) => text.includes(signal)) ?? null
-  );
+  const detection = detectVerificationGate({
+    pageText: value,
+  });
+  return detection.detected ? detection.signal ?? "verification_required" : null;
 }
 
 function isVerificationClassification(
@@ -157,6 +138,7 @@ function buildVerificationStopPayload(
     session.debug?.stoppedAtUrl ?? session.debug?.finalUrl ?? session.lastUrl ?? null;
   const stoppedAtTitle = session.debug?.stoppedAtTitle ?? null;
   const currentUrl = session.debug?.currentUrl ?? session.lastUrl ?? stoppedAtUrl;
+  const scrapflySessionId = session.remoteSessionId ?? null;
   const hostSignal = parseHostname(stoppedAtUrl);
   const isRtxVerification =
     Boolean(rtxStop) ||
@@ -216,7 +198,11 @@ function buildVerificationStopPayload(
       retryMode: "last_url",
       launchStrategy: session.debug?.playwrightLaunchStrategy ?? null,
       persistentContext: session.debug?.playwrightPersistentContext ?? null,
+      scrapflySessionId,
+      resumeEndpoint: `/api/apply-sessions/${session.id}/resume`,
     },
+    scrapflySessionId,
+    resumeEndpoint: `/api/apply-sessions/${session.id}/resume`,
     evidence: evidenceSnippet || verificationSignal || null,
     evidenceDetail: {
       title: stoppedAtTitle,
@@ -252,28 +238,65 @@ export async function GET(
 
   const verificationStop = buildVerificationStopPayload(session);
   const rtxStop = buildRtxStopPayload(session);
+  const inferredErrorCode = inferApplyAutomationErrorCode({
+    errorCode: session.errorCode ?? null,
+    stopClassification:
+      verificationStop?.stopClassification ?? session.debug?.stopClassification ?? null,
+    status: verificationStop ? "VERIFICATION_REQUIRED" : session.status,
+    message:
+      verificationStop?.message ??
+      session.message ??
+      session.error ??
+      null,
+    finalReason: session.debug?.finalReason ?? null,
+  });
+  const normalizedMessage =
+    prefixErrorCodeInMessage({
+      errorCode: inferredErrorCode,
+      message:
+        verificationStop?.message ??
+        session.message ??
+        session.error ??
+        null,
+    }) ??
+    verificationStop?.message ??
+    session.message ??
+    session.error ??
+    null;
+  const sessionPayload = verificationStop
+    ? {
+        ...session,
+        status: "VERIFICATION_REQUIRED",
+        message: verificationStop.message,
+        debug: {
+          ...(session.debug ?? {}),
+          stopClassification:
+            verificationStop.stopClassification ??
+            session.debug?.stopClassification,
+          lastAction:
+            session.debug?.lastAction === "verification_required"
+              ? session.debug.lastAction
+              : "verification_required",
+        },
+      }
+    : session;
 
   return NextResponse.json({
     ok: true,
     found: true,
     storageBackendUsed,
-    session: verificationStop
-      ? {
-          ...session,
-          status: "VERIFICATION_REQUIRED",
-          message: verificationStop.message,
-          debug: {
-            ...(session.debug ?? {}),
-            stopClassification:
-              verificationStop.stopClassification ??
-              session.debug?.stopClassification,
-            lastAction:
-              session.debug?.lastAction === "verification_required"
-                ? session.debug.lastAction
-                : "verification_required",
-          },
-        }
-      : session,
+    session: {
+      ...sessionPayload,
+      message: normalizedMessage ?? sessionPayload.message,
+      errorCode: inferredErrorCode ?? sessionPayload.errorCode,
+      error:
+        sessionPayload.error && inferredErrorCode
+          ? prefixErrorCodeInMessage({
+              errorCode: inferredErrorCode,
+              message: sessionPayload.error,
+            }) ?? sessionPayload.error
+          : sessionPayload.error,
+    },
     stopPoint: verificationStop,
     rtxStop,
   });

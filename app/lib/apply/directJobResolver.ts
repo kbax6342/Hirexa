@@ -64,6 +64,15 @@ type NormalizedResolverInput = {
   googleFirstTriggered: boolean;
 };
 
+type NonJobPostingClassification =
+  | "about_or_benefits_page"
+  | "policy_page"
+  | "search_results_page"
+  | "not_found_page"
+  | "static_or_media_asset"
+  | "known_asset_host"
+  | "generic_company_homepage";
+
 type ScoredCandidate = {
   url: string;
   title?: string;
@@ -134,7 +143,36 @@ const UNRELATED_HOST_FRAGMENTS = [
   "twitter.com",
   "youtube.com",
   "wikipedia.org",
+  "tealhq.com",
+  "theladders.com",
+  "ladders.com",
+  "career.io",
+  "google.com",
+  "bing.com",
+  "maps.google.com",
 ] as const;
+
+const KNOWN_ASSET_HOST_FRAGMENTS = [
+  "zunastatic",
+  "kxcdn.com",
+  "cloudfront.net",
+  "akamaihd.net",
+  "fastly.net",
+  "cdn.jsdelivr.net",
+  "cdnjs.cloudflare.com",
+] as const;
+
+const NON_JOB_PAGE_PATH_PATTERNS = [
+  /\/about(?:-us)?(?:\/|$)/i,
+  /\/benefits(?:\/|$)/i,
+  /\/privacy(?:\/|$)/i,
+  /\/terms(?:\/|$)/i,
+  /\/search-results(?:\/|$)/i,
+  /\/search(?:\/|$)/i,
+  /\/404(?:\/|$)/i,
+] as const;
+
+const NON_JOB_MEDIA_EXTENSIONS = /\.(png|jpg|jpeg|svg|webp|ico|gif|bmp|avif)(?:$|\?)/i;
 
 const HIGH_CONFIDENCE_THRESHOLD = 0.72;
 const ADZUNA_GOOGLE_FIRST_THRESHOLD = 0.64;
@@ -301,6 +339,75 @@ function sanitizeQueryTerm(value: string) {
   return value.replace(/["]+/g, "").trim();
 }
 
+function classifyNonJobPostingUrl(
+  candidateUrl: string | null | undefined,
+): NonJobPostingClassification | null {
+  const normalizedUrl = normalizeJobUrl(candidateUrl ?? "");
+  if (!normalizedUrl) return null;
+
+  if (NON_JOB_MEDIA_EXTENSIONS.test(normalizedUrl)) {
+    return "static_or_media_asset";
+  }
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = decodeURIComponent(parsed.pathname || "/").toLowerCase();
+
+    if (
+      KNOWN_ASSET_HOST_FRAGMENTS.some(
+        (fragment) =>
+          hostname === fragment || hostname.endsWith(`.${fragment}`),
+      )
+    ) {
+      return "known_asset_host";
+    }
+
+    if (
+      pathname === "/favicon.ico" ||
+      pathname.endsWith("/favicon.ico")
+    ) {
+      return "static_or_media_asset";
+    }
+
+    if (
+      pathname === "/" ||
+      pathname === "/home" ||
+      pathname === "/index" ||
+      pathname === "/index.html"
+    ) {
+      return "generic_company_homepage";
+    }
+
+    if (
+      NON_JOB_PAGE_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
+    ) {
+      if (
+        pathname.includes("/about") ||
+        pathname.includes("/benefits")
+      ) {
+        return "about_or_benefits_page";
+      }
+
+      if (pathname.includes("/privacy") || pathname.includes("/terms")) {
+        return "policy_page";
+      }
+
+      if (pathname.includes("/search")) {
+        return "search_results_page";
+      }
+
+      if (pathname.includes("/404")) {
+        return "not_found_page";
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 function normalizeResolverLocation(value: string | null | undefined) {
   const normalized = normalizeText(value);
   if (!normalized) return "";
@@ -345,14 +452,16 @@ function buildEmployerHostCandidates(companyAliasVariants: string[]) {
 }
 
 function buildSearchQueries(input: NormalizedResolverInput) {
-  const quotedTitle = `"${sanitizeQueryTerm(input.title)}"`;
-  const quotedCleanedTitle = `"${sanitizeQueryTerm(input.cleanedTitle || input.title)}"`;
-  const quotedCompany = `"${sanitizeQueryTerm(input.company)}"`;
+  const plainTitle = sanitizeQueryTerm(input.title);
+  const plainCleanedTitle = sanitizeQueryTerm(
+    input.cleanedTitle || input.title,
+  );
+  const plainCompany = sanitizeQueryTerm(input.company);
   const locationPart = input.normalizedLocation
-    ? ` "${sanitizeQueryTerm(input.normalizedLocation)}"`
+    ? ` ${sanitizeQueryTerm(input.normalizedLocation)}`
     : "";
   const cityPart = input.locationCity
-    ? ` "${sanitizeQueryTerm(input.locationCity)}"`
+    ? ` ${sanitizeQueryTerm(input.locationCity)}`
     : "";
   const atsSitesPrimary =
     "site:greenhouse.io OR site:jobs.lever.co OR site:ashbyhq.com OR site:smartrecruiters.com";
@@ -368,25 +477,25 @@ function buildSearchQueries(input: NormalizedResolverInput) {
       input.employerHostCandidates.find((host) => host !== jobsHost);
 
     return dedupeStrings([
-      `${quotedCleanedTitle} ${quotedCompany}${locationPart}`,
+      `${plainCleanedTitle} ${plainCompany}${locationPart}`,
       input.cleanedTitle !== input.title
-        ? `${quotedTitle} ${quotedCompany}${locationPart}`
+        ? `${plainTitle} ${plainCompany}${locationPart}`
         : "",
-      `${quotedCleanedTitle} ${quotedCompany} careers`,
+      `${plainCleanedTitle} ${plainCompany} careers`,
       jobsHost
-        ? `site:${jobsHost} ${quotedCleanedTitle}${cityPart || locationPart}`
+        ? `site:${jobsHost} ${plainCleanedTitle}${cityPart || locationPart}`
         : "",
-      careersHost ? `site:${careersHost} ${quotedCleanedTitle}` : "",
-      `${quotedCompany} ${quotedCleanedTitle}${cityPart || locationPart}`,
+      careersHost ? `site:${careersHost} ${plainCleanedTitle}` : "",
+      `${plainCompany} ${plainCleanedTitle}${cityPart || locationPart}`,
     ]).slice(0, 5);
   }
 
   return dedupeStrings([
-    `${quotedTitle} ${quotedCompany}${locationPart}`,
-    `${quotedTitle} ${quotedCompany}${locationPart} apply`,
-    `${quotedCompany} ${quotedCleanedTitle} careers`,
-    `${quotedCleanedTitle} ${quotedCompany} ${atsSitesPrimary}`,
-    `${quotedCleanedTitle} ${quotedCompany} ${atsSitesSecondary}`,
+    `${plainTitle} ${plainCompany}${locationPart}`,
+    `${plainTitle} ${plainCompany}${locationPart} apply`,
+    `${plainCompany} ${plainCleanedTitle} careers`,
+    `${plainCleanedTitle} ${plainCompany} ${atsSitesPrimary}`,
+    `${plainCleanedTitle} ${plainCompany} ${atsSitesSecondary}`,
   ]);
 }
 
@@ -580,6 +689,7 @@ function isKnownDirectEmployerUrl(
   const normalizedUrl = normalizeJobUrl(url);
   if (
     !normalizedUrl ||
+    classifyNonJobPostingUrl(normalizedUrl) !== null ||
     isAdzunaUnresolvedHandoffUrl(normalizedUrl) ||
     isAggregatorHandoffUrl(normalizedUrl)
   ) {
@@ -892,7 +1002,8 @@ function evaluateCandidateAcceptance(
     hasReasonPart(candidate, "aggregator_handoff_penalty") ||
     hasReasonPart(candidate, "login_or_interstitial_penalty") ||
     hasReasonPart(candidate, "search_or_index_page_penalty") ||
-    hasReasonPart(candidate, "unrelated_domain_penalty");
+    hasReasonPart(candidate, "unrelated_domain_penalty") ||
+    hasReasonPart(candidate, "non_job_posting_penalty");
   const threshold = input.googleFirstTriggered
     ? ADZUNA_GOOGLE_FIRST_THRESHOLD
     : HIGH_CONFIDENCE_THRESHOLD;
@@ -1086,6 +1197,12 @@ function scoreCandidate(
     reasonParts.push("unrelated_domain_penalty");
   }
 
+  const nonJobPostingReason = classifyNonJobPostingUrl(candidateUrl);
+  if (nonJobPostingReason) {
+    penalty += 0.72;
+    reasonParts.push(`non_job_posting_penalty:${nonJobPostingReason}`);
+  }
+
   penalty += overrides?.verificationPenalty ?? 0;
 
   let confidence =
@@ -1182,6 +1299,11 @@ function scoreKnownDirectCandidate(args: {
 async function resolveAdzunaExtractedDirectUrl(args: {
   input: NormalizedResolverInput;
   sourceJobId?: string | null;
+  applicationId?: string | null;
+  source?: string | null;
+  jobTitle?: string | null;
+  company?: string | null;
+  location?: string | null;
 }): Promise<DirectJobResolution | null> {
   const detailsUrl = buildAdzunaDetailsUrl(args.sourceJobId);
   const fetchTargets = dedupeStrings(
@@ -1245,6 +1367,19 @@ async function resolveAdzunaExtractedDirectUrl(args: {
       });
 
       const responseUrl = normalizeJobUrl(response.url || fetchTarget);
+      const responseUrlRejectedReason = classifyNonJobPostingUrl(responseUrl);
+      if (responseUrlRejectedReason) {
+        logDirectUrlRejectedNotJobPosting({
+          applicationId: args.applicationId,
+          sourceJobId: args.sourceJobId,
+          source: args.source,
+          candidateUrl: responseUrl,
+          rejectionReason: responseUrlRejectedReason,
+          jobTitle: args.jobTitle,
+          company: args.company,
+          location: args.location,
+        });
+      }
       if (isKnownDirectEmployerUrl(args.input, responseUrl)) {
         return buildKnownUrlResolution({
           input: args.input,
@@ -1441,8 +1576,34 @@ function buildNormalizedInput(args: {
   };
 }
 
+function logDirectUrlRejectedNotJobPosting(args: {
+  applicationId?: string | null;
+  sourceJobId?: string | null;
+  source?: string | null;
+  candidateUrl: string;
+  rejectionReason: NonJobPostingClassification;
+  jobTitle?: string | null;
+  company?: string | null;
+  location?: string | null;
+}) {
+  console.info("[AUTO_APPLY_DIRECT_URL_REJECTED_NOT_JOB_POSTING]", {
+    applicationId: args.applicationId ?? null,
+    sourceJobId: args.sourceJobId ?? null,
+    source: args.source ?? null,
+    candidateUrl: normalizeJobUrl(args.candidateUrl),
+    rejectionReason: args.rejectionReason,
+    jobTitle: normalizeText(args.jobTitle),
+    company: normalizeText(args.company),
+    location: normalizeText(args.location),
+  });
+}
+
 function buildCurrentUrlResolution(input: NormalizedResolverInput): DirectJobResolution | null {
   if (!input.currentUrl) {
+    return null;
+  }
+
+  if (classifyNonJobPostingUrl(input.currentUrl)) {
     return null;
   }
 
@@ -1486,6 +1647,7 @@ export async function resolveDirectJobUrl(args: {
   source?: string | null;
   sourceJobId?: string | null;
   preferredDirectUrl?: string | null;
+  applicationId?: string | null;
 }): Promise<DirectJobResolution> {
   const input = buildNormalizedInput(args);
 
@@ -1498,8 +1660,24 @@ export async function resolveDirectJobUrl(args: {
   }
 
   const preferredDirectUrl = normalizeJobUrl(args.preferredDirectUrl ?? "");
+  const preferredDirectUrlRejectedReason = classifyNonJobPostingUrl(
+    preferredDirectUrl,
+  );
+  if (preferredDirectUrl && preferredDirectUrlRejectedReason) {
+    logDirectUrlRejectedNotJobPosting({
+      applicationId: args.applicationId,
+      sourceJobId: args.sourceJobId,
+      source: args.source,
+      candidateUrl: preferredDirectUrl,
+      rejectionReason: preferredDirectUrlRejectedReason,
+      jobTitle: args.title,
+      company: args.company,
+      location: args.location,
+    });
+  }
   if (
     preferredDirectUrl &&
+    !preferredDirectUrlRejectedReason &&
     isKnownDirectEmployerUrl(input, preferredDirectUrl, {
       allowUnknownNonAggregator: true,
     })
@@ -1520,6 +1698,20 @@ export async function resolveDirectJobUrl(args: {
     });
   }
 
+  const currentUrlRejectedReason = classifyNonJobPostingUrl(input.currentUrl);
+  if (input.currentUrl && currentUrlRejectedReason) {
+    logDirectUrlRejectedNotJobPosting({
+      applicationId: args.applicationId,
+      sourceJobId: args.sourceJobId,
+      source: args.source,
+      candidateUrl: input.currentUrl,
+      rejectionReason: currentUrlRejectedReason,
+      jobTitle: args.title,
+      company: args.company,
+      location: args.location,
+    });
+  }
+
   const currentUrlResolution = buildCurrentUrlResolution(input);
   if (currentUrlResolution) {
     return cacheSuccessfulResolution({
@@ -1534,6 +1726,11 @@ export async function resolveDirectJobUrl(args: {
   const extractedAdzunaResolution = await resolveAdzunaExtractedDirectUrl({
     input,
     sourceJobId: args.sourceJobId,
+    applicationId: args.applicationId,
+    source: args.source,
+    jobTitle: args.title,
+    company: args.company,
+    location: args.location,
   });
   if (extractedAdzunaResolution) {
     return cacheSuccessfulResolution({
@@ -1665,6 +1862,32 @@ export async function resolveDirectJobUrl(args: {
       reason: candidate.reason,
     })),
   });
+
+  const nonJobCandidates = scoredCandidates
+    .filter((candidate) =>
+      candidate.reasonParts.some((part) =>
+        part.startsWith("non_job_posting_penalty:"),
+      ),
+    )
+    .slice(0, 5);
+  for (const candidate of nonJobCandidates) {
+    const reasonPart = candidate.reasonParts.find((part) =>
+      part.startsWith("non_job_posting_penalty:"),
+    );
+    const rejectionReason =
+      (reasonPart?.split(":")[1] as NonJobPostingClassification | undefined) ??
+      "search_results_page";
+    logDirectUrlRejectedNotJobPosting({
+      applicationId: args.applicationId,
+      sourceJobId: args.sourceJobId,
+      source: args.source,
+      candidateUrl: candidate.url,
+      rejectionReason,
+      jobTitle: args.title,
+      company: args.company,
+      location: args.location,
+    });
+  }
 
   if (bestCandidate && acceptance.accepted) {
     const matchReason = `${acceptance.rule}: ${bestCandidate.reason}`;

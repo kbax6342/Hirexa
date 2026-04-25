@@ -18,7 +18,7 @@ export function getStopSuggestedActionUi(
       return {
         label: getStopSuggestedActionLabel(suggestedAction),
         recommendationText:
-          "This looks like a job-board listing rather than the employer's actual application page. Open the original job site to continue or teach Hirexa how to reach it.",
+          "Hirexa could not confirm the real employer job posting. The selected site did not match this job. Open the original job listing or retry after refreshing job details.",
       };
     case "sign_in_and_retry":
       return {
@@ -30,7 +30,7 @@ export function getStopSuggestedActionUi(
       return {
         label: getStopSuggestedActionLabel(suggestedAction),
         recommendationText:
-          "Employer verification is required before Hirexa can continue. Complete the verification, then resume the application.",
+          "This page needs manual verification before Hirexa can continue. Complete the verification in the live browser session, then click Resume.",
       };
     case "teach_this_page":
       return {

@@ -324,7 +324,7 @@ export function buildEcosiaSearchQuery(args: {
     normalizeText(normalizedLocation),
   ].filter(Boolean);
 
-  return parts.map((part) => `"${sanitizeQueryValue(part)}"`).join(" ");
+  return parts.map((part) => sanitizeQueryValue(part)).join(" ");
 }
 
 export function selectInitialAutomationTarget(args: {

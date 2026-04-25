@@ -11,6 +11,11 @@ import {
 import { BookmarkIcon as BookmarkSolid } from "@heroicons/react/24/solid";
 import { useSession } from "next-auth/react";
 import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
+import {
+  getApplyAutomationErrorMessage,
+  normalizeApplyAutomationErrorCode,
+  prefixErrorCodeInMessage,
+} from "@/app/lib/apply/errorCodes";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
@@ -142,6 +147,7 @@ type ApplySessionPollResponse = {
     lastUrl?: string;
     error?: string;
     message?: string;
+    errorCode?: string | null;
     debug?: {
       finalUrl?: string | null;
       stoppedAtUrl?: string | null;
@@ -210,17 +216,39 @@ function pickPreferredDirectJobUrl(job: SupportedAutoApplyJob, detail?: JobDetai
 function isEmployerUrlResolutionFailure(
   payload: AutoApplyStartResponse | null | undefined,
 ) {
-  return payload?.errorCode === "EMPLOYER_URL_RESOLUTION_FAILED";
+  return (
+    payload?.errorCode === "EMPLOYER_URL_RESOLUTION_FAILED" ||
+    payload?.errorCode === "REAL_POSTING_NOT_FOUND" ||
+    payload?.errorCode === "WRONG_EMPLOYER_DOMAIN"
+  );
+}
+
+function formatAutoApplyErrorMessage(args: {
+  message?: string | null;
+  errorCode?: string | null;
+}) {
+  const normalizedCode = normalizeApplyAutomationErrorCode(args.errorCode);
+  const prefixed = prefixErrorCodeInMessage({
+    errorCode: normalizedCode,
+    message: args.message,
+  });
+  if (prefixed) return prefixed;
+  return normalizedCode ? getApplyAutomationErrorMessage(normalizedCode) : null;
 }
 
 function getAutoApplyStartFailureMessage(
   payload: AutoApplyStartResponse | null | undefined,
 ) {
-  if (isEmployerUrlResolutionFailure(payload)) {
-    return "Could not resolve employer job page.";
+  if (isEmployerUrlResolutionFailure(payload) && !payload?.message && !payload?.error) {
+    return "REAL_POSTING_NOT_FOUND: Could not resolve employer job page.";
   }
 
-  return payload?.message ?? payload?.error ?? "Unable to start auto apply.";
+  return (
+    formatAutoApplyErrorMessage({
+      message: payload?.message ?? payload?.error ?? "Unable to start auto apply.",
+      errorCode: payload?.errorCode ?? null,
+    }) ?? "Unable to start auto apply."
+  );
 }
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
@@ -993,6 +1021,10 @@ export default function JobMatchesLayout({
               toApplySessionDisplayStatus(payload.session.status) ??
               payload.session.status ??
               item.status;
+            const formattedMessage = formatAutoApplyErrorMessage({
+              message: payload.session.message ?? payload.session.error ?? null,
+              errorCode: payload.session.errorCode ?? null,
+            });
 
             nextItems[item.applicationId] = {
               ...nextItems[item.applicationId],
@@ -1002,7 +1034,10 @@ export default function JobMatchesLayout({
                   item.applySessionId ??
                   null,
               status: displayStatus,
-              message: payload.session.message ?? payload.session.error ?? null,
+              message: formattedMessage,
+              errorCode:
+                normalizeApplyAutomationErrorCode(payload.session.errorCode) ??
+                null,
               lastUrl:
                 payload.session.debug?.finalUrl ??
                 payload.session.lastUrl ??
@@ -1779,6 +1814,8 @@ export default function JobMatchesLayout({
           location: job.location,
           status,
           message: popupMessage,
+          errorCode:
+            normalizeApplyAutomationErrorCode(startData?.errorCode) ?? null,
           lastUrl: startData?.finalUrl ?? null,
           stoppedAtUrl: startData?.stoppedAtUrl ?? null,
           stoppedAtTitle: startData?.stoppedAtTitle ?? null,
@@ -1814,7 +1851,12 @@ export default function JobMatchesLayout({
           toApplySessionDisplayStatus(startData.status) ??
           startData.status ??
           "STARTING",
-        message: startData.message ?? null,
+        message: formatAutoApplyErrorMessage({
+          message: startData.message ?? null,
+          errorCode: startData.errorCode ?? null,
+        }),
+        errorCode:
+          normalizeApplyAutomationErrorCode(startData.errorCode) ?? null,
       });
 
       console.info("[AUTO_APPLY_DASHBOARD] started background auto-apply", {

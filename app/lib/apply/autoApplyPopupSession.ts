@@ -22,6 +22,7 @@ export type AutoApplyPopupItem = {
   lastActionText?: string | null;
   lastActionSelector?: string | null;
   stopReason?: string | null;
+  errorCode?: string | null;
   stopClassification?: ApplyStopClassification | null;
   updatedAt: number;
 };

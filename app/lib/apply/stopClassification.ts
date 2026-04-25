@@ -2,6 +2,7 @@ export type ApplyStopReason =
   | "no_apply_cta"
   | "login_required"
   | "verification_required"
+  | "wrong_employer_domain"
   | "invalid_start_url"
   | "real_posting_not_found"
   | "aggregator_no_cta"
@@ -11,6 +12,7 @@ export type ApplyStopReason =
 export type ApplyStopPageType =
   | "human_verification_gate"
   | "aggregator"
+  | "resolver_failure"
   | "employer_site"
   | "auth_gate"
   | "handoff_page"
@@ -35,6 +37,7 @@ export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "no_apply_cta",
   "login_required",
   "verification_required",
+  "wrong_employer_domain",
   "invalid_start_url",
   "real_posting_not_found",
   "aggregator_no_cta",
@@ -138,6 +141,11 @@ const INVALID_START_URL_KEYWORDS = [
 const REAL_POSTING_NOT_FOUND_KEYWORDS = [
   "real posting not found",
   "real_posting_not_found",
+];
+
+const WRONG_EMPLOYER_DOMAIN_KEYWORDS = [
+  "wrong employer domain",
+  "wrong_employer_domain",
 ];
 
 const RTX_RECOVERY_KEYWORDS = [
@@ -263,7 +271,15 @@ export function deriveStopClassification(
   if (includesAnySignal(signalText, REAL_POSTING_NOT_FOUND_KEYWORDS)) {
     return {
       reason: "real_posting_not_found",
-      pageType: "aggregator",
+      pageType: "resolver_failure",
+      suggestedAction: "open_original_job_site",
+    };
+  }
+
+  if (includesAnySignal(signalText, WRONG_EMPLOYER_DOMAIN_KEYWORDS)) {
+    return {
+      reason: "wrong_employer_domain",
+      pageType: "resolver_failure",
       suggestedAction: "open_original_job_site",
     };
   }
@@ -320,6 +336,8 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
       return "Sign-in required";
     case "verification_required":
       return "Verification required";
+    case "wrong_employer_domain":
+      return "Wrong employer domain";
     case "invalid_start_url":
       return "Start URL was invalid";
     case "real_posting_not_found":
@@ -338,6 +356,8 @@ export function getStopPageTypeLabel(pageType: ApplyStopPageType) {
   switch (pageType) {
     case "human_verification_gate":
       return "Human verification gate";
+    case "resolver_failure":
+      return "Resolver failure";
     case "handoff_page":
       return "Handoff page";
     case "job_page":

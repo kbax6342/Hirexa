@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { JobSearchFallbackCandidate } from "@/app/lib/apply/jobSearchFallback";
+import type { ApplyAutomationErrorCode } from "@/app/lib/apply/errorCodes";
 import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
 import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
@@ -204,6 +205,7 @@ export type ApplySession = {
   lastUrl?: string;
   error?: string;
   message?: string;
+  errorCode?: ApplyAutomationErrorCode;
   remoteSessionId?: string;
   debug?: ApplySessionDebug;
 };

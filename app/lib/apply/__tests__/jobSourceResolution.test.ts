@@ -12,7 +12,7 @@ test("builds deterministic Ecosia query from title, company, and normalized loca
     location: "austin tx",
   });
 
-  expect(query).toBe("\"Software Engineer\" \"RTX\" \"Austin, TX\"");
+  expect(query).toBe("Software Engineer RTX Austin, TX");
 });
 
 test("routing selection skips invalid aggregator/static URLs and keeps first valid direct target", () => {

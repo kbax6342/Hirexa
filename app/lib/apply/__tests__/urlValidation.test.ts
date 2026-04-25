@@ -40,3 +40,17 @@ test("detects search engine challenge URLs", () => {
   expect(validation.isValid).toBeFalsy();
   expect(validation.reason).toBe("search_engine_challenge_page");
 });
+
+test("rejects non-job posting company pages", () => {
+  const benefits = validateAutomationStartUrl(
+    "https://jobs.republicservices.com/us/en/about-us/benefits",
+  );
+  const searchResults = validateAutomationStartUrl(
+    "https://careers.rtx.com/global/en/search-results",
+  );
+
+  expect(benefits.isValid).toBeFalsy();
+  expect(benefits.reason).toBe("non_job_posting_path");
+  expect(searchResults.isValid).toBeFalsy();
+  expect(searchResults.reason).toBe("non_job_posting_path");
+});

@@ -13,12 +13,20 @@ import {
   shouldUseRemoteBrowser,
 } from "@/app/lib/apply/remoteBrowser";
 import {
+  connectScrapflyBrowserSession,
+  disconnectScrapflyBrowserSession,
+} from "@/app/lib/apply/scrapfly-browser";
+import {
   classifyAdzunaHandoffUrl,
   extractAdzunaHandoffSignals,
   isAdzunaLandAdUrl,
   isAdzunaUrl,
   isLikelyDownstreamApplicationUrl,
 } from "@/app/lib/apply/adzunaHandoff";
+import {
+  readBrowserRuntimeDiagnostics,
+  type BrowserRuntimeDiagnostics,
+} from "@/app/lib/apply/browserRuntimeDiagnostics";
 import {
   findMatchingLocator,
   extractLocatorText,
@@ -62,6 +70,10 @@ import {
   APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
   type ApplySessionStatus,
 } from "@/app/lib/apply/sessionStatus";
+import {
+  isKnownAggregatorHostname,
+  validateAutomationStartUrl,
+} from "@/app/lib/apply/urlValidation";
 import { classifyJobUrlKind, normalizeJobUrl } from "@/app/lib/jobSources";
 
 export type PlaywrightApplyResult = {
@@ -1072,6 +1084,15 @@ const REAL_APPLY_HOST_PATTERNS = [
   "jazzhr.com",
 ] as const;
 
+const KNOWN_ATS_HOST_PATTERNS = [
+  ...REAL_APPLY_HOST_PATTERNS,
+  "myworkdaysite.com",
+  "smartrecruiters.com",
+  "jobvite.com",
+  "bamboohr.com",
+  "recruitee.com",
+] as const;
+
 const REAL_APPLY_URL_PATTERNS = [
   "/apply",
   "/application",
@@ -1667,6 +1688,172 @@ function parseHostname(value: string | null | undefined) {
   }
 }
 
+function parseHostnameOrHost(value: string | null | undefined) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+
+  try {
+    return new URL(raw).hostname.toLowerCase();
+  } catch {
+    return raw
+      .replace(/^https?:\/\//, "")
+      .replace(/^wss?:\/\//, "")
+      .replace(/\/.*$/, "")
+      .replace(/^www\./, "")
+      .trim()
+      .toLowerCase();
+  }
+}
+
+function hostsEquivalentOrSubdomain(left: string, right: string) {
+  if (!left || !right) return false;
+  return (
+    left === right ||
+    left.endsWith(`.${right}`) ||
+    right.endsWith(`.${left}`)
+  );
+}
+
+function isKnownAtsHost(hostname: string) {
+  if (!hostname) return false;
+  return hostnameMatches(hostname, KNOWN_ATS_HOST_PATTERNS);
+}
+
+function isAggregatorLikeHost(hostname: string) {
+  if (!hostname) return false;
+  return (
+    isKnownAggregatorHostname(hostname) ||
+    hostname.includes("adzuna.") ||
+    hostname.includes("appcast.") ||
+    hostname.includes("dice.")
+  );
+}
+
+function resolveExpectedEmployerHost(args: {
+  resolvedDirectUrl?: string;
+  originalJobUrl?: string;
+  entryUrl: string;
+}) {
+  const candidates = [
+    args.resolvedDirectUrl,
+    args.originalJobUrl,
+    args.entryUrl,
+  ];
+
+  for (const candidate of candidates) {
+    const host = parseHostname(candidate);
+    if (!host) continue;
+    if (isAggregatorLikeHost(host)) continue;
+    return host;
+  }
+
+  return "";
+}
+
+type PreLaunchValidationFailure = {
+  reason: "real_posting_not_found" | "wrong_employer_domain";
+  message: string;
+  targetHost: string;
+  expectedEmployerHost: string;
+  validationReason?: string;
+  strategySourceHost?: string;
+  strategyDestinationHost?: string;
+};
+
+function validatePreLaunchTarget(args: {
+  targetUrl: string;
+  entryUrl: string;
+  originalJobUrl?: string;
+  resolvedDirectUrl?: string;
+  strategySourceHost?: string;
+  strategyDestinationHost?: string;
+}) {
+  const targetValidation = validateAutomationStartUrl(args.targetUrl, {
+    rejectAggregator: true,
+    rejectSearchEngine: true,
+  });
+  const targetHost = parseHostname(targetValidation.normalizedUrl);
+  const expectedEmployerHost = resolveExpectedEmployerHost({
+    resolvedDirectUrl: args.resolvedDirectUrl,
+    originalJobUrl: args.originalJobUrl,
+    entryUrl: args.entryUrl,
+  });
+  const strategySourceHost = parseHostnameOrHost(args.strategySourceHost);
+  const strategyDestinationHost = parseHostnameOrHost(
+    args.strategyDestinationHost,
+  );
+
+  if (!targetValidation.isValid) {
+    return {
+      reason: "real_posting_not_found",
+      message:
+        "Selected target URL is not a valid employer job posting. Open the original job listing and retry.",
+      targetHost,
+      expectedEmployerHost,
+      validationReason: targetValidation.reason,
+      strategySourceHost,
+      strategyDestinationHost,
+    } satisfies PreLaunchValidationFailure;
+  }
+
+  const hasExpectedHost = Boolean(expectedEmployerHost);
+  const hasTargetHost = Boolean(targetHost);
+  const expectedHostMismatched =
+    hasExpectedHost &&
+    hasTargetHost &&
+    !hostsEquivalentOrSubdomain(targetHost, expectedEmployerHost) &&
+    !isKnownAtsHost(targetHost) &&
+    !isKnownAtsHost(expectedEmployerHost);
+
+  if (expectedHostMismatched) {
+    return {
+      reason: "wrong_employer_domain",
+      message:
+        "Selected target URL does not match this employer. Open the original job listing and retry.",
+      targetHost,
+      expectedEmployerHost,
+      validationReason: "target_host_mismatch",
+      strategySourceHost,
+      strategyDestinationHost,
+    } satisfies PreLaunchValidationFailure;
+  }
+
+  const strategyHostCandidates = [
+    strategySourceHost,
+    strategyDestinationHost,
+  ].filter(Boolean);
+  const strategyHostMismatch = strategyHostCandidates.some((strategyHost) => {
+    if (!strategyHost) return false;
+    if (hasTargetHost && hostsEquivalentOrSubdomain(strategyHost, targetHost)) {
+      return false;
+    }
+    if (
+      hasExpectedHost &&
+      hostsEquivalentOrSubdomain(strategyHost, expectedEmployerHost)
+    ) {
+      return false;
+    }
+    if (isKnownAtsHost(strategyHost)) return false;
+    if (hasExpectedHost && isKnownAtsHost(expectedEmployerHost)) return false;
+    return true;
+  });
+
+  if (strategyHostMismatch) {
+    return {
+      reason: "wrong_employer_domain",
+      message:
+        "Selected target URL appears to come from another employer strategy. Open the original job listing and retry.",
+      targetHost,
+      expectedEmployerHost,
+      validationReason: "strategy_host_mismatch",
+      strategySourceHost,
+      strategyDestinationHost,
+    } satisfies PreLaunchValidationFailure;
+  }
+
+  return null;
+}
+
 function hostnameMatches(hostname: string, patterns: readonly string[]) {
   return patterns.some(
     (pattern) => hostname === pattern || hostname.endsWith(`.${pattern}`),
@@ -1724,6 +1911,20 @@ function detectApplyDomain(url: string): KnownApplyDomain {
 function isRtxHostname(hostname: string) {
   const normalized = hostname.toLowerCase();
   return hostnameMatches(normalized, RTX_HOST_PATTERNS);
+}
+
+function isRtxCompanyName(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    normalized.includes("rtx") ||
+    normalized.includes("raytheon") ||
+    normalized.includes("raytheon technologies") ||
+    normalized.includes("collins aerospace") ||
+    normalized.includes("pratt & whitney") ||
+    normalized.includes("pratt and whitney")
+  );
 }
 
 function isRtxWorkdayUrl(rawUrl: string) {
@@ -6507,16 +6708,38 @@ async function runRtxManualApplyPrelude(args: {
   let verificationSignals: string[] = [];
   let verificationSignal: string | undefined;
   let verificationEvidence: string | undefined;
-  const companyText = normalizeWhitespace(args.company).toLowerCase();
-  const rtxContextDetected =
-    isRtxHostname(parseHostname(args.targetUrl)) ||
-    isRtxHostname(parseHostname(args.originalJobUrl)) ||
-    isRtxHostname(parseHostname(args.resolvedDirectUrl)) ||
-    isRtxHostname(parseHostname(activePage.url())) ||
-    companyText === "rtx" ||
-    companyText.includes("rtx corporation");
+  const targetHost = parseHostname(args.targetUrl);
+  const originalHost = parseHostname(args.originalJobUrl);
+  const resolvedHost = parseHostname(args.resolvedDirectUrl);
+  const currentHost = parseHostname(activePage.url());
+  const companyLooksRtx = isRtxCompanyName(args.company);
+  const targetHostIsRtxRoot =
+    targetHost === "rtx.com" ||
+    targetHost === "careers.rtx.com" ||
+    targetHost.endsWith(".rtx.com");
+  const strictRtxContextDetected =
+    targetHostIsRtxRoot &&
+    isRtxHostname(targetHost) &&
+    companyLooksRtx;
+  const hasAnyRtxSignal =
+    isRtxHostname(targetHost) ||
+    isRtxHostname(originalHost) ||
+    isRtxHostname(resolvedHost) ||
+    isRtxHostname(currentHost) ||
+    companyLooksRtx;
 
-  if (!rtxContextDetected) {
+  if (!strictRtxContextDetected) {
+    if (hasAnyRtxSignal) {
+      console.info("[AUTO_APPLY_RTX_FLOW_SKIPPED_DOMAIN_MISMATCH]", {
+        targetUrl: args.targetUrl,
+        targetHost: targetHost || null,
+        originalHost: originalHost || null,
+        resolvedHost: resolvedHost || null,
+        currentHost: currentHost || null,
+        company: normalizeWhitespace(args.company),
+        reason: "strict_rtx_guard_failed",
+      });
+    }
     return {
       page: activePage,
       attempted: false,
@@ -9960,6 +10183,8 @@ export async function applyWithPlaywright(args: {
     embedUrl?: string;
   };
   metadata?: {
+    applicationId?: string | null;
+    applySessionId?: string | null;
     originalUrl?: string | null;
     resolvedUrl?: string | null;
     source?: string | null;
@@ -10017,6 +10242,9 @@ export async function applyWithPlaywright(args: {
   let stealthDependencyInstalled = false;
   let stealthRuntimeEnabled = false;
   let stealthPluginRegistered = false;
+  const browserDiagnosticsEnabled =
+    parseBooleanEnv(process.env.AUTO_APPLY_BROWSER_DIAGNOSTICS) === true;
+  let browserRuntimeDiagnostics: BrowserRuntimeDiagnostics | undefined;
 
   const attemptedSelectors: string[] = [];
   const missingNames: string[] = [];
@@ -10040,6 +10268,8 @@ export async function applyWithPlaywright(args: {
     Boolean(strategyStartUrl) ||
     Boolean(args.metadata?.strategy?.automationPrompt) ||
     Boolean(args.metadata?.strategy?.derivedInstruction);
+  const applicationId = args.metadata?.applicationId?.trim() || undefined;
+  const applySessionId = args.metadata?.applySessionId?.trim() || undefined;
   const strategyId = args.metadata?.strategy?.id?.trim() || undefined;
   const strategySourceHost = args.metadata?.strategy?.sourceHost?.trim() || undefined;
   const strategyDestinationHost =
@@ -10945,6 +11175,121 @@ export async function applyWithPlaywright(args: {
       openUrl: undefined,
     });
 
+    const preLaunchValidationFailure = validatePreLaunchTarget({
+      targetUrl,
+      entryUrl,
+      originalJobUrl,
+      resolvedDirectUrl,
+      strategySourceHost,
+      strategyDestinationHost,
+    });
+
+    if (preLaunchValidationFailure) {
+      const stopClassification: ApplyStopClassification = {
+        reason: preLaunchValidationFailure.reason,
+        pageType: "resolver_failure",
+        suggestedAction: "open_original_job_site",
+      };
+      const finalStatus = "APPLY_NOT_STARTED";
+      const finalUrl = targetUrl;
+      const skipLogMarker =
+        preLaunchValidationFailure.reason === "wrong_employer_domain"
+          ? "[AUTO_APPLY_REMOTE_BROWSER_SKIPPED_DOMAIN_MISMATCH]"
+          : "[AUTO_APPLY_REMOTE_BROWSER_SKIPPED_INVALID_TARGET]";
+
+      console.warn(skipLogMarker, {
+        applicationId: applicationId ?? null,
+        applySessionId: applySessionId ?? null,
+        targetUrl,
+        entryUrl,
+        originalJobUrl: originalJobUrl ?? null,
+        resolvedDirectUrl: resolvedDirectUrl ?? null,
+        expectedEmployerHost:
+          preLaunchValidationFailure.expectedEmployerHost || null,
+        targetHost: preLaunchValidationFailure.targetHost || null,
+        strategySourceHost:
+          preLaunchValidationFailure.strategySourceHost ?? null,
+        strategyDestinationHost:
+          preLaunchValidationFailure.strategyDestinationHost ?? null,
+        validationReason:
+          preLaunchValidationFailure.validationReason ?? null,
+        reason: preLaunchValidationFailure.reason,
+      });
+
+      await args.onStatus?.({
+        status: finalStatus,
+        lastUrl: finalUrl,
+        error: preLaunchValidationFailure.message,
+        message: preLaunchValidationFailure.message,
+        openUrl: finalUrl,
+      });
+
+      logPlaywrightEvidence({
+        attemptedSelectors,
+        applyCtaFound: false,
+        applyCtaClicked: false,
+        currentUrl: finalUrl,
+        hopCount: 0,
+        submitButtonFound: false,
+        submitButtonClicked: false,
+        confirmationTextFound: false,
+        confirmationTextSnippet: null,
+        successUrlPatternMatched: false,
+        finalStatus,
+        submissionConfirmed: false,
+      });
+
+      return {
+        ok: false,
+        status: finalStatus,
+        finalUrl,
+        openUrl: finalUrl,
+        message: preLaunchValidationFailure.message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          ...debugContext(),
+          stoppedAtUrl: finalUrl,
+          stoppedAtTitle: undefined,
+          lastActionText: undefined,
+          lastActionSelector: undefined,
+          finalUrl,
+          verificationSignals: [],
+          confirmationSignals: [],
+          pageText: undefined,
+          pageHtml: undefined,
+          targetUrl,
+          applyCtaFound: false,
+          applyCtaClicked: false,
+          currentUrl: finalUrl,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          finalStatus,
+          success: false,
+          needsHuman: false,
+          unavailable: false,
+          hopCount: 0,
+          urlsVisited: dedupeUrls([finalUrl]),
+          clicks: [],
+          formDetected: false,
+          confirmationDetected: false,
+          verificationDetected: false,
+          finalReason: `${preLaunchValidationFailure.reason}:${
+            preLaunchValidationFailure.validationReason ?? "target_rejected"
+          }`,
+          stopClassification,
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
+        }),
+      };
+    }
+
     const browserRuntime = await resolveApplyBrowserRuntime();
     const runtimeChromium = browserRuntime.chromium;
     browserAutomationLibrary = browserRuntime.browserAutomationLibrary;
@@ -10959,13 +11304,23 @@ export async function applyWithPlaywright(args: {
 
     if (shouldUseRemoteBrowser()) {
       remoteSession = await createRemoteSession();
-      const useCdp = shouldUseCdp(remoteSession.connectUrl);
+      const useScrapflyRemote = remoteSession.provider === "scrapfly";
+      const useCdp = useScrapflyRemote || shouldUseCdp(remoteSession.connectUrl);
       playwrightLaunchStrategy = "remote";
       playwrightPersistentContext = false;
       playwrightUserDataDir = undefined;
       headless = true;
+      if (useScrapflyRemote) {
+        browserAutomationLibrary = "playwright-extra";
+        playwrightExtraAvailable = true;
+        puppeteerExtraAvailable = true;
+        stealthRequested = true;
+        stealthDependencyInstalled = true;
+        stealthRuntimeEnabled = true;
+      }
       console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
         stealthEnabled: stealthRequested,
+        browserDiagnosticsEnabled,
         runtime: browserAutomationLibrary,
         browserAutomationLibrary,
         runtimeFallbackUsed: browserAutomationLibrary === "playwright",
@@ -10983,9 +11338,25 @@ export async function applyWithPlaywright(args: {
         domain: runtimeDomain,
         targetUrl,
       });
-      browser = useCdp
-        ? await runtimeChromium.connectOverCDP(remoteSession.connectUrl)
-        : await runtimeChromium.connect(remoteSession.connectUrl);
+      if (useScrapflyRemote) {
+        const scrapflyConnection = await connectScrapflyBrowserSession({
+          sessionId: remoteSession.sessionId,
+        });
+        browser = scrapflyConnection.browser;
+        context = scrapflyConnection.context;
+        page = scrapflyConnection.page;
+        activePage = page;
+        remoteSession = {
+          ...remoteSession,
+          sessionId: scrapflyConnection.sessionId,
+          connectUrl: scrapflyConnection.wsEndpoint,
+        };
+        stealthPluginRegistered = scrapflyConnection.stealthPluginRegistered;
+      } else {
+        browser = useCdp
+          ? await runtimeChromium.connectOverCDP(remoteSession.connectUrl)
+          : await runtimeChromium.connect(remoteSession.connectUrl);
+      }
       console.log("[AUTO_APPLY_REMOTE] connected to remote browser", {
         provider: remoteSession.provider,
         sessionId: remoteSession.sessionId,
@@ -10998,6 +11369,7 @@ export async function applyWithPlaywright(args: {
       playwrightUserDataDir = launchOptions.userDataDir;
       console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
         stealthEnabled: stealthRequested,
+        browserDiagnosticsEnabled,
         runtime: browserAutomationLibrary,
         browserAutomationLibrary,
         runtimeFallbackUsed: browserAutomationLibrary === "playwright",
@@ -11325,6 +11697,33 @@ export async function applyWithPlaywright(args: {
       initialLoadedUrl,
       domain,
     });
+
+    if (browserDiagnosticsEnabled) {
+      try {
+        browserRuntimeDiagnostics = await readBrowserRuntimeDiagnostics(page);
+        const diagnosticsTargetHost =
+          parseHostname(page.url()) || parseHostname(targetUrl) || null;
+        console.info("[AUTO_APPLY_BROWSER_DIAGNOSTICS]", {
+          applicationId: applicationId ?? null,
+          applySessionId: applySessionId ?? null,
+          targetHost: diagnosticsTargetHost,
+          runtime: browserAutomationLibrary,
+          stealthEnabled: stealthRequested,
+          stealthPluginRegistered,
+          ...browserRuntimeDiagnostics,
+        });
+      } catch (error) {
+        console.warn("[AUTO_APPLY_BROWSER_DIAGNOSTICS] failed", {
+          applicationId: applicationId ?? null,
+          applySessionId: applySessionId ?? null,
+          targetHost: parseHostname(page.url()) || parseHostname(targetUrl) || null,
+          runtime: browserAutomationLibrary,
+          stealthEnabled: stealthRequested,
+          stealthPluginRegistered,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     const initialSignals = await detectPageSignals(page);
     const forceEntryCtaPhase = shouldForceEntryCtaPhase(
@@ -13398,6 +13797,17 @@ export async function applyWithPlaywright(args: {
       }),
     };
   } finally {
+    if (keepBrowserOpen && remoteSession?.provider === "scrapfly") {
+      await disconnectScrapflyBrowserSession(browser).catch(() => undefined);
+      console.info("[AUTO_APPLY_SCRAPFLY_SESSION_PAUSED_FOR_USER]", {
+        applicationId: applicationId ?? null,
+        applySessionId: applySessionId ?? null,
+        scrapflySessionId: remoteSession.sessionId,
+        currentUrl: currentUrl ?? null,
+        targetUrl,
+      });
+    }
+
     if (!keepBrowserOpen) {
       await context?.close().catch(() => undefined);
       await browser?.close().catch(() => undefined);

@@ -50,6 +50,12 @@ import {
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
 import {
+  inferApplyAutomationErrorCode,
+  getApplyAutomationErrorMessage,
+  normalizeApplyAutomationErrorCode,
+  prefixErrorCodeInMessage,
+} from "@/app/lib/apply/errorCodes";
+import {
   findBestApplySiteStrategyForRun,
   recordApplySiteStrategyReplayForUser,
 } from "@/app/lib/apply/playwrightStrategyRepository";
@@ -178,7 +184,7 @@ type DirectResolutionAttemptResult =
       context: DirectResolutionContext;
       blocked: true;
       message: string;
-      errorCode: typeof EMPLOYER_URL_RESOLUTION_FAILED_CODE;
+      errorCode: string;
       failureReason: string;
     };
 
@@ -186,12 +192,10 @@ const ADZUNA_UNRESOLVED_TARGET_MESSAGE =
   "Adzuna handoff unresolved: no confirmed employer-hosted application URL found after search fallback";
 const ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE =
   "No confirmed employer-hosted application URL found from Google-first resolution for Adzuna job";
-const EMPLOYER_URL_RESOLUTION_FAILED_CODE =
-  "EMPLOYER_URL_RESOLUTION_FAILED" as const;
-const EMPLOYER_URL_RESOLUTION_FAILED_MESSAGE =
-  "Could not resolve employer job page.";
 const VERIFICATION_REQUIRED_STATUS = "VERIFICATION_REQUIRED" as const;
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+const WRONG_EMPLOYER_DOMAIN_MESSAGE =
+  "Hirexa could not confirm the real employer job posting. The selected site did not match this job. Open the original job listing or retry after refreshing job details.";
 const VERIFICATION_STOP_SIGNALS = [
   "just a moment",
   "performing security verification",
@@ -227,12 +231,139 @@ function parseHostname(value: string | null | undefined) {
 }
 
 function isRtxHostname(hostname: string) {
+  return hostname === "rtx.com" || hostname.endsWith(".rtx.com");
+}
+
+function isKnownAtsHostname(hostname: string) {
+  if (!hostname) return false;
   return (
-    hostname === "rtx.com" ||
-    hostname.endsWith(".rtx.com") ||
     hostname.endsWith(".myworkdayjobs.com") ||
-    hostname.endsWith(".workdayjobs.com")
+    hostname.endsWith(".workdayjobs.com") ||
+    hostname.endsWith(".myworkdaysite.com") ||
+    hostname.endsWith(".greenhouse.io") ||
+    hostname.endsWith(".lever.co") ||
+    hostname.endsWith(".jobs.lever.co") ||
+    hostname.endsWith(".ashbyhq.com") ||
+    hostname.endsWith(".icims.com") ||
+    hostname.endsWith(".bamboohr.com") ||
+    hostname.endsWith(".jobvite.com") ||
+    hostname.endsWith(".smartrecruiters.com") ||
+    hostname.endsWith(".workable.com") ||
+    hostname.endsWith(".recruitee.com")
   );
+}
+
+function isRtxCompanyName(value: string | null | undefined) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (!normalized) return false;
+
+  return (
+    normalized.includes("rtx") ||
+    normalized.includes("raytheon") ||
+    normalized.includes("collins aerospace") ||
+    normalized.includes("pratt & whitney") ||
+    normalized.includes("pratt and whitney") ||
+    normalized.includes("raytheon technologies")
+  );
+}
+
+function hostsEquivalentOrSubdomain(left: string, right: string) {
+  if (!left || !right) return false;
+  return (
+    left === right ||
+    left.endsWith(`.${right}`) ||
+    right.endsWith(`.${left}`)
+  );
+}
+
+function resolveExpectedEmployerHost(args: {
+  preferredTargetUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  applicationJobUrl?: string | null;
+  originalUrl?: string | null;
+}) {
+  const candidates = [
+    args.preferredTargetUrl,
+    args.resolvedDirectUrl,
+    args.applicationJobUrl,
+    args.originalUrl,
+  ];
+
+  for (const candidate of candidates) {
+    const host = parseHostname(candidate);
+    if (host) return host;
+  }
+
+  return "";
+}
+
+function rejectStrategyForDomainMismatch(args: {
+  application: LoadedApplication;
+  originalUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  expectedTargetUrl?: string | null;
+  guidance: MatchedStrategyGuidance | null;
+}) {
+  const guidance = args.guidance;
+  if (!guidance) {
+    return null;
+  }
+
+  const strategySourceHost = parseHostname(
+    guidance.strategy.sourceHost ?? guidance.strategy.hostname ?? null,
+  );
+  const strategyDestinationHost = parseHostname(
+    guidance.strategy.destinationHost ?? guidance.startUrl ?? null,
+  );
+  const currentExpectedEmployerHost = resolveExpectedEmployerHost({
+    preferredTargetUrl: args.expectedTargetUrl,
+    resolvedDirectUrl: args.resolvedDirectUrl,
+    applicationJobUrl: args.application.jobUrl,
+    originalUrl: args.originalUrl,
+  });
+
+  const companyIsRtx = isRtxCompanyName(args.application.company);
+  const strategyIsRtx =
+    isRtxHostname(strategySourceHost) || isRtxHostname(strategyDestinationHost);
+
+  let rejectionReason: string | null = null;
+
+  if (
+    strategyDestinationHost &&
+    currentExpectedEmployerHost &&
+    !hostsEquivalentOrSubdomain(
+      strategyDestinationHost,
+      currentExpectedEmployerHost,
+    ) &&
+    !isKnownAtsHostname(strategyDestinationHost) &&
+    !isKnownAtsHostname(currentExpectedEmployerHost)
+  ) {
+    rejectionReason = "strategy_destination_host_mismatch";
+  }
+
+  if (!rejectionReason && !companyIsRtx && strategyIsRtx) {
+    rejectionReason = "rtx_strategy_for_non_rtx_job";
+  }
+
+  if (!rejectionReason) {
+    return null;
+  }
+
+  console.info("[AUTO_APPLY_STRATEGY_REJECTED_DOMAIN_MISMATCH]", {
+    applicationId: args.application.id,
+    jobTitle: args.application.title ?? args.application.jobTitle ?? null,
+    company: args.application.company ?? null,
+    source: args.application.source ?? null,
+    originalUrl: args.originalUrl ?? null,
+    resolvedDirectUrl: args.resolvedDirectUrl ?? null,
+    candidateStrategyId: guidance.strategy.id ?? null,
+    strategySourceHost: strategySourceHost || null,
+    strategyDestinationHost: strategyDestinationHost || null,
+    currentExpectedEmployerHost: currentExpectedEmployerHost || null,
+    rejectionReason,
+  });
+
+  return rejectionReason;
 }
 
 function buildRtxStopPayload(args: {
@@ -571,6 +702,7 @@ async function resolveApplicationDirectJobUrl(args: {
     source,
     sourceJobId: args.application.sourceJobId ?? null,
     preferredDirectUrl,
+    applicationId: args.application.id,
   });
 
   const resolvedDirectUrl =
@@ -1114,6 +1246,133 @@ function withStopDebug(
       stopClassification: stopDebug.stopClassification,
     },
   };
+}
+
+type StopUrlDomainMismatch = {
+  finalHost: string;
+  expectedEmployerHost: string;
+  finalUrl: string | null;
+  stoppedAtUrl: string | null;
+  currentBrowserUrl: string | null;
+  reason: "wrong_employer_domain";
+};
+
+function detectStopUrlDomainMismatch(args: {
+  application: LoadedApplication;
+  result: ApplyExecutionResult;
+  originalJobUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  targetUrl?: string | null;
+}): StopUrlDomainMismatch | null {
+  if (args.result.ok || args.result.status === "SUBMITTED") {
+    return null;
+  }
+
+  const finalUrl =
+    args.result.debug.stoppedAtUrl ??
+    args.result.debug.currentUrl ??
+    args.result.finalUrl ??
+    args.result.debug.finalUrl ??
+    null;
+  const finalHost = parseHostname(finalUrl);
+  if (!finalHost) return null;
+
+  const expectedEmployerHost = resolveExpectedEmployerHost({
+    preferredTargetUrl: args.targetUrl ?? args.result.debug.targetUrl,
+    resolvedDirectUrl: args.resolvedDirectUrl,
+    applicationJobUrl: args.application.jobUrl,
+    originalUrl: args.originalJobUrl,
+  });
+  if (!expectedEmployerHost) {
+    return null;
+  }
+
+  const companyIsRtx = isRtxCompanyName(args.application.company);
+  const finalHostIsRtx = isRtxHostname(finalHost);
+  if (finalHostIsRtx && !companyIsRtx) {
+    return {
+      finalHost,
+      expectedEmployerHost,
+      finalUrl,
+      stoppedAtUrl: args.result.debug.stoppedAtUrl ?? null,
+      currentBrowserUrl: args.result.debug.currentUrl ?? null,
+      reason: "wrong_employer_domain",
+    };
+  }
+
+  if (
+    hostsEquivalentOrSubdomain(finalHost, expectedEmployerHost) ||
+    isKnownAtsHostname(finalHost)
+  ) {
+    return null;
+  }
+
+  return {
+    finalHost,
+    expectedEmployerHost,
+    finalUrl,
+    stoppedAtUrl: args.result.debug.stoppedAtUrl ?? null,
+    currentBrowserUrl: args.result.debug.currentUrl ?? null,
+    reason: "wrong_employer_domain",
+  };
+}
+
+function forceApplyNotStartedForDomainMismatch(args: {
+  result: ApplyExecutionResult;
+  mismatch: StopUrlDomainMismatch;
+}) {
+  const finalUrl =
+    args.result.finalUrl ??
+    args.result.debug.finalUrl ??
+    args.mismatch.finalUrl ??
+    null;
+  const currentUrl = args.result.debug.currentUrl ?? finalUrl;
+  const stopClassification: ApplyStopClassification = {
+    reason: "wrong_employer_domain",
+    pageType: "resolver_failure",
+    suggestedAction: "open_original_job_site",
+  };
+
+  return withStopDebug(
+    {
+      ...args.result,
+      ok: false,
+      status: "APPLY_NOT_STARTED",
+      unavailable: true,
+      needsHuman: false,
+      message: WRONG_EMPLOYER_DOMAIN_MESSAGE,
+      debug: {
+        ...args.result.debug,
+        finalUrl: finalUrl ?? undefined,
+        currentUrl: currentUrl ?? undefined,
+        stoppedAtTitle: undefined,
+        lastActionText: undefined,
+        lastActionSelector: undefined,
+        stopReason: "HUMAN_INTERVENTION_REQUIRED",
+        lastAction: "no_apply_cta",
+        stopClassification,
+        verificationDetected: false,
+        verificationSignals: [],
+        submissionConfirmed: false,
+        finalReason: "wrong_employer_domain",
+      },
+    },
+    {
+      stopReason: "HUMAN_INTERVENTION_REQUIRED",
+      finalUrl,
+      currentUrl,
+      lastAction: "no_apply_cta",
+      stopClassification,
+      stoppedAtUrl:
+        args.result.debug.stoppedAtUrl ??
+        currentUrl ??
+        finalUrl ??
+        null,
+      stoppedAtTitle: null,
+      lastActionText: null,
+      lastActionSelector: null,
+    },
+  );
 }
 
 function applyRouteLevelSubmissionGuard(args: {
@@ -1800,10 +2059,25 @@ function buildStopResponseFields(result: ApplyExecutionResult) {
     rtxFailureReason: result.debug.rtxFailureReason,
     rtxJobId: result.debug.rtxJobId,
   });
+  const inferredErrorCode = inferExecutionErrorCode({
+    result,
+    stopClassification:
+      normalizedStopClassification ??
+      stopDebug?.stopClassification ??
+      result.debug.stopClassification ??
+      null,
+  });
+  const nonVerificationMessage = verificationRequired
+    ? null
+    : buildErrorMessageWithCode({
+        errorCode: inferredErrorCode,
+        message: result.message ?? result.debug.finalReason ?? null,
+      });
 
   if (!stopDebug) {
     return {
       finalUrl,
+      errorCode: inferredErrorCode ?? undefined,
       rtxStop,
     };
   }
@@ -1827,10 +2101,11 @@ function buildStopResponseFields(result: ApplyExecutionResult) {
     retryMode: verificationRequired ? "last_url" : undefined,
     humanMessage: verificationRequired
       ? VERIFICATION_REQUIRED_MESSAGE
-      : undefined,
+      : nonVerificationMessage ?? undefined,
     userMessage: verificationRequired
       ? VERIFICATION_REQUIRED_MESSAGE
-      : undefined,
+      : nonVerificationMessage ?? undefined,
+    errorCode: inferredErrorCode ?? undefined,
     rtxStop,
   };
 }
@@ -1846,6 +2121,40 @@ function isRealPostingNotFoundResult(result: ApplyExecutionResult) {
   return (
     normalizedReason === REAL_POSTING_NOT_FOUND_CODE ||
     normalizedMessage.includes("REAL POSTING NOT FOUND")
+  );
+}
+
+function inferExecutionErrorCode(args: {
+  result: ApplyExecutionResult;
+  stopClassification?: ApplyStopClassification | null;
+  message?: string | null;
+  explicitErrorCode?: string | null;
+}) {
+  return inferApplyAutomationErrorCode({
+    errorCode: args.explicitErrorCode,
+    stopClassification: args.stopClassification ?? args.result.debug.stopClassification,
+    status: args.result.status,
+    message: args.message ?? args.result.message ?? null,
+    finalReason: args.result.debug.finalReason ?? null,
+  });
+}
+
+function buildErrorMessageWithCode(args: {
+  errorCode?: string | null;
+  message?: string | null;
+}) {
+  const normalizedErrorCode = normalizeApplyAutomationErrorCode(args.errorCode);
+  const fallbackMessage = normalizedErrorCode
+    ? getApplyAutomationErrorMessage(normalizedErrorCode)
+    : null;
+
+  return (
+    prefixErrorCodeInMessage({
+      errorCode: normalizedErrorCode,
+      message: args.message ?? fallbackMessage,
+    }) ??
+    args.message ??
+    fallbackMessage
   );
 }
 
@@ -2259,16 +2568,19 @@ async function runBackgroundApply(args: {
   answers: AnswersMap;
   finalValuesToSubmit: AnswersMap;
   targetUrl?: string;
+  selectedStartSource?: string | null;
   resumePath: string;
   urlResolution: DirectResolutionContext;
   strategyGuidance?: MatchedStrategyGuidance | null;
 }) {
   try {
-    const result = applyRouteLevelSubmissionGuard({
+    let result = applyRouteLevelSubmissionGuard({
       rawResult: await applyWithPlaywright({
         jobUrl: args.application.jobUrl ?? "",
         form: args.targetUrl ? { embedUrl: args.targetUrl } : undefined,
         metadata: {
+          applicationId: args.application.id,
+          applySessionId: args.applySessionId,
           originalUrl: args.urlResolution.originalUrl,
           resolvedUrl: args.urlResolution.resolvedDirectUrl,
           source: args.application.source,
@@ -2332,6 +2644,41 @@ async function runBackgroundApply(args: {
       phase: "background",
       applySessionId: args.applySessionId,
     });
+    const backgroundDomainMismatch = detectStopUrlDomainMismatch({
+      application: args.application,
+      result,
+      originalJobUrl: args.urlResolution.originalUrl,
+      resolvedDirectUrl: args.urlResolution.resolvedDirectUrl,
+      targetUrl: args.targetUrl,
+    });
+    if (backgroundDomainMismatch) {
+      console.warn("[AUTO_APPLY_STOP_URL_DOMAIN_MISMATCH]", {
+        applicationId: args.application.id,
+        applySessionId: args.applySessionId,
+        sourceJobId: args.application.sourceJobId ?? null,
+        company: args.application.company ?? null,
+        jobTitle: args.application.title ?? args.application.jobTitle ?? null,
+        originalJobUrl: args.urlResolution.originalUrl ?? null,
+        resolvedDirectUrl: args.urlResolution.resolvedDirectUrl ?? null,
+        targetUrl: args.targetUrl ?? result.debug.targetUrl ?? null,
+        finalUrl: backgroundDomainMismatch.finalUrl,
+        stoppedAtUrl: backgroundDomainMismatch.stoppedAtUrl,
+        selectedStartSource: args.selectedStartSource ?? null,
+        strategyId: args.strategyGuidance?.strategy.id ?? null,
+        strategyDomain:
+          args.strategyGuidance?.strategy.destinationHost ??
+          args.strategyGuidance?.strategy.sourceHost ??
+          null,
+        currentBrowserUrl: backgroundDomainMismatch.currentBrowserUrl,
+        expectedEmployerHost: backgroundDomainMismatch.expectedEmployerHost,
+        finalHost: backgroundDomainMismatch.finalHost,
+        mismatchReason: backgroundDomainMismatch.reason,
+      });
+      result = forceApplyNotStartedForDomainMismatch({
+        result,
+        mismatch: backgroundDomainMismatch,
+      });
+    }
 
     console.log("[AUTO_APPLY_ROUTE] background apply completed", {
       applicationId: args.application.id,
@@ -2365,6 +2712,14 @@ async function runBackgroundApply(args: {
       applicationId: args.application.id,
       applySessionId: args.applySessionId,
     });
+    const finalErrorCode = inferExecutionErrorCode({
+      result: finalResult,
+      message: persistedOutcome.message ?? finalResult.message ?? null,
+    });
+    const finalSessionMessage = buildErrorMessageWithCode({
+      errorCode: finalErrorCode,
+      message: persistedOutcome.message ?? finalResult.message ?? null,
+    });
     logFinalWrite({
       applicationId: args.application.id,
       applySessionId: args.applySessionId,
@@ -2379,8 +2734,9 @@ async function runBackgroundApply(args: {
     updateSession(args.applySessionId, {
       status: finalResult.status,
       lastUrl: finalResult.finalUrl,
-      error: finalResult.ok ? undefined : finalResult.message,
-      message: persistedOutcome.message ?? finalResult.message,
+      error: finalResult.ok ? undefined : finalSessionMessage ?? finalResult.message,
+      message: finalSessionMessage ?? persistedOutcome.message ?? finalResult.message,
+      errorCode: finalErrorCode ?? undefined,
       submissionStatus: persistedOutcome.submissionStatus,
       emailStatus: persistedOutcome.emailStatus,
       debug: finalResult.debug,
@@ -2392,11 +2748,21 @@ async function runBackgroundApply(args: {
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Playwright automation failed.";
+    const errorCode = inferApplyAutomationErrorCode({
+      status: "FAILED",
+      message,
+      finalReason: message,
+    });
+    const normalizedMessage =
+      buildErrorMessageWithCode({
+        errorCode,
+        message,
+      }) ?? message;
 
     console.error("[AUTO_APPLY_PLAYWRIGHT] background apply failed", {
       applicationId: args.application.id,
       applySessionId: args.applySessionId,
-      error: message,
+      error: normalizedMessage,
     });
 
     await recordMatchedStrategyOutcome({
@@ -2405,8 +2771,8 @@ async function runBackgroundApply(args: {
       result: {
         ok: false,
         status: "FAILED",
-        message,
-        debug: { finalReason: message },
+        message: normalizedMessage,
+        debug: { finalReason: normalizedMessage },
         rawStatus: "FAILED",
         rawSubmissionConfirmed: false,
       },
@@ -2423,7 +2789,7 @@ async function runBackgroundApply(args: {
       automation: {
         provider: "playwright",
         status: "FAILED",
-        message,
+        message: normalizedMessage,
         finalReason: "playwright_error",
       },
     });
@@ -2445,7 +2811,7 @@ async function runBackgroundApply(args: {
         status: "READY_TO_SEND",
         answersJson: args.answers,
         auditJson: nextAudit as Prisma.InputJsonValue,
-        failureReason: message,
+        failureReason: normalizedMessage,
         verificationRequired: false,
       },
     });
@@ -2463,11 +2829,12 @@ async function runBackgroundApply(args: {
 
     updateSession(args.applySessionId, {
       status: "FAILED",
-      error: message,
-      message,
+      error: normalizedMessage,
+      message: normalizedMessage,
+      errorCode: errorCode ?? undefined,
       submissionStatus: "NOT_SUBMITTED",
       emailStatus: "SKIPPED",
-      debug: { finalReason: message },
+      debug: { finalReason: normalizedMessage },
     }, {
       caller: "runBackgroundApply.catch",
       sourcePath: "app/api/applications/[id]/apply/route.ts",
@@ -2531,13 +2898,33 @@ export async function POST(
     application = urlResolution.application;
 
     if (directResolution.blocked) {
+      const resolverStopClassification: ApplyStopClassification = {
+        reason: "real_posting_not_found",
+        pageType: "resolver_failure",
+        suggestedAction: "open_original_job_site",
+      };
+      const errorCode =
+        inferApplyAutomationErrorCode({
+          errorCode: directResolution.errorCode,
+          stopClassification: resolverStopClassification,
+          status: "APPLY_NOT_STARTED",
+          message: directResolution.message,
+          finalReason: directResolution.failureReason,
+        }) ?? "REAL_POSTING_NOT_FOUND";
+      const message = buildErrorMessageWithCode({
+        errorCode,
+        message: directResolution.message,
+      });
+
       return NextResponse.json(
         {
           ok: false,
           status: "APPLY_NOT_STARTED",
-          error: directResolution.failureReason,
-          message: directResolution.message,
-          errorCode: directResolution.errorCode,
+          error: message ?? directResolution.failureReason,
+          message: message ?? directResolution.message,
+          errorCode,
+          stopClassification: resolverStopClassification,
+          suggestedAction: resolverStopClassification.suggestedAction,
           ...buildUrlDecisionFields(urlResolution.debug),
         },
         { status: 409 },
@@ -2585,13 +2972,23 @@ export async function POST(
       });
     }
 
-    const matchedStrategyGuidance = initialRoutingDecision.selectedUrl
+    const rawMatchedStrategyGuidance = initialRoutingDecision.selectedUrl
       ? await resolveMatchedStrategyGuidance({
           application,
           sourceUrl: urlResolution.originalUrl || application.jobUrl,
           targetUrl: initialRoutingDecision.selectedUrl,
         })
       : null;
+    const strategyDomainRejection = rejectStrategyForDomainMismatch({
+      application,
+      originalUrl: urlResolution.originalUrl,
+      resolvedDirectUrl: urlResolution.resolvedDirectUrl,
+      expectedTargetUrl: initialRoutingDecision.selectedUrl,
+      guidance: rawMatchedStrategyGuidance,
+    });
+    const matchedStrategyGuidance = strategyDomainRejection
+      ? null
+      : rawMatchedStrategyGuidance;
     const finalRoutingDecision = selectInitialAutomationTarget({
       sourceProvider: application.source,
       candidates: [
@@ -2647,6 +3044,8 @@ export async function POST(
       adzunaStrategyReplaySkipped:
         urlResolution.debug.adzunaStrategyReplaySkipped === true,
       strategyMatched: Boolean(matchedStrategyGuidance),
+      strategyDomainRejected: Boolean(strategyDomainRejection),
+      strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
       strategyStartUrl: matchedStrategyGuidance?.startUrl ?? null,
       usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
@@ -2667,6 +3066,8 @@ export async function POST(
       resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
       targetUrl: effectiveTargetUrl ?? null,
       strategyMatched: Boolean(matchedStrategyGuidance),
+      strategyDomainRejected: Boolean(strategyDomainRejection),
+      strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
       selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
       requiresEcosiaSearch: finalRoutingDecision.requiresEcosiaSearch,
@@ -2775,6 +3176,7 @@ export async function POST(
         answers: prepared.answers,
         finalValuesToSubmit: prepared.finalValuesToSubmit,
         targetUrl: effectiveTargetUrl,
+        selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
         resumePath: tempResume.path,
         urlResolution,
         strategyGuidance: matchedStrategyGuidance,
@@ -2795,11 +3197,13 @@ export async function POST(
     }
 
     try {
-      const result = applyRouteLevelSubmissionGuard({
+      let result = applyRouteLevelSubmissionGuard({
         rawResult: await applyWithPlaywright({
           jobUrl: application.jobUrl ?? "",
           form: effectiveTargetUrl ? { embedUrl: effectiveTargetUrl } : undefined,
           metadata: {
+            applicationId: application.id,
+            applySessionId: null,
             originalUrl: urlResolution.originalUrl,
             resolvedUrl: urlResolution.resolvedDirectUrl,
             source: application.source,
@@ -2845,6 +3249,41 @@ export async function POST(
         applicationId: application.id,
         phase: "foreground",
       });
+      const foregroundDomainMismatch = detectStopUrlDomainMismatch({
+        application,
+        result,
+        originalJobUrl: urlResolution.originalUrl,
+        resolvedDirectUrl: urlResolution.resolvedDirectUrl,
+        targetUrl: effectiveTargetUrl,
+      });
+      if (foregroundDomainMismatch) {
+        console.warn("[AUTO_APPLY_STOP_URL_DOMAIN_MISMATCH]", {
+          applicationId: application.id,
+          applySessionId: null,
+          sourceJobId: application.sourceJobId ?? null,
+          company: application.company ?? null,
+          jobTitle: application.title ?? application.jobTitle ?? null,
+          originalJobUrl: urlResolution.originalUrl ?? null,
+          resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+          targetUrl: effectiveTargetUrl ?? result.debug.targetUrl ?? null,
+          finalUrl: foregroundDomainMismatch.finalUrl,
+          stoppedAtUrl: foregroundDomainMismatch.stoppedAtUrl,
+          selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
+          strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+          strategyDomain:
+            matchedStrategyGuidance?.strategy.destinationHost ??
+            matchedStrategyGuidance?.strategy.sourceHost ??
+            null,
+          currentBrowserUrl: foregroundDomainMismatch.currentBrowserUrl,
+          expectedEmployerHost: foregroundDomainMismatch.expectedEmployerHost,
+          finalHost: foregroundDomainMismatch.finalHost,
+          mismatchReason: foregroundDomainMismatch.reason,
+        });
+        result = forceApplyNotStartedForDomainMismatch({
+          result,
+          mismatch: foregroundDomainMismatch,
+        });
+      }
 
       console.log("[AUTO_APPLY_ROUTE] foreground apply completed", {
         applicationId: application.id,
@@ -2903,12 +3342,20 @@ export async function POST(
       }
 
       if (finalResult.needsHuman) {
+        const errorCode = inferExecutionErrorCode({
+          result: finalResult,
+        });
+        const message = buildErrorMessageWithCode({
+          errorCode,
+          message: finalResult.message ?? "Human intervention required.",
+        });
+
         return NextResponse.json(
           {
             ok: false,
             status: finalResult.status,
-            error: finalResult.message ?? "Human intervention required.",
-            message: finalResult.message ?? "Human intervention required.",
+            error: message ?? "Human intervention required.",
+            message: message ?? "Human intervention required.",
             ...buildStopResponseFields(finalResult),
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
@@ -2920,20 +3367,24 @@ export async function POST(
 
       if (finalResult.status === "APPLY_NOT_STARTED") {
         const realPostingNotFound = isRealPostingNotFoundResult(finalResult);
-        const message = realPostingNotFound
-          ? "Real posting not found."
-          : finalResult.message ??
-            "Opened job page but could not start application.";
+        const errorCode =
+          inferExecutionErrorCode({
+            result: finalResult,
+          }) ?? (realPostingNotFound ? "REAL_POSTING_NOT_FOUND" : null);
+        const message = buildErrorMessageWithCode({
+          errorCode,
+          message: realPostingNotFound
+            ? "Real posting not found."
+            : finalResult.message ??
+              "Opened job page but could not start application.",
+        });
 
         return NextResponse.json(
           {
             ok: false,
             status: finalResult.status,
-            error: message,
-            message,
-            errorCode: realPostingNotFound
-              ? REAL_POSTING_NOT_FOUND_CODE
-              : undefined,
+            error: message ?? "Opened job page but could not start application.",
+            message: message ?? "Opened job page but could not start application.",
             ...buildStopResponseFields(finalResult),
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
@@ -2944,12 +3395,22 @@ export async function POST(
       }
 
       if (finalResult.status === "UNCONFIRMED") {
+        const errorCode = inferExecutionErrorCode({
+          result: finalResult,
+        });
+        const message = buildErrorMessageWithCode({
+          errorCode,
+          message:
+            finalResult.message ?? "Application submission not confirmed.",
+        });
+
         return NextResponse.json(
           {
             ok: false,
             status: finalResult.status,
-            error:
-              finalResult.message ?? "Application submission not confirmed.",
+            error: message ?? "Application submission not confirmed.",
+            message: message ?? "Application submission not confirmed.",
+            errorCode: errorCode ?? undefined,
             finalUrl: finalResult.finalUrl,
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
@@ -2960,13 +3421,22 @@ export async function POST(
       }
 
       if (finalResult.unavailable) {
+        const errorCode = inferExecutionErrorCode({
+          result: finalResult,
+        });
+        const message = buildErrorMessageWithCode({
+          errorCode,
+          message:
+            finalResult.message ??
+            "Auto apply is not available for this job application.",
+        });
+
         return NextResponse.json(
           {
             ok: false,
             status: "AUTO_APPLY_UNAVAILABLE",
-            error:
-              finalResult.message ??
-              "Auto apply is not available for this job application.",
+            error: message ?? "Auto apply is not available for this job application.",
+            message: message ?? "Auto apply is not available for this job application.",
             ...buildStopResponseFields(finalResult),
             ...buildUrlDecisionFields(finalResult.debug),
             submissionStatus: persistedOutcome.submissionStatus,
@@ -2976,11 +3446,20 @@ export async function POST(
         );
       }
 
+      const errorCode = inferExecutionErrorCode({
+        result: finalResult,
+      });
+      const message = buildErrorMessageWithCode({
+        errorCode,
+        message: finalResult.message ?? "Playwright automation failed.",
+      });
+
       return NextResponse.json(
         {
           ok: false,
           status: finalResult.status,
-          error: finalResult.message ?? "Playwright automation failed.",
+          error: message ?? "Playwright automation failed.",
+          message: message ?? "Playwright automation failed.",
           ...buildStopResponseFields(finalResult),
           ...buildUrlDecisionFields(finalResult.debug),
           submissionStatus: persistedOutcome.submissionStatus,
@@ -2993,15 +3472,27 @@ export async function POST(
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Server error";
+    const errorCode = inferApplyAutomationErrorCode({
+      status: "FAILED",
+      message,
+      finalReason: message,
+    });
+    const normalizedMessage =
+      buildErrorMessageWithCode({
+        errorCode,
+        message,
+      }) ?? message;
 
     console.error("[AUTO_APPLY_PLAYWRIGHT] request failed", {
-      error: message,
+      error: normalizedMessage,
     });
 
     return NextResponse.json(
       {
         ok: false,
-        error: message,
+        error: normalizedMessage,
+        message: normalizedMessage,
+        errorCode: errorCode ?? undefined,
       },
       { status: 500 },
     );

@@ -7,8 +7,9 @@ import {
   hasOpenClawConfig,
   type OpenClawConfig,
 } from "@/app/lib/apply/providers/openclaw";
+import { createScrapflyRemoteSession } from "@/app/lib/apply/scrapfly-browser";
 
-export type RemoteBrowserProvider = "browserbase" | "openclaw";
+export type RemoteBrowserProvider = "browserbase" | "openclaw" | "scrapfly";
 
 export type RemoteSession = {
   provider: RemoteBrowserProvider;
@@ -32,6 +33,10 @@ function hasBrowserbaseConfig() {
   return Boolean(process.env.BROWSERBASE_API_KEY?.trim());
 }
 
+function hasScrapflyConfig() {
+  return Boolean(process.env.SCRAPFLY_API_KEY?.trim());
+}
+
 export function getRemoteBrowserProvider(): RemoteBrowserProvider | null {
   const provider = getConfiguredRemoteBrowserProvider();
 
@@ -41,6 +46,10 @@ export function getRemoteBrowserProvider(): RemoteBrowserProvider | null {
 
   if (provider === "openclaw") {
     return hasOpenClawConfig() ? "openclaw" : null;
+  }
+
+  if (provider === "scrapfly") {
+    return hasScrapflyConfig() ? "scrapfly" : null;
   }
 
   return null;
@@ -68,6 +77,16 @@ export async function createRemoteSession(): Promise<RemoteSession> {
       provider: "openclaw",
       sessionId: `openclaw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       connectUrl: config.apiUrl,
+    };
+  }
+
+  if (provider === "scrapfly") {
+    const scrapflySession = createScrapflyRemoteSession();
+
+    return {
+      provider: "scrapfly",
+      sessionId: scrapflySession.sessionId,
+      connectUrl: scrapflySession.wsEndpoint,
     };
   }
 

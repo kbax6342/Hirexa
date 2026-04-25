@@ -18,8 +18,17 @@ These environment variables are optional and only affect the server-side Hirexa 
 Existing behavior is preserved when these variables are not set:
 
 - local runs stay on the current ephemeral Playwright context
-- remote/browserbase flows keep using the existing remote launch path
+- remote/browserbase and remote/scrapfly flows keep using the existing remote launch path
 - `PLAYWRIGHT_HEADLESS` continues to work as before for local non-remote runs
+
+## Scrapfly remote browser (optional)
+
+Set `REMOTE_BROWSER_PROVIDER=scrapfly` and `SCRAPFLY_API_KEY` to run auto-apply on Scrapfly Cloud Browser with durable manual handoff support.
+
+- Scrapfly sessions use `auto_close=false` so verification handoff can be resumed.
+- Verification pages pause automation and return `VERIFICATION_REQUIRED`.
+- Hirexa disconnects from Scrapfly for manual verification, then can reconnect on resume.
+- Invalid targets (static assets, generic company pages, wrong-employer domains, or strategy-domain mismatch) are rejected before any browser launch.
 
 ## RTX careers safety behavior
 

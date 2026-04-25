@@ -9,9 +9,12 @@ export type ApplyStopReason =
   | "unknown_human_intervention";
 
 export type ApplyStopPageType =
+  | "human_verification_gate"
   | "aggregator"
   | "employer_site"
   | "auth_gate"
+  | "handoff_page"
+  | "job_page"
   | "application_form"
   | "unknown";
 
@@ -50,6 +53,9 @@ type StopClassificationInput = {
   submitButtonClicked?: boolean;
   confirmationTextFound?: boolean;
   verificationSignals?: string[];
+  status?: string | null;
+  needsHuman?: boolean;
+  hasPasswordField?: boolean;
   pageText?: string | null;
   finalReason?: string | null;
   message?: string | null;
@@ -70,13 +76,21 @@ const LOGIN_KEYWORDS = [
   "login",
   "sign in",
   "signin",
-  "sign into",
-  "create account",
-  "sign up",
-  "register",
+  "login to apply",
+  "create account to apply",
+  "create an account to apply",
   "password",
-  "forgot password",
+  "email address",
 ];
+
+const OAUTH_LOGIN_KEYWORDS = [
+  "continue with google",
+  "continue with microsoft",
+  "continue with linkedin",
+  "sign in with google",
+  "sign in with microsoft",
+  "sign in with linkedin",
+] as const;
 
 const VERIFICATION_KEYWORDS = [
   "just a moment",
@@ -86,7 +100,9 @@ const VERIFICATION_KEYWORDS = [
   "prove you are human",
   "are you human",
   "human verification",
+  "performing security verification",
   "checking your browser",
+  "checking if you are human",
   "checking if the site connection is secure",
   "please enable javascript and cookies",
   "press & hold",
@@ -99,6 +115,7 @@ const VERIFICATION_KEYWORDS = [
   "cf-chl",
   "security check",
   "security verification",
+  "complete verification",
   "verification required",
   "verification code",
   "verify your email",
@@ -149,6 +166,10 @@ function includesAnySignal(text: string, checks: readonly string[]) {
   return checks.some((check) => text.includes(check));
 }
 
+function normalizeStatus(value: string | null | undefined) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
 function normalizeSignalText(args: StopClassificationInput) {
   return [
     args.targetUrl,
@@ -183,18 +204,32 @@ export function deriveStopClassification(
   const currentHostname = parseHostname(args.currentUrl);
   const activeHostname = currentHostname || finalHostname || targetHostname;
   const signalText = normalizeSignalText(args);
+  const normalizedStatus = normalizeStatus(args.status);
   const hopCount = typeof args.hopCount === "number" ? args.hopCount : 0;
   const applyCtaMissing =
     args.applyCtaFound === false ||
     (args.applyCtaClicked !== true && hopCount === 0);
-  const hasLoginSignals =
-    args.lastAction === "login_required" ||
-    includesAnySignal(signalText, LOGIN_KEYWORDS);
   const hasVerificationSignals =
+    args.needsHuman === true ||
+    normalizedStatus === "VERIFICATION_REQUIRED" ||
+    normalizedStatus === "WAITING_HUMAN" ||
     args.lastAction === "verification_required" ||
     (Array.isArray(args.verificationSignals) &&
       args.verificationSignals.length > 0) ||
     includesAnySignal(signalText, VERIFICATION_KEYWORDS);
+  const hasPasswordSignal =
+    args.hasPasswordField === true || signalText.includes("password");
+  const hasEmailPasswordSignal =
+    signalText.includes("email address") && hasPasswordSignal;
+  const hasOauthSignals = includesAnySignal(signalText, OAUTH_LOGIN_KEYWORDS);
+  const hasLoginSignals =
+    args.lastAction === "login_required" ||
+    hasOauthSignals ||
+    hasEmailPasswordSignal ||
+    (includesAnySignal(signalText, LOGIN_KEYWORDS) &&
+      (hasPasswordSignal ||
+        signalText.includes("to apply") ||
+        signalText.includes("sign in to continue")));
   const aggregatorHost = isAggregatorStopHostname(activeHostname);
   const hostChanged =
     Boolean(targetHostname) &&
@@ -204,7 +239,7 @@ export function deriveStopClassification(
   if (hasVerificationSignals) {
     return {
       reason: "verification_required",
-      pageType: "auth_gate",
+      pageType: "human_verification_gate",
       suggestedAction: "complete_verification",
     };
   }
@@ -301,17 +336,20 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
 
 export function getStopPageTypeLabel(pageType: ApplyStopPageType) {
   switch (pageType) {
+    case "human_verification_gate":
+      return "Human verification gate";
+    case "handoff_page":
+      return "Handoff page";
+    case "job_page":
     case "aggregator":
-      return "Aggregator";
     case "employer_site":
-      return "Employer site";
+    case "application_form":
+      return "Job page";
     case "auth_gate":
       return "Auth gate";
-    case "application_form":
-      return "Application form";
     case "unknown":
     default:
-      return "Unknown";
+      return "Unknown page";
   }
 }
 

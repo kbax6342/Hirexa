@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import AppliedJobsPopout from "@/app/components/apply/AppliedJobsPopout";
 
 export const metadata: Metadata = {
   robots: {
@@ -13,5 +14,10 @@ type SettingsLayoutProps = {
 };
 
 export default function SettingsLayout({ children }: SettingsLayoutProps) {
-  return children;
+  return (
+    <>
+      {children}
+      <AppliedJobsPopout buttonId="applied-jobs-popout-toggle-settings" />
+    </>
+  );
 }

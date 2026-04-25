@@ -27,6 +27,7 @@ import {
   resolveProfessionalLinksForProfile,
   type ProfessionalLink,
 } from "@/app/lib/profile/professionalLinks";
+import AppliedJobsPopout from "@/app/components/apply/AppliedJobsPopout";
 
 type ExperienceItem = {
   id: string;
@@ -2500,6 +2501,7 @@ function ToggleField({
           </div>
         </div>
       </main>
+      <AppliedJobsPopout buttonId="applied-jobs-popout-toggle-profile" />
     </div>
   );
 }

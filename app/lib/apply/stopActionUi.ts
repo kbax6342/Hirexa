@@ -30,7 +30,7 @@ export function getStopSuggestedActionUi(
       return {
         label: getStopSuggestedActionLabel(suggestedAction),
         recommendationText:
-          "This page appears to require account or identity verification. Complete that step, then resume the application flow or retry with a fresh session.",
+          "Employer verification is required before Hirexa can continue. Complete the verification, then resume the application.",
       };
     case "teach_this_page":
       return {

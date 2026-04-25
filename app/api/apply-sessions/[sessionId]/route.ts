@@ -11,10 +11,12 @@ const RTX_VERIFICATION_REQUIRED_MESSAGE =
   APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
 const VERIFICATION_STOP_SIGNALS = [
   "just a moment",
+  "performing security verification",
   "verify you are human",
   "verify you're human",
   "verify that you are human",
   "prove you are human",
+  "checking if you are human",
   "checking your browser",
   "checking if the site connection is secure",
   "please enable javascript and cookies",
@@ -139,16 +141,22 @@ function buildVerificationStopPayload(
 
   const normalizedStopClassification =
     stopClassification && isVerificationClassification(stopClassification)
-      ? stopClassification
+      ? {
+          ...stopClassification,
+          reason: "verification_required" as const,
+          pageType: "human_verification_gate" as const,
+          suggestedAction: "complete_verification" as const,
+        }
       : {
           reason: "verification_required" as const,
-          pageType: "auth_gate" as const,
+          pageType: "human_verification_gate" as const,
           suggestedAction: "complete_verification" as const,
         };
   const rtxStop = buildRtxStopPayload(session);
   const stoppedAtUrl =
     session.debug?.stoppedAtUrl ?? session.debug?.finalUrl ?? session.lastUrl ?? null;
   const stoppedAtTitle = session.debug?.stoppedAtTitle ?? null;
+  const currentUrl = session.debug?.currentUrl ?? session.lastUrl ?? stoppedAtUrl;
   const hostSignal = parseHostname(stoppedAtUrl);
   const isRtxVerification =
     Boolean(rtxStop) ||
@@ -163,6 +171,16 @@ function buildVerificationStopPayload(
   const message = isRtxVerification
     ? RTX_VERIFICATION_REQUIRED_MESSAGE
     : VERIFICATION_REQUIRED_MESSAGE;
+  const verificationSignal =
+    verificationSignalFromDebug ?? verificationSignalFromText ?? null;
+  const evidenceSnippet = [
+    stoppedAtTitle,
+    verificationSignal,
+    session.debug?.lastActionText ?? null,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" | ")
+    .slice(0, 280);
 
   if (isRtxVerification) {
     console.info("[AUTO_APPLY_RTX_PROGRESS]", {
@@ -171,7 +189,7 @@ function buildVerificationStopPayload(
       stoppedAtUrl,
       stoppedAtTitle,
       verificationSignal:
-        verificationSignalFromDebug ?? verificationSignalFromText ?? null,
+        verificationSignal,
     });
     console.info("[AUTO_APPLY_RTX_PROGRESS]", {
       marker: "RTX_VERIFICATION_REQUIRED_RESUME_AVAILABLE",
@@ -182,17 +200,28 @@ function buildVerificationStopPayload(
   }
 
   return {
+    reason: "Security verification required",
+    humanMessage: message,
     message,
+    currentUrl,
     stoppedAtUrl,
+    openUrl: stoppedAtUrl ?? currentUrl,
     stoppedAtTitle,
     suggestedAction: normalizedStopClassification.suggestedAction,
     stopClassification: normalizedStopClassification,
     canResumeAfterHumanStep: true,
-    evidence:
-      verificationSignalFromDebug ??
-      verificationSignalFromText ??
-      session.debug?.lastActionText ??
-      null,
+    retryMode: "last_url",
+    retryContext: {
+      canResumeAfterHumanStep: true,
+      retryMode: "last_url",
+      launchStrategy: session.debug?.playwrightLaunchStrategy ?? null,
+      persistentContext: session.debug?.playwrightPersistentContext ?? null,
+    },
+    evidence: evidenceSnippet || verificationSignal || null,
+    evidenceDetail: {
+      title: stoppedAtTitle,
+      challengeText: verificationSignal,
+    },
     rtx: rtxStop,
   };
 }

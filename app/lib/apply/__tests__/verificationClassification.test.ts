@@ -39,6 +39,14 @@ test.describe("verification signal detection", () => {
 
     expect(signals).toContain("verify you are human");
   });
+
+  test("detects performing-security-verification challenge", () => {
+    const signals = collectVerificationSignals([
+      "Performing security verification. Please wait.",
+    ]);
+
+    expect(signals).toContain("performing security verification");
+  });
 });
 
 test("verification classification wins over aggregator no-cta outcome", () => {
@@ -68,6 +76,43 @@ test("verification classification wins over generic no-cta outcome", () => {
   });
 
   expect(stop.reason).toBe("verification_required");
-  expect(stop.pageType).toBe("auth_gate");
+  expect(stop.pageType).toBe("human_verification_gate");
   expect(stop.suggestedAction).toBe("complete_verification");
+});
+
+test("workable verification pages map to human verification gate", () => {
+  const stop = deriveStopClassification({
+    targetUrl:
+      "https://jobs.workable.com/view/5qhr2iJshD2kD9o5jvZnDM/hybrid-qa-engineer-in-sandy-at-faircom",
+    finalUrl:
+      "https://jobs.workable.com/view/5qhr2iJshD2kD9o5jvZnDM/hybrid-qa-engineer-in-sandy-at-faircom",
+    currentUrl:
+      "https://jobs.workable.com/view/5qhr2iJshD2kD9o5jvZnDM/hybrid-qa-engineer-in-sandy-at-faircom",
+    needsHuman: true,
+    verificationSignals: ["Human verification required"],
+    pageText: "Verify you are human",
+  });
+
+  expect(stop.reason).toBe("verification_required");
+  expect(stop.pageType).toBe("human_verification_gate");
+  expect(stop.suggestedAction).toBe("complete_verification");
+  expect(stop.pageType).not.toBe("auth_gate");
+});
+
+test("login pages still classify as auth gates", () => {
+  const stop = deriveStopClassification({
+    targetUrl: "https://jobs.workable.com/login",
+    finalUrl: "https://jobs.workable.com/login",
+    currentUrl: "https://jobs.workable.com/login",
+    pageText:
+      "Sign in to continue. Email address Password Continue with Google Login to apply",
+    hasPasswordField: true,
+    applyCtaFound: false,
+    applyCtaClicked: false,
+    hopCount: 0,
+  });
+
+  expect(stop.reason).toBe("login_required");
+  expect(stop.pageType).toBe("auth_gate");
+  expect(stop.suggestedAction).toBe("sign_in_and_retry");
 });

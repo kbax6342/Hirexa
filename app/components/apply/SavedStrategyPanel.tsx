@@ -258,7 +258,11 @@ export default function SavedStrategyPanel({
     }
 
     const fallbackMessage = String(errorMessage ?? "").trim();
-    return fallbackMessage.length > 0
+    const fallbackLooksLikeVerification = /verify|verification|human|cloudflare|captcha|turnstile|just a moment|checking your browser/i.test(
+      fallbackMessage,
+    );
+
+    return fallbackLooksLikeVerification && fallbackMessage.length > 0
       ? fallbackMessage
       : APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
   }, [
@@ -551,9 +555,13 @@ export default function SavedStrategyPanel({
 
   const renderStopSummary = () => (
     <div className="rounded-lg border border-current/10 bg-white/70 p-3">
-      <p className="font-semibold text-current">
-        Why it stopped: {getStopReasonLabel(resolvedStopClassification.reason)}
-      </p>
+      {resolvedStopClassification.reason === "verification_required" ? (
+        <p className="font-semibold text-current">Human verification required</p>
+      ) : (
+        <p className="font-semibold text-current">
+          Why it stopped: {getStopReasonLabel(resolvedStopClassification.reason)}
+        </p>
+      )}
       <p className={cn("mt-1", palette.subtle)}>
         Page type: {getStopPageTypeLabel(resolvedStopClassification.pageType)}
       </p>
@@ -561,6 +569,20 @@ export default function SavedStrategyPanel({
         Suggested action:{" "}
         {getStopSuggestedActionLabel(resolvedStopClassification.suggestedAction)}
       </p>
+      {resolvedStopClassification.reason === "verification_required" &&
+      recommendedActionUrl ? (
+        <p className={cn("mt-1", palette.subtle)}>
+          Current URL:{" "}
+          <a
+            className="break-all underline"
+            href={recommendedActionUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {recommendedActionUrl}
+          </a>
+        </p>
+      ) : null}
       {verificationUiMessage ? (
         <p className={cn("mt-2", palette.subtle)}>{verificationUiMessage}</p>
       ) : null}

@@ -267,12 +267,25 @@ export async function chaseApplyPath(args: {
 
     const candidate = await findNextApplyCallToAction(activePage);
     if (!candidate) {
+      const noCandidateSignals = await detectPageSignals(activePage);
+      if (noCandidateSignals.needsHuman) {
+        return {
+          page: activePage,
+          hopCount: hop - 1,
+          urlsVisited,
+          clicks,
+          signals: noCandidateSignals,
+          finalReason:
+            "Security verification requires manual completion before continuing.",
+        };
+      }
+
       return {
         page: activePage,
         hopCount: hop - 1,
         urlsVisited,
         clicks,
-        signals,
+        signals: noCandidateSignals,
         unavailable: true,
         finalReason:
           "Auto apply is not available for this job application because no usable apply button path was found.",

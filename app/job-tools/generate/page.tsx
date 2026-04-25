@@ -30,6 +30,13 @@ type Result = {
   candidateFirstName?: string | null;
   candidateLastName?: string | null;
   candidateEmail?: string | null;
+  candidatePhone?: string | null;
+  candidateAddress?: string | null;
+  candidateCity?: string | null;
+  candidateState?: string | null;
+  candidatePostalCode?: string | null;
+  candidateLinkedinUrl?: string | null;
+  candidatePortfolioUrl?: string | null;
   savedResume?: {
     id: string;
     fileName?: string | null;
@@ -457,6 +464,55 @@ function JobToolsGeneratePageContent() {
     );
   }
 
+  function buildResumeContactLines(r: Result | null) {
+    if (!r) return [];
+
+    const address = normalizeDocumentText(r.candidateAddress ?? "");
+    const stateZip = [r.candidateState?.trim(), r.candidatePostalCode?.trim()]
+      .filter(Boolean)
+      .join(" ");
+    const cityStateZip = [r.candidateCity?.trim(), stateZip].filter(Boolean).join(", ");
+    const fullAddressLine = [address, cityStateZip].filter(Boolean).join(", ");
+
+    const emailPhoneLine = [
+      r.candidateEmail?.trim() ? `Email: ${r.candidateEmail.trim()}` : "",
+      r.candidatePhone?.trim() ? `Phone: ${r.candidatePhone.trim()}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    const linksLine = [
+      r.candidateLinkedinUrl?.trim()
+        ? `LinkedIn: ${r.candidateLinkedinUrl.trim()}`
+        : "",
+      r.candidatePortfolioUrl?.trim()
+        ? `Portfolio: ${r.candidatePortfolioUrl.trim()}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    return dedupeTextItems([fullAddressLine, emailPhoneLine, linksLine]);
+  }
+
+  function buildSocialMediaLines(r: Result | null, rawResumeText: string) {
+    const rawMatches = normalizeDocumentText(rawResumeText)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^(portfolio|facebook|twitter|x|instagram|linkedin)\s*:/i.test(line));
+
+    const profileLines = [
+      r?.candidatePortfolioUrl?.trim()
+        ? `Portfolio: ${r.candidatePortfolioUrl.trim()}`
+        : "",
+      r?.candidateLinkedinUrl?.trim()
+        ? `LinkedIn: ${r.candidateLinkedinUrl.trim()}`
+        : "",
+    ];
+
+    return dedupeTextItems([...rawMatches, ...profileLines]);
+  }
+
   function formatCoverLetterDocument(r: Result | null) {
     if (!r) return "";
     const candidateName = getCandidateName(r);
@@ -504,6 +560,8 @@ function JobToolsGeneratePageContent() {
     }).format(new Date());
     const context = { candidateName, company, role, dateLabel };
     const fullResumeText = stripPlaceholders(getRawDocumentText(r, "updatedResume"), context);
+    const candidateContactLines = buildResumeContactLines(r);
+    const socialMediaLines = buildSocialMediaLines(r, fullResumeText);
     const summary = stripPlaceholders(
       pickFirstNonEmpty(r.resumeUpdates?.summaryRewrite, r.job?.summary),
       context
@@ -530,7 +588,7 @@ function JobToolsGeneratePageContent() {
 
     const fallbackLines: string[] = [];
     if (candidateName) fallbackLines.push(candidateName);
-    if (r.candidateEmail?.trim()) fallbackLines.push(r.candidateEmail.trim());
+    fallbackLines.push(...candidateContactLines);
     if (fallbackLines.length > 0) fallbackLines.push("");
 
     if (summary) {
@@ -550,11 +608,17 @@ function JobToolsGeneratePageContent() {
       }
     }
 
+    if (socialMediaLines.length > 0) {
+      fallbackLines.push("SOCIAL MEDIA LINKS", "");
+      fallbackLines.push(...socialMediaLines);
+      fallbackLines.push("");
+    }
+
     const sourceResumeText = fullResumeText || normalizeDocumentText(fallbackLines.join("\n"));
     const normalizedResume = normalizeResume({
       rawText: sourceResumeText,
       candidateName: candidateName || null,
-      candidateContactLines: dedupeTextItems([r.candidateEmail ?? ""]),
+      candidateContactLines,
     });
     return normalizeDocumentText(normalizedResumeToText(normalizedResume));
   }

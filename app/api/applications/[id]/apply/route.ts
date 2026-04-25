@@ -194,11 +194,13 @@ const VERIFICATION_REQUIRED_STATUS = "VERIFICATION_REQUIRED" as const;
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
 const VERIFICATION_STOP_SIGNALS = [
   "just a moment",
+  "performing security verification",
   "verify you are human",
   "verify you're human",
   "verify that you are human",
   "prove you are human",
   "are you human",
+  "checking if you are human",
   "checking your browser",
   "checking if the site connection is secure",
   "please enable javascript and cookies",
@@ -877,6 +879,8 @@ function buildStopDebugFromRawResult(
       null,
     message: result.message,
     lastAction,
+    status: result.status,
+    needsHuman: result.needsHuman === true,
     formDetected: result.debug?.formDetected === true,
   });
 
@@ -958,6 +962,8 @@ function buildStopDebugFromExecutionResult(
         null,
       message: result.message,
       lastAction,
+      status: result.status,
+      needsHuman: result.needsHuman === true,
       formDetected: result.debug.formDetected === true,
     });
 
@@ -1030,9 +1036,12 @@ function coerceVerificationExecutionResult(
           submitButtonFound: result.debug.submitButtonFound === true,
           submitButtonClicked: result.debug.submitButtonClicked === true,
           confirmationTextFound: result.debug.confirmationTextFound === true,
+          verificationSignals: result.debug.verificationSignals ?? [],
           finalReason: result.debug.finalReason ?? result.message ?? null,
           message: result.message,
           lastAction: "verification_required",
+          status: result.status,
+          needsHuman: true,
           formDetected: result.debug.formDetected === true,
         });
   const stopDebug: AutoApplyStopDebug = {
@@ -1402,6 +1411,8 @@ function applyFinalWriteGuard(args: {
     finalReason,
     message: args.result.message,
     lastAction: "no_apply_cta",
+    status: args.result.status,
+    needsHuman: args.result.needsHuman === true,
     formDetected: args.result.debug.formDetected === true,
   });
 
@@ -1483,6 +1494,8 @@ function ensureTerminalApplySessionResult(args: {
       finalReason,
       message: args.result.message,
       lastAction,
+      status: args.result.status,
+      needsHuman: false,
       formDetected: args.result.debug.formDetected === true,
     });
 
@@ -1765,7 +1778,18 @@ function logAutoApplyStopPoint(args: {
 function buildStopResponseFields(result: ApplyExecutionResult) {
   const stopDebug = buildStopDebugFromExecutionResult(result);
   const finalUrl = stopDebug?.finalUrl ?? result.finalUrl ?? result.debug.finalUrl ?? null;
+  const currentUrl = stopDebug?.currentUrl ?? result.debug.currentUrl ?? finalUrl ?? null;
   const verificationRequired = isVerificationExecutionResult(result);
+  const normalizedStopClassification =
+    stopDebug?.stopClassification &&
+    stopDebug.stopClassification.reason === "verification_required"
+      ? {
+          ...stopDebug.stopClassification,
+          reason: "verification_required" as const,
+          pageType: "human_verification_gate" as const,
+          suggestedAction: "complete_verification" as const,
+        }
+      : stopDebug?.stopClassification ?? null;
   const rtxStop = buildRtxStopPayload({
     finalUrl: stopDebug?.finalUrl ?? result.finalUrl ?? result.debug.finalUrl,
     currentUrl: stopDebug?.currentUrl ?? result.debug.currentUrl,
@@ -1786,16 +1810,24 @@ function buildStopResponseFields(result: ApplyExecutionResult) {
 
   return {
     stopReason: stopDebug.stopReason,
+    reason: verificationRequired ? "Security verification required" : undefined,
     finalUrl,
-    currentUrl: stopDebug.currentUrl,
+    currentUrl,
+    openUrl: stopDebug.stoppedAtUrl ?? currentUrl ?? finalUrl,
     stoppedAtUrl: stopDebug.stoppedAtUrl,
     stoppedAtTitle: stopDebug.stoppedAtTitle,
     lastAction: stopDebug.lastAction,
     lastActionText: stopDebug.lastActionText,
     lastActionSelector: stopDebug.lastActionSelector,
-    stopClassification: stopDebug.stopClassification,
-    suggestedAction: stopDebug.stopClassification.suggestedAction,
+    stopClassification: normalizedStopClassification,
+    suggestedAction:
+      normalizedStopClassification?.suggestedAction ??
+      stopDebug.stopClassification.suggestedAction,
     canResumeAfterHumanStep: verificationRequired,
+    retryMode: verificationRequired ? "last_url" : undefined,
+    humanMessage: verificationRequired
+      ? VERIFICATION_REQUIRED_MESSAGE
+      : undefined,
     userMessage: verificationRequired
       ? VERIFICATION_REQUIRED_MESSAGE
       : undefined,

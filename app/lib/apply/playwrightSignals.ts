@@ -23,6 +23,7 @@ export type MeaningfulFormControlSummary = {
 
 export const HUMAN_VERIFICATION_CHECKS = [
   "just a moment",
+  "performing security verification",
   "verify you are human",
   "verify you're human",
   "verify that you are human",
@@ -30,6 +31,7 @@ export const HUMAN_VERIFICATION_CHECKS = [
   "are you human",
   "are you a human",
   "human verification",
+  "checking if you are human",
   "checking your browser",
   "checking if the site connection is secure",
   "please enable javascript and cookies",
@@ -54,6 +56,22 @@ export const HUMAN_VERIFICATION_CHECKS = [
   "one time code",
   "otp",
 ] as const;
+
+const VERIFICATION_DOM_MARKERS: Array<{ selector: string; signal: string }> = [
+  { selector: "iframe[src*='turnstile']", signal: "turnstile iframe" },
+  { selector: "iframe[title*='turnstile' i]", signal: "turnstile iframe" },
+  {
+    selector: "iframe[src*='challenges.cloudflare.com']",
+    signal: "cloudflare challenge iframe",
+  },
+  { selector: ".cf-turnstile", signal: "turnstile widget" },
+  { selector: "[id*='turnstile' i]", signal: "turnstile container" },
+  { selector: "input[name='cf-turnstile-response']", signal: "turnstile response field" },
+  { selector: "#challenge-form", signal: "challenge form" },
+  { selector: "#challenge-running", signal: "challenge running indicator" },
+  { selector: "[class*='challenge-form' i]", signal: "challenge form" },
+  { selector: "[data-testid*='challenge' i]", signal: "challenge container" },
+];
 
 export const SEARCH_ENGINE_CHALLENGE_CHECKS = [
   "unusual traffic",
@@ -142,6 +160,24 @@ async function detectForm(page: Page) {
     formDetected: result.controlCount > 0,
     hasPassword: result.hasPassword,
   };
+}
+
+async function detectVerificationDomSignals(page: Page) {
+  return page
+    .evaluate((markers) => {
+      const found = new Set<string>();
+      for (const marker of markers) {
+        try {
+          if (document.querySelector(marker.selector)) {
+            found.add(marker.signal);
+          }
+        } catch {
+          // Ignore selector parse errors from malformed pages.
+        }
+      }
+      return Array.from(found);
+    }, VERIFICATION_DOM_MARKERS)
+    .catch(() => [] as string[]);
 }
 
 export async function readMeaningfulFormControlSummary(
@@ -246,18 +282,22 @@ export async function waitForDomAndSettle(page: Page) {
 }
 
 export async function detectPageSignals(page: Page): Promise<PageSignals> {
-  const [html, pageText, currentTitle, form] = await Promise.all([
+  const [html, pageText, currentTitle, form, verificationDomSignals] = await Promise.all([
     page.content().catch(() => ""),
     page.innerText("body").catch(() => ""),
     page.title().catch(() => ""),
     detectForm(page),
+    detectVerificationDomSignals(page),
   ]);
 
   const visibleText = [currentTitle, pageText].join("\n");
   const verificationText = [page.url(), currentTitle, pageText, html].join("\n");
-  const verificationSignals = collectVerificationSignals([
-    verificationText,
-  ]);
+  const verificationSignals = [
+    ...new Set([
+      ...collectVerificationSignals([verificationText]),
+      ...verificationDomSignals,
+    ]),
+  ];
   const searchEngineChallengeSignals = [
     ...new Set(containsSignal(verificationText, SEARCH_ENGINE_CHALLENGE_CHECKS)),
   ];

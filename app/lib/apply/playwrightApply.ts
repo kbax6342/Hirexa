@@ -324,6 +324,7 @@ type ApplyBrowserAutomationLibrary = "playwright" | "playwright-extra";
 type ApplyBrowserRuntimeResolution = {
   chromium: ApplyChromiumRuntime;
   browserAutomationLibrary: ApplyBrowserAutomationLibrary;
+  stealthRequested: boolean;
   playwrightExtraAvailable: boolean;
   puppeteerExtraAvailable: boolean;
   stealthDependencyInstalled: boolean;
@@ -337,6 +338,7 @@ function buildDefaultApplyBrowserRuntimeResolution(): ApplyBrowserRuntimeResolut
   return {
     chromium: playwrightChromium,
     browserAutomationLibrary: "playwright",
+    stealthRequested: false,
     playwrightExtraAvailable: false,
     puppeteerExtraAvailable: false,
     stealthDependencyInstalled: false,
@@ -376,7 +378,10 @@ async function resolveApplyBrowserRuntime(): Promise<ApplyBrowserRuntimeResoluti
     parseBooleanEnv(process.env.APPLY_STEALTH_ENABLED) === true;
 
   if (!stealthRequested) {
-    return fallback;
+    return {
+      ...fallback,
+      stealthRequested,
+    };
   }
 
   let playwrightExtraAvailable = false;
@@ -408,6 +413,7 @@ async function resolveApplyBrowserRuntime(): Promise<ApplyBrowserRuntimeResoluti
     ) {
       return {
         ...fallback,
+        stealthRequested,
         playwrightExtraAvailable,
         puppeteerExtraAvailable,
         stealthDependencyInstalled,
@@ -422,6 +428,7 @@ async function resolveApplyBrowserRuntime(): Promise<ApplyBrowserRuntimeResoluti
     return {
       chromium: runtimeChromium,
       browserAutomationLibrary: "playwright-extra",
+      stealthRequested,
       playwrightExtraAvailable,
       puppeteerExtraAvailable,
       stealthDependencyInstalled,
@@ -434,6 +441,7 @@ async function resolveApplyBrowserRuntime(): Promise<ApplyBrowserRuntimeResoluti
     });
     return {
       ...fallback,
+      stealthRequested,
       playwrightExtraAvailable,
       puppeteerExtraAvailable,
       stealthDependencyInstalled,
@@ -10005,6 +10013,7 @@ export async function applyWithPlaywright(args: {
   let browserAutomationLibrary: ApplyBrowserAutomationLibrary = "playwright";
   let playwrightExtraAvailable = false;
   let puppeteerExtraAvailable = false;
+  let stealthRequested = false;
   let stealthDependencyInstalled = false;
   let stealthRuntimeEnabled = false;
   let stealthPluginRegistered = false;
@@ -10941,6 +10950,7 @@ export async function applyWithPlaywright(args: {
     browserAutomationLibrary = browserRuntime.browserAutomationLibrary;
     playwrightExtraAvailable = browserRuntime.playwrightExtraAvailable;
     puppeteerExtraAvailable = browserRuntime.puppeteerExtraAvailable;
+    stealthRequested = browserRuntime.stealthRequested;
     stealthDependencyInstalled = browserRuntime.stealthDependencyInstalled;
     stealthRuntimeEnabled = browserRuntime.stealthRuntimeEnabled;
     stealthPluginRegistered = browserRuntime.stealthPluginRegistered;
@@ -10955,7 +10965,11 @@ export async function applyWithPlaywright(args: {
       playwrightUserDataDir = undefined;
       headless = true;
       console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
+        stealthEnabled: stealthRequested,
+        runtime: browserAutomationLibrary,
         browserAutomationLibrary,
+        runtimeFallbackUsed: browserAutomationLibrary === "playwright",
+        browser: "chromium",
         playwrightExtraAvailable,
         puppeteerExtraAvailable,
         stealthDependencyInstalled,
@@ -10983,7 +10997,11 @@ export async function applyWithPlaywright(args: {
       playwrightPersistentContext = launchOptions.persistentContext;
       playwrightUserDataDir = launchOptions.userDataDir;
       console.info("[AUTO_APPLY_BROWSER_RUNTIME]", {
+        stealthEnabled: stealthRequested,
+        runtime: browserAutomationLibrary,
         browserAutomationLibrary,
+        runtimeFallbackUsed: browserAutomationLibrary === "playwright",
+        browser: "chromium",
         playwrightExtraAvailable,
         puppeteerExtraAvailable,
         stealthDependencyInstalled,
@@ -11876,6 +11894,7 @@ export async function applyWithPlaywright(args: {
         ...chase.signals.verificationSignals,
         ...chase.signals.accountSignals,
       ],
+      needsHuman: chase.signals.needsHuman,
       pageText: chase.signals.pageText,
       finalReason: chase.finalReason,
       formDetected: chase.signals.formDetected,

@@ -123,7 +123,6 @@ const generateProfileSelect = {
       },
       experiences: {
         orderBy: { order: "asc" },
-        take: 10,
         select: {
           title: true,
           company: true,
@@ -307,7 +306,7 @@ function collectCandidateExperience(profile: GenerateProfile | null) {
     return structuredExperiences;
   }
 
-  return parseResumeExperiencesJson(profile?.resume?.resumeExperiences?.experiences).slice(0, 8);
+  return parseResumeExperiencesJson(profile?.resume?.resumeExperiences?.experiences);
 }
 
 function cleanText(s: string) {
@@ -589,29 +588,78 @@ function buildFallbackResumeText(
   candidateName: string | null
 ) {
   const profile = context.candidateProfile;
-  const contactLine = dedupeStrings([
-    profile.email,
-    profile.phone,
-    [profile.city, profile.state].filter(Boolean).join(", "),
-    profile.linkedinUrl,
-    profile.portfolioUrl,
-  ]).join(" | ");
-  const summary = cleanText(
-    generated.resumeUpdates?.summaryRewrite ||
-      generated.job?.summary ||
-      [
-        context.candidateSignals.targetRole
-          ? `Targeting ${context.candidateSignals.targetRole} opportunities`
-          : null,
-        context.candidateExperience[0]
-          ? `with experience as ${context.candidateExperience[0].title} at ${context.candidateExperience[0].company}`
-          : null,
-        context.candidateSignals.skills.length
-          ? `bringing strengths in ${context.candidateSignals.skills.slice(0, 5).join(", ")}`
-          : null,
-      ]
+  const addressLine = dedupeStrings([
+    [
+      profile.address,
+      [profile.city, [profile.state, profile.postalCode].filter(Boolean).join(" ")]
         .filter(Boolean)
-        .join(" ")
+        .join(", "),
+    ]
+      .filter(Boolean)
+      .join(", "),
+  ]).join("");
+  const emailPhoneLine = dedupeStrings([
+    profile.email ? `Email: ${profile.email}` : "",
+    profile.phone ? `Phone: ${profile.phone}` : "",
+  ]).join(" | ");
+  const linksLine = dedupeStrings([
+    profile.linkedinUrl ? `LinkedIn: ${profile.linkedinUrl}` : "",
+    profile.portfolioUrl ? `Portfolio: ${profile.portfolioUrl}` : "",
+  ]).join(" | ");
+
+  const ensureSummarySentenceMinimum = (value: string, minimum = 4) => {
+    const sentences = cleanText(value)
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => cleanText(sentence))
+      .filter(Boolean);
+    const fallbackSentences = [
+      "Skilled at collaborating across teams to deliver reliable outcomes.",
+      "Known for clear communication, strong ownership, and consistent execution.",
+      "Focused on process improvements that increase quality and efficiency.",
+    ];
+    let fallbackIndex = 0;
+    while (sentences.length < minimum) {
+      sentences.push(fallbackSentences[fallbackIndex % fallbackSentences.length]);
+      fallbackIndex += 1;
+    }
+    return cleanText(sentences.join(" "));
+  };
+
+  const ensureMinimumBullets = (bullets: string[], minimum = 5) => {
+    const normalized = dedupeStrings(bullets).slice(0, 8);
+    const fallbackBullets = [
+      "Collaborated with cross-functional partners to deliver prioritized work on schedule.",
+      "Maintained quality standards through testing, documentation, and process consistency.",
+      "Communicated status, risks, and next steps to keep stakeholders aligned.",
+      "Supported process improvements that increased reliability and operational efficiency.",
+      "Applied security, compliance, and data-quality best practices in daily execution.",
+    ];
+    let fallbackIndex = 0;
+    while (normalized.length < minimum) {
+      normalized.push(fallbackBullets[fallbackIndex % fallbackBullets.length]);
+      fallbackIndex += 1;
+    }
+    return normalized;
+  };
+
+  const summary = cleanText(
+    ensureSummarySentenceMinimum(
+      generated.resumeUpdates?.summaryRewrite ||
+        generated.job?.summary ||
+        [
+          context.candidateSignals.targetRole
+            ? `Targeting ${context.candidateSignals.targetRole} opportunities`
+            : null,
+          context.candidateExperience[0]
+            ? `with experience as ${context.candidateExperience[0].title} at ${context.candidateExperience[0].company}`
+            : null,
+          context.candidateSignals.skills.length
+            ? `bringing strengths in ${context.candidateSignals.skills.slice(0, 5).join(", ")}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" ")
+    )
   );
   const skills = dedupeStrings([
     ...context.candidateSignals.skills,
@@ -638,17 +686,17 @@ function buildFallbackResumeText(
             .map((edit) => edit.after)
             .filter(Boolean) ?? [];
 
-      return cleanText(
-        [header, ...bullets.slice(0, 4).map((bullet) => `- ${bullet}`)].join("\n")
-      );
+      return cleanText([header, ...ensureMinimumBullets(bullets).map((bullet) => `- ${bullet}`)].join("\n"));
     })
     .filter(Boolean);
 
   const sections = [
     candidateName || "Candidate",
-    contactLine,
-    summary ? `SUMMARY\n${summary}` : "",
-    skills.length ? `SKILLS\n${skills.join(" | ")}` : "",
+    addressLine,
+    emailPhoneLine,
+    linksLine,
+    summary ? `PROFESSIONAL SUMMARY\n${summary}` : "",
+    skills.length ? `SKILLS\n${skills.map((skill) => `- ${skill}`).join("\n")}` : "",
     experienceSections.length
       ? `PROFESSIONAL EXPERIENCE\n${experienceSections.join("\n\n")}`
       : "",
@@ -1031,12 +1079,28 @@ TASK:
    - greeting
    - 3-5 short paragraphs
    - professional close and candidate name
-3) Generate a complete final resume in plain text that is ready to export directly. It must be a full developed resume, not patch notes or suggestions. Use clear sections when data exists, such as:
-   - Name / Contact
-   - Professional Summary
-   - Skills
-   - Professional Experience
-   - Education / Certifications
+3) Generate a complete final resume in plain text that is ready to export directly. It must be a full developed resume, not patch notes or suggestions.
+   Resume format requirements:
+   - Start with candidate name.
+   - Then contact block in this order when data exists:
+     1) full address line
+     2) Email + Phone on one line
+     3) LinkedIn + Portfolio on one line
+   - Use ALL CAPS headings:
+     PROFESSIONAL SUMMARY
+     SKILLS
+     PROFESSIONAL EXPERIENCE
+     EDUCATION
+     CERTIFICATIONS
+     SOCIAL MEDIA LINKS (only when links are available)
+   - PROFESSIONAL SUMMARY must be at least 4 sentences.
+   - SKILLS must be bullet points only.
+   - PROFESSIONAL EXPERIENCE: each job must include title line, company/location line, date range line, and at least 5 bullet points.
+     Include every role present in SAVED EXPERIENCE JSON when that data is available. Do not arbitrarily omit older roles.
+     If the source has fewer than 5 bullets, generate additional truthful, conservative bullets based on known context without inventing metrics.
+   - EDUCATION lines should preserve credential and school naming clearly (for example M.S., B.S., B.A., A.A., C.).
+   - Do not output markdown tables.
+   - Do not include placeholder tokens like [Your Name], [Company], [Hiring Manager], [Date], or spacing markers like "<-- Add Space Here -->".
    Use the real saved profile details and saved experience where available. Tailor the summary, skills, and bullet phrasing to the job posting.
    Rewrite the experience bullets so they are noticeably stronger, more specific, and more hireable than the source wording.
 4) Propose resume updates:
@@ -1119,6 +1183,13 @@ ${JSON.stringify(schema, null, 2)}
         candidateFirstName: candidateContext.candidateProfile.firstName,
         candidateLastName: candidateContext.candidateProfile.lastName,
         candidateEmail: candidateContext.candidateProfile.email,
+        candidatePhone: candidateContext.candidateProfile.phone,
+        candidateAddress: candidateContext.candidateProfile.address,
+        candidateCity: candidateContext.candidateProfile.city,
+        candidateState: candidateContext.candidateProfile.state,
+        candidatePostalCode: candidateContext.candidateProfile.postalCode,
+        candidateLinkedinUrl: candidateContext.candidateProfile.linkedinUrl,
+        candidatePortfolioUrl: candidateContext.candidateProfile.portfolioUrl,
         fullResumeText,
         savedResume,
         profileSync,

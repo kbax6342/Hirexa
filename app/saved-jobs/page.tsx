@@ -8,6 +8,7 @@ import { useSession } from "next-auth/react";
 import JobCard, { type JobCardData } from "@/app/components/jobs/JobCard";
 import MobileListLoadingScreen from "@/app/components/loading/MobileListLoadingScreen";
 import LoginFooter from "@/app/components/loginFooter/LoginFooter";
+import AppliedJobsPopout from "@/app/components/apply/AppliedJobsPopout";
 
 type SavedJob = {
   id: string;
@@ -254,6 +255,7 @@ export default function SavedJobsPage() {
       </main>
 
       <LoginFooter />
+      <AppliedJobsPopout buttonId="applied-jobs-popout-toggle-saved-jobs" />
     </>
   );
 }

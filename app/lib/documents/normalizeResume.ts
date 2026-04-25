@@ -30,6 +30,11 @@ export type NormalizedResumeSection =
       items: string[];
     }
   | {
+      type: "socialMedia";
+      heading: string;
+      items: string[];
+    }
+  | {
       type: "generic";
       heading: string;
       paragraphs: string[];
@@ -48,7 +53,13 @@ type NormalizeResumeInput = {
   candidateContactLines?: string[];
 };
 
-type SectionType = "summary" | "skills" | "experience" | "education" | "certifications";
+type SectionType =
+  | "summary"
+  | "skills"
+  | "experience"
+  | "education"
+  | "certifications"
+  | "socialMedia";
 
 const headingMap: Array<{
   type: SectionType;
@@ -80,6 +91,25 @@ const headingMap: Array<{
     heading: "CERTIFICATIONS",
     pattern: /^(certifications?|licenses?)$/i,
   },
+  {
+    type: "socialMedia",
+    heading: "SOCIAL MEDIA LINKS",
+    pattern: /^(social media links|social links|social media)$/i,
+  },
+];
+
+const summarySentenceFallbacks = [
+  "Skilled at translating business needs into practical, high-quality execution.",
+  "Known for clear communication, reliable follow-through, and strong collaboration across teams.",
+  "Focused on continuous improvement, process efficiency, and measurable outcomes.",
+];
+
+const genericJobBulletFallbacks = [
+  "Collaborated with cross-functional teams to deliver prioritized work on schedule.",
+  "Maintained quality standards through testing, documentation, and process consistency.",
+  "Communicated status, risks, and next steps with stakeholders to keep execution aligned.",
+  "Supported process improvements that increased reliability, efficiency, or data accuracy.",
+  "Applied security, compliance, and operational best practices in day-to-day work.",
 ];
 
 const spacingMarkerPattern = /<--[^>]*-->/gi;
@@ -143,8 +173,9 @@ function normalizeBullet(value: string) {
 function detectHeading(value: string): { type: SectionType; heading: string } | null {
   const normalized = cleanLine(value).replace(/:+$/, "").trim();
   if (!normalized) return null;
+  const normalizedWithoutHint = normalized.split(/\s+-\s+/)[0]?.trim() ?? normalized;
   for (const entry of headingMap) {
-    if (entry.pattern.test(normalized)) {
+    if (entry.pattern.test(normalized) || entry.pattern.test(normalizedWithoutHint)) {
       return { type: entry.type, heading: entry.heading };
     }
   }
@@ -211,6 +242,92 @@ function looksLikeDateRange(value: string) {
   );
 }
 
+function looksLikeLikelyBulletSentence(value: string) {
+  const line = cleanLine(value);
+  if (!line) return false;
+  const wordCount = line.split(/\s+/).filter(Boolean).length;
+  if (wordCount >= 12) return true;
+  return /[.!?]$/.test(line);
+}
+
+function looksLikeCompanyLocation(value: string) {
+  const line = cleanLine(value);
+  if (!line) return false;
+  if (/[|]/.test(line)) return true;
+  if (/[–—-]/.test(line)) return true;
+  if (/,?\s[A-Z]{2}\b/.test(line)) return true;
+  return /\b(inc|llc|corp|company|global|technologies|systems|university)\b/i.test(line);
+}
+
+function looksLikeTitleLine(value: string) {
+  const line = cleanLine(value);
+  if (!line) return false;
+  if (looksLikeDateRange(line)) return false;
+  if (looksLikeCompanyLocation(line)) return false;
+  if (looksLikeLikelyBulletSentence(line)) return false;
+  if (line.length > 100) return false;
+  return true;
+}
+
+function withMinimumJobBullets(
+  bullets: string[],
+  title?: string,
+  companyLocation?: string
+) {
+  const normalizedBullets = dedupe(
+    bullets
+      .map((line) => cleanLine(line).replace(/^-+\s*/, ""))
+      .filter(Boolean)
+  );
+
+  const contextBullet = cleanLine(
+    [
+      title ? `Delivered role-specific outcomes as ${title}` : "",
+      companyLocation ? `while supporting priorities at ${companyLocation}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+
+  const fallbackPool = contextBullet
+    ? [contextBullet, ...genericJobBulletFallbacks]
+    : genericJobBulletFallbacks;
+
+  for (const fallback of fallbackPool) {
+    if (normalizedBullets.length >= 5) break;
+    const key = fallback.toLowerCase();
+    if (normalizedBullets.some((existing) => existing.toLowerCase() === key)) continue;
+    normalizedBullets.push(fallback);
+  }
+
+  return normalizedBullets.slice(0, 8);
+}
+
+function splitIntoSentences(value: string) {
+  return cleanLine(value)
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => cleanLine(sentence))
+    .filter(Boolean);
+}
+
+function ensureMinimumSummarySentences(paragraphs: string[]) {
+  const combined = cleanLine(paragraphs.join(" "));
+  if (!combined) return paragraphs;
+
+  const sentences = splitIntoSentences(combined);
+  if (sentences.length >= 4) {
+    return [sentences.join(" ")];
+  }
+
+  let fallbackIndex = 0;
+  while (sentences.length < 4) {
+    sentences.push(summarySentenceFallbacks[fallbackIndex % summarySentenceFallbacks.length]);
+    fallbackIndex += 1;
+  }
+
+  return [cleanLine(sentences.join(" "))];
+}
+
 function parseExperienceJobs(lines: string[]) {
   const jobs: Array<{
     title?: string;
@@ -221,36 +338,37 @@ function parseExperienceJobs(lines: string[]) {
   const blocks = splitContentBlocks(lines);
 
   for (const block of blocks) {
-    const bulletLines = block.filter((line) => isBulletLine(line)).map((line) => normalizeBullet(line));
-    const nonBulletLines = block.filter((line) => !isBulletLine(line)).map((line) => cleanLine(line));
+    const cleanedBlock = block.map((line) => cleanLine(line)).filter(Boolean);
+    if (cleanedBlock.length === 0) continue;
 
-    if (nonBulletLines.length === 0 && bulletLines.length > 0) {
-      if (jobs.length > 0) {
-        jobs[jobs.length - 1].bullets.push(...bulletLines);
-      } else {
-        jobs.push({ bullets: bulletLines });
-      }
-      continue;
-    }
+    const strippedBlock = cleanedBlock.map((line) =>
+      isBulletLine(line) ? normalizeBullet(line) : line
+    );
 
-    const title = nonBulletLines[0] || undefined;
-    const companyLocation = nonBulletLines[1] || undefined;
+    let cursor = 0;
+    let title: string | undefined;
+    let companyLocation: string | undefined;
     let dateRange: string | undefined;
-    let extraLines: string[] = [];
 
-    if (nonBulletLines.length > 2) {
-      if (looksLikeDateRange(nonBulletLines[2])) {
-        dateRange = nonBulletLines[2];
-        extraLines = nonBulletLines.slice(3);
-      } else {
-        extraLines = nonBulletLines.slice(2);
-      }
+    if (strippedBlock[cursor] && looksLikeTitleLine(strippedBlock[cursor])) {
+      title = strippedBlock[cursor];
+      cursor += 1;
+    }
+    if (strippedBlock[cursor] && looksLikeCompanyLocation(strippedBlock[cursor])) {
+      companyLocation = strippedBlock[cursor];
+      cursor += 1;
+    }
+    if (strippedBlock[cursor] && looksLikeDateRange(strippedBlock[cursor])) {
+      dateRange = strippedBlock[cursor];
+      cursor += 1;
     }
 
-    const bullets = dedupe([
-      ...bulletLines,
-      ...extraLines.filter((line) => line && !detectHeading(line)).map((line) => line),
-    ]);
+    const remainingLines = strippedBlock.slice(cursor).filter((line) => !detectHeading(line));
+    const bulletLines = remainingLines
+      .map((line) => line.replace(/^-+\s*/, "").trim())
+      .filter(Boolean);
+    const bullets = withMinimumJobBullets(bulletLines, title, companyLocation);
+
     jobs.push({
       title,
       companyLocation,
@@ -282,6 +400,24 @@ function parseLineItems(lines: string[]) {
     .map((line) => (isBulletLine(line) ? normalizeBullet(line) : cleanLine(line)))
     .filter(Boolean);
   return dedupe(items);
+}
+
+function educationCredentialRank(value: string) {
+  const line = cleanLine(value).toUpperCase();
+  if (/^(PHD|PH\.D|D\.SC|D\.ENG|DOCTOR)/.test(line)) return 1;
+  if (/^(M\.S|MS|M\.A|MA|MBA|MASTER)/.test(line)) return 2;
+  if (/^(B\.S|BS|B\.A|BA|BACHELOR)/.test(line)) return 3;
+  if (/^(A\.A|AA|A\.S|AS|ASSOCIATE)/.test(line)) return 4;
+  if (/^(C\.|CERT|CERTIFICATE)/.test(line)) return 5;
+  return 99;
+}
+
+function sortEducationItems(items: string[]) {
+  return [...items].sort((left, right) => {
+    const rankDiff = educationCredentialRank(left) - educationCredentialRank(right);
+    if (rankDiff !== 0) return rankDiff;
+    return cleanLine(left).localeCompare(cleanLine(right));
+  });
 }
 
 function renderBullets(items: string[]) {
@@ -321,7 +457,11 @@ function renderSection(section: NormalizedResumeSection) {
     return lines;
   }
 
-  if (section.type === "education" || section.type === "certifications") {
+  if (
+    section.type === "education" ||
+    section.type === "certifications" ||
+    section.type === "socialMedia"
+  ) {
     lines.push(...section.items);
     return lines;
   }
@@ -371,6 +511,10 @@ function mergeSection(
   }
   if (existing.type === "certifications" && incoming.type === "certifications") {
     existing.items = dedupe([...existing.items, ...incoming.items]);
+    return;
+  }
+  if (existing.type === "socialMedia" && incoming.type === "socialMedia") {
+    existing.items = dedupe([...existing.items, ...incoming.items]);
   }
 }
 
@@ -394,7 +538,7 @@ export function normalizeResume(input: NormalizeResumeInput): NormalizedResume {
         contactLine.toLowerCase().includes(seededLine.toLowerCase())
       )
   );
-  const contactLines = dedupe([...headerContactLines, ...seededContacts]);
+  const contactLines = dedupe([...seededContacts, ...headerContactLines]);
 
   type RawSection = {
     type: SectionType | "generic";
@@ -450,7 +594,7 @@ export function normalizeResume(input: NormalizeResumeInput): NormalizedResume {
       mergeSection(sections, {
         type: "summary",
         heading: section.heading,
-        paragraphs: splitParagraphs(cleanedLines),
+        paragraphs: ensureMinimumSummarySentences(splitParagraphs(cleanedLines)),
       });
       continue;
     }
@@ -474,13 +618,21 @@ export function normalizeResume(input: NormalizeResumeInput): NormalizedResume {
       mergeSection(sections, {
         type: "education",
         heading: section.heading,
-        items: parseLineItems(cleanedLines),
+        items: sortEducationItems(parseLineItems(cleanedLines)),
       });
       continue;
     }
     if (section.type === "certifications") {
       mergeSection(sections, {
         type: "certifications",
+        heading: section.heading,
+        items: parseLineItems(cleanedLines),
+      });
+      continue;
+    }
+    if (section.type === "socialMedia") {
+      mergeSection(sections, {
+        type: "socialMedia",
         heading: section.heading,
         items: parseLineItems(cleanedLines),
       });
@@ -509,6 +661,7 @@ export function normalizeResume(input: NormalizeResumeInput): NormalizedResume {
       if (section.type === "education" || section.type === "certifications") {
         return section.items.length > 0;
       }
+      if (section.type === "socialMedia") return section.items.length > 0;
       return section.paragraphs.length > 0 || Boolean(section.bullets?.length);
     }),
   };

@@ -7,6 +7,7 @@ export type ApplyStopReason =
   | "wrong_employer_domain"
   | "invalid_start_url"
   | "real_posting_not_found"
+  | "search_results_no_strong_match"
   | "candidate_needs_review"
   | "aggregator_no_cta"
   | "external_redirect_needed"
@@ -53,6 +54,7 @@ export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "wrong_employer_domain",
   "invalid_start_url",
   "real_posting_not_found",
+  "search_results_no_strong_match",
   "candidate_needs_review",
   "aggregator_no_cta",
   "external_redirect_needed",
@@ -155,6 +157,12 @@ const INVALID_START_URL_KEYWORDS = [
 const REAL_POSTING_NOT_FOUND_KEYWORDS = [
   "real posting not found",
   "real_posting_not_found",
+];
+
+const SEARCH_RESULTS_NO_STRONG_MATCH_KEYWORDS = [
+  "search_results_no_strong_match",
+  "search results no strong match",
+  "no search result met the direct employer posting threshold",
 ];
 
 const ADZUNA_RATE_LIMIT_KEYWORDS = [
@@ -314,6 +322,14 @@ export function deriveStopClassification(
     };
   }
 
+  if (includesAnySignal(signalText, SEARCH_RESULTS_NO_STRONG_MATCH_KEYWORDS)) {
+    return {
+      reason: "search_results_no_strong_match",
+      pageType: "resolver_failure",
+      suggestedAction: "open_original_job_site",
+    };
+  }
+
   if (includesAnySignal(signalText, WRONG_EMPLOYER_DOMAIN_KEYWORDS)) {
     return {
       reason: "wrong_employer_domain",
@@ -384,6 +400,8 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
       return "Start URL was invalid";
     case "real_posting_not_found":
       return "Real posting was not found";
+    case "search_results_no_strong_match":
+      return "Search results had no strong employer match";
     case "candidate_needs_review":
       return "A possible job posting needs review";
     case "aggregator_no_cta":

@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 import type { JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
+import { getStopReasonLabel } from "@/app/lib/apply/stopClassification";
 import {
   CheckIcon,
   EnvelopeIcon,
@@ -62,6 +64,8 @@ type JobDetailsPanelProps = {
     lastActionSelector?: string | null;
     originalJobUrl?: string | null;
     resolvedDirectUrl?: string | null;
+    stopReason?: string | null;
+    stopClassification?: ApplyStopClassification | null;
     status?: string | null;
   } | null;
   resolvedApplyUrlState?: {
@@ -458,7 +462,8 @@ export default function JobDetailsPanel({
             ) : null}
 
             {autoApplyStopPoint.originalJobUrl ||
-            autoApplyStopPoint.resolvedDirectUrl ? (
+            autoApplyStopPoint.resolvedDirectUrl ||
+            autoApplyStopPoint.stopClassification ? (
               <div className="mt-2 space-y-1 text-[11px] text-amber-900">
                 {autoApplyStopPoint.originalJobUrl ? (
                   <p className="break-all">
@@ -468,6 +473,16 @@ export default function JobDetailsPanel({
                 {autoApplyStopPoint.resolvedDirectUrl ? (
                   <p className="break-all">
                     Resolved posting URL: {autoApplyStopPoint.resolvedDirectUrl}
+                  </p>
+                ) : autoApplyStopPoint.originalJobUrl ? (
+                  <p className="break-all">Resolved posting URL: unavailable</p>
+                ) : null}
+                {autoApplyStopPoint.stopClassification ? (
+                  <p className="break-all">
+                    Stop reason: {autoApplyStopPoint.stopClassification.reason}
+                    {" ("}
+                    {getStopReasonLabel(autoApplyStopPoint.stopClassification.reason)}
+                    {")"}
                   </p>
                 ) : null}
               </div>

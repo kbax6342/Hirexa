@@ -8,6 +8,7 @@ import { detectVerificationGate } from "@/app/lib/apply/verification";
 import {
   isAdzunaUrl,
   isAggregatorHandoffUrl,
+  isSearchResultsUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
 import {
@@ -71,10 +72,18 @@ function pickLatestSessionStopUrl(
   const first = prioritized[0] ?? null;
   const downstream = prioritized.find(
     (candidate) =>
-      !isAdzunaUrl(candidate) && !isAggregatorHandoffUrl(candidate),
+      !isAdzunaUrl(candidate) &&
+      !isAggregatorHandoffUrl(candidate) &&
+      !isSearchResultsUrl(candidate),
   );
 
-  if (first && (isAdzunaUrl(first) || isAggregatorHandoffUrl(first)) && downstream) {
+  if (
+    first &&
+    (isAdzunaUrl(first) ||
+      isAggregatorHandoffUrl(first) ||
+      isSearchResultsUrl(first)) &&
+    downstream
+  ) {
     return downstream;
   }
 

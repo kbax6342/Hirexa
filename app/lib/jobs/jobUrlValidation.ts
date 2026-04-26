@@ -1,14 +1,11 @@
-import { isAdzunaUrl, normalizeJobUrl } from "@/app/lib/jobSources";
+import {
+  isAdzunaUrl,
+  isSearchResultsUrl,
+  normalizeJobUrl,
+} from "@/app/lib/jobSources";
 
 const STATIC_EXTENSIONS =
   /\.(?:js|css|json|png|jpg|jpeg|svg|gif|woff2?|ico|map)(?:$|\?)/i;
-
-const SEARCH_HOST_PATTERNS = [
-  "google.com",
-  "bing.com",
-  "duckduckgo.com",
-  "search.yahoo.com",
-];
 
 const TRACKING_HOST_PATTERNS = [
   "doubleclick.net",
@@ -87,7 +84,7 @@ export function isValidResolvedJobUrl(url: string): boolean {
   const pathname = decodeURIComponent(parsed.pathname || "/");
   const fullPath = `${pathname}${parsed.search}`;
 
-  if (SEARCH_HOST_PATTERNS.some((pattern) => hostMatches(hostname, pattern))) {
+  if (isSearchResultsUrl(normalizedUrl)) {
     return false;
   }
 
@@ -109,4 +106,3 @@ export function isValidResolvedJobUrl(url: string): boolean {
 
   return COMPANY_JOB_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 }
-

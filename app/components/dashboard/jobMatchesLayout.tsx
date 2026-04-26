@@ -31,6 +31,7 @@ import {
   isAggregatorHandoffUrl,
   isLikelyAtsUrl,
   isLikelyCompanyCareersUrl,
+  isSearchResultsUrl,
   normalizeJobUrl as normalizeEmployerJobUrl,
 } from "@/app/lib/jobSources";
 import { storeJobDetailSummary } from "@/app/lib/jobs/clientDetailSummary";
@@ -314,17 +315,24 @@ function pickLatestAutoApplyStopUrl(item: {
   originalJobUrl?: string | null;
   jobUrl?: string | null;
 }) {
-  return (
-    item.stoppedAtUrl ??
-    item.latestUrl ??
-    item.currentUrl ??
-    item.lastUrl ??
-    item.targetUrl ??
-    item.resolvedDirectUrl ??
-    item.originalJobUrl ??
-    item.jobUrl ??
-    null
-  );
+  const prioritized = [
+    item.stoppedAtUrl,
+    item.latestUrl,
+    item.currentUrl,
+    item.lastUrl,
+    item.targetUrl,
+    item.resolvedDirectUrl,
+    item.originalJobUrl,
+    item.jobUrl,
+  ].filter((value): value is string => Boolean(value));
+  const first = prioritized[0] ?? null;
+  const nonSearchResult = prioritized.find((value) => !isSearchResultsUrl(value));
+
+  if (first && isSearchResultsUrl(first) && nonSearchResult) {
+    return nonSearchResult;
+  }
+
+  return first;
 }
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
@@ -625,7 +633,8 @@ export default function JobMatchesLayout({
       stoppedAtUrl ||
         selectedAutoApplyItem.stoppedAtTitle ||
         selectedAutoApplyItem.lastActionText ||
-        selectedAutoApplyItem.lastActionSelector,
+        selectedAutoApplyItem.lastActionSelector ||
+        selectedAutoApplyItem.stopClassification,
     );
 
     if (!hasStopPoint) {
@@ -646,6 +655,8 @@ export default function JobMatchesLayout({
         selectedAutoApplyItem.resolvedDirectUrl ??
         selectedAutoApplyItem.targetUrl ??
         null,
+      stopReason: selectedAutoApplyItem.stopReason ?? null,
+      stopClassification: selectedAutoApplyItem.stopClassification ?? null,
     };
   }, [selectedAutoApplyItem]);
 

@@ -1,4 +1,8 @@
-import { isAggregatorHandoffUrl, normalizeJobUrl } from "@/app/lib/jobSources";
+import {
+  isAggregatorHandoffUrl,
+  isSearchResultsUrl,
+  normalizeJobUrl,
+} from "@/app/lib/jobSources";
 
 export type AutomationStartUrlInvalidReason =
   | "empty_url"
@@ -254,7 +258,8 @@ export function validateAutomationStartUrl(
   const isKnownAssetHost = isKnownAssetHostname(hostname);
   const isAggregator =
     isAggregatorHandoffUrl(normalizedUrl) || isKnownAggregatorHostname(hostname);
-  const isSearchEngine = isSearchEngineHostname(hostname);
+  const isSearchEngine =
+    isSearchEngineHostname(hostname) || isSearchResultsUrl(normalizedUrl);
   const isSearchEngineChallenge = isSearchEngineChallengeUrl(normalizedUrl);
   const likelyHtmlDocument = isLikelyHtmlDocumentPath(pathname);
 

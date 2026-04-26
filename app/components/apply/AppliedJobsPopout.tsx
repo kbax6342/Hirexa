@@ -23,6 +23,7 @@ import {
   isApplySessionTerminalStatus,
   toApplySessionDisplayStatus,
 } from "@/app/lib/apply/sessionStatus";
+import { isSearchResultsUrl } from "@/app/lib/jobSources";
 
 type ApplySessionPollResponse = {
   ok?: boolean;
@@ -110,17 +111,24 @@ function pickLatestAutoApplyStopUrl(item: {
   originalJobUrl?: string | null;
   jobUrl?: string | null;
 }) {
-  return (
-    item.stoppedAtUrl ??
-    item.latestUrl ??
-    item.currentUrl ??
-    item.lastUrl ??
-    item.targetUrl ??
-    item.resolvedDirectUrl ??
-    item.originalJobUrl ??
-    item.jobUrl ??
-    null
-  );
+  const prioritized = [
+    item.stoppedAtUrl,
+    item.latestUrl,
+    item.currentUrl,
+    item.lastUrl,
+    item.targetUrl,
+    item.resolvedDirectUrl,
+    item.originalJobUrl,
+    item.jobUrl,
+  ].filter((value): value is string => Boolean(value));
+  const first = prioritized[0] ?? null;
+  const nonSearchResult = prioritized.find((value) => !isSearchResultsUrl(value));
+
+  if (first && isSearchResultsUrl(first) && nonSearchResult) {
+    return nonSearchResult;
+  }
+
+  return first;
 }
 
 export default function AppliedJobsPopout({

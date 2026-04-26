@@ -22,6 +22,7 @@ type CacheEntry<T> = {
 
 const CACHE_TTL = 5 * 60 * 1000;
 const RECENT_POSTING_DAYS = 7;
+const ADZUNA_NUMERIC_ID_PATTERN = /^\d+$/;
 const jobCache = new Map<string, CacheEntry<Job[]>>();
 
 function getCachedJobs(cacheKey: string) {
@@ -86,6 +87,92 @@ function isRecentPosting(iso?: string, maxAgeDays = RECENT_POSTING_DAYS) {
 
   const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
   return Date.now() - postedAt.getTime() <= maxAgeMs;
+}
+
+function extractPlainNumericAdzunaId(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return null;
+
+  const firstSegment = normalized
+    .split("::")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!firstSegment) return null;
+
+  return ADZUNA_NUMERIC_ID_PATTERN.test(firstSegment) ? firstSegment : null;
+}
+
+function looksLikeEncodedAdzunaProviderId(value: string) {
+  const normalized = value.trim();
+  if (!normalized || ADZUNA_NUMERIC_ID_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  return /^[A-Za-z0-9_-]+$/.test(normalized);
+}
+
+function resolveAdzunaProviderIdWithMeta(rawProviderId: string): {
+  providerId: string;
+  decodingUsed: boolean;
+} {
+  const normalizedRawProviderId = rawProviderId.trim();
+  if (!normalizedRawProviderId) {
+    return {
+      providerId: "",
+      decodingUsed: false,
+    };
+  }
+
+  const directNumericId = extractPlainNumericAdzunaId(normalizedRawProviderId);
+  if (directNumericId) {
+    return {
+      providerId: directNumericId,
+      decodingUsed: false,
+    };
+  }
+
+  if (!looksLikeEncodedAdzunaProviderId(normalizedRawProviderId)) {
+    return {
+      providerId: normalizedRawProviderId,
+      decodingUsed: false,
+    };
+  }
+
+  try {
+    const decoded = Buffer.from(normalizedRawProviderId, "base64url").toString("utf8");
+    if (!decoded || /[\u0000-\u001F\u007F\uFFFD]/.test(decoded)) {
+      return {
+        providerId: normalizedRawProviderId,
+        decodingUsed: false,
+      };
+    }
+
+    const decodedNumericId = extractPlainNumericAdzunaId(decoded);
+    if (!decodedNumericId) {
+      return {
+        providerId: normalizedRawProviderId,
+        decodingUsed: false,
+      };
+    }
+
+    return {
+      providerId: decodedNumericId,
+      decodingUsed: true,
+    };
+  } catch {
+    return {
+      providerId: normalizedRawProviderId,
+      decodingUsed: false,
+    };
+  }
+}
+
+// Examples:
+// resolveAdzunaProviderId("5711084570") => "5711084570"
+// resolveAdzunaProviderId(Buffer.from("5711084570::adzuna", "utf8").toString("base64url")) => "5711084570"
+// resolveAdzunaProviderId("bad-garbage") => "bad-garbage"
+export function resolveAdzunaProviderId(rawProviderId: string): string {
+  return resolveAdzunaProviderIdWithMeta(rawProviderId).providerId;
 }
 
 export async function fetchAdzunaJobs(args: {
@@ -174,17 +261,9 @@ export async function fetchAdzunaJobDetails(
   origin: string
 ): Promise<JobDetail | null> {
   const [, rawProviderId] = fullId.split(":", 2);
-  const providerId = (() => {
-    if (!rawProviderId) return "";
-
-    try {
-      const decoded = Buffer.from(rawProviderId, "base64url").toString("utf8");
-      const [decodedId] = decoded.split("::").filter(Boolean);
-      return decodedId?.trim() || rawProviderId.trim();
-    } catch {
-      return rawProviderId.trim();
-    }
-  })();
+  const { providerId, decodingUsed } = resolveAdzunaProviderIdWithMeta(
+    rawProviderId ?? "",
+  );
 
   if (!providerId) return null;
 
@@ -196,7 +275,10 @@ export async function fetchAdzunaJobDetails(
   if (!res.ok) {
     const body = await res.text();
     console.warn("[ADZUNA_DETAILS] provider detail request failed", {
+      rawProviderId: rawProviderId?.trim() ?? "",
       providerId,
+      resolvedProviderId: providerId,
+      decodingUsed,
       route: "/api/adzuna/details",
       status: res.status,
       fallbackPath: "detail-resolver",

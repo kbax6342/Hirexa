@@ -48,12 +48,19 @@ export type ApplySessionDebug = {
   directJobResolutionProvider?: string;
   directJobResolutionMatchReason?: string;
   directJobResolutionError?: string;
+  directJobResolutionFailureReason?: string;
   directJobResolutionCandidates?: Array<{
     url: string;
     title?: string;
     provider?: string;
+    source?: string;
+    domain?: string;
+    score?: number;
     confidence: number;
+    confidenceLabel?: "low" | "medium" | "high";
     reason: string;
+    matchedSignals?: string[];
+    rejectedReason?: string;
   }>;
   adzunaStrategyReplaySkipped?: boolean;
   searchFallbackTriggered?: boolean;
@@ -116,7 +123,13 @@ export type ApplySessionDebug = {
     reason: string;
   }>;
   adzunaScrapflyUrlsVisited?: string[];
-  selectedStopSource?: "scrapfly_resolved_url" | "search_url" | "low_confidence_candidate" | "verification_required";
+  selectedStopSource?:
+    | "scrapfly_resolved_url"
+    | "search_url"
+    | "low_confidence_candidate"
+    | "verification_required"
+    | "original_source_url"
+    | "current_url";
   startingUrlKind?: "aggregator_handoff" | "direct_ats" | "company_careers" | "unknown";
   finalChosenUrlKind?: "aggregator_handoff" | "direct_ats" | "company_careers" | "unknown";
   domain?: string;

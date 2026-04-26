@@ -70,6 +70,10 @@ export function inferApplyAutomationErrorCode(args: {
     return "REAL_POSTING_NOT_FOUND" as const;
   }
 
+  if (args.stopClassification?.reason === "search_results_no_strong_match") {
+    return "REAL_POSTING_NOT_FOUND" as const;
+  }
+
   const text = [args.message, args.finalReason, args.status]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n")
@@ -84,7 +88,9 @@ export function inferApplyAutomationErrorCode(args: {
 
   if (
     text.includes("real_posting_not_found") ||
-    text.includes("real posting not found")
+    text.includes("real posting not found") ||
+    text.includes("search_results_no_strong_match") ||
+    text.includes("search results no strong match")
   ) {
     return "REAL_POSTING_NOT_FOUND" as const;
   }

@@ -5,6 +5,7 @@ import { normalizeAdzunaProviderId } from "@/app/lib/jobs/adzunaProviderId";
 import {
   isAggregatorHandoffUrl,
   isAdzunaUrl,
+  isSearchResultsUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
 
@@ -101,7 +102,8 @@ export async function POST(request: Request) {
     const hasResolvedApplyUrl = Boolean(
       resolvedApplyUrl &&
         !isAdzunaUrl(resolvedApplyUrl) &&
-        !isAggregatorHandoffUrl(resolvedApplyUrl),
+        !isAggregatorHandoffUrl(resolvedApplyUrl) &&
+        !isSearchResultsUrl(resolvedApplyUrl),
     );
     const status = hasResolvedApplyUrl
       ? "found"
@@ -137,4 +139,3 @@ export async function POST(request: Request) {
     );
   }
 }
-

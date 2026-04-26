@@ -76,6 +76,29 @@ type NewExperienceForm = {
   bullets: string[];
 };
 
+type ProfileLocationAutocompleteOption = {
+  id: string;
+  label: string;
+  displayLabel: string;
+  city: string;
+  state: string;
+  source: "google" | "local" | "manual";
+  placeId?: string | null;
+  kind?: "city" | "state";
+};
+
+type LocationAutocompleteApiResponse = {
+  ok?: boolean;
+  source?: string;
+  suggestions?: Array<{
+    label?: string | null;
+    city?: string | null;
+    state?: string | null;
+    source?: string | null;
+    placeId?: string | null;
+  }>;
+};
+
 export type ProfileApiResponse = {
   ok: boolean;
   profile: {
@@ -239,14 +262,10 @@ function buildCityStateInputLabel(city?: string | null, state?: string | null) {
   return normalizedCity || normalizedState;
 }
 
-function parseSelectedLocationLabel(rawLabel: string) {
+function parseLocationSelectionLabel(rawLabel: string) {
   const normalizedLabel = normalizeLocationLabel(rawLabel);
   if (!normalizedLabel) {
-    return {
-      city: "",
-      state: "",
-      normalizedLabel: "",
-    };
+    return null;
   }
 
   const commaIndex = normalizedLabel.indexOf(",");
@@ -254,11 +273,14 @@ function parseSelectedLocationLabel(rawLabel: string) {
     const city = normalizedLabel.slice(0, commaIndex).trim();
     const stateInput = normalizedLabel.slice(commaIndex + 1).trim();
     const matchedState = normalizeStateInput(stateInput);
-    const state = matchedState?.code ?? stateInput;
+    if (!city || !matchedState) {
+      return null;
+    }
+
     return {
       city,
-      state,
-      normalizedLabel: city && state ? `${city}, ${state}` : normalizedLabel,
+      state: matchedState.code,
+      normalizedLabel: `${city}, ${matchedState.code}`,
     };
   }
 
@@ -271,10 +293,78 @@ function parseSelectedLocationLabel(rawLabel: string) {
     };
   }
 
+  return null;
+}
+
+function parseManualLocationInput(rawInput: string) {
+  const normalizedLabel = normalizeLocationLabel(rawInput);
+  return parseLocationSelectionLabel(normalizedLabel);
+}
+
+function buildLocalProfileLocationOptions(
+  value: string,
+): ProfileLocationAutocompleteOption[] {
+  const options: ProfileLocationAutocompleteOption[] = [];
+
+  for (const suggestion of getLocationSuggestions(value)) {
+    const parsed = parseLocationSelectionLabel(suggestion.label);
+    if (!parsed) {
+      continue;
+    }
+
+    options.push({
+        id: `local:${suggestion.kind}:${parsed.normalizedLabel.toLowerCase()}`,
+        label:
+          parsed.city && parsed.state
+            ? `${parsed.city}, ${parsed.state}`
+            : suggestion.label,
+        displayLabel: suggestion.label,
+        city: parsed.city,
+        state: parsed.state,
+        source: "local" as const,
+        kind: suggestion.kind,
+      } satisfies ProfileLocationAutocompleteOption);
+  }
+
+  return options;
+}
+
+function dedupeProfileLocationOptions(
+  options: ProfileLocationAutocompleteOption[],
+) {
+  const seen = new Set<string>();
+
+  return options.filter((option) => {
+    const key = `${option.label.toLowerCase()}|${option.city.toLowerCase()}|${option.state.toLowerCase()}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildManualProfileLocationOption(
+  value: string,
+): ProfileLocationAutocompleteOption | null {
+  const parsed = parseManualLocationInput(value);
+  if (!parsed) {
+    return null;
+  }
+
+  const selectionLabel = parsed.city
+    ? `${parsed.city}, ${parsed.state}`
+    : normalizeStateInput(parsed.state)?.name ?? parsed.state;
+
   return {
-    city: normalizedLabel,
-    state: "",
-    normalizedLabel,
+    id: `manual:${selectionLabel.toLowerCase()}`,
+    label: selectionLabel,
+    displayLabel: `Use ${selectionLabel}`,
+    city: parsed.city,
+    state: parsed.state,
+    source: "manual",
+    kind: parsed.city ? "city" : "state",
   };
 }
 
@@ -1504,36 +1594,30 @@ function ToggleField({
     });
   }
 
-  function applyPersonalLocationInput(rawLabel: string) {
-    const trimmed = rawLabel.trim();
-    if (!trimmed) {
-      setPersonalLocationInput("");
-      setPersonalDetailsForm((prev) => ({ ...prev, city: "", state: "" }));
-      return;
-    }
-
+  function applyPersonalLocationSelection(
+    selection: ProfileLocationAutocompleteOption
+  ) {
     const previousCity = personalDetailsForm.city;
     const previousState = personalDetailsForm.state;
-    const parsed = parseSelectedLocationLabel(trimmed);
-    const nextInputValue = parsed.normalizedLabel || trimmed;
 
-    setPersonalLocationInput(nextInputValue);
+    setPersonalLocationInput(selection.label);
     setPersonalDetailsForm((prev) => ({
       ...prev,
-      city: parsed.city,
-      state: parsed.state,
+      city: selection.city,
+      state: selection.state,
     }));
     maybeSyncWorkplaceLocationFromPersonalSelection(
-      nextInputValue,
+      selection.label,
       previousCity,
       previousState
     );
 
     if (process.env.NODE_ENV !== "production") {
       console.log("[profile location autocomplete] selected", {
-        label: nextInputValue,
-        city: parsed.city,
-        state: parsed.state,
+        source: selection.source,
+        label: selection.label,
+        city: selection.city,
+        state: selection.state,
       });
     }
   }
@@ -1691,31 +1775,15 @@ function ToggleField({
                       setPersonalDetailsForm((prev) => ({ ...prev, address: value }))
                     }
                   />
-                  <LocationAutocompleteField
+                  <ProfileLocationAutocompleteField
                     label="City or state"
                     value={personalLocationInput}
                     placeholder="Search city or state..."
                     minSearchChars={2}
                     loadingText="Searching..."
                     emptyText="No results."
-                    onChange={(value) => {
-                      setPersonalLocationInput(value);
-                      if (!value.trim()) {
-                        setPersonalDetailsForm((prev) => ({
-                          ...prev,
-                          city: "",
-                          state: "",
-                        }));
-                      }
-                    }}
-                    onSuggestionSelect={(suggestion) => {
-                      applyPersonalLocationInput(suggestion.label);
-                    }}
-                    onInputBlur={(value) => {
-                      if (value.trim()) {
-                        applyPersonalLocationInput(value);
-                      }
-                    }}
+                    onChange={setPersonalLocationInput}
+                    onSelect={applyPersonalLocationSelection}
                   />
                   <TextField
                     label="Postal code"
@@ -2723,6 +2791,232 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
         onChange={(event) => onChange(event.target.value)}
         className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       />
+    </label>
+  );
+}
+
+function ProfileLocationAutocompleteField({
+  label,
+  value,
+  onChange,
+  onSelect,
+  placeholder = "Search city or state...",
+  minSearchChars = 2,
+  loadingText = "Searching...",
+  emptyText = "No results.",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSelect: (selection: ProfileLocationAutocompleteOption) => void;
+  placeholder?: string;
+  minSearchChars?: number;
+  loadingText?: string;
+  emptyText?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [options, setOptions] = useState<ProfileLocationAutocompleteOption[]>([]);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const normalizedValue = value.trim();
+
+  useEffect(() => {
+    if (!open || normalizedValue.length < minSearchChars) {
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
+      setLoadingSearch(false);
+      setOptions([]);
+      setActiveIndex(-1);
+      return;
+    }
+
+    setLoadingSearch(true);
+    const timeoutId = window.setTimeout(() => {
+      requestAbortRef.current?.abort();
+      const controller = new AbortController();
+      requestAbortRef.current = controller;
+
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/api/locations/autocomplete?q=${encodeURIComponent(normalizedValue)}`,
+            {
+              cache: "no-store",
+              signal: controller.signal,
+            }
+          );
+          const payload =
+            (await readJsonResponse<LocationAutocompleteApiResponse>(response)) ?? null;
+
+          const googleOptions: ProfileLocationAutocompleteOption[] = [];
+          for (const suggestion of payload?.suggestions ?? []) {
+            const label = String(suggestion.label ?? "").trim();
+            const city = String(suggestion.city ?? "").trim();
+            const state = String(suggestion.state ?? "").trim();
+            if (!label || !state) {
+              continue;
+            }
+
+            googleOptions.push({
+              id: `google:${suggestion.placeId ?? label.toLowerCase()}`,
+              label,
+              displayLabel: label,
+              city,
+              state,
+              source: "google",
+              placeId: suggestion.placeId ?? null,
+              kind: city ? "city" : "state",
+            });
+          }
+
+          const fallbackOptions =
+            googleOptions.length > 0
+              ? []
+              : buildLocalProfileLocationOptions(normalizedValue);
+          const manualOption = buildManualProfileLocationOption(normalizedValue);
+          const nextOptions = dedupeProfileLocationOptions([
+            ...googleOptions,
+            ...fallbackOptions,
+            ...(manualOption ? [manualOption] : []),
+          ]).slice(0, 8);
+
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          setOptions(nextOptions);
+          setActiveIndex(nextOptions.length > 0 ? 0 : -1);
+        } catch (error) {
+          if (controller.signal.aborted) {
+            return;
+          }
+
+          const fallbackOptions = buildLocalProfileLocationOptions(normalizedValue);
+          const manualOption = buildManualProfileLocationOption(normalizedValue);
+          const nextOptions = dedupeProfileLocationOptions([
+            ...fallbackOptions,
+            ...(manualOption ? [manualOption] : []),
+          ]).slice(0, 8);
+
+          setOptions(nextOptions);
+          setActiveIndex(nextOptions.length > 0 ? 0 : -1);
+
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[profile location autocomplete] request failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setLoadingSearch(false);
+          }
+        }
+      })();
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [loadingText, minSearchChars, normalizedValue, open]);
+
+  useEffect(() => {
+    return () => {
+      requestAbortRef.current?.abort();
+    };
+  }, []);
+
+  const handleSelect = (selection: ProfileLocationAutocompleteOption) => {
+    onSelect(selection);
+    setOpen(false);
+  };
+
+  return (
+    <label className="relative flex flex-col gap-1">
+      <span className="text-xs font-semibold text-slate-700">{label}</span>
+      <input
+        value={value}
+        onFocus={() => {
+          if (normalizedValue.length >= minSearchChars) {
+            setOpen(true);
+          }
+        }}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(false), 120);
+        }}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(event.target.value.trim().length >= minSearchChars);
+        }}
+        onKeyDown={(event) => {
+          if (!open || loadingSearch) {
+            return;
+          }
+
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActiveIndex((prev) =>
+              options.length === 0 ? -1 : Math.min(prev + 1, options.length - 1)
+            );
+            return;
+          }
+
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveIndex((prev) =>
+              options.length === 0 ? -1 : Math.max(prev - 1, 0)
+            );
+            return;
+          }
+
+          if (event.key === "Escape") {
+            setOpen(false);
+            return;
+          }
+
+          if (event.key === "Enter" && activeIndex >= 0 && options[activeIndex]) {
+            event.preventDefault();
+            handleSelect(options[activeIndex]);
+          }
+        }}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
+      />
+
+      {open && normalizedValue.length >= minSearchChars ? (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-lg">
+          {loadingSearch ? (
+            <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
+              {loadingText}
+            </div>
+          ) : options.length > 0 ? (
+            options.map((option, index) => (
+              <button
+                key={option.id}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  handleSelect(option);
+                }}
+                className={[
+                  "flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-slate-700",
+                  index === activeIndex ? "bg-sky-50 text-sky-900" : "hover:bg-slate-50",
+                ].join(" ")}
+              >
+                <span>{option.displayLabel}</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  {option.source}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
+              {emptyText}
+            </div>
+          )}
+        </div>
+      ) : null}
     </label>
   );
 }

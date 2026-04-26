@@ -66,6 +66,7 @@ import {
   isAdzunaUrl,
   isLikelyAtsUrl,
   isLikelyCompanyCareersUrl,
+  isSearchResultsUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
 import { validateAutomationStartUrl } from "@/app/lib/apply/urlValidation";
@@ -167,6 +168,7 @@ type DirectResolutionDebug = Pick<
   | "directJobResolutionProvider"
   | "directJobResolutionMatchReason"
   | "directJobResolutionError"
+  | "directJobResolutionFailureReason"
   | "directJobResolutionCandidates"
   | "adzunaStrategyReplaySkipped"
   | "startingUrlKind"
@@ -683,10 +685,18 @@ function pickMostRecentStopUrl(args: {
   const first = prioritized[0] ?? null;
   const downstream = prioritized.find(
     (candidate) =>
-      !isAdzunaUrl(candidate) && !isAggregatorHandoffUrl(candidate),
+      !isAdzunaUrl(candidate) &&
+      !isAggregatorHandoffUrl(candidate) &&
+      !isSearchResultsUrl(candidate),
   );
 
-  if (first && (isAdzunaUrl(first) || isAggregatorHandoffUrl(first)) && downstream) {
+  if (
+    first &&
+    (isAdzunaUrl(first) ||
+      isAggregatorHandoffUrl(first) ||
+      isSearchResultsUrl(first)) &&
+    downstream
+  ) {
     return downstream;
   }
 
@@ -704,24 +714,44 @@ function readDebugStringField(
   return normalized.length > 0 ? normalized : null;
 }
 
-function buildManualJobSearchQuery(args: {
-  title?: string | null;
-  company?: string | null;
-  location?: string | null;
-  queries?: string[];
+function pickResolverFailureStopUrl(args: {
+  candidateUrls?: Array<string | null | undefined>;
+  resolvedDirectUrl?: string | null;
+  targetUrl?: string | null;
+  currentUrl?: string | null;
+  originalJobUrl?: string | null;
 }) {
-  const query =
-    args.queries?.find((value) => String(value ?? "").trim().length > 0) ??
-    [args.title, args.company, args.location]
-      .map((value) => String(value ?? "").trim())
-      .filter(Boolean)
-      .join(" ");
+  const prioritized = [
+    ...(args.candidateUrls ?? []),
+    args.resolvedDirectUrl,
+    args.targetUrl,
+    args.currentUrl,
+    args.originalJobUrl,
+  ]
+    .map((value) => normalizeJobUrl(String(value ?? "")))
+    .filter(Boolean);
 
-  return query.replace(/["]+/g, "").trim();
+  return prioritized.find((value) => !isSearchResultsUrl(value)) ?? null;
 }
 
-function buildManualJobSearchUrl(query: string) {
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+function resolveResolverFailureStopSource(args: {
+  selectedStopUrl?: string | null;
+  originalJobUrl?: string | null;
+  currentUrl?: string | null;
+}) {
+  const selectedStopUrl = normalizeJobUrl(String(args.selectedStopUrl ?? ""));
+  const originalJobUrl = normalizeJobUrl(String(args.originalJobUrl ?? ""));
+  const currentUrl = normalizeJobUrl(String(args.currentUrl ?? ""));
+
+  if (selectedStopUrl && selectedStopUrl === originalJobUrl) {
+    return "original_source_url" as const;
+  }
+
+  if (selectedStopUrl && selectedStopUrl === currentUrl) {
+    return "current_url" as const;
+  }
+
+  return "low_confidence_candidate" as const;
 }
 
 function buildDirectResolutionDebug(args: {
@@ -749,6 +779,7 @@ function buildDirectResolutionDebug(args: {
     directJobResolutionProvider: args.resolution?.provider,
     directJobResolutionMatchReason: args.resolution?.matchReason,
     directJobResolutionError: args.resolution?.error,
+    directJobResolutionFailureReason: args.resolution?.failureReason,
     directJobResolutionCandidates: args.resolution?.candidates ?? [],
     adzunaStrategyReplaySkipped:
       args.resolution?.adzunaStrategyReplaySkipped === true,
@@ -894,6 +925,7 @@ async function resolveApplicationDirectJobUrl(args: {
     confidence: resolution.confidence ?? null,
     provider: resolution.provider ?? null,
     matchReason: resolution.matchReason ?? null,
+    failureReason: resolution.failureReason ?? null,
     error: resolution.error ?? null,
     startingUrlKind: debug.startingUrlKind ?? null,
     finalChosenUrlKind: debug.finalChosenUrlKind ?? null,
@@ -3469,29 +3501,37 @@ export async function POST(
         applicationId: application.id,
         isAdzunaHandoff: true,
       });
-      const query = buildManualJobSearchQuery({
-        title: application.title ?? application.jobTitle,
-        company: application.company,
-        location: application.location,
-        queries: urlResolution.debug.directJobResolutionQueries,
+      const selectedStopUrl =
+        pickResolverFailureStopUrl({
+          resolvedDirectUrl: effectiveResolvedDirectUrl,
+          targetUrl: effectiveTargetUrl,
+          currentUrl: application.jobUrl ?? urlResolution.originalUrl,
+          originalJobUrl: urlResolution.originalUrl,
+        }) ??
+        normalizeJobUrl(urlResolution.originalUrl ?? application.jobUrl ?? "");
+      const selectedStopSource = resolveResolverFailureStopSource({
+        selectedStopUrl,
+        originalJobUrl: urlResolution.originalUrl,
+        currentUrl: application.jobUrl,
       });
-      const searchUrl = buildManualJobSearchUrl(query);
       earlyStop = {
         status: "APPLY_NOT_STARTED",
         message:
           "Scrapfly is selected as the remote browser provider, but SCRAPFLY_API_KEY is missing.",
         errorCode: "REMOTE_PROVIDER_UNAVAILABLE",
         stopClassification: {
-          reason: "real_posting_not_found",
+          reason:
+            urlResolution.resolution?.failureReason ??
+            "real_posting_not_found",
           pageType: "resolver_failure",
           suggestedAction: "open_original_job_site",
         },
         suggestedAction: "configure_scrapfly",
-        stoppedAtUrl: searchUrl,
-        selectedStopSource: "search_url",
+        stoppedAtUrl: selectedStopUrl,
+        selectedStopSource,
       };
       adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
-      adzunaResolverDebug.selectedStopSource = "search_url";
+      adzunaResolverDebug.selectedStopSource = selectedStopSource;
     }
 
     if (shouldAttemptAdzunaScrapflyResolution && adzunaHandoffUrl) {
@@ -3792,6 +3832,9 @@ export async function POST(
         adzunaResolverDebug.directJobResolutionError =
           accessDeniedFallbackResolution.error ??
           adzunaResolverDebug.directJobResolutionError;
+        adzunaResolverDebug.directJobResolutionFailureReason =
+          accessDeniedFallbackResolution.failureReason ??
+          adzunaResolverDebug.directJobResolutionFailureReason;
         adzunaResolverDebug.directJobResolutionCandidates =
           accessDeniedFallbackResolution.candidates ??
           adzunaResolverDebug.directJobResolutionCandidates;
@@ -3802,7 +3845,8 @@ export async function POST(
         if (
           accessDeniedFallbackResolution.ok &&
           fallbackResolvedUrl &&
-          !isAdzunaUrl(fallbackResolvedUrl)
+          !isAdzunaUrl(fallbackResolvedUrl) &&
+          !isSearchResultsUrl(fallbackResolvedUrl)
         ) {
           console.info("[DIRECT_JOB_RESOLVER] candidate accepted", {
             resolvedDirectUrl: fallbackResolvedUrl,
@@ -3838,29 +3882,42 @@ export async function POST(
             error: accessDeniedFallbackResolution.error ?? null,
             queryCount: accessDeniedFallbackResolution.queries?.length ?? 0,
           });
-          const query = buildManualJobSearchQuery({
-            title: application.title ?? application.jobTitle,
-            company: application.company,
-            location: application.location,
-            queries:
-              accessDeniedFallbackResolution.queries ??
-              urlResolution.debug.directJobResolutionQueries,
-          });
-          const searchUrl = buildManualJobSearchUrl(query);
-          const bestCandidate = [...fallbackCandidates].sort(
-            (left, right) => right.confidence - left.confidence,
-          )[0];
-          const selectedStopUrl = bestCandidate?.url || searchUrl;
+          const bestCandidate = [...fallbackCandidates]
+            .filter((candidate) => !isSearchResultsUrl(candidate.url))
+            .sort(
+              (left, right) =>
+                Number(right.score ?? right.confidence) -
+                Number(left.score ?? left.confidence),
+            )[0];
+          const selectedStopUrl =
+            pickResolverFailureStopUrl({
+              candidateUrls: fallbackCandidates.map((candidate) => candidate.url),
+              resolvedDirectUrl: effectiveResolvedDirectUrl,
+              targetUrl: effectiveTargetUrl,
+              currentUrl: application.jobUrl ?? urlResolution.originalUrl,
+              originalJobUrl: urlResolution.originalUrl,
+            }) ??
+            normalizeJobUrl(urlResolution.originalUrl ?? application.jobUrl ?? "");
           const selectedStopSource = bestCandidate
-            ? ("low_confidence_candidate" as const)
-            : ("search_url" as const);
+            ? resolveResolverFailureStopSource({
+                selectedStopUrl,
+                originalJobUrl: urlResolution.originalUrl,
+                currentUrl: application.jobUrl,
+              })
+            : resolveResolverFailureStopSource({
+                selectedStopUrl,
+                originalJobUrl: urlResolution.originalUrl,
+                currentUrl: application.jobUrl,
+              });
           earlyStop = {
             status: "APPLY_NOT_STARTED",
             message:
               "Adzuna blocked the handoff page and Hirexa could not confirm a real employer posting.",
             errorCode: ADZUNA_HANDOFF_ACCESS_DENIED_CODE,
             stopClassification: {
-              reason: "real_posting_not_found",
+              reason:
+                accessDeniedFallbackResolution.failureReason ??
+                "real_posting_not_found",
               pageType: "aggregator",
               suggestedAction: "open_original_job_site",
             },
@@ -3882,27 +3939,40 @@ export async function POST(
           adzunaResolverDebug.selectedStopSource = selectedStopSource;
         }
       } else {
-        const query = buildManualJobSearchQuery({
-          title: application.title ?? application.jobTitle,
-          company: application.company,
-          location: application.location,
-          queries: urlResolution.debug.directJobResolutionQueries,
-        });
-        const searchUrl = buildManualJobSearchUrl(query);
-        const bestCandidate = [...scrapflyResolution.candidates].sort(
-          (left, right) => right.score - left.score,
-        )[0];
-        const selectedStopUrl = bestCandidate?.url || searchUrl;
+        const bestCandidate = [...scrapflyResolution.candidates]
+          .filter((candidate) => !isSearchResultsUrl(candidate.url))
+          .sort((left, right) => right.score - left.score)[0];
+        const selectedStopUrl =
+          pickResolverFailureStopUrl({
+            candidateUrls: scrapflyResolution.candidates.map(
+              (candidate) => candidate.url,
+            ),
+            resolvedDirectUrl: effectiveResolvedDirectUrl,
+            targetUrl: effectiveTargetUrl,
+            currentUrl: application.jobUrl ?? urlResolution.originalUrl,
+            originalJobUrl: urlResolution.originalUrl,
+          }) ??
+          normalizeJobUrl(urlResolution.originalUrl ?? application.jobUrl ?? "");
         const selectedStopSource = bestCandidate
-          ? ("low_confidence_candidate" as const)
-          : ("search_url" as const);
+          ? resolveResolverFailureStopSource({
+              selectedStopUrl,
+              originalJobUrl: urlResolution.originalUrl,
+              currentUrl: application.jobUrl,
+            })
+          : resolveResolverFailureStopSource({
+              selectedStopUrl,
+              originalJobUrl: urlResolution.originalUrl,
+              currentUrl: application.jobUrl,
+            });
         earlyStop = {
           status: "APPLY_NOT_STARTED",
           message:
             "Could not confirm the real employer posting. Open the suggested result and retry.",
           errorCode: REAL_POSTING_NOT_FOUND_CODE,
           stopClassification: {
-            reason: "real_posting_not_found",
+            reason:
+              urlResolution.resolution?.failureReason ??
+              "real_posting_not_found",
             pageType: "aggregator",
             suggestedAction: "open_original_job_site",
           },
@@ -3925,28 +3995,36 @@ export async function POST(
       effectiveTargetUrl &&
       isAdzunaUrl(effectiveTargetUrl)
     ) {
-      const query = buildManualJobSearchQuery({
-        title: application.title ?? application.jobTitle,
-        company: application.company,
-        location: application.location,
-        queries: urlResolution.debug.directJobResolutionQueries,
+      const selectedStopUrl =
+        pickResolverFailureStopUrl({
+          resolvedDirectUrl: effectiveResolvedDirectUrl,
+          targetUrl: effectiveTargetUrl,
+          currentUrl: application.jobUrl ?? urlResolution.originalUrl,
+          originalJobUrl: urlResolution.originalUrl,
+        }) ??
+        normalizeJobUrl(urlResolution.originalUrl ?? application.jobUrl ?? "");
+      const selectedStopSource = resolveResolverFailureStopSource({
+        selectedStopUrl,
+        originalJobUrl: urlResolution.originalUrl,
+        currentUrl: application.jobUrl,
       });
-      const searchUrl = buildManualJobSearchUrl(query);
       earlyStop = {
         status: "APPLY_NOT_STARTED",
         message:
           "Could not confirm the real employer posting. Open the suggested result and retry.",
         errorCode: REAL_POSTING_NOT_FOUND_CODE,
         stopClassification: {
-          reason: "real_posting_not_found",
+          reason:
+            urlResolution.resolution?.failureReason ??
+            "real_posting_not_found",
           pageType: "aggregator",
           suggestedAction: "open_original_job_site",
         },
         suggestedAction: "open_original_job_site",
-        stoppedAtUrl: searchUrl,
-        selectedStopSource: "search_url",
+        stoppedAtUrl: selectedStopUrl,
+        selectedStopSource,
       };
-      adzunaResolverDebug.selectedStopSource = "search_url";
+      adzunaResolverDebug.selectedStopSource = selectedStopSource;
     }
 
     if (effectiveRequiresEcosiaSearch) {
@@ -4053,6 +4131,12 @@ export async function POST(
           targetUrl: effectiveTargetUrl,
           originalJobUrl: urlResolution.originalUrl,
         }) ?? earlyStop.stoppedAtUrl;
+      console.info("[apply resolver] Step 6 completed: stop point now shows selected/last real URL correctly", {
+        originalSourceUrl: urlResolution.originalUrl ?? null,
+        resolvedPostingUrl: effectiveResolvedDirectUrl ?? null,
+        stoppedAt: selectedEarlyStopUrl ?? null,
+        stopReason: earlyStop.stopClassification.reason,
+      });
       if (selectedStartSource === "adzuna_scrapfly_resolver") {
         console.info(
           "[AUTO_APPLY_ROUTE] Step 5 completed: acceptance scenario verified for Adzuna → Workday stop point",

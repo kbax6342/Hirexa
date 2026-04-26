@@ -54,3 +54,20 @@ test("rejects non-job posting company pages", () => {
   expect(searchResults.isValid).toBeFalsy();
   expect(searchResults.reason).toBe("non_job_posting_path");
 });
+
+test("rejects explicit SERP URLs as automation start pages", () => {
+  const urls = [
+    "https://www.google.com/search?q=Flight+Management+Systems+Software+Engineer+Kronos+Consulting+Phoenix+AZ",
+    "https://serpapi.com/search?q=Flight+Management+Systems+Software+Engineer",
+    "https://duckduckgo.com/html/?q=Kronos+Consulting",
+    "https://duckduckgo.com/?q=Kronos+Consulting",
+    "https://www.bing.com/search?q=Kronos+Consulting",
+    "https://search.yahoo.com/search?p=Kronos+Consulting",
+  ];
+
+  for (const url of urls) {
+    const validation = validateAutomationStartUrl(url);
+    expect(validation.isValid).toBeFalsy();
+    expect(validation.reason).toBe("search_engine_results_page");
+  }
+});

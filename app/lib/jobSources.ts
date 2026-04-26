@@ -50,6 +50,15 @@ const COMPANY_CAREERS_SEGMENTS = [
   "/jobs/",
 ] as const;
 
+const SEARCH_RESULTS_HOST_PATTERNS = [
+  "google.com",
+  "bing.com",
+  "duckduckgo.com",
+  "yahoo.com",
+  "search.yahoo.com",
+  "serpapi.com",
+] as const;
+
 function safeParseUrl(rawUrl: string) {
   const normalized = normalizeJobUrl(rawUrl);
   if (!normalized) return null;
@@ -133,6 +142,53 @@ export function isAggregatorHandoffUrl(url: string): boolean {
   }
 
   return /[?&](url|dest|destination|redirect|redirect_url|external)=/i.test(query);
+}
+
+export function isSearchResultsUrl(url: string): boolean {
+  const parsed = safeParseUrl(url);
+  if (!parsed) return false;
+
+  const host = normalizeHostname(parsed.hostname);
+  const path = normalizePathname(parsed.pathname).toLowerCase();
+  const hasQuery = parsed.searchParams.has("q");
+  const matchesSearchHost = SEARCH_RESULTS_HOST_PATTERNS.some(
+    (pattern) => host === pattern || host.endsWith(`.${pattern}`),
+  );
+
+  if (!matchesSearchHost) {
+    return false;
+  }
+
+  if ((host === "google.com" || host.endsWith(".google.com")) && path === "/search") {
+    return true;
+  }
+
+  if ((host === "bing.com" || host.endsWith(".bing.com")) && path === "/search") {
+    return true;
+  }
+
+  if (
+    (host === "yahoo.com" ||
+      host.endsWith(".yahoo.com") ||
+      host === "search.yahoo.com" ||
+      host.endsWith(".search.yahoo.com")) &&
+    path === "/search"
+  ) {
+    return true;
+  }
+
+  if (
+    (host === "duckduckgo.com" || host.endsWith(".duckduckgo.com")) &&
+    (path === "/html" || (path === "/" && hasQuery))
+  ) {
+    return true;
+  }
+
+  if ((host === "serpapi.com" || host.endsWith(".serpapi.com")) && path === "/search") {
+    return true;
+  }
+
+  return false;
 }
 
 export function isLikelyAtsUrl(url: string): boolean {

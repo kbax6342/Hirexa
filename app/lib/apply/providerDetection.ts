@@ -1,4 +1,5 @@
 import type { Job, JobSource } from "@/app/lib/jobs/types";
+import { isGreenhouseUrl } from "@/app/lib/apply/providers/greenhouse";
 import { normalizeJobUrl } from "@/app/lib/jobSources";
 
 export type ApplyProvider = "greenhouse" | "ashby";
@@ -20,21 +21,6 @@ export function normalizeApplyProvider(value: unknown): ApplyProvider | null {
   }
 
   return null;
-}
-
-export function isGreenhouseUrl(jobUrl: string | null | undefined) {
-  const normalizedUrl = normalizeJobUrl(String(jobUrl ?? ""));
-  if (!normalizedUrl) return false;
-
-  try {
-    const parsed = new URL(normalizedUrl);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.toLowerCase();
-
-    return host.endsWith("greenhouse.io") || (host.includes("greenhouse") && path.includes("apply"));
-  } catch {
-    return false;
-  }
 }
 
 export function isAshbyUrl(jobUrl: string | null | undefined) {

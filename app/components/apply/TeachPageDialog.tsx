@@ -22,6 +22,10 @@ import {
   type ApplySiteStrategyStep,
 } from "@/app/lib/apply/siteStrategyStore";
 import {
+  buildApplySiteStrategyCodexPrompt,
+  getPromptGenerationStatus,
+} from "@/app/lib/apply/siteStrategyPrompt";
+import {
   deriveStopClassification,
   type ApplyStopClassification,
 } from "@/app/lib/apply/stopClassification";
@@ -57,6 +61,39 @@ type TrainingSessionResponse = {
     error?: string | null;
   };
 };
+
+function getLatestRecordedStepTimestamp(steps: ApplySiteStrategyStep[]) {
+  return steps.reduce((latest, step) => {
+    const next = Date.parse(step.timestamp);
+    if (!Number.isFinite(next)) return latest;
+    return Math.max(latest, next);
+  }, 0);
+}
+
+function recordedStepsAreNewer(
+  strategy: ApplySiteStrategyRecord,
+  recordedSteps: ApplySiteStrategyStep[],
+) {
+  if (recordedSteps.length === 0) {
+    return false;
+  }
+
+  const savedRawSteps = strategy.rawSteps ?? strategy.steps ?? [];
+  if (savedRawSteps.length === 0) {
+    return true;
+  }
+
+  const savedTimestamp = Math.max(
+    getLatestRecordedStepTimestamp(savedRawSteps),
+    Date.parse(strategy.updatedAt) || 0,
+  );
+  const currentTimestamp = getLatestRecordedStepTimestamp(recordedSteps);
+
+  return (
+    currentTimestamp > savedTimestamp ||
+    recordedSteps.length !== savedRawSteps.length
+  );
+}
 
 export default function TeachPageDialog({
   finalUrl,
@@ -99,7 +136,9 @@ export default function TeachPageDialog({
   const [promptModel, setPromptModel] = useState<string | null>(null);
   const [promptReasoningEffort, setPromptReasoningEffort] = useState<string | null>(null);
   const [promptWarning, setPromptWarning] = useState<string | null>(null);
+  const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [promptGeneratedLocally, setPromptGeneratedLocally] = useState(false);
 
   const resolvedUrl = finalUrl ?? currentUrl ?? "";
   const resolvedStopReason = stopReason ?? "HUMAN_INTERVENTION_REQUIRED";
@@ -121,6 +160,51 @@ export default function TeachPageDialog({
   );
   const teachFieldClassName = "bg-white text-black";
   const canShowGeneratedPrompt = generatedCodexPrompt.trim().length > 0;
+  const promptSourceStrategy = useMemo(() => {
+    if (!savedStrategy) {
+      return null;
+    }
+
+    const useRecordedSteps = recordedStepsAreNewer(savedStrategy, recordedSteps);
+    const nextRecordedSteps = useRecordedSteps
+      ? recordedSteps
+      : savedStrategy.rawSteps ?? savedStrategy.steps ?? [];
+    const nextReplaySafeSteps = useRecordedSteps
+      ? recordedSteps
+      : savedStrategy.steps ??
+        savedStrategy.sanitizedSteps ??
+        savedStrategy.rawSteps ??
+        [];
+    const nextLastTrainedUrl = useRecordedSteps
+      ? recordedSteps.at(-1)?.currentUrl ??
+        lastTrainedUrl ??
+        savedStrategy.lastTrainedUrl
+      : savedStrategy.lastTrainedUrl ??
+        lastTrainedUrl ??
+        nextRecordedSteps.at(-1)?.currentUrl;
+
+    return {
+      ...savedStrategy,
+      instructions: instructions.trim() || savedStrategy.instructions,
+      selectors: selectors.trim() || savedStrategy.selectors,
+      steps: nextReplaySafeSteps,
+      rawSteps: nextRecordedSteps,
+      sanitizedSteps: nextReplaySafeSteps,
+      lastTrainedUrl: nextLastTrainedUrl,
+    } satisfies ApplySiteStrategyRecord;
+  }, [instructions, lastTrainedUrl, recordedSteps, savedStrategy, selectors]);
+  const promptGenerationStatus = useMemo(
+    () =>
+      getPromptGenerationStatus(promptSourceStrategy, {
+        generated: promptGeneratedLocally,
+        replaySafeSteps: promptSourceStrategy?.steps,
+        rawRecordedSteps: promptSourceStrategy?.rawSteps,
+      }),
+    [promptGeneratedLocally, promptSourceStrategy],
+  );
+  const canGeneratePrompt =
+    Boolean(promptSourceStrategy) &&
+    promptGenerationStatus.key !== "needs_recorded_steps";
 
   const setPromptFields = useCallback((strategy: ApplySiteStrategyRecord | null) => {
     const promptValue =
@@ -179,7 +263,9 @@ export default function TeachPageDialog({
     setPromptModel(null);
     setPromptReasoningEffort(null);
     setPromptWarning(null);
+    setPromptMessage(null);
     setCopyMessage(null);
+    setPromptGeneratedLocally(false);
 
     void (async () => {
       await refreshApplySiteStrategies().catch(() => undefined);
@@ -254,12 +340,75 @@ export default function TeachPageDialog({
 
   const isRecording = trainingStatus === "recording";
   const canSaveStrategy = Boolean(resolvedHostname) && trainingStatus !== "starting";
+  const generateCodexPrompt = useCallback(() => {
+    if (!promptSourceStrategy || !canGeneratePrompt) {
+      return;
+    }
+
+    const generatedAt = new Date().toISOString();
+    const prompt = buildApplySiteStrategyCodexPrompt(promptSourceStrategy, {
+      replaySafeSteps: promptSourceStrategy.steps,
+      rawRecordedSteps: promptSourceStrategy.rawSteps,
+    });
+
+    setGeneratedCodexPrompt(prompt);
+    setGeneratedSummary(
+      promptSourceStrategy.aiSummary ??
+        promptSourceStrategy.derivedInstruction ??
+        "",
+    );
+    setPromptGeneratedAt(generatedAt);
+    setPromptModel("local-deterministic");
+    setPromptReasoningEffort(null);
+    setPromptWarning(null);
+    setPromptMessage("Prompt generated locally from saved strategy evidence.");
+    setCopyMessage(null);
+    setPromptGeneratedLocally(true);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[APPLY_STRATEGY_PROMPT] generated", {
+        hostname: promptSourceStrategy.hostname,
+        finalUrl: promptSourceStrategy.finalUrl,
+        lastTrainedUrl: promptSourceStrategy.lastTrainedUrl ?? null,
+        stepCount:
+          promptSourceStrategy.rawSteps?.length ??
+          promptSourceStrategy.steps?.length ??
+          0,
+        hasInstructions: promptSourceStrategy.instructions.trim().length > 0,
+        hasSelectors: (promptSourceStrategy.selectors ?? "").trim().length > 0,
+      });
+    }
+  }, [canGeneratePrompt, promptSourceStrategy]);
+
+  const copyPromptToClipboard = useCallback(() => {
+    if (!canShowGeneratedPrompt) return;
+
+    void (async () => {
+      if (
+        typeof navigator === "undefined" ||
+        !navigator.clipboard ||
+        typeof navigator.clipboard.writeText !== "function"
+      ) {
+        setCopyMessage("Clipboard is unavailable in this browser.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(generatedCodexPrompt);
+        setCopyMessage("Copied prompt to clipboard.");
+      } catch {
+        setCopyMessage("Unable to copy prompt.");
+      }
+    })();
+  }, [canShowGeneratedPrompt, generatedCodexPrompt]);
+
   const saveStrategy = useCallback(
     async (mode: "save" | "regenerate") => {
       if (!canSaveStrategy || isRecording) return;
 
       try {
         setSaving(true);
+        setPromptMessage(null);
         setCopyMessage(null);
         const next = await saveApplySiteStrategy({
           hostname: urlOrHostname || resolvedHostname,
@@ -287,7 +436,14 @@ export default function TeachPageDialog({
             : `Regenerated Codex prompt for ${next.hostname}.`,
         );
         setSaveError(null);
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[apply strategy] strategy saved, closing modal", {
+            strategyKey: next.strategyKey ?? null,
+            siteDomain: next.hostname,
+          });
+        }
         onStrategySaved?.(next);
+        setOpen(false);
       } catch (error) {
         setSaveMessage(null);
         setSaveError(
@@ -503,6 +659,9 @@ export default function TeachPageDialog({
                     setRecordingStepCount(0);
                     setLastTrainedUrl(resolvedUrl || null);
                     setPromptFields(null);
+                    setPromptMessage(null);
+                    setPromptGeneratedLocally(false);
+                    setCopyMessage(null);
                   }}
                 >
                   Back to fresh entry
@@ -716,7 +875,7 @@ export default function TeachPageDialog({
                 Updated: {new Date(savedStrategy.updatedAt).toLocaleString()}
               </p>
               <p className="mt-1 text-xs text-gray-500">
-                Prompt generation: {savedStrategy.promptGenerationSucceeded ? "Ready" : "Pending"}
+                Prompt generation: {promptGenerationStatus.label}
               </p>
               {savedStrategy.derivedInstruction ? (
                 <p className="mt-2 text-xs text-gray-600">
@@ -730,36 +889,27 @@ export default function TeachPageDialog({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="font-medium text-gray-900">Generated Codex Prompt</p>
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!canShowGeneratedPrompt}
-                  onClick={() => {
-                    if (!canShowGeneratedPrompt) return;
-                    void (async () => {
-                      try {
-                        await navigator.clipboard.writeText(generatedCodexPrompt);
-                        setCopyMessage("Copied prompt to clipboard.");
-                      } catch {
-                        setCopyMessage("Unable to copy prompt.");
-                      }
-                    })();
-                  }}
-                >
-                  Copy Codex Prompt
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!canSaveStrategy || isRecording || saving}
-                  onClick={() => {
-                    void saveStrategy("regenerate");
-                  }}
-                >
-                  Regenerate
-                </Button>
+                {savedStrategy ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!canGeneratePrompt}
+                    onClick={generateCodexPrompt}
+                  >
+                    Generate Codex Prompt
+                  </Button>
+                ) : null}
+                {canShowGeneratedPrompt ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyPromptToClipboard}
+                  >
+                    Copy Prompt
+                  </Button>
+                ) : null}
               </div>
             </div>
 
@@ -767,7 +917,9 @@ export default function TeachPageDialog({
               <p className="mt-2 text-xs text-gray-600">{generatedSummary}</p>
             ) : (
               <p className="mt-2 text-xs text-gray-500">
-                Save strategy to generate a Codex-ready prompt.
+                {savedStrategy
+                  ? "Generate a paste-ready Codex prompt from the saved strategy and recorded steps."
+                  : "Save strategy to unlock local prompt generation."}
               </p>
             )}
 
@@ -791,6 +943,10 @@ export default function TeachPageDialog({
                   <p>Reasoning effort: {promptReasoningEffort}</p>
                 ) : null}
               </div>
+            ) : null}
+
+            {promptMessage ? (
+              <p className="mt-2 text-xs text-emerald-700">{promptMessage}</p>
             ) : null}
 
             {promptWarning ? (

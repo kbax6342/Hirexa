@@ -1,9 +1,12 @@
 import type { Page } from "playwright-core";
+import type { VerificationEvidence } from "@/app/lib/apply/stopClassification";
 
 export type PageSignals = {
   html: string;
+  title: string;
   pageText: string;
   verificationSignals: string[];
+  verificationEvidence: VerificationEvidence;
   searchEngineChallengeSignals: string[];
   searchEngineChallengeDetected: boolean;
   confirmationSignals: string[];
@@ -58,6 +61,12 @@ export const HUMAN_VERIFICATION_CHECKS = [
 ] as const;
 
 const VERIFICATION_DOM_MARKERS: Array<{ selector: string; signal: string }> = [
+  { selector: "iframe[src*='recaptcha']", signal: "recaptcha iframe" },
+  { selector: "iframe[title*='recaptcha' i]", signal: "recaptcha iframe" },
+  { selector: ".g-recaptcha", signal: "recaptcha widget" },
+  { selector: "iframe[src*='hcaptcha']", signal: "hcaptcha iframe" },
+  { selector: "iframe[title*='hcaptcha' i]", signal: "hcaptcha iframe" },
+  { selector: ".h-captcha", signal: "hcaptcha widget" },
   { selector: "iframe[src*='turnstile']", signal: "turnstile iframe" },
   { selector: "iframe[title*='turnstile' i]", signal: "turnstile iframe" },
   {
@@ -165,19 +174,24 @@ async function detectForm(page: Page) {
 async function detectVerificationDomSignals(page: Page) {
   return page
     .evaluate((markers) => {
-      const found = new Set<string>();
+      const found: Array<{ signal: string; selector: string }> = [];
+      const seen = new Set<string>();
       for (const marker of markers) {
         try {
           if (document.querySelector(marker.selector)) {
-            found.add(marker.signal);
+            const key = `${marker.signal}:${marker.selector}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              found.push(marker);
+            }
           }
         } catch {
           // Ignore selector parse errors from malformed pages.
         }
       }
-      return Array.from(found);
+      return found;
     }, VERIFICATION_DOM_MARKERS)
-    .catch(() => [] as string[]);
+    .catch(() => [] as Array<{ signal: string; selector: string }>);
 }
 
 export async function readMeaningfulFormControlSummary(
@@ -295,9 +309,19 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
   const verificationSignals = [
     ...new Set([
       ...collectVerificationSignals([verificationText]),
-      ...verificationDomSignals,
+      ...verificationDomSignals.map((entry) => entry.signal),
     ]),
   ];
+  const textSnippet = extractSignalSnippet(verificationText, verificationSignals);
+  const firstDomSignal = verificationDomSignals[0];
+  const verificationEvidence: VerificationEvidence = {
+    detected: verificationSignals.length > 0,
+    matchedPattern: verificationSignals[0],
+    textSnippet,
+    selector: firstDomSignal?.selector,
+    url: page.url(),
+    title: currentTitle,
+  };
   const searchEngineChallengeSignals = [
     ...new Set(containsSignal(verificationText, SEARCH_ENGINE_CHALLENGE_CHECKS)),
   ];
@@ -316,8 +340,10 @@ export async function detectPageSignals(page: Page): Promise<PageSignals> {
 
   return {
     html,
+    title: currentTitle,
     pageText,
     verificationSignals,
+    verificationEvidence,
     searchEngineChallengeSignals,
     searchEngineChallengeDetected: searchEngineChallengeSignals.length > 0,
     confirmationSignals,

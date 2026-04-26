@@ -20,6 +20,10 @@ import {
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
 import {
+  isResolvedUrlCompatibleWithJob,
+  isThirdPartyJobSource,
+} from "@/app/lib/apply/resolvedUrlCompatibility";
+import {
   buildAdzunaDetailsUrl,
   normalizeAdzunaProviderId,
 } from "@/app/lib/jobs/adzunaProviderId";
@@ -929,6 +933,12 @@ function isKnownDirectEmployerUrl(
 ) {
   const normalizedUrl = normalizeJobUrl(url);
   if (
+    !isResolvedUrlCompatibleWithJob({
+      url: normalizedUrl,
+      companyName: input.company,
+      jobTitle: input.title,
+      sourceUrl: input.currentUrl,
+    }) ||
     !normalizedUrl ||
     !isValidResolvedJobUrl(normalizedUrl) ||
     classifyNonJobPostingUrl(normalizedUrl) !== null ||
@@ -1880,7 +1890,10 @@ function buildNormalizedInput(args: {
   const locationTokens = tokenizeSimilarityInput(normalizedLocation || location);
   const adzunaHandoffDetected =
     isAdzunaUnresolvedHandoffUrl(currentUrl) || source.includes("adzuna");
-  const googleFirstTriggered = adzunaHandoffDetected;
+  const googleFirstTriggered = isThirdPartyJobSource({
+    source,
+    url: currentUrl,
+  });
   const employerHostCandidates = buildEmployerHostCandidates(
     companyAliasVariants,
   );

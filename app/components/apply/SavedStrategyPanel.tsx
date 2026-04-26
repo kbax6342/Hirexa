@@ -26,6 +26,7 @@ import {
   type ApplySiteStrategyRecord,
   type ApplySiteStrategyStep,
 } from "@/app/lib/apply/siteStrategyStore";
+import { getPromptGenerationStatus } from "@/app/lib/apply/siteStrategyPrompt";
 import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 
 type SavedStrategyPanelProps = {
@@ -289,6 +290,12 @@ export default function SavedStrategyPanel({
         ? "Failed"
         : "Not replayed yet"
     : "Not replayed yet";
+  const promptGenerationStatus = savedStrategy
+    ? getPromptGenerationStatus(savedStrategy, {
+        replaySafeSteps: strategySteps,
+        rawRecordedSteps: savedStrategy.rawSteps,
+      })
+    : null;
 
   useEffect(() => {
     if (
@@ -874,7 +881,7 @@ export default function SavedStrategyPanel({
           Last replay: {lastReplayOutcomeLabel}
         </p>
         <p className={cn("mt-1", palette.subtle)}>
-          Prompt generation: {savedStrategy.promptGenerationSucceeded ? "Ready" : "Pending"}
+          Prompt generation: {promptGenerationStatus?.label ?? "Needs recorded steps"}
         </p>
         {savedStrategy.promptModel ? (
           <p className={cn("mt-1", palette.subtle)}>

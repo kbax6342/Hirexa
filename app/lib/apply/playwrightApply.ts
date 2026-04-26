@@ -32,6 +32,22 @@ import {
   findMatchingLocator,
   extractLocatorText,
 } from "@/app/lib/apply/formFieldLocators";
+import {
+  detectGreenhouseApplicationForm,
+  fillGreenhouseApplicationForm,
+  isGreenhouseUrl,
+  type FillGreenhouseApplicationFormResult,
+} from "@/app/lib/apply/providers/greenhouse";
+import { generateFormAnswers } from "@/app/lib/apply/formIntelligence/aiFormAnswerGenerator";
+import { fillGeneratedAnswers } from "@/app/lib/apply/formIntelligence/playwrightFormFiller";
+import { scanCurrentForm } from "@/app/lib/apply/formIntelligence/formScanner";
+import { classifyRequiredApplicationField } from "@/app/lib/apply/form-field-classifier";
+import type {
+  FillGeneratedAnswersResult,
+  FormFieldDescriptor,
+  GeneratedFormAnswer,
+} from "@/app/lib/apply/formIntelligence/types";
+import { getResolvedUrlCompatibility } from "@/app/lib/apply/resolvedUrlCompatibility";
 import { cssEscape } from "@/app/lib/apply/cssEscape";
 import {
   chaseApplyPath,
@@ -58,7 +74,9 @@ import {
 } from "@/app/lib/apply/playwrightSignals";
 import {
   deriveStopClassification,
+  shouldAllowVerificationRequired,
   type ApplyStopClassification,
+  type VerificationEvidence,
 } from "@/app/lib/apply/stopClassification";
 import type { DirectJobResolution } from "@/app/lib/apply/directJobResolver";
 import type { ApplySiteStrategyStep } from "@/app/lib/apply/playwrightStrategyTypes";
@@ -129,6 +147,8 @@ export type PlaywrightApplyResult = {
     urlBeforeClick?: string;
     urlAfterClick?: string;
     currentUrl?: string;
+    providerDetected?: string;
+    formContextUrl?: string;
     submitButtonFound: boolean;
     submitButtonClicked: boolean;
     confirmationTextFound: boolean;
@@ -187,6 +207,36 @@ export type PlaywrightApplyResult = {
     ctaClickedSelector?: string;
     dismissedBlocker?: boolean;
     formDetected: boolean;
+    visibleFieldCount?: number;
+    fillableFieldCount?: number;
+    filledFieldCount?: number;
+    requiredFieldCount?: number;
+    missingRequiredFields?: string[];
+    unsupportedRequiredFields?: string[];
+    formScanAttempted?: boolean;
+    formFound?: boolean;
+    formFillAttempted?: boolean;
+    resumeUploadAttempted?: boolean;
+    resumeUploadSucceeded?: boolean;
+    submitOrContinueAttempted?: boolean;
+    submitOrContinueClicked?: boolean;
+    aiFormAnswerEngineRan?: boolean;
+    aiFormAnswersGenerated?: boolean;
+    aiFormAutofillCompleted?: boolean;
+    aiFormFieldCount?: number;
+    aiFormRequiredFieldCount?: number;
+    aiFormAnsweredCount?: number;
+    aiFormBlockedCount?: number;
+    aiFormFilledCount?: number;
+    aiFormRemainingRequiredFields?: string[];
+    aiFormBlockedFields?: Array<{
+      fieldId: string;
+      label: string;
+      reason: string;
+      category: string;
+    }>;
+    verificationEvidence?: VerificationEvidence;
+    verificationOverriddenByVisibleForm?: boolean;
     confirmationDetected: boolean;
     verificationDetected: boolean;
     finalReason?: string;
@@ -609,6 +659,14 @@ type PlaywrightEvidence = {
   successUrlPatternMatched: boolean;
   finalStatus: ApplySessionStatus;
   submissionConfirmed: boolean;
+  formScanAttempted?: boolean;
+  formFound?: boolean;
+  formFillAttempted?: boolean;
+  filledFieldCount?: number;
+  requiredFieldCount?: number;
+  missingRequiredFields?: string[];
+  verificationDetected?: boolean;
+  verificationEvidence?: VerificationEvidence;
 };
 
 type JobSearchFallbackDebugState = {
@@ -639,7 +697,7 @@ type LocalPlaywrightLaunchOptions = {
   headedDebug: boolean;
 };
 
-type KnownApplyDomain = "adzuna" | "dice" | "generic";
+type KnownApplyDomain = "adzuna" | "dice" | "greenhouse" | "generic";
 
 type EntryCtaConfig = {
   text: string;
@@ -1226,6 +1284,8 @@ function buildDebugPayload(args: {
   urlBeforeClick?: string;
   urlAfterClick?: string;
   currentUrl?: string;
+  providerDetected?: string;
+  formContextUrl?: string;
   submitButtonFound: boolean;
   submitButtonClicked: boolean;
   confirmationTextFound: boolean;
@@ -1284,6 +1344,36 @@ function buildDebugPayload(args: {
   ctaClickedSelector?: string;
   dismissedBlocker?: boolean;
   formDetected: boolean;
+  visibleFieldCount?: number;
+  fillableFieldCount?: number;
+  filledFieldCount?: number;
+  requiredFieldCount?: number;
+  missingRequiredFields?: string[];
+  unsupportedRequiredFields?: string[];
+  formScanAttempted?: boolean;
+  formFound?: boolean;
+  formFillAttempted?: boolean;
+  resumeUploadAttempted?: boolean;
+  resumeUploadSucceeded?: boolean;
+  submitOrContinueAttempted?: boolean;
+  submitOrContinueClicked?: boolean;
+  aiFormAnswerEngineRan?: boolean;
+  aiFormAnswersGenerated?: boolean;
+  aiFormAutofillCompleted?: boolean;
+  aiFormFieldCount?: number;
+  aiFormRequiredFieldCount?: number;
+  aiFormAnsweredCount?: number;
+  aiFormBlockedCount?: number;
+  aiFormFilledCount?: number;
+  aiFormRemainingRequiredFields?: string[];
+  aiFormBlockedFields?: Array<{
+    fieldId: string;
+    label: string;
+    reason: string;
+    category: string;
+  }>;
+  verificationEvidence?: VerificationEvidence;
+  verificationOverriddenByVisibleForm?: boolean;
   confirmationDetected: boolean;
   verificationDetected: boolean;
   finalReason?: string;
@@ -1424,6 +1514,8 @@ function buildDebugPayload(args: {
     urlBeforeClick: args.urlBeforeClick,
     urlAfterClick: args.urlAfterClick,
     currentUrl: args.currentUrl,
+    providerDetected: args.providerDetected,
+    formContextUrl: args.formContextUrl,
     submitButtonFound: args.submitButtonFound,
     submitButtonClicked: args.submitButtonClicked,
     confirmationTextFound: args.confirmationTextFound,
@@ -1491,6 +1583,33 @@ function buildDebugPayload(args: {
     ctaClickedSelector: args.ctaClickedSelector,
     dismissedBlocker: args.dismissedBlocker ?? false,
     formDetected: args.formDetected,
+    visibleFieldCount: args.visibleFieldCount ?? 0,
+    fillableFieldCount: args.fillableFieldCount ?? 0,
+    filledFieldCount: args.filledFieldCount ?? 0,
+    requiredFieldCount: args.requiredFieldCount ?? 0,
+    missingRequiredFields: args.missingRequiredFields ?? [],
+    unsupportedRequiredFields: args.unsupportedRequiredFields ?? [],
+    formScanAttempted: args.formScanAttempted ?? false,
+    formFound: args.formFound ?? args.formDetected,
+    formFillAttempted: args.formFillAttempted ?? false,
+    resumeUploadAttempted: args.resumeUploadAttempted ?? false,
+    resumeUploadSucceeded: args.resumeUploadSucceeded ?? false,
+    submitOrContinueAttempted: args.submitOrContinueAttempted ?? false,
+    submitOrContinueClicked: args.submitOrContinueClicked ?? false,
+    aiFormAnswerEngineRan: args.aiFormAnswerEngineRan ?? false,
+    aiFormAnswersGenerated: args.aiFormAnswersGenerated ?? false,
+    aiFormAutofillCompleted: args.aiFormAutofillCompleted ?? false,
+    aiFormFieldCount: args.aiFormFieldCount ?? 0,
+    aiFormRequiredFieldCount: args.aiFormRequiredFieldCount ?? 0,
+    aiFormAnsweredCount: args.aiFormAnsweredCount ?? 0,
+    aiFormBlockedCount: args.aiFormBlockedCount ?? 0,
+    aiFormFilledCount: args.aiFormFilledCount ?? 0,
+    aiFormRemainingRequiredFields: args.aiFormRemainingRequiredFields ?? [],
+    aiFormBlockedFields: args.aiFormBlockedFields ?? [],
+    verificationEvidence:
+      args.verificationEvidence ?? { detected: args.verificationDetected },
+    verificationOverriddenByVisibleForm:
+      args.verificationOverriddenByVisibleForm ?? false,
     confirmationDetected: args.confirmationDetected,
     verificationDetected: args.verificationDetected,
     finalReason: args.finalReason,
@@ -1620,13 +1739,292 @@ function buildCtaEvidence(
 ) {
   const effectiveClicks = [...preludeApplyClicks, ...chase.clicks];
   return {
-    applyCtaFound: effectiveClicks.length > 0,
+    applyCtaFound: chase.ctaFound || effectiveClicks.length > 0,
     applyCtaClicked: effectiveClicks.length > 0,
     urlBeforeClick: effectiveClicks[0]?.fromUrl,
     urlAfterClick: effectiveClicks.at(-1)?.toUrl ?? currentUrl,
     currentUrl,
     hopCount: preludeApplyClicks.length + chase.hopCount,
   };
+}
+
+function collectStrategyPreferredCtaTexts(
+  steps: ApplySiteStrategyStep[] | null | undefined,
+) {
+  const results = new Set<string>();
+
+  for (const step of steps ?? []) {
+    if (step.type !== "click") continue;
+
+    for (const value of [step.label, step.text]) {
+      const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+      if (!normalized) continue;
+
+      const lower = normalized.toLowerCase();
+      if (
+        lower.includes("apply") ||
+        lower.includes("continue") ||
+        lower.includes("submit") ||
+        lower.includes("start") ||
+        lower.includes("next") ||
+        lower.includes("application")
+      ) {
+        results.add(normalized);
+      }
+    }
+  }
+
+  return Array.from(results).slice(0, 12);
+}
+
+function collectStrategyPreferredSelectors(
+  steps: ApplySiteStrategyStep[] | null | undefined,
+) {
+  const results = new Set<string>();
+
+  for (const step of steps ?? []) {
+    if (step.type !== "click") continue;
+    const selector = String(step.selector ?? "").trim();
+    if (!selector) continue;
+    results.add(selector);
+  }
+
+  return Array.from(results).slice(0, 12);
+}
+
+const GREENHOUSE_APPLY_SELECTORS = [
+  'button[aria-label="Apply"]',
+  '#link-apply',
+  'a[href*="job_app"]',
+  'a[href*="embed/job_app"]',
+  'button:has-text("Apply")',
+  'a:has-text("Apply")',
+];
+
+function mergePreferredCtaSelectors(args: {
+  strategySelectors: string[];
+  greenhouseProviderDetected: boolean;
+}) {
+  return [
+    ...new Set([
+      ...args.strategySelectors,
+      ...(args.greenhouseProviderDetected ? GREENHOUSE_APPLY_SELECTORS : []),
+    ]),
+  ].slice(0, 24);
+}
+
+function parseGreenhouseUrlParts(value: string | null | undefined) {
+  const normalized = normalizeJobUrl(String(value ?? ""));
+  if (!normalized) return null;
+
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host !== "boards.greenhouse.io" &&
+      host !== "job-boards.greenhouse.io" &&
+      host !== "job-boards.eu.greenhouse.io"
+    ) {
+      return null;
+    }
+
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    const token =
+      parsed.searchParams.get("token") ??
+      (pathParts.includes("jobs")
+        ? pathParts[pathParts.indexOf("jobs") + 1]
+        : undefined);
+    const board =
+      parsed.searchParams.get("for") ??
+      (pathParts[0] === "embed" ? undefined : pathParts[0]);
+
+    return {
+      host,
+      board: board?.toLowerCase(),
+      token: token?.toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildSafeGreenhouseEmbedUrl(args: {
+  currentUrl: string;
+  targetUrl: string;
+  candidateUrl?: string | null;
+}) {
+  const currentParts =
+    parseGreenhouseUrlParts(args.currentUrl) ?? parseGreenhouseUrlParts(args.targetUrl);
+  if (!currentParts?.board || !currentParts.token) {
+    return { allowed: false, reason: "missing_current_board_or_token" };
+  }
+
+  const candidate = normalizeJobUrl(args.candidateUrl ?? "");
+  if (candidate) {
+    const candidateParts = parseGreenhouseUrlParts(candidate);
+    if (!candidateParts) {
+      return { allowed: false, reason: "candidate_not_greenhouse_board_url" };
+    }
+    if (candidateParts.board && candidateParts.board !== currentParts.board) {
+      return { allowed: false, reason: "candidate_board_mismatch" };
+    }
+    if (candidateParts.token && candidateParts.token !== currentParts.token) {
+      return { allowed: false, reason: "candidate_token_mismatch" };
+    }
+    return { allowed: true, url: candidate, reason: "safe_candidate_embed" };
+  }
+
+  return {
+    allowed: true,
+    url: `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(
+      currentParts.board,
+    )}&token=${encodeURIComponent(currentParts.token)}`,
+    reason: "constructed_from_current_job_url",
+  };
+}
+
+async function discoverGreenhouseEmbedCandidate(page: Page) {
+  return page
+    .evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a[href]"));
+      for (const link of links) {
+        const href = (link as HTMLAnchorElement).href;
+        if (/\/embed\/job_app|job_app/i.test(href)) {
+          return href;
+        }
+      }
+      return null;
+    })
+    .catch(() => null);
+}
+
+type VisibleFormState = {
+  formDetected: boolean;
+  visibleFieldCount: number;
+  fillableFieldCount: number;
+  filledFieldCount: number;
+  requiredFieldCount: number;
+  missingRequiredFields: string[];
+  fileInputFound: boolean;
+};
+
+async function inspectVisibleFormState(page: Page): Promise<VisibleFormState> {
+  return page
+    .evaluate(() => {
+      function isVisible(element: Element) {
+        if (!(element instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      }
+
+      function resolveLabel(element: Element) {
+        if (!(element instanceof HTMLElement)) return "";
+        const ariaLabel = element.getAttribute("aria-label") ?? "";
+        if (ariaLabel.trim()) return ariaLabel.trim();
+
+        const id = element.getAttribute("id");
+        if (id) {
+          const forLabel = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          if (forLabel?.textContent?.trim()) {
+            return forLabel.textContent.replace(/\s+/g, " ").trim();
+          }
+        }
+
+        const wrappingLabel = element.closest("label");
+        if (wrappingLabel?.textContent?.trim()) {
+          return wrappingLabel.textContent.replace(/\s+/g, " ").trim();
+        }
+
+        const placeholder =
+          element.getAttribute("placeholder") ??
+          element.getAttribute("name") ??
+          element.getAttribute("id") ??
+          "";
+        return placeholder.trim();
+      }
+
+      const controls = Array.from(
+        document.querySelectorAll("input, textarea, select"),
+      ).filter((element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        if (!isVisible(element)) return false;
+        if (element.hasAttribute("disabled")) return false;
+        if (element.getAttribute("aria-disabled") === "true") return false;
+        if (element.closest("header, nav, footer, [role='navigation']")) return false;
+        if (element instanceof HTMLInputElement) {
+          const type = (element.type || "text").toLowerCase();
+          if (type === "hidden" || type === "submit" || type === "button" || type === "reset") {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      const missingRequiredFields: string[] = [];
+      let filledFieldCount = 0;
+      let requiredFieldCount = 0;
+      let fileInputFound = false;
+
+      for (const control of controls) {
+        const required =
+          control.hasAttribute("required") ||
+          control.getAttribute("aria-required") === "true";
+        const label = resolveLabel(control);
+        let filled = false;
+
+        if (control instanceof HTMLInputElement) {
+          const type = (control.type || "text").toLowerCase();
+          if (type === "file") {
+            fileInputFound = true;
+            filled = (control.files?.length ?? 0) > 0;
+          } else if (type === "checkbox" || type === "radio") {
+            filled = control.checked;
+          } else {
+            filled = Boolean(control.value?.trim());
+          }
+        } else if (control instanceof HTMLTextAreaElement) {
+          filled = Boolean(control.value?.trim());
+        } else if (control instanceof HTMLSelectElement) {
+          filled = Boolean(control.value?.trim());
+        }
+
+        if (filled) {
+          filledFieldCount += 1;
+        }
+
+        if (required) {
+          requiredFieldCount += 1;
+          if (!filled) {
+            missingRequiredFields.push(label || "Required field");
+          }
+        }
+      }
+
+      return {
+        formDetected: controls.length > 0,
+        visibleFieldCount: controls.length,
+        fillableFieldCount: controls.length,
+        filledFieldCount,
+        requiredFieldCount,
+        missingRequiredFields: Array.from(new Set(missingRequiredFields)),
+        fileInputFound,
+      };
+    })
+    .catch(() => ({
+      formDetected: false,
+      visibleFieldCount: 0,
+      fillableFieldCount: 0,
+      filledFieldCount: 0,
+      requiredFieldCount: 0,
+      missingRequiredFields: [],
+      fileInputFound: false,
+    }));
 }
 
 function isNoInteractionOnTarget(args: {
@@ -1676,6 +2074,49 @@ function resolveSubmissionConfirmed(args: {
 
 function logPlaywrightEvidence(evidence: PlaywrightEvidence) {
   console.log("[AUTO_APPLY_PLAYWRIGHT] evidence", evidence);
+}
+
+function logGreenhouseFormState(args: {
+  currentUrl: string;
+  stoppedAtUrl?: string | null;
+  formState:
+    | FillGreenhouseApplicationFormResult
+    | {
+        providerDetected: "greenhouse";
+        formContextUrl: string;
+        usedFrame: boolean;
+        formDetected: boolean;
+        visibleFieldCount: number;
+        fillableFieldCount: number;
+        requiredFieldCount: number;
+        submitButtonFound: boolean;
+      };
+  filledFieldCount?: number;
+  missingRequiredFields?: string[];
+  verificationSignals?: string[];
+  verificationOverriddenByVisibleForm?: boolean;
+  submitButtonClicked: boolean;
+  submissionConfirmed: boolean;
+}) {
+  console.info("[AUTO_APPLY_GREENHOUSE]", {
+    providerDetected: "greenhouse",
+    currentUrl: args.currentUrl,
+    stoppedAtUrl: args.stoppedAtUrl ?? null,
+    formContextUrl: args.formState.formContextUrl,
+    usedFrame: args.formState.usedFrame,
+    formDetected: args.formState.formDetected,
+    visibleFieldCount: args.formState.visibleFieldCount,
+    fillableFieldCount: args.formState.fillableFieldCount,
+    filledFieldCount: args.filledFieldCount ?? 0,
+    requiredFieldCount: args.formState.requiredFieldCount,
+    missingRequiredFields: args.missingRequiredFields ?? [],
+    verificationSignals: args.verificationSignals ?? [],
+    verificationOverriddenByVisibleForm:
+      args.verificationOverriddenByVisibleForm ?? false,
+    submitButtonFound: args.formState.submitButtonFound,
+    submitButtonClicked: args.submitButtonClicked,
+    submissionConfirmed: args.submissionConfirmed,
+  });
 }
 
 function parseHostname(value: string | null | undefined) {
@@ -1766,6 +2207,8 @@ function validatePreLaunchTarget(args: {
   entryUrl: string;
   originalJobUrl?: string;
   resolvedDirectUrl?: string;
+  companyName?: string;
+  jobTitle?: string;
   strategySourceHost?: string;
   strategyDestinationHost?: string;
 }) {
@@ -1783,6 +2226,12 @@ function validatePreLaunchTarget(args: {
   const strategyDestinationHost = parseHostnameOrHost(
     args.strategyDestinationHost,
   );
+  const compatibility = getResolvedUrlCompatibility({
+    url: targetValidation.normalizedUrl,
+    companyName: args.companyName,
+    jobTitle: args.jobTitle,
+    sourceUrl: args.originalJobUrl ?? args.entryUrl,
+  });
 
   if (!targetValidation.isValid) {
     return {
@@ -1792,6 +2241,24 @@ function validatePreLaunchTarget(args: {
       targetHost,
       expectedEmployerHost,
       validationReason: targetValidation.reason,
+      strategySourceHost,
+      strategyDestinationHost,
+    } satisfies PreLaunchValidationFailure;
+  }
+
+  if (!compatibility.compatible) {
+    return {
+      reason: "wrong_employer_domain",
+      message:
+        compatibility.mismatchFamily === "rtx"
+          ? "Resolved URL appears to belong to RTX, but this job is for another employer. Resolver stopped before navigating."
+          : "Resolved URL appears to belong to a different employer. Resolver stopped before navigating.",
+      targetHost,
+      expectedEmployerHost,
+      validationReason:
+        compatibility.mismatchFamily === "rtx"
+          ? "REAL_POSTING_COMPANY_MISMATCH"
+          : compatibility.reason,
       strategySourceHost,
       strategyDestinationHost,
     } satisfies PreLaunchValidationFailure;
@@ -1901,6 +2368,7 @@ function detectApplyDomainFromHostname(hostname: string): KnownApplyDomain {
   const normalized = hostname.toLowerCase();
   if (normalized.includes("adzuna")) return "adzuna";
   if (normalized.includes("dice")) return "dice";
+  if (normalized.includes("greenhouse")) return "greenhouse";
   return "generic";
 }
 
@@ -5104,6 +5572,26 @@ function buildEntryCtaConfigs(domain: KnownApplyDomain): EntryCtaConfig[] {
     return [
       { text: "Apply Now", match: "exact", preferredRole: "button" },
       { text: "Apply now", match: "exact", preferredRole: "button" },
+      ...generic,
+    ];
+  }
+
+  if (domain === "greenhouse") {
+    return [
+      {
+        text: "Apply for this job",
+        match: "exact",
+        preferredRole: "link",
+      },
+      {
+        text: "Apply for this job",
+        match: "exact",
+        preferredRole: "button",
+      },
+      { text: "Apply now", match: "exact", preferredRole: "link" },
+      { text: "Apply now", match: "exact", preferredRole: "button" },
+      { text: "Apply", match: "exact", preferredRole: "link" },
+      { text: "Apply", match: "exact", preferredRole: "button" },
       ...generic,
     ];
   }
@@ -9897,7 +10385,19 @@ function mergeChaseResults(args: {
     (args.resolverUrl ? 1 : 0) +
     args.resolved.hopCount;
   const clicks = [...args.initial.clicks, ...args.resolved.clicks];
+  const attempts = [...args.initial.attempts, ...args.resolved.attempts];
+  const attemptedSelectors = [
+    ...new Set([
+      ...args.initial.attemptedSelectors,
+      ...args.resolved.attemptedSelectors,
+    ]),
+  ];
   const finalReason = args.resolved.finalReason ?? args.initial.finalReason;
+  const ctaFound = args.initial.ctaFound || args.resolved.ctaFound;
+  const lastActionText =
+    args.resolved.lastActionText ?? args.initial.lastActionText;
+  const lastActionSelector =
+    args.resolved.lastActionSelector ?? args.initial.lastActionSelector;
 
   if ("unavailable" in args.resolved && args.resolved.unavailable) {
     return {
@@ -9905,7 +10405,12 @@ function mergeChaseResults(args: {
       hopCount,
       urlsVisited: mergedUrlsVisited,
       clicks,
+      attempts,
+      attemptedSelectors,
+      ctaFound,
       finalReason,
+      lastActionText,
+      lastActionSelector,
     };
   }
 
@@ -9914,7 +10419,12 @@ function mergeChaseResults(args: {
     hopCount,
     urlsVisited: mergedUrlsVisited,
     clicks,
+    attempts,
+    attemptedSelectors,
+    ctaFound,
     finalReason,
+    lastActionText,
+    lastActionSelector,
   };
 }
 
@@ -10055,6 +10565,9 @@ async function runJobSearchFallbackFlow(args: {
           hopCount: 0,
           urlsVisited: dedupeUrls([candidate.url, activePage.url()]),
           clicks: [],
+          attempts: [],
+          attemptedSelectors: [],
+          ctaFound: false,
           signals: initialSignals,
           finalReason: `Search fallback reached a usable application page (${initialProgress.reason}).`,
         },
@@ -10093,6 +10606,7 @@ async function runJobSearchFallbackFlow(args: {
       viewerUrl: args.viewerUrl,
       remoteSessionId: args.remoteSessionId,
       openUrl: candidate.url,
+      applicationId: null,
     });
 
     activePage = chased.page;
@@ -10211,6 +10725,10 @@ export async function applyWithPlaywright(args: {
       | "error"
       | "candidates"
     > & { attempted?: boolean };
+    userProfile?: unknown;
+    resumeText?: string | null;
+    resumeSummary?: string | null;
+    jobDescription?: string | null;
   };
   values: Record<string, string | string[]>;
   resumePath?: string | null;
@@ -10281,8 +10799,21 @@ export async function applyWithPlaywright(args: {
     args.metadata?.strategy?.derivedInstruction?.trim() || undefined;
   const strategyAutomationPrompt =
     args.metadata?.strategy?.automationPrompt?.trim() || undefined;
+  const strategyReplaySteps = args.metadata?.strategy?.steps ?? [];
   const strategySanitizedStepCount =
-    args.metadata?.strategy?.steps?.length ?? 0;
+    strategyReplaySteps.length;
+  const strategyPreferredCtaTexts =
+    collectStrategyPreferredCtaTexts(strategyReplaySteps);
+  const strategyPreferredSelectors =
+    collectStrategyPreferredSelectors(strategyReplaySteps);
+  const greenhouseProviderForCta =
+    isGreenhouseUrl(targetUrl) ||
+    isGreenhouseUrl(originalJobUrl) ||
+    isGreenhouseUrl(resolvedDirectUrl);
+  const preferredCtaSelectors = mergePreferredCtaSelectors({
+    strategySelectors: strategyPreferredSelectors,
+    greenhouseProviderDetected: greenhouseProviderForCta,
+  });
   const directJobResolutionAttempted =
     args.metadata?.directJobResolution?.attempted === true;
   const directJobResolutionConfidence =
@@ -10449,7 +10980,7 @@ export async function applyWithPlaywright(args: {
     resolvedDirectUrl,
     title: searchJobTitle,
   });
-  let rtxFlowAttempted = false;
+  const rtxFlowAttempted = false;
   let rtxFlowCompleted = false;
   let rtxFailureReason: string | undefined;
   let rtxProgressMarkers: string[] = [];
@@ -11181,6 +11712,8 @@ export async function applyWithPlaywright(args: {
       entryUrl,
       originalJobUrl,
       resolvedDirectUrl,
+      companyName: searchCompany,
+      jobTitle: searchJobTitle,
       strategySourceHost,
       strategyDestinationHost,
     });
@@ -11748,7 +12281,10 @@ export async function applyWithPlaywright(args: {
       signals: initialSignals,
     });
     const willRunEntryCtaPhase =
-      forceEntryCtaPhase || !realApplyDestinationPage;
+      forceEntryCtaPhase ||
+      (!initialSignals.confirmationDetected &&
+        !initialSignals.needsHuman &&
+        !initialSignals.formDetected);
 
     console.log("[AUTO_APPLY_ENTRY_CTA] gating", {
       domain,
@@ -11756,6 +12292,7 @@ export async function applyWithPlaywright(args: {
       isRealApplyDestinationPage: realApplyDestinationPage,
       forceEntryCtaPhase,
       willRunEntryCtaPhase,
+      willRunUniversalActionLoop: true,
     });
 
     const adzunaDetailsPhase = isAdzunaDetailsPage(page.url())
@@ -11848,7 +12385,7 @@ export async function applyWithPlaywright(args: {
     trackedClicks = [];
     trackedUrlsVisited = entryPhaseUrlsVisited;
     trackedHopCount = 0;
-    ctaAttempts = entryPhase.attempts;
+    ctaAttempts = [...ctaAttempts, ...entryPhase.attempts];
     entryCtaFound = entryPhase.ctaFound;
     entryCtaClicked = entryPhase.clicks.length > 0;
     entryCtaClickedText = entryPhase.ctaClickedText;
@@ -11894,137 +12431,8 @@ export async function applyWithPlaywright(args: {
     captureCurrentUrl(page);
     mergeCookiePromptPhase(initialCookiePhase);
 
-    const rtxPrelude = await runRtxManualApplyPrelude({
-      page,
-      context,
-      targetUrl,
-      originalJobUrl,
-      resolvedDirectUrl,
-      title: searchJobTitle,
-      company: searchCompany,
-      onPageReady: args.onPageReady,
-      onStatus: args.onStatus,
-      viewerUrl: remoteSession?.viewerUrl,
-      remoteSessionId: remoteSession?.sessionId,
-    });
-    page = rtxPrelude.page;
-    captureCurrentUrl(page);
-    rtxFlowAttempted = rtxFlowAttempted || rtxPrelude.attempted;
-    rtxFlowCompleted = rtxFlowCompleted || rtxPrelude.reachedWorkday;
-    rtxProgressMarkers = dedupeUrls([
-      ...rtxProgressMarkers,
-      ...rtxPrelude.markers,
-    ]);
-    if (rtxPrelude.lastActionText) {
-      latestActionText = rtxPrelude.lastActionText;
-    }
-    if (rtxPrelude.lastActionSelector) {
-      latestActionSelector = rtxPrelude.lastActionSelector;
-    }
-    if (rtxPrelude.failureReason) {
-      rtxFailureReason = rtxPrelude.failureReason;
-    }
-    if (rtxPrelude.verificationBlocked) {
-      keepBrowserOpen = true;
-      const finalUrl = page.url();
-      const message = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
-      const rtxPreludeAction = normalizeWhitespace(
-        rtxPrelude.lastActionText ?? "",
-      ).toLowerCase();
-      const rtxPreludeClickedApply =
-        rtxPreludeAction.includes("apply now") ||
-        rtxPreludeAction.includes("apply manually");
-
-      await args.onStatus?.({
-        status: "VERIFICATION_REQUIRED",
-        lastUrl: finalUrl,
-        message,
-        viewerUrl: remoteSession?.viewerUrl,
-        openUrl: finalUrl,
-        remoteSessionId: remoteSession?.sessionId,
-      });
-
-      logPlaywrightEvidence({
-        attemptedSelectors,
-        applyCtaFound: rtxPreludeClickedApply,
-        applyCtaClicked: rtxPreludeClickedApply,
-        currentUrl: finalUrl,
-        hopCount: 0,
-        submitButtonFound: false,
-        submitButtonClicked: false,
-        confirmationTextFound: false,
-        confirmationTextSnippet: null,
-        successUrlPatternMatched: false,
-        finalStatus: "VERIFICATION_REQUIRED",
-        submissionConfirmed: false,
-      });
-
-      return {
-        ok: false,
-        status: "VERIFICATION_REQUIRED",
-        needsHuman: true,
-        finalUrl,
-        openUrl: finalUrl,
-        viewerUrl: remoteSession?.viewerUrl,
-        message,
-        debug: buildDebugPayload({
-          attemptedSelectors,
-          missingNames,
-          ...debugContext(),
-          ...(await captureStopPoint(page, {
-            lastActionText:
-              rtxPrelude.verificationEvidence ??
-              rtxPrelude.verificationSignal ??
-              latestActionText,
-            lastActionSelector: latestActionSelector,
-          })),
-          finalUrl,
-          verificationSignals:
-            rtxPrelude.verificationSignals ?? ["verification required"],
-          confirmationSignals: [],
-          pageText: rtxPrelude.verificationEvidence,
-          pageHtml: undefined,
-          sessionId: remoteSession?.sessionId,
-          viewerUrl: remoteSession?.viewerUrl,
-          targetUrl,
-          applyCtaFound: rtxPreludeClickedApply,
-          applyCtaClicked: rtxPreludeClickedApply,
-          currentUrl: finalUrl,
-          submitButtonFound: false,
-          submitButtonClicked: false,
-          confirmationTextFound: false,
-          confirmationTextSnippet: null,
-          successUrlPatternMatched: false,
-          submissionConfirmed: false,
-          finalStatus: "VERIFICATION_REQUIRED",
-          success: false,
-          needsHuman: true,
-          unavailable: false,
-          hopCount: 0,
-          urlsVisited: dedupeUrls([
-            ...adzunaPhaseUrlsVisited,
-            ...entryPhaseUrlsVisited,
-            ...handoffPhaseUrlsVisited,
-            ...cookiePhaseUrlsVisited,
-            finalUrl,
-          ]),
-          clicks: [
-            ...adzunaPhaseClicks,
-            ...entryPhaseClicks,
-            ...handoffPhaseClicks,
-            ...cookiePhaseClicks,
-          ],
-          formDetected: false,
-          confirmationDetected: false,
-          verificationDetected: true,
-          finalReason: rtxPrelude.failureReason ?? "verification_required",
-          resolverAttemptedLinks,
-          resolverSelectedLink,
-          resolverSuccess,
-          resolverNewUrl,
-        }),
-      };
-    }
+    // Keep apply CTA handling generic so the browser stays on the selected
+    // posting URL instead of jumping through a hardcoded RTX-specific prelude.
 
     if (
       isAdzunaLandRedirectPage(page.url()) ||
@@ -12277,6 +12685,9 @@ export async function applyWithPlaywright(args: {
         viewerUrl: remoteSession?.viewerUrl,
         remoteSessionId: remoteSession?.sessionId,
         openUrl: page.url(),
+        applicationId: applicationId ?? null,
+        preferredTexts: strategyPreferredCtaTexts,
+        preferredSelectors: preferredCtaSelectors,
       }));
 
     page = chase.page;
@@ -12297,6 +12708,7 @@ export async function applyWithPlaywright(args: {
       targetUrl,
       finalUrl: page.url(),
       currentUrl: page.url(),
+      attemptedSelectors: chase.attemptedSelectors,
       applyCtaFound: rawChaseEvidence.applyCtaFound,
       applyCtaClicked: rawChaseEvidence.applyCtaClicked,
       hopCount: rawChaseEvidence.hopCount,
@@ -12388,6 +12800,9 @@ export async function applyWithPlaywright(args: {
           viewerUrl: remoteSession?.viewerUrl,
           remoteSessionId: remoteSession?.sessionId,
           openUrl: page.url(),
+          applicationId: applicationId ?? null,
+          preferredTexts: strategyPreferredCtaTexts,
+          preferredSelectors: preferredCtaSelectors,
         });
 
         page = resolvedChase.page;
@@ -12435,6 +12850,9 @@ export async function applyWithPlaywright(args: {
           viewerUrl: remoteSession?.viewerUrl,
           remoteSessionId: remoteSession?.sessionId,
           openUrl: page.url(),
+          applicationId: applicationId ?? null,
+          preferredTexts: strategyPreferredCtaTexts,
+          preferredSelectors: preferredCtaSelectors,
         });
 
         page = recoveredChase.page;
@@ -12521,13 +12939,27 @@ export async function applyWithPlaywright(args: {
     );
     const latestApplyClick =
       chase.clicks.at(-1) ?? realApplyPreludeClicks.at(-1);
+    ctaAttempts = [...ctaAttempts, ...chase.attempts];
+    for (const selector of chase.attemptedSelectors) {
+      if (!attemptedSelectors.includes(selector)) {
+        attemptedSelectors.push(selector);
+      }
+    }
     applyCtaClickedText = latestApplyClick?.text ?? applyCtaClickedText;
     applyCtaClickedSelector =
       latestApplyClick?.selector ?? applyCtaClickedSelector;
-    if (latestApplyClick?.text || latestApplyClick?.selector) {
-      latestActionText = latestApplyClick?.text ?? latestActionText;
+    if (
+      latestApplyClick?.text ||
+      latestApplyClick?.selector ||
+      chase.lastActionText ||
+      chase.lastActionSelector
+    ) {
+      latestActionText =
+        latestApplyClick?.text ?? chase.lastActionText ?? latestActionText;
       latestActionSelector =
-        latestApplyClick?.selector ?? latestActionSelector;
+        latestApplyClick?.selector ??
+        chase.lastActionSelector ??
+        latestActionSelector;
     }
     trackedClicks = effectiveChase.clicks;
     trackedUrlsVisited = effectiveChase.urlsVisited;
@@ -13080,11 +13512,45 @@ export async function applyWithPlaywright(args: {
       };
     }
 
-    if (chase.signals.needsHuman && knownChainAllowedToFail) {
+    const allowChaseVerificationRequired = shouldAllowVerificationRequired(
+      {
+        status:
+          chase.signals.verificationSignals.length > 0
+            ? "VERIFICATION_REQUIRED"
+            : "WAITING_HUMAN",
+        verificationSignals: chase.signals.verificationSignals,
+        needsHuman: chase.signals.needsHuman,
+      },
+      {
+        attemptedSelectors,
+        ...chaseEvidence,
+        formScanAttempted: false,
+        formFound: chase.signals.formDetected,
+        formFillAttempted: false,
+        verificationEvidence: chase.signals.verificationEvidence,
+      },
+    );
+    if (chase.signals.needsHuman && knownChainAllowedToFail && allowChaseVerificationRequired) {
       keepBrowserOpen = true;
       const finalUrl = page.url();
       const verificationRequired =
         chase.signals.verificationSignals.length > 0;
+      console.log("[AUTO_APPLY_FORM_FIRST] pre-verification gate", {
+        applicationId: applicationId ?? null,
+        currentUrl: page.url(),
+        attemptedSelectors,
+        applyCtaFound: chaseEvidence.applyCtaFound,
+        applyCtaClicked: chaseEvidence.applyCtaClicked,
+        formScanAttempted: false,
+        formFound: chase.signals.formDetected,
+        formFillAttempted: false,
+        filledFieldCount: 0,
+        requiredFieldCount: 0,
+        missingRequiredFields: [],
+        verificationDetected: chase.signals.verificationEvidence.detected,
+        verificationEvidence: chase.signals.verificationEvidence,
+        allowVerificationRequired: allowChaseVerificationRequired,
+      });
       const humanStatus = verificationRequired
         ? "VERIFICATION_REQUIRED"
         : "WAITING_HUMAN";
@@ -13128,6 +13594,7 @@ export async function applyWithPlaywright(args: {
           ...(await captureStopPoint(page)),
           finalUrl,
           verificationSignals: chase.signals.verificationSignals,
+          verificationEvidence: chase.signals.verificationEvidence,
           confirmationSignals: chase.signals.confirmationSignals,
           pageText: chase.signals.pageText,
           pageHtml: chase.signals.html,
@@ -13242,6 +13709,34 @@ export async function applyWithPlaywright(args: {
       hasResumePath: Boolean(args.resumePath),
     });
 
+    if (greenhouseProviderForCta || isGreenhouseUrl(page.url())) {
+      const beforeFallbackDetection = await detectGreenhouseApplicationForm(page);
+      if (!beforeFallbackDetection.formDetected) {
+        const currentGreenhouseUrl = page.url();
+        const candidateEmbedUrl = await discoverGreenhouseEmbedCandidate(page);
+        const embedFallback = buildSafeGreenhouseEmbedUrl({
+          currentUrl: currentGreenhouseUrl,
+          targetUrl,
+          candidateUrl: candidateEmbedUrl,
+        });
+        console.log("[GREENHOUSE_FORM_FIRST] embed fallback before verification", {
+          applicationId: applicationId ?? null,
+          currentUrl: currentGreenhouseUrl,
+          preferredTargetUrl: embedFallback.url ?? candidateEmbedUrl ?? null,
+          allowed: embedFallback.allowed,
+          reason: embedFallback.reason,
+        });
+
+        if (embedFallback.allowed && embedFallback.url) {
+          await page
+            .goto(embedFallback.url, { waitUntil: "domcontentloaded", timeout: 30_000 })
+            .catch(() => null);
+          await waitForDomAndSettle(page);
+          captureCurrentUrl(page);
+        }
+      }
+    }
+
     await args.onStatus?.({
       status: "OPENING_FORM",
       lastUrl: captureCurrentUrl(page),
@@ -13268,118 +13763,621 @@ export async function applyWithPlaywright(args: {
       remoteSessionId: remoteSession?.sessionId,
     });
 
-    for (const [name, rawValue] of Object.entries(args.values)) {
-      const allowChoiceControls = shouldAllowChoiceControls(name, rawValue);
-      const locator = await findMatchingLocator(page, name, attemptedSelectors, {
-        allowChoiceControls,
+    const greenhouseProviderDetected =
+      isGreenhouseUrl(captureCurrentUrl(page)) || isGreenhouseUrl(targetUrl);
+    let greenhouseFormState: FillGreenhouseApplicationFormResult | null = null;
+    let genericFormState: VisibleFormState | null = null;
+    let verificationOverriddenByVisibleForm = false;
+    let formScanAttempted = false;
+    let formFound = Boolean(meaningfulFormControls);
+    let formFillAttempted = false;
+    let genericFilledFieldCount = 0;
+    let resumeUploadAttempted = false;
+    let resumeUploadSucceeded = false;
+    let submitOrContinueAttempted = false;
+    let submitOrContinueClicked = false;
+
+    if (greenhouseProviderDetected) {
+      formScanAttempted = true;
+      greenhouseFormState = await fillGreenhouseApplicationForm(page, {
+        values: args.values,
+        resumePath: args.resumePath,
+        attemptedSelectors,
       });
-      if (!locator) {
-        missingNames.push(name);
-        continue;
+      formFound = greenhouseFormState.formDetected;
+      formFillAttempted = greenhouseFormState.formDetected;
+      resumeUploadAttempted = greenhouseFormState.resumeUploadAttempted;
+      resumeUploadSucceeded = greenhouseFormState.resumeUploadSucceeded;
+
+      for (const missingName of greenhouseFormState.missingPayloadNames) {
+        if (!missingNames.includes(missingName)) {
+          missingNames.push(missingName);
+        }
       }
 
-      const first = locator.first();
-      const tagName = await first
-        .evaluate((el) => el.tagName.toLowerCase())
-        .catch(() => "");
-      const inputType =
-        tagName === "input"
-          ? await first
-              .evaluate(
-                (el) => (el as HTMLInputElement).type?.toLowerCase() || "text",
-              )
-              .catch(() => "text")
-          : "";
-      const count = await locator.count();
+      logGreenhouseFormState({
+        currentUrl: captureCurrentUrl(page),
+        stoppedAtUrl: captureCurrentUrl(page),
+        formState: greenhouseFormState,
+        filledFieldCount: greenhouseFormState.filledFieldCount,
+        missingRequiredFields: greenhouseFormState.missingRequiredFields,
+        submitButtonClicked: false,
+        submissionConfirmed: false,
+      });
+    }
 
-      if (tagName === "select") {
-        const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
-        await first.selectOption({ value: String(value) }).catch(async () => {
-          await first.selectOption({ label: String(value) });
+    if (!greenhouseFormState?.formDetected) {
+      formScanAttempted = true;
+      formFillAttempted = Boolean(meaningfulFormControls);
+      for (const [name, rawValue] of Object.entries(args.values)) {
+        const allowChoiceControls = shouldAllowChoiceControls(name, rawValue);
+        const locator = await findMatchingLocator(page, name, attemptedSelectors, {
+          allowChoiceControls,
         });
-        continue;
-      }
-
-      if (inputType === "checkbox") {
-        const values = asArray(rawValue);
-        for (let i = 0; i < count; i += 1) {
-          const checkbox = locator.nth(i);
-          if (!(await isInteractableChoiceLocator(checkbox))) {
-            continue;
-          }
-          const elementValue = await checkbox.getAttribute("value");
-          const labelText = (await extractLocatorText(checkbox)).toLowerCase().trim();
-
-          const shouldCheck = values.some((target) => {
-            const normalized = target.toLowerCase().trim();
-            if (elementValue && elementValue.toLowerCase() === normalized)
-              return true;
-            return Boolean(labelText) && labelText.includes(normalized);
-          });
-
-          if (shouldCheck) {
-            await checkbox.check().catch(() => undefined);
-          }
+        if (!locator) {
+          missingNames.push(name);
+          continue;
         }
-        continue;
-      }
 
-      if (inputType === "radio") {
+        const first = locator.first();
+        const tagName = await first
+          .evaluate((el) => el.tagName.toLowerCase())
+          .catch(() => "");
+        const inputType =
+          tagName === "input"
+            ? await first
+                .evaluate(
+                  (el) => (el as HTMLInputElement).type?.toLowerCase() || "text",
+                )
+                .catch(() => "text")
+            : "";
+        const count = await locator.count();
+
+        if (tagName === "select") {
+          const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
+          const selected = await first
+            .selectOption({ value: String(value) })
+            .catch(async () => first.selectOption({ label: String(value) }));
+          if (selected.length > 0) {
+            genericFilledFieldCount += 1;
+          }
+          continue;
+        }
+
+        if (inputType === "checkbox") {
+          const values = asArray(rawValue);
+          for (let i = 0; i < count; i += 1) {
+            const checkbox = locator.nth(i);
+            if (!(await isInteractableChoiceLocator(checkbox))) {
+              continue;
+            }
+            const elementValue = await checkbox.getAttribute("value");
+            const labelText = (await extractLocatorText(checkbox))
+              .toLowerCase()
+              .trim();
+
+            const shouldCheck = values.some((target) => {
+              const normalized = target.toLowerCase().trim();
+              if (elementValue && elementValue.toLowerCase() === normalized)
+                return true;
+              return Boolean(labelText) && labelText.includes(normalized);
+            });
+
+            if (shouldCheck) {
+              await checkbox.check().catch(() => undefined);
+              genericFilledFieldCount += 1;
+            }
+          }
+          continue;
+        }
+
+        if (inputType === "radio") {
+          const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
+          for (let i = 0; i < count; i += 1) {
+            const option = locator.nth(i);
+            if (!(await isInteractableChoiceLocator(option))) {
+              continue;
+            }
+            const optionValue = await option.getAttribute("value");
+            const optionText = (await extractLocatorText(option))
+              .toLowerCase()
+              .trim();
+            const normalizedValue = String(value).toLowerCase().trim();
+
+            if (
+              optionValue?.toLowerCase() === normalizedValue ||
+              optionText.includes(normalizedValue)
+            ) {
+              await option
+                .check()
+                .catch(() => option.click().catch(() => undefined));
+              genericFilledFieldCount += 1;
+              break;
+            }
+          }
+          continue;
+        }
+
+        if (inputType === "file") {
+          if (args.resumePath) {
+            resumeUploadAttempted = true;
+            await first.setInputFiles(args.resumePath);
+            resumeUploadSucceeded = true;
+            genericFilledFieldCount += 1;
+          }
+          continue;
+        }
+
         const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
-        for (let i = 0; i < count; i += 1) {
-          const option = locator.nth(i);
-          if (!(await isInteractableChoiceLocator(option))) {
-            continue;
-          }
-          const optionValue = await option.getAttribute("value");
-          const optionText = (await extractLocatorText(option)).toLowerCase().trim();
-          const normalizedValue = String(value).toLowerCase().trim();
-
-          if (
-            optionValue?.toLowerCase() === normalizedValue ||
-            optionText.includes(normalizedValue)
-          ) {
-            await option.check().catch(() => option.click().catch(() => undefined));
-            break;
-          }
-        }
-        continue;
+        await first.fill(String(value ?? ""));
+        genericFilledFieldCount += 1;
       }
 
-      if (inputType === "file") {
-        if (args.resumePath) {
-          await first.setInputFiles(args.resumePath);
+      if (args.resumePath) {
+        const fileInput = page.locator('input[type="file"]:visible').first();
+        if ((await fileInput.count()) > 0) {
+          resumeUploadAttempted = true;
+          await fileInput.setInputFiles(args.resumePath);
+          resumeUploadSucceeded = true;
+          genericFilledFieldCount += 1;
+          console.log("[AUTO_APPLY_CRAWL] resume uploaded", args.resumePath);
         }
-        continue;
       }
 
-      const value = Array.isArray(rawValue) ? (rawValue[0] ?? "") : rawValue;
-      await first.fill(String(value ?? ""));
+      if (greenhouseProviderDetected) {
+        const postGenericDetection = await detectGreenhouseApplicationForm(page);
+        formFound = postGenericDetection.formDetected;
+        formFillAttempted = postGenericDetection.formDetected;
+        greenhouseFormState = {
+          ...postGenericDetection,
+          filledFieldCount: genericFilledFieldCount,
+          missingRequiredFields: [
+            ...new Set(
+              postGenericDetection.fields
+                .filter((field) => field.required && field.enabled && !field.filled)
+                .map((field) => field.label || field.name || "Required field")
+                .filter(Boolean),
+            ),
+          ],
+          missingPayloadNames: [],
+          resumeInputFound: false,
+          resumeUploadAttempted,
+          resumeUploadSucceeded,
+        };
+      } else {
+        genericFormState = await inspectVisibleFormState(page);
+        formFound = genericFormState.formDetected;
+        formFillAttempted = genericFormState.formDetected;
+        genericFormState = {
+          ...genericFormState,
+          filledFieldCount: Math.max(
+            genericFormState.filledFieldCount,
+            genericFilledFieldCount,
+          ),
+        };
+      }
     }
 
-    if (args.resumePath) {
-      const fileInput = page.locator('input[type="file"]:visible').first();
-      if ((await fileInput.count()) > 0) {
-        await fileInput.setInputFiles(args.resumePath);
-        console.log("[AUTO_APPLY_CRAWL] resume uploaded", args.resumePath);
+    const detectedFieldLabels =
+      greenhouseFormState?.fields.map((field) => field.label).filter(Boolean) ??
+      genericFormState?.missingRequiredFields ??
+      [];
+    console.log("[AUTO_APPLY_FORM_FILL] form scan result", {
+      applicationId: applicationId ?? null,
+      currentUrl: page.url(),
+      formFound,
+      inputCount:
+        greenhouseFormState?.fields.filter((field) => field.type !== "textarea" && field.type !== "select").length ??
+        genericFormState?.visibleFieldCount ??
+        0,
+      textareaCount:
+        greenhouseFormState?.fields.filter((field) => field.type === "textarea").length ??
+        0,
+      selectCount:
+        greenhouseFormState?.fields.filter((field) => field.type === "select").length ??
+        0,
+      fileInputCount:
+        greenhouseFormState?.fields.filter((field) => field.type === "file").length ??
+        (genericFormState?.fileInputFound ? 1 : 0),
+      requiredFieldCount:
+        greenhouseFormState?.requiredFieldCount ?? genericFormState?.requiredFieldCount ?? 0,
+      labels: detectedFieldLabels,
+    });
+    console.log("[AUTO_APPLY_FORM_FILL] filled fields", {
+      applicationId: applicationId ?? null,
+      currentUrl: page.url(),
+      filledFieldCount:
+        greenhouseFormState?.filledFieldCount ?? genericFormState?.filledFieldCount ?? 0,
+      filledLabels: [],
+      resumeUploadAttempted,
+      resumeUploadSucceeded,
+      missingRequiredFields:
+        greenhouseFormState?.missingRequiredFields ??
+        genericFormState?.missingRequiredFields ??
+        [],
+      unsupportedRequiredFields: [],
+    });
+    const buildFormProgressDebug = () => ({
+      formScanAttempted,
+      formFound,
+      formFillAttempted,
+      resumeUploadAttempted,
+      resumeUploadSucceeded,
+      unsupportedRequiredFields: [] as string[],
+    });
+    let aiFormAnswerEngineRan = false;
+    let aiFormAnswersGenerated = false;
+    let aiFormAutofillCompleted = false;
+    let aiFormScannedFields: FormFieldDescriptor[] = [];
+    let aiFormGeneratedAnswers: GeneratedFormAnswer[] = [];
+    let aiFormFillResult: FillGeneratedAnswersResult | null = null;
+    let aiFormBlockedFields: Array<{
+      fieldId: string;
+      label: string;
+      reason: string;
+      category: string;
+    }> = [];
+
+    if (formScanAttempted && formFound) {
+      aiFormAnswerEngineRan = true;
+      aiFormScannedFields = await scanCurrentForm(page);
+      const requiredFieldCount = aiFormScannedFields.filter(
+        (field) => field.required && field.visible && !field.disabled,
+      ).length;
+      console.log("[AI_FORM_ENGINE] form scanned", {
+        applicationId: applicationId ?? null,
+        currentUrl: page.url(),
+        fieldCount: aiFormScannedFields.length,
+        requiredFieldCount,
+        labels: aiFormScannedFields.map((field) => field.label).slice(0, 40),
+      });
+      for (const field of aiFormScannedFields.filter(
+        (item) => item.required && item.visible && !item.disabled,
+      )) {
+        const classification = classifyRequiredApplicationField({
+          questionLabel: field.label,
+          fieldType: field.inputType,
+          placeholder: field.placeholder,
+          required: field.required,
+          name: field.name,
+          id: field.idAttribute,
+          nearbyText: field.nearbyText,
+          options: field.options,
+        });
+        console.log("[AI_FORM_ANSWER] detected required question", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label: field.label,
+          fieldType: field.inputType,
+          classification: classification.category,
+          reason: classification.reason,
+        });
+      }
+      console.log("[AI_FORM_ANSWER] context available", {
+        applicationId: applicationId ?? null,
+        currentUrl: page.url(),
+        hasProfile: Boolean(args.metadata?.userProfile),
+        hasResumeText: Boolean(args.metadata?.resumeText),
+        hasResumeSummary: Boolean(args.metadata?.resumeSummary),
+        hasJobTitle: Boolean(searchJobTitle),
+        hasCompanyName: Boolean(searchCompany),
+        hasJobDescription: Boolean(args.metadata?.jobDescription),
+        existingAnswerCount: Object.keys(args.values).length,
+      });
+
+      const aiGenerated = await generateFormAnswers({
+        userProfile: args.metadata?.userProfile ?? args.values,
+        resumeText: args.metadata?.resumeText ?? undefined,
+        resumeSummary: args.metadata?.resumeSummary ?? undefined,
+        jobTitle: searchJobTitle,
+        companyName: searchCompany,
+        jobDescription: args.metadata?.jobDescription ?? undefined,
+        pageText: await page.innerText("body").catch(() => ""),
+        source: applySource,
+        existingApplicationAnswers: Object.fromEntries(
+          Object.entries(args.values).map(([key, value]) => [
+            key,
+            Array.isArray(value) ? String(value[0] ?? "") : String(value ?? ""),
+          ]),
+        ),
+        fields: aiFormScannedFields,
+      });
+      aiFormGeneratedAnswers = aiGenerated.answers;
+      aiFormBlockedFields = aiGenerated.blockedFields;
+      aiFormAnswersGenerated = true;
+
+      console.log("[AI_FORM_ENGINE] answers generated", {
+        applicationId: applicationId ?? null,
+        answeredCount: aiGenerated.answers.length,
+        blockedCount: aiGenerated.blockedFields.length,
+        answers: aiGenerated.answers.map((answer) => ({
+          label: answer.label,
+          confidence: answer.confidence,
+          safeToAutofill: answer.safeToAutofill,
+          requiresUserReview: answer.requiresUserReview,
+          sourceBasis: answer.sourceBasis,
+        })),
+        blockedFields: aiGenerated.blockedFields,
+      });
+      for (const answer of aiGenerated.answers) {
+        console.log("[AI_FORM_ANSWER] generated answer", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label: answer.label,
+          confidence: answer.confidence,
+          safeToAutofill: answer.safeToAutofill,
+          requiresUserReview: answer.requiresUserReview,
+          sourceHints: answer.sourceBasis,
+          answerLength:
+            typeof answer.value === "string"
+              ? answer.value.length
+              : Array.isArray(answer.value)
+                ? answer.value.join(",").length
+                : String(answer.value).length,
+          reason: answer.reason,
+        });
+      }
+      for (const blocked of aiGenerated.blockedFields) {
+        console.log("[AI_FORM_ANSWER] skipped field", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label: blocked.label,
+          category: blocked.category,
+          reason: blocked.reason,
+        });
+      }
+
+      aiFormFillResult = await fillGeneratedAnswers(page, aiGenerated.answers, {
+        fields: aiFormScannedFields,
+        resumePath: args.resumePath,
+      });
+      aiFormAutofillCompleted = aiFormFillResult.failedCount === 0;
+      resumeUploadAttempted =
+        resumeUploadAttempted || aiFormFillResult.resumeUploadAttempted;
+      resumeUploadSucceeded =
+        resumeUploadSucceeded || aiFormFillResult.resumeUploadSucceeded;
+
+      console.log("[AI_FORM_ENGINE] playwright fill completed", {
+        applicationId: applicationId ?? null,
+        filledCount: aiFormFillResult.filledCount,
+        skippedCount: aiFormFillResult.skippedCount,
+        failedCount: aiFormFillResult.failedCount,
+        remainingRequiredFields: aiFormFillResult.remainingRequiredFields,
+        resumeUploadAttempted: aiFormFillResult.resumeUploadAttempted,
+        resumeUploadSucceeded: aiFormFillResult.resumeUploadSucceeded,
+      });
+      for (const field of aiFormFillResult.filledFields) {
+        console.log("[AI_FORM_ANSWER] filled field", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label: field.label,
+        });
+      }
+      for (const skipped of [
+        ...aiFormFillResult.skippedFields,
+        ...aiFormFillResult.failedFields,
+      ]) {
+        console.log("[AI_FORM_ANSWER] skipped field", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label: skipped.label,
+          reason: skipped.reason,
+        });
+      }
+      console.log("[AI_FORM_ANSWER] retrying required-field validation", {
+        applicationId: applicationId ?? null,
+        currentUrl: page.url(),
+        filledCount: aiFormFillResult.filledCount,
+      });
+      for (const label of aiFormFillResult.remainingRequiredFields) {
+        console.log("[AI_FORM_ANSWER] still missing after attempt", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          label,
+        });
+      }
+
+      const fillBlockers = [
+        ...aiFormFillResult.skippedFields,
+        ...aiFormFillResult.failedFields,
+      ]
+        .filter((field) =>
+          aiFormFillResult?.remainingRequiredFields.includes(field.label),
+        )
+        .map((field) => ({
+          fieldId: field.fieldId,
+          label: field.label,
+          reason: field.reason,
+          category: "unsupported",
+        }));
+      aiFormBlockedFields = [
+        ...aiFormBlockedFields,
+        ...fillBlockers.filter(
+          (field) =>
+            !aiFormBlockedFields.some((existing) => existing.fieldId === field.fieldId),
+        ),
+      ];
+
+      if (greenhouseFormState?.formDetected) {
+        greenhouseFormState = {
+          ...greenhouseFormState,
+          filledFieldCount:
+            greenhouseFormState.filledFieldCount + aiFormFillResult.filledCount,
+          missingRequiredFields: aiFormFillResult.remainingRequiredFields,
+          resumeUploadAttempted,
+          resumeUploadSucceeded,
+        };
+      }
+
+      if (genericFormState?.formDetected) {
+        genericFormState = {
+          ...genericFormState,
+          filledFieldCount:
+            genericFormState.filledFieldCount + aiFormFillResult.filledCount,
+          missingRequiredFields: aiFormFillResult.remainingRequiredFields,
+        };
       }
     }
 
-    const preSubmitSignals = await detectPageSignals(page);
-    if (preSubmitSignals.needsHuman) {
+    const aiFormProgressDebug = {
+      aiFormAnswerEngineRan,
+      aiFormAnswersGenerated,
+      aiFormAutofillCompleted,
+      aiFormFieldCount: aiFormScannedFields.length,
+      aiFormRequiredFieldCount: aiFormScannedFields.filter(
+        (field) => field.required && field.visible && !field.disabled,
+      ).length,
+      aiFormAnsweredCount: aiFormGeneratedAnswers.length,
+      aiFormBlockedCount: aiFormBlockedFields.length,
+      aiFormFilledCount: aiFormFillResult?.filledCount ?? 0,
+      aiFormRemainingRequiredFields:
+        aiFormFillResult?.remainingRequiredFields ?? [],
+      aiFormBlockedFields,
+    };
+    const finalFormProgressDebug = {
+      ...buildFormProgressDebug(),
+      ...aiFormProgressDebug,
+    };
+    const buildMissingRequiredMessage = (fields: string[]) => {
+      if (!aiFormAnswerEngineRan || fields.length === 0) {
+        return `Missing required fields: ${fields.join(", ")}`;
+      }
+
+      const firstField = fields[0];
+      const blocker = aiFormBlockedFields.find(
+        (field) => field.label === firstField,
+      );
+      const contextAvailable = [
+        args.metadata?.userProfile ? "profile" : "",
+        args.metadata?.resumeText || args.metadata?.resumeSummary ? "resume" : "",
+        searchJobTitle ? "job title" : "",
+        searchCompany ? "company" : "",
+        args.metadata?.jobDescription ? "job description" : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const reason =
+        blocker?.reason ??
+        "The field remained empty after AI/profile/resume autofill and validation retry.";
+
+      return [
+        `Could not answer required field: "${firstField}".`,
+        `Reason: ${reason}`,
+        `Context available: ${contextAvailable || "none"}.`,
+        "Suggested action: answer manually or add the missing preference to your profile, then continue Auto Apply.",
+        fields.length > 1 ? `Other missing fields: ${fields.slice(1).join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    };
+
+    if (
+      greenhouseProviderDetected &&
+      greenhouseFormState?.formDetected &&
+      greenhouseFormState.missingRequiredFields.length > 0
+    ) {
       keepBrowserOpen = true;
       const finalUrl = page.url();
-      const verificationRequired =
-        preSubmitSignals.verificationSignals.length > 0;
-      const humanStatus = verificationRequired
-        ? "VERIFICATION_REQUIRED"
-        : "WAITING_HUMAN";
-      const message = verificationRequired
-        ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
-        : "Account creation or verification needs human completion.";
+      const message = buildMissingRequiredMessage(
+        greenhouseFormState.missingRequiredFields,
+      );
 
       await args.onStatus?.({
-        status: humanStatus,
+        status: "WAITING_HUMAN",
+        lastUrl: finalUrl,
+        message,
+        viewerUrl: remoteSession?.viewerUrl,
+        openUrl: finalUrl,
+        remoteSessionId: remoteSession?.sessionId,
+      });
+
+      logGreenhouseFormState({
+        currentUrl: finalUrl,
+        stoppedAtUrl: finalUrl,
+        formState: greenhouseFormState,
+        filledFieldCount: greenhouseFormState.filledFieldCount,
+        missingRequiredFields: greenhouseFormState.missingRequiredFields,
+        submitButtonClicked: false,
+        submissionConfirmed: false,
+      });
+
+      return {
+        ok: false,
+        status: "WAITING_HUMAN",
+        needsHuman: true,
+        finalUrl,
+        openUrl: finalUrl,
+        viewerUrl: remoteSession?.viewerUrl,
+        message,
+        debug: buildDebugPayload({
+          attemptedSelectors,
+          missingNames,
+          ...debugContext(),
+          ...(await captureStopPoint(page)),
+          finalUrl,
+          verificationSignals: [],
+          confirmationSignals: [],
+          pageText: await page.innerText("body").catch(() => ""),
+          pageHtml: await page.content().catch(() => ""),
+          sessionId: remoteSession?.sessionId,
+          viewerUrl: remoteSession?.viewerUrl,
+          targetUrl,
+          ...finalFormProgressDebug,
+          ...chaseEvidence,
+          currentUrl: finalUrl,
+          formScanAttempted,
+          formFound,
+          formFillAttempted,
+          resumeUploadAttempted,
+          resumeUploadSucceeded,
+          providerDetected: "greenhouse",
+          formContextUrl: greenhouseFormState.formContextUrl,
+          submitButtonFound: greenhouseFormState.submitButtonFound,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          finalStatus: "WAITING_HUMAN",
+          success: false,
+          needsHuman: true,
+          unavailable: false,
+          hopCount: chaseEvidence.hopCount,
+          urlsVisited: effectiveChase.urlsVisited,
+          clicks: effectiveChase.clicks,
+          formDetected: greenhouseFormState.formDetected,
+          visibleFieldCount: greenhouseFormState.visibleFieldCount,
+          fillableFieldCount: greenhouseFormState.fillableFieldCount,
+          filledFieldCount: greenhouseFormState.filledFieldCount,
+          requiredFieldCount: greenhouseFormState.requiredFieldCount,
+          missingRequiredFields: greenhouseFormState.missingRequiredFields,
+          verificationOverriddenByVisibleForm: false,
+          confirmationDetected: false,
+          verificationDetected: false,
+          finalReason: aiFormAnswerEngineRan
+            ? "missing_required_answers_after_ai"
+            : "missing_required_fields",
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
+        }),
+      };
+    }
+
+    if (
+      !greenhouseProviderDetected &&
+      genericFormState?.formDetected &&
+      genericFormState.missingRequiredFields.length > 0
+    ) {
+      keepBrowserOpen = true;
+      const finalUrl = page.url();
+      const message = buildMissingRequiredMessage(
+        genericFormState.missingRequiredFields,
+      );
+
+      await args.onStatus?.({
+        status: "WAITING_HUMAN",
         lastUrl: finalUrl,
         message,
         viewerUrl: remoteSession?.viewerUrl,
@@ -13393,16 +14391,16 @@ export async function applyWithPlaywright(args: {
         currentUrl: finalUrl,
         submitButtonFound: false,
         submitButtonClicked: false,
-        confirmationTextFound: preSubmitSignals.confirmationTextFound,
-        confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
-        successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
-        finalStatus: humanStatus,
+        confirmationTextFound: false,
+        confirmationTextSnippet: null,
+        successUrlPatternMatched: false,
+        finalStatus: "WAITING_HUMAN",
         submissionConfirmed: false,
       });
 
       return {
         ok: false,
-        status: humanStatus,
+        status: "WAITING_HUMAN",
         needsHuman: true,
         finalUrl,
         openUrl: finalUrl,
@@ -13414,13 +14412,164 @@ export async function applyWithPlaywright(args: {
           ...debugContext(),
           ...(await captureStopPoint(page)),
           finalUrl,
-          verificationSignals: preSubmitSignals.verificationSignals,
-          confirmationSignals: preSubmitSignals.confirmationSignals,
-          pageText: preSubmitSignals.pageText,
-          pageHtml: preSubmitSignals.html,
+          verificationSignals: [],
+          confirmationSignals: [],
+          pageText: await page.innerText("body").catch(() => ""),
+          pageHtml: await page.content().catch(() => ""),
           sessionId: remoteSession?.sessionId,
           viewerUrl: remoteSession?.viewerUrl,
           targetUrl,
+          ...finalFormProgressDebug,
+          ...chaseEvidence,
+          currentUrl: finalUrl,
+          formScanAttempted,
+          formFound,
+          formFillAttempted,
+          resumeUploadAttempted,
+          resumeUploadSucceeded,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationTextSnippet: null,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          finalStatus: "WAITING_HUMAN",
+          success: false,
+          needsHuman: true,
+          unavailable: false,
+          hopCount: chaseEvidence.hopCount,
+          urlsVisited: effectiveChase.urlsVisited,
+          clicks: effectiveChase.clicks,
+          formDetected: genericFormState.formDetected,
+          visibleFieldCount: genericFormState.visibleFieldCount,
+          fillableFieldCount: genericFormState.fillableFieldCount,
+          filledFieldCount: genericFormState.filledFieldCount,
+          requiredFieldCount: genericFormState.requiredFieldCount,
+          missingRequiredFields: genericFormState.missingRequiredFields,
+          verificationOverriddenByVisibleForm: false,
+          confirmationDetected: false,
+          verificationDetected: false,
+          finalReason: aiFormAnswerEngineRan
+            ? "missing_required_answers_after_ai"
+            : "missing_required_fields",
+          resolverAttemptedLinks,
+          resolverSelectedLink,
+          resolverSuccess,
+          resolverNewUrl,
+        }),
+      };
+    }
+
+    const preSubmitSignals = await detectPageSignals(page);
+    if (preSubmitSignals.needsHuman) {
+      if (
+        greenhouseProviderDetected &&
+        greenhouseFormState?.formDetected &&
+        greenhouseFormState.fillableFieldCount > 0
+      ) {
+        verificationOverriddenByVisibleForm = true;
+        logGreenhouseFormState({
+          currentUrl: page.url(),
+          stoppedAtUrl: page.url(),
+          formState: greenhouseFormState,
+          filledFieldCount: greenhouseFormState.filledFieldCount,
+          missingRequiredFields: greenhouseFormState.missingRequiredFields,
+          verificationSignals: preSubmitSignals.verificationSignals,
+          verificationOverriddenByVisibleForm: true,
+          submitButtonClicked: false,
+          submissionConfirmed: false,
+        });
+      } else if (
+        !greenhouseProviderDetected &&
+        genericFormState?.formDetected &&
+        genericFormState.fillableFieldCount > 0
+      ) {
+        verificationOverriddenByVisibleForm = true;
+        console.info("[AUTO_APPLY_UNIVERSAL_ACTION] verification overridden by visible form", {
+          currentUrl: page.url(),
+          visibleFieldCount: genericFormState.visibleFieldCount,
+          fillableFieldCount: genericFormState.fillableFieldCount,
+          requiredFieldCount: genericFormState.requiredFieldCount,
+          missingRequiredFields: genericFormState.missingRequiredFields,
+          verificationSignals: preSubmitSignals.verificationSignals,
+        });
+      } else {
+        keepBrowserOpen = true;
+        const finalUrl = page.url();
+        const verificationRequired =
+          preSubmitSignals.verificationSignals.length > 0;
+        const allowVerificationRequired = shouldAllowVerificationRequired(
+          {
+            status: verificationRequired ? "VERIFICATION_REQUIRED" : "WAITING_HUMAN",
+            verificationSignals: preSubmitSignals.verificationSignals,
+            needsHuman: preSubmitSignals.needsHuman,
+          },
+          {
+            attemptedSelectors,
+            ...chaseEvidence,
+            formScanAttempted,
+            formFound,
+            formFillAttempted,
+            verificationEvidence: preSubmitSignals.verificationEvidence,
+          },
+        );
+        console.log("[AUTO_APPLY_FORM_FIRST] pre-verification gate", {
+          applicationId: applicationId ?? null,
+          currentUrl: page.url(),
+          attemptedSelectors,
+          applyCtaFound: chaseEvidence.applyCtaFound,
+          applyCtaClicked: chaseEvidence.applyCtaClicked,
+          formScanAttempted,
+          formFound,
+          formFillAttempted,
+          filledFieldCount:
+            greenhouseFormState?.filledFieldCount ??
+            genericFormState?.filledFieldCount ??
+            0,
+          requiredFieldCount:
+            greenhouseFormState?.requiredFieldCount ??
+            genericFormState?.requiredFieldCount ??
+            0,
+          missingRequiredFields:
+            greenhouseFormState?.missingRequiredFields ??
+            genericFormState?.missingRequiredFields ??
+            [],
+          verificationDetected: preSubmitSignals.verificationEvidence.detected,
+          verificationEvidence: preSubmitSignals.verificationEvidence,
+          allowVerificationRequired,
+        });
+        const humanStatus = verificationRequired && allowVerificationRequired
+          ? "VERIFICATION_REQUIRED"
+          : "WAITING_HUMAN";
+        const message = humanStatus === "VERIFICATION_REQUIRED"
+          ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
+          : "Account creation or verification needs human completion.";
+
+        await args.onStatus?.({
+          status: humanStatus,
+          lastUrl: finalUrl,
+          message,
+          viewerUrl: remoteSession?.viewerUrl,
+          openUrl: finalUrl,
+          remoteSessionId: remoteSession?.sessionId,
+        });
+
+        if (greenhouseFormState) {
+          logGreenhouseFormState({
+            currentUrl: finalUrl,
+            stoppedAtUrl: finalUrl,
+            formState: greenhouseFormState,
+            filledFieldCount: greenhouseFormState.filledFieldCount,
+            missingRequiredFields: greenhouseFormState.missingRequiredFields,
+            verificationSignals: preSubmitSignals.verificationSignals,
+            verificationOverriddenByVisibleForm: false,
+            submitButtonClicked: false,
+            submissionConfirmed: false,
+          });
+        }
+
+        logPlaywrightEvidence({
+          attemptedSelectors,
           ...chaseEvidence,
           currentUrl: finalUrl,
           submitButtonFound: false,
@@ -13428,24 +14577,70 @@ export async function applyWithPlaywright(args: {
           confirmationTextFound: preSubmitSignals.confirmationTextFound,
           confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
           successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
-          submissionConfirmed: false,
           finalStatus: humanStatus,
-          success: false,
+          submissionConfirmed: false,
+        });
+
+        return {
+          ok: false,
+          status: humanStatus,
           needsHuman: true,
-          unavailable: false,
-          hopCount: chaseEvidence.hopCount,
-          urlsVisited: effectiveChase.urlsVisited,
-          clicks: effectiveChase.clicks,
-          formDetected: true,
-          confirmationDetected: preSubmitSignals.confirmationDetected,
-          verificationDetected: verificationRequired,
-          finalReason: "Verification detected before submission.",
-          resolverAttemptedLinks,
-          resolverSelectedLink,
-          resolverSuccess,
-          resolverNewUrl,
-        }),
-      };
+          finalUrl,
+          openUrl: finalUrl,
+          viewerUrl: remoteSession?.viewerUrl,
+          message,
+          debug: buildDebugPayload({
+            attemptedSelectors,
+            missingNames,
+            ...finalFormProgressDebug,
+            ...debugContext(),
+            ...(await captureStopPoint(page)),
+            finalUrl,
+            verificationSignals: preSubmitSignals.verificationSignals,
+            verificationEvidence: preSubmitSignals.verificationEvidence,
+            confirmationSignals: preSubmitSignals.confirmationSignals,
+            pageText: preSubmitSignals.pageText,
+            pageHtml: preSubmitSignals.html,
+            sessionId: remoteSession?.sessionId,
+            viewerUrl: remoteSession?.viewerUrl,
+            targetUrl,
+            ...chaseEvidence,
+            currentUrl: finalUrl,
+            providerDetected: greenhouseProviderDetected
+              ? "greenhouse"
+              : undefined,
+            formContextUrl: greenhouseFormState?.formContextUrl,
+            submitButtonFound: false,
+            submitButtonClicked: false,
+            confirmationTextFound: preSubmitSignals.confirmationTextFound,
+            confirmationTextSnippet: preSubmitSignals.confirmationTextSnippet ?? null,
+            successUrlPatternMatched: preSubmitSignals.successUrlPatternMatched,
+            submissionConfirmed: false,
+            finalStatus: humanStatus,
+            success: false,
+            needsHuman: true,
+            unavailable: false,
+            hopCount: chaseEvidence.hopCount,
+            urlsVisited: effectiveChase.urlsVisited,
+            clicks: effectiveChase.clicks,
+            formDetected:
+              greenhouseFormState?.formDetected ?? preSubmitSignals.formDetected,
+            visibleFieldCount: greenhouseFormState?.visibleFieldCount,
+            fillableFieldCount: greenhouseFormState?.fillableFieldCount,
+            filledFieldCount: greenhouseFormState?.filledFieldCount,
+            requiredFieldCount: greenhouseFormState?.requiredFieldCount,
+            missingRequiredFields: greenhouseFormState?.missingRequiredFields,
+            verificationOverriddenByVisibleForm: false,
+            confirmationDetected: preSubmitSignals.confirmationDetected,
+            verificationDetected: verificationRequired,
+            finalReason: "Verification detected before submission.",
+            resolverAttemptedLinks,
+            resolverSelectedLink,
+            resolverSuccess,
+            resolverNewUrl,
+          }),
+        };
+      }
     }
 
     await args.onStatus?.({
@@ -13461,6 +14656,12 @@ export async function applyWithPlaywright(args: {
       'input[type="submit"]',
       'button:has-text("Submit application")',
       'button:has-text("Submit Application")',
+      'button:has-text("Save and continue")',
+      'button:has-text("Save & continue")',
+      'button:has-text("Continue to Application")',
+      'button:has-text("Continue application")',
+      'button:has-text("Continue")',
+      'button:has-text("Next")',
       'button:has-text("Submit")',
       'button:has-text("Apply")',
     ];
@@ -13468,14 +14669,21 @@ export async function applyWithPlaywright(args: {
     let submitUsed: string | null = null;
     let submitButtonFound = false;
     let submitButtonClicked = false;
+    const greenhouseSubmitRoot =
+      greenhouseFormState?.usedFrame === true
+        ? page
+            .frames()
+            .find((frame) => frame.url() === greenhouseFormState?.formContextUrl) ?? page
+        : page;
     for (const submitSelector of submitSelectors) {
-      const button = page.locator(submitSelector).first();
+      const button = greenhouseSubmitRoot.locator(submitSelector).first();
       if ((await button.count()) === 0) continue;
       if (!(await button.isVisible().catch(() => false))) continue;
       if (!(await button.isEnabled().catch(() => false))) continue;
 
       submitButtonFound = true;
       submitUsed = submitSelector;
+      submitOrContinueAttempted = true;
       console.log("[AUTO_APPLY_CRAWL] clicking submit", submitSelector);
       await Promise.all([
         page
@@ -13484,6 +14692,7 @@ export async function applyWithPlaywright(args: {
         button.click(),
       ]);
       submitButtonClicked = true;
+      submitOrContinueClicked = true;
       break;
     }
 
@@ -13501,6 +14710,19 @@ export async function applyWithPlaywright(args: {
         openUrl: finalUrl,
         remoteSessionId: remoteSession?.sessionId,
       });
+
+      if (greenhouseFormState) {
+        logGreenhouseFormState({
+          currentUrl: finalUrl,
+          stoppedAtUrl: finalUrl,
+          formState: greenhouseFormState,
+          filledFieldCount: greenhouseFormState.filledFieldCount,
+          missingRequiredFields: greenhouseFormState.missingRequiredFields,
+          verificationOverriddenByVisibleForm,
+          submitButtonClicked,
+          submissionConfirmed: false,
+        });
+      }
 
       logPlaywrightEvidence({
         attemptedSelectors,
@@ -13534,6 +14756,13 @@ export async function applyWithPlaywright(args: {
           targetUrl,
           ...chaseEvidence,
           currentUrl: finalUrl,
+          providerDetected: greenhouseProviderDetected
+            ? "greenhouse"
+            : undefined,
+          formContextUrl: greenhouseFormState?.formContextUrl,
+          ...finalFormProgressDebug,
+          submitOrContinueAttempted,
+          submitOrContinueClicked,
           submitButtonFound,
           submitButtonClicked,
           confirmationTextFound: false,
@@ -13547,7 +14776,13 @@ export async function applyWithPlaywright(args: {
           hopCount: chaseEvidence.hopCount,
           urlsVisited: effectiveChase.urlsVisited,
           clicks: effectiveChase.clicks,
-          formDetected: true,
+          formDetected: greenhouseFormState?.formDetected ?? true,
+          visibleFieldCount: greenhouseFormState?.visibleFieldCount,
+          fillableFieldCount: greenhouseFormState?.fillableFieldCount,
+          filledFieldCount: greenhouseFormState?.filledFieldCount,
+          requiredFieldCount: greenhouseFormState?.requiredFieldCount,
+          missingRequiredFields: greenhouseFormState?.missingRequiredFields,
+          verificationOverriddenByVisibleForm,
           confirmationDetected: false,
           verificationDetected: false,
           finalReason: message,
@@ -13581,6 +14816,20 @@ export async function applyWithPlaywright(args: {
     });
     const finalStatus = success ? "SUBMITTED" : "UNCONFIRMED";
 
+    if (greenhouseFormState) {
+      logGreenhouseFormState({
+        currentUrl: finalUrl,
+        stoppedAtUrl: finalUrl,
+        formState: greenhouseFormState,
+        filledFieldCount: greenhouseFormState.filledFieldCount,
+        missingRequiredFields: greenhouseFormState.missingRequiredFields,
+        verificationSignals: finalSignals.verificationSignals,
+        verificationOverriddenByVisibleForm,
+        submitButtonClicked,
+        submissionConfirmed: success,
+      });
+    }
+
     logPlaywrightEvidence({
       attemptedSelectors,
       ...chaseEvidence,
@@ -13598,10 +14847,50 @@ export async function applyWithPlaywright(args: {
       keepBrowserOpen = true;
       const verificationRequired =
         finalSignals.verificationSignals.length > 0;
-      const humanStatus = verificationRequired
+      const allowVerificationRequired = shouldAllowVerificationRequired(
+        {
+          status: verificationRequired ? "VERIFICATION_REQUIRED" : "WAITING_HUMAN",
+          verificationSignals: finalSignals.verificationSignals,
+          needsHuman: finalSignals.needsHuman,
+        },
+        {
+          attemptedSelectors,
+          ...chaseEvidence,
+          formScanAttempted,
+          formFound,
+          formFillAttempted,
+          verificationEvidence: finalSignals.verificationEvidence,
+        },
+      );
+      console.log("[AUTO_APPLY_FORM_FIRST] pre-verification gate", {
+        applicationId: applicationId ?? null,
+        currentUrl: page.url(),
+        attemptedSelectors,
+        applyCtaFound: chaseEvidence.applyCtaFound,
+        applyCtaClicked: chaseEvidence.applyCtaClicked,
+        formScanAttempted,
+        formFound,
+        formFillAttempted,
+        filledFieldCount:
+          greenhouseFormState?.filledFieldCount ??
+          genericFormState?.filledFieldCount ??
+          0,
+        requiredFieldCount:
+          greenhouseFormState?.requiredFieldCount ??
+          genericFormState?.requiredFieldCount ??
+          0,
+        missingRequiredFields:
+          greenhouseFormState?.missingRequiredFields ??
+          genericFormState?.missingRequiredFields ??
+          [],
+        verificationDetected: finalSignals.verificationEvidence.detected,
+        verificationEvidence: finalSignals.verificationEvidence,
+        allowVerificationRequired,
+      });
+      const humanStatus = verificationRequired && allowVerificationRequired
         ? "VERIFICATION_REQUIRED"
         : "WAITING_HUMAN";
-      const message = verificationRequired
+      const message = humanStatus === "VERIFICATION_REQUIRED"
         ? APPLY_VERIFICATION_REQUIRED_USER_MESSAGE
         : "Account creation or verification needs human completion.";
 
@@ -13625,6 +14914,9 @@ export async function applyWithPlaywright(args: {
         debug: buildDebugPayload({
           attemptedSelectors,
           missingNames,
+          ...finalFormProgressDebug,
+          submitOrContinueAttempted,
+          submitOrContinueClicked,
           ...debugContext(),
           ...(await captureStopPoint(page, {
             lastActionText: submitButtonClicked
@@ -13635,6 +14927,7 @@ export async function applyWithPlaywright(args: {
           finalUrl,
           submitSelectorUsed: submitUsed,
           verificationSignals: finalSignals.verificationSignals,
+          verificationEvidence: finalSignals.verificationEvidence,
           confirmationSignals: finalSignals.confirmationSignals,
           pageText: finalSignals.pageText,
           pageHtml: finalSignals.html,
@@ -13643,6 +14936,10 @@ export async function applyWithPlaywright(args: {
           targetUrl,
           ...chaseEvidence,
           currentUrl: finalUrl,
+          providerDetected: greenhouseProviderDetected
+            ? "greenhouse"
+            : undefined,
+          formContextUrl: greenhouseFormState?.formContextUrl,
           submitButtonFound,
           submitButtonClicked,
           confirmationTextFound: finalSignals.confirmationTextFound,
@@ -13656,9 +14953,15 @@ export async function applyWithPlaywright(args: {
           hopCount: chaseEvidence.hopCount,
           urlsVisited: [...effectiveChase.urlsVisited, finalUrl],
           clicks: effectiveChase.clicks,
-          formDetected: true,
+          formDetected: greenhouseFormState?.formDetected ?? true,
+          visibleFieldCount: greenhouseFormState?.visibleFieldCount,
+          fillableFieldCount: greenhouseFormState?.fillableFieldCount,
+          filledFieldCount: greenhouseFormState?.filledFieldCount,
+          requiredFieldCount: greenhouseFormState?.requiredFieldCount,
+          missingRequiredFields: greenhouseFormState?.missingRequiredFields,
+          verificationOverriddenByVisibleForm,
           confirmationDetected: success,
-          verificationDetected: verificationRequired,
+          verificationDetected: verificationRequired && allowVerificationRequired,
           finalReason: "Verification detected after submit.",
           resolverAttemptedLinks,
           resolverSelectedLink,
@@ -13688,6 +14991,7 @@ export async function applyWithPlaywright(args: {
       debug: buildDebugPayload({
         attemptedSelectors,
         missingNames,
+        ...finalFormProgressDebug,
         ...debugContext(),
         ...(await captureStopPoint(page, {
           lastActionText: submitButtonClicked
@@ -13706,6 +15010,10 @@ export async function applyWithPlaywright(args: {
         targetUrl,
         ...chaseEvidence,
         currentUrl: finalUrl,
+        providerDetected: greenhouseProviderDetected
+          ? "greenhouse"
+          : undefined,
+        formContextUrl: greenhouseFormState?.formContextUrl,
         submitButtonFound,
         submitButtonClicked,
         confirmationTextFound: finalSignals.confirmationTextFound,
@@ -13719,7 +15027,13 @@ export async function applyWithPlaywright(args: {
         hopCount: chaseEvidence.hopCount,
         urlsVisited: [...effectiveChase.urlsVisited, finalUrl],
         clicks: effectiveChase.clicks,
-        formDetected: true,
+        formDetected: greenhouseFormState?.formDetected ?? true,
+        visibleFieldCount: greenhouseFormState?.visibleFieldCount,
+        fillableFieldCount: greenhouseFormState?.fillableFieldCount,
+        filledFieldCount: greenhouseFormState?.filledFieldCount,
+        requiredFieldCount: greenhouseFormState?.requiredFieldCount,
+        missingRequiredFields: greenhouseFormState?.missingRequiredFields,
+        verificationOverriddenByVisibleForm,
         confirmationDetected: success,
         verificationDetected: false,
         finalReason: success
@@ -13933,7 +15247,35 @@ export function toApplySessionDebug(
     urlBeforeClick: result.urlBeforeClick,
     urlAfterClick: result.urlAfterClick,
     currentUrl: result.currentUrl,
+    providerDetected: result.providerDetected,
+    formContextUrl: result.formContextUrl,
     formDetected: result.formDetected,
+    visibleFieldCount: result.visibleFieldCount,
+    fillableFieldCount: result.fillableFieldCount,
+    filledFieldCount: result.filledFieldCount,
+    requiredFieldCount: result.requiredFieldCount,
+    missingRequiredFields: result.missingRequiredFields ?? [],
+    unsupportedRequiredFields: result.unsupportedRequiredFields ?? [],
+    formScanAttempted: result.formScanAttempted,
+    formFound: result.formFound,
+    formFillAttempted: result.formFillAttempted,
+    resumeUploadAttempted: result.resumeUploadAttempted,
+    resumeUploadSucceeded: result.resumeUploadSucceeded,
+    submitOrContinueAttempted: result.submitOrContinueAttempted,
+    submitOrContinueClicked: result.submitOrContinueClicked,
+    aiFormAnswerEngineRan: result.aiFormAnswerEngineRan,
+    aiFormAnswersGenerated: result.aiFormAnswersGenerated,
+    aiFormAutofillCompleted: result.aiFormAutofillCompleted,
+    aiFormFieldCount: result.aiFormFieldCount,
+    aiFormRequiredFieldCount: result.aiFormRequiredFieldCount,
+    aiFormAnsweredCount: result.aiFormAnsweredCount,
+    aiFormBlockedCount: result.aiFormBlockedCount,
+    aiFormFilledCount: result.aiFormFilledCount,
+    aiFormRemainingRequiredFields:
+      result.aiFormRemainingRequiredFields ?? [],
+    aiFormBlockedFields: result.aiFormBlockedFields ?? [],
+    verificationOverriddenByVisibleForm:
+      result.verificationOverriddenByVisibleForm,
     submitButtonFound: result.submitButtonFound,
     submitButtonClicked: result.submitButtonClicked,
     confirmationDetected: result.confirmationDetected,
@@ -13941,6 +15283,7 @@ export function toApplySessionDebug(
     confirmationTextSnippet: result.confirmationTextSnippet ?? null,
     successUrlPatternMatched: result.successUrlPatternMatched,
     verificationDetected: result.verificationDetected,
+    verificationEvidence: result.verificationEvidence,
     submissionConfirmed: result.submissionConfirmed,
     stopClassification: result.stopClassification,
     finalReason: result.finalReason,

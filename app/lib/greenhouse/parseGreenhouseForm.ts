@@ -17,6 +17,7 @@ export type GhParsedForm = {
   hidden: Record<string, string>;
   fields: GhField[];
   debug: {
+    greenhouseParserMode?: "strict" | "fallback";
     pickedFormReason?: string;
     formCount?: number;
     pickedFormAction?: string;
@@ -28,6 +29,13 @@ export type GhParsedForm = {
     firstBytesJobPage?: string;
     firstBytesEmbed?: string;
     selectedFormReason?: string;
+    selectedFormFieldNames?: string[];
+    selectedFormButtonTexts?: string[];
+    fallbackFormParserUsed?: boolean;
+    visibleInputCount?: number;
+    visibleTextareaCount?: number;
+    visibleSelectCount?: number;
+    visibleFileInputCount?: number;
     actionSuspicious?: boolean;
     actionSuspiciousReason?: string;
     embedTried: Array<{ url: string; status?: number; ok?: boolean; note?: string }>;
@@ -42,8 +50,12 @@ type FetchHtmlResult =
   | { ok: true; status: number; url: string; html: string; note?: string; firstBytes: string }
   | { ok: false; status?: number; url: string; html: ""; note?: string; firstBytes: string };
 
-function norm(s: string) {
+function norm(s: string | null | undefined) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
+}
+
+function lower(value: string | null | undefined) {
+  return norm(value).toLowerCase();
 }
 
 function safeMethod(m: string | undefined | null): "POST" | "GET" {
@@ -145,6 +157,66 @@ function dedupeOptions(options: GhOption[]) {
   });
 }
 
+function toCamelCaseFromText(value: string) {
+  const parts = norm(value)
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .split(" ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return "";
+
+  return parts
+    .map((part, index) => {
+      const lowerPart = part.toLowerCase();
+      if (index === 0) return lowerPart;
+      return lowerPart.charAt(0).toUpperCase() + lowerPart.slice(1);
+    })
+    .join("");
+}
+
+function inferFallbackFieldName(args: {
+  name: string;
+  id: string;
+  label: string;
+  placeholder: string;
+  type: string;
+}) {
+  if (args.name) return args.name;
+
+  const combined = [args.id, args.label, args.placeholder, args.type]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/(first name|firstname|given name)/i.test(combined)) return "firstName";
+  if (/(last name|lastname|family name|surname)/i.test(combined)) return "lastName";
+  if (/(e-mail|email)/i.test(combined)) return "email";
+  if (/(phone|mobile|telephone)/i.test(combined)) return "phone";
+  if (/(street|address)/i.test(combined)) return "address";
+  if (/\bcity\b|\btown\b/i.test(combined)) return "city";
+  if (/(state|province|region)/i.test(combined)) return "state";
+  if (/(zip|postal|postcode)/i.test(combined)) return "postalCode";
+  if (/(country code|phone country)/i.test(combined)) return "countryCode";
+  if (/\bcountry\b/i.test(combined)) return "country";
+  if (/\blocation\b/i.test(combined)) return "location";
+  if (/linkedin/i.test(combined)) return "linkedin";
+  if (/portfolio/i.test(combined)) return "portfolio";
+  if (/(website|personal site|url)/i.test(combined)) return "website";
+  if (/(work authorization|authorized to work|authorisation)/i.test(combined)) {
+    return "workAuthorization";
+  }
+  if (/(sponsorship|sponsor|visa)/i.test(combined)) return "sponsorship";
+  if (/pronoun/i.test(combined)) return "pronouns";
+  if (/(ethnicity|race|eeo)/i.test(combined)) return "ethnicity";
+  if (/veteran/i.test(combined)) return "veteran";
+  if (/disability/i.test(combined)) return "disability";
+  if (/gender/i.test(combined)) return "gender";
+  if (args.type === "file" && /(resume|cv)/i.test(combined)) return "resume";
+  if (args.type === "file" && /cover/i.test(combined)) return "coverLetter";
+
+  return toCamelCaseFromText(args.id || args.label || args.placeholder || args.type);
+}
+
 function parseBoardAndJobId(jobUrl: string) {
   try {
     const u = new URL(jobUrl);
@@ -162,6 +234,10 @@ function alternateHostUrl(inputUrl: string) {
   try {
     const u = new URL(inputUrl);
     if (u.hostname.startsWith("job-boards.greenhouse.io")) {
+      u.hostname = "boards.greenhouse.io";
+      return u.toString();
+    }
+    if (u.hostname.startsWith("job-boards.eu.greenhouse.io")) {
       u.hostname = "boards.greenhouse.io";
       return u.toString();
     }
@@ -192,11 +268,183 @@ function htmlSnippet(html: string) {
   return html.replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
+function isHiddenCandidate($el: cheerio.Cheerio<any>) {
+  const inputType = lower($el.attr("type") || "text");
+  if (
+    inputType === "hidden" ||
+    inputType === "submit" ||
+    inputType === "button" ||
+    inputType === "image"
+  ) {
+    return true;
+  }
+
+  if ($el.attr("hidden") !== undefined) return true;
+  if (lower($el.attr("aria-hidden")) === "true") return true;
+
+  const style = lower($el.attr("style"));
+  if (
+    style.includes("display:none") ||
+    style.includes("display: none") ||
+    style.includes("visibility:hidden") ||
+    style.includes("visibility: hidden")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function collectFormButtonTexts(
+  $: cheerio.CheerioAPI,
+  $form: cheerio.Cheerio<any>,
+) {
+  const texts = new Set<string>();
+
+  $form.find("button, input[type='submit'], input[type='button']").each((_, el) => {
+    const $el = $(el);
+    if (isHiddenCandidate($el)) return;
+
+    const text = norm(
+      $el.is("input")
+        ? $el.attr("value") || $el.attr("aria-label") || ""
+        : $el.text() || $el.attr("aria-label") || "",
+    );
+    if (text) {
+      texts.add(text);
+    }
+  });
+
+  return [...texts];
+}
+
+function inspectVisibleFormCandidate(
+  $: cheerio.CheerioAPI,
+  formEl: any,
+) {
+  const $form = $(formEl);
+  const fieldSummaries: Array<{
+    name: string;
+    id: string;
+    label: string;
+    placeholder: string;
+    type: string;
+  }> = [];
+  let visibleInputCount = 0;
+  let visibleTextareaCount = 0;
+  let visibleSelectCount = 0;
+  let visibleFileInputCount = 0;
+
+  $form.find("input, textarea, select").each((_, el) => {
+    const $el = $(el);
+    if (isHiddenCandidate($el)) return;
+
+    const tag = (($el.get(0) as any)?.tagName ?? "").toLowerCase();
+    const rawType = lower($el.attr("type") || "text");
+    const type = tag === "input" ? rawType : tag;
+    const placeholder = norm($el.attr("placeholder") || $el.attr("aria-label") || "");
+    const label = extractQuestionLabel($, $form, $el).replace(/\*/g, "").trim();
+    const name = norm($el.attr("name") || "");
+    const id = norm($el.attr("id") || "");
+
+    if (tag === "textarea") {
+      visibleTextareaCount += 1;
+    } else if (tag === "select") {
+      visibleSelectCount += 1;
+    } else if (type === "file") {
+      visibleInputCount += 1;
+      visibleFileInputCount += 1;
+    } else {
+      visibleInputCount += 1;
+    }
+
+    fieldSummaries.push({
+      name,
+      id,
+      label,
+      placeholder,
+      type,
+    });
+  });
+
+  const buttonTexts = collectFormButtonTexts($, $form);
+  const lowerButtonTexts = buttonTexts.map((text) => text.toLowerCase());
+  const applicationLikeFields = fieldSummaries.filter((field) => {
+    const combined = [field.name, field.id, field.label, field.placeholder, field.type]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return /(first name|firstname|last name|lastname|email|phone|resume|cv|location|linkedin|website|portfolio|work authorization|sponsorship|job_application|answers_attributes|candidate|applicant)/i.test(
+      combined,
+    );
+  });
+  const strongIdentityFieldCount = fieldSummaries.filter((field) => {
+    const combined = [field.name, field.id, field.label, field.placeholder]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return /(first name|firstname|last name|lastname|email|phone|resume|cv)/i.test(
+      combined,
+    );
+  }).length;
+  const buttonLooksLikeApply = lowerButtonTexts.some((text) =>
+    /(apply|submit)/i.test(text),
+  );
+  const fieldNames = fieldSummaries
+    .map((field) =>
+      inferFallbackFieldName({
+        name: field.name,
+        id: field.id,
+        label: field.label,
+        placeholder: field.placeholder,
+        type: field.type,
+      }),
+    )
+    .filter(Boolean);
+  const reasonParts = [
+    `application_like_fields:${applicationLikeFields.length}`,
+    `visible_inputs:${visibleInputCount}`,
+    `visible_textareas:${visibleTextareaCount}`,
+    `visible_selects:${visibleSelectCount}`,
+    `visible_file_inputs:${visibleFileInputCount}`,
+    buttonLooksLikeApply ? "apply_button" : "no_apply_button",
+  ];
+
+  const acceptable =
+    (applicationLikeFields.length >= 2 &&
+      (buttonLooksLikeApply || strongIdentityFieldCount >= 2)) ||
+    (strongIdentityFieldCount >= 3 && visibleFileInputCount >= 1);
+
+  return {
+    acceptable,
+    reason: `fallback:visible_application_fields (${reasonParts.join(", ")})`,
+    visibleInputCount,
+    visibleTextareaCount,
+    visibleSelectCount,
+    visibleFileInputCount,
+    selectedFormFieldNames: [...new Set(fieldNames)].slice(0, 25),
+    selectedFormButtonTexts: [...new Set(buttonTexts)].slice(0, 10),
+  };
+}
+
 function extractForm(
   $: cheerio.CheerioAPI,
   formEl: any,
   baseUrl: string,
-  debug: GhParsedForm["debug"]
+  debug: GhParsedForm["debug"],
+  options?: {
+    allowGeneratedFieldNames?: boolean;
+    parserMode?: "strict" | "fallback";
+    selectedFormReason?: string;
+    selectedFormFieldNames?: string[];
+    selectedFormButtonTexts?: string[];
+    selectedFormHasJobApplication?: boolean;
+    fallbackFormParserUsed?: boolean;
+    visibleInputCount?: number;
+    visibleTextareaCount?: number;
+    visibleSelectCount?: number;
+    visibleFileInputCount?: number;
+  },
 ): GhParsedForm {
   const $form = $(formEl);
   const rawAction = $form.attr("action") || "";
@@ -241,22 +489,34 @@ function extractForm(
 
     if (type === "hidden" || type === "submit" || type === "button" || type === "image") return;
 
-    const name = norm($el.attr("name") || "");
-    if (!name) return;
-
     const placeholder = norm($el.attr("placeholder") || "");
     const rawLabelWithMarks = extractQuestionLabel($, $form, $el).trim();
     const rawLabel = rawLabelWithMarks.replace(/\*/g, "").trim();
-    const label = rawLabel || placeholder || name;
+    const rawName = norm($el.attr("name") || "");
+    const id = norm($el.attr("id") || "");
+    const name = rawName || (
+      options?.allowGeneratedFieldNames
+        ? inferFallbackFieldName({
+            name: rawName,
+            id,
+            label: rawLabel,
+            placeholder,
+            type,
+          })
+        : ""
+    );
+    if (!name) return;
+
+    const label = rawLabel || placeholder || rawName || id || name;
     const isSecurityCodeField =
-      name.toLowerCase().includes("security_code") ||
-      norm($el.attr("id") || "").toLowerCase().includes("security_code");
+      rawName.toLowerCase().includes("security_code") ||
+      id.toLowerCase().includes("security_code");
     const securityCodeRequiredByHint =
       /\*/.test(rawLabelWithMarks) || /required/i.test(placeholder) || /required/i.test(rawLabelWithMarks);
     const required = isSecurityCodeField
-      ? isRequiredEl($el, rawLabelWithMarks || placeholder || name) || securityCodeRequiredByHint
-      : isRequiredEl($el, rawLabelWithMarks || placeholder || name);
-    const questionKey = toQuestionKey(name);
+      ? isRequiredEl($el, rawLabelWithMarks || placeholder || rawName || name) || securityCodeRequiredByHint
+      : isRequiredEl($el, rawLabelWithMarks || placeholder || rawName || name);
+    const questionKey = rawName ? toQuestionKey(rawName) : undefined;
 
     if (type === "radio" || type === "checkbox") {
       const value = String($el.attr("value") ?? (type === "checkbox" ? "on" : ""));
@@ -300,6 +560,24 @@ function extractForm(
 
   debug.pickedFormAction = action;
   debug.pickedFormMethod = method;
+  debug.greenhouseParserMode = options?.parserMode ?? "strict";
+  debug.selectedFormReason =
+    options?.selectedFormReason ?? debug.selectedFormReason ?? debug.pickedFormReason;
+  debug.selectedFormFieldNames =
+    options?.selectedFormFieldNames ??
+    fields.map((field) => field.name).slice(0, 25);
+  debug.selectedFormButtonTexts =
+    options?.selectedFormButtonTexts ?? collectFormButtonTexts($, $form);
+  debug.fallbackFormParserUsed = options?.fallbackFormParserUsed ?? false;
+  debug.visibleInputCount = options?.visibleInputCount ?? debug.visibleInputCount;
+  debug.visibleTextareaCount =
+    options?.visibleTextareaCount ?? debug.visibleTextareaCount;
+  debug.visibleSelectCount = options?.visibleSelectCount ?? debug.visibleSelectCount;
+  debug.visibleFileInputCount =
+    options?.visibleFileInputCount ?? debug.visibleFileInputCount;
+  debug.selectedFormHasJobApplication =
+    options?.selectedFormHasJobApplication ??
+    debug.selectedFormHasJobApplication;
 
   const rawActionNorm = norm(rawAction);
   if (!rawActionNorm) {
@@ -369,8 +647,10 @@ function buildEmbedFallbackUrls(jobUrl: string) {
   return [
     `https://boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
     `https://job-boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
+    `https://job-boards.eu.greenhouse.io/embed/job_app?for=${encodeURIComponent(board)}&token=${encodeURIComponent(jobId)}`,
     `https://boards.greenhouse.io/embed/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}`,
     `https://job-boards.greenhouse.io/embed/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}`,
+    `https://job-boards.eu.greenhouse.io/embed/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}`,
   ];
 }
 
@@ -394,15 +674,52 @@ function parseFromHtml(html: string, baseUrl: string, debug: GhParsedForm["debug
   });
   const pickedForm = strictForms[0];
 
-  if (!pickedForm) return null;
-
   debug.formCount = forms.length;
-  debug.pickedFormReason = `strict:application_like_fields (${strictForms.length}/${forms.length})`;
-  debug.selectedFormReason = debug.pickedFormReason;
-  debug.iframeUsed = baseUrl;
-  debug.selectedFormHasJobApplication = true;
+  if (pickedForm) {
+    debug.pickedFormReason = `strict:application_like_fields (${strictForms.length}/${forms.length})`;
+    debug.selectedFormReason = debug.pickedFormReason;
+    debug.iframeUsed = baseUrl;
+    debug.selectedFormHasJobApplication = true;
 
-  const parsed = extractForm($, pickedForm, baseUrl, debug);
+    const parsed = extractForm($, pickedForm, baseUrl, debug, {
+      parserMode: "strict",
+      selectedFormReason: debug.pickedFormReason,
+      selectedFormHasJobApplication: true,
+      fallbackFormParserUsed: false,
+    });
+    return {
+      ...parsed,
+      embedUrl: buildEmbedJobAppUrl(baseUrl),
+    };
+  }
+
+  const fallbackCandidates = forms
+    .map((formEl) => ({
+      formEl,
+      inspection: inspectVisibleFormCandidate($, formEl),
+    }))
+    .filter((candidate) => candidate.inspection.acceptable);
+  const pickedFallback = fallbackCandidates[0];
+  if (!pickedFallback) return null;
+
+  debug.pickedFormReason = pickedFallback.inspection.reason;
+  debug.selectedFormReason = pickedFallback.inspection.reason;
+  debug.iframeUsed = baseUrl;
+  debug.selectedFormHasJobApplication = false;
+
+  const parsed = extractForm($, pickedFallback.formEl, baseUrl, debug, {
+    allowGeneratedFieldNames: true,
+    parserMode: "fallback",
+    selectedFormReason: pickedFallback.inspection.reason,
+    selectedFormFieldNames: pickedFallback.inspection.selectedFormFieldNames,
+    selectedFormButtonTexts: pickedFallback.inspection.selectedFormButtonTexts,
+    selectedFormHasJobApplication: false,
+    fallbackFormParserUsed: true,
+    visibleInputCount: pickedFallback.inspection.visibleInputCount,
+    visibleTextareaCount: pickedFallback.inspection.visibleTextareaCount,
+    visibleSelectCount: pickedFallback.inspection.visibleSelectCount,
+    visibleFileInputCount: pickedFallback.inspection.visibleFileInputCount,
+  });
   return {
     ...parsed,
     embedUrl: buildEmbedJobAppUrl(baseUrl),

@@ -151,6 +151,166 @@ export function pickStrategyStartUrl(strategy: ApplySiteStrategyRecord) {
   return picked || null;
 }
 
+function hasMeaningfulReplayableSteps(strategy: ApplySiteStrategyRecord) {
+  const steps = strategy.sanitizedSteps ?? strategy.steps ?? [];
+  if (steps.length === 0) return false;
+
+  const actionableStepFound = steps.some(
+    (step) =>
+      step.type === "click" ||
+      step.type === "fill" ||
+      step.type === "select_option" ||
+      step.type === "toggle",
+  );
+  if (actionableStepFound) {
+    return true;
+  }
+
+  const baselineUrl = normalizeJobUrl(
+    strategy.finalUrl ?? strategy.lastTrainedUrl ?? steps[0]?.currentUrl ?? "",
+  );
+
+  return steps.some((step) => {
+    const currentUrl = normalizeJobUrl(step.currentUrl);
+    return Boolean(currentUrl) && currentUrl !== baselineUrl;
+  });
+}
+
+function parseUrl(value: string | null | undefined) {
+  const normalized = normalizeJobUrl(value ?? "");
+  if (!normalized) return null;
+
+  try {
+    return new URL(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function isGreenhouseBoardPostingUrl(value: string | null | undefined) {
+  const parsed = parseUrl(value);
+  if (!parsed) return false;
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "job-boards.greenhouse.io" &&
+    hostname !== "boards.greenhouse.io"
+  ) {
+    return false;
+  }
+
+  const pathname = parsed.pathname.toLowerCase();
+  return pathname.includes("/jobs/") && !pathname.includes("/embed/");
+}
+
+function isGreenhouseDirectApplyUrl(value: string | null | undefined) {
+  const parsed = parseUrl(value);
+  if (!parsed) return false;
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname.endsWith("greenhouse.io")) {
+    return false;
+  }
+
+  const pathname = parsed.pathname.toLowerCase();
+  return (
+    pathname.includes("/embed/job_app") ||
+    pathname.includes("/embed/") ||
+    pathname.includes("/job_app") ||
+    pathname.includes("/applications") ||
+    (parsed.searchParams.has("for") && parsed.searchParams.has("token"))
+  );
+}
+
+function looksLikeDirectApplicationUrl(value: string | null | undefined) {
+  if (isGreenhouseDirectApplyUrl(value)) {
+    return true;
+  }
+
+  const parsed = parseUrl(value);
+  if (!parsed) return false;
+
+  return /\/(apply|application|applications|job_app|job-application|candidate|register|submit)/i.test(
+    parsed.pathname,
+  );
+}
+
+export function resolveRuntimeStrategyStartUrl(args: {
+  strategy: ApplySiteStrategyRecord;
+  strategyStartUrl?: string | null;
+  preferredTargetUrl?: string | null;
+}) {
+  const strategyStartUrl =
+    normalizeJobUrl(args.strategyStartUrl ?? pickStrategyStartUrl(args.strategy) ?? "") ||
+    "";
+  const preferredTargetUrl = normalizeJobUrl(args.preferredTargetUrl ?? "") || "";
+  const preferredTargetValidation = preferredTargetUrl
+    ? validateAutomationStartUrl(preferredTargetUrl, {
+        rejectAggregator: true,
+        rejectSearchEngine: true,
+      })
+    : null;
+  const strategyLooksWeak =
+    !hasMeaningfulReplayableSteps(args.strategy) &&
+    (args.strategy.sanitizedSteps ?? args.strategy.steps ?? []).length <= 1;
+  const strategyHost = resolveStrategyHostname(strategyStartUrl);
+  const preferredHost = resolveStrategyHostname(preferredTargetUrl);
+  const sameProviderFamily =
+    Boolean(strategyHost) &&
+    Boolean(preferredHost) &&
+    ((strategyHost.endsWith("greenhouse.io") &&
+      preferredHost.endsWith("greenhouse.io")) ||
+      strategyHost === preferredHost);
+
+  if (!strategyStartUrl) {
+    return {
+      action: "skipped" as const,
+      selectedUrl:
+        preferredTargetValidation?.isValid === true ? preferredTargetUrl : null,
+      strategyStartUrl: null,
+      reason: "missing_strategy_start_url",
+    };
+  }
+
+  if (
+    preferredTargetValidation?.isValid === true &&
+    preferredTargetUrl !== strategyStartUrl &&
+    strategyLooksWeak &&
+    isGreenhouseBoardPostingUrl(strategyStartUrl) &&
+    isGreenhouseDirectApplyUrl(preferredTargetUrl)
+  ) {
+    return {
+      action: "converted" as const,
+      selectedUrl: preferredTargetUrl,
+      strategyStartUrl,
+      reason: "greenhouse_direct_apply_target_preferred",
+    };
+  }
+
+  if (
+    preferredTargetValidation?.isValid === true &&
+    preferredTargetUrl !== strategyStartUrl &&
+    strategyLooksWeak &&
+    sameProviderFamily &&
+    !looksLikeDirectApplicationUrl(strategyStartUrl) &&
+    looksLikeDirectApplicationUrl(preferredTargetUrl)
+  ) {
+    return {
+      action: "converted" as const,
+      selectedUrl: preferredTargetUrl,
+      strategyStartUrl,
+      reason: "weak_strategy_replaced_with_direct_apply_target",
+    };
+  }
+
+  return {
+    action: "replayed" as const,
+    selectedUrl: strategyStartUrl,
+    strategyStartUrl,
+    reason: "strategy_start_url_selected",
+  };
+}
+
 function scoreStrategy(args: {
   strategy: ApplySiteStrategyRecord;
   sourceHost?: string;

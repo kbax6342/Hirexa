@@ -48,7 +48,9 @@ import {
 import { prisma } from "@/app/lib/prisma";
 import {
   deriveStopClassification,
+  shouldAllowVerificationRequired,
   type ApplyStopClassification,
+  type VerificationEvidence,
 } from "@/app/lib/apply/stopClassification";
 import {
   inferApplyAutomationErrorCode,
@@ -60,6 +62,11 @@ import {
   findBestApplySiteStrategyForRun,
   recordApplySiteStrategyReplayForUser,
 } from "@/app/lib/apply/playwrightStrategyRepository";
+import { resolveRuntimeStrategyStartUrl } from "@/app/lib/apply/playwrightStrategyMatcher";
+import {
+  getResolvedUrlCompatibility,
+  isThirdPartyJobSource,
+} from "@/app/lib/apply/resolvedUrlCompatibility";
 import {
   classifyJobUrlKind,
   isAggregatorHandoffUrl,
@@ -122,6 +129,9 @@ type AutoApplyLastAction =
   | "no_apply_cta"
   | "login_required"
   | "verification_required"
+  | "missing_required_fields"
+  | "missing_required_answers_after_ai"
+  | "user_review_required_for_form_fields"
   | "adzuna_handoff_rate_limited";
 
 type AutoApplyStopDebug = {
@@ -152,6 +162,40 @@ function delay(ms: number) {
 type LoadedApplication = NonNullable<
   Awaited<ReturnType<typeof findApplicationForUser>>
 >;
+
+async function loadAiFormResumeText(userProfileId: string) {
+  const resume = await prisma.resume.findUnique({
+    where: { userProfileId },
+    include: {
+      experiences: {
+        orderBy: { order: "asc" },
+        include: {
+          bullets: { orderBy: { order: "asc" } },
+        },
+      },
+    },
+  });
+
+  if (!resume) return null;
+
+  return resume.experiences
+    .map((experience) => {
+      const heading = [
+        experience.title,
+        experience.company,
+        experience.location,
+        experience.dateRange,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      const bullets = experience.bullets
+        .map((bullet) => `- ${bullet.text}`)
+        .join("\n");
+      return [heading, bullets].filter(Boolean).join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 type DirectResolutionDebug = Pick<
   ApplySessionDebug,
@@ -475,15 +519,16 @@ function hasVerificationDebugSignal(args: {
   verificationSignals?: string[] | null;
   message?: string | null;
   finalUrl?: string | null;
+  attemptedSelectors?: string[] | null;
+  applyCtaFound?: boolean | null;
+  applyCtaClicked?: boolean | null;
+  hopCount?: number | null;
+  formScanAttempted?: boolean | null;
+  formFound?: boolean | null;
+  formDetected?: boolean | null;
+  formFillAttempted?: boolean | null;
+  verificationEvidence?: VerificationEvidence | null;
 }) {
-  if (args.verificationDetected === true) {
-    return true;
-  }
-
-  if (isVerificationStopClassification(args.stopClassification)) {
-    return true;
-  }
-
   const verificationText = [
     ...(args.verificationSignals ?? []),
     args.stoppedAtTitle,
@@ -495,7 +540,31 @@ function hasVerificationDebugSignal(args: {
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 
-  return looksLikeVerificationBlocker(verificationText);
+  const hasVerificationSignal =
+    args.verificationDetected === true ||
+    isVerificationStopClassification(args.stopClassification) ||
+    looksLikeVerificationBlocker(verificationText);
+
+  return (
+    hasVerificationSignal &&
+    shouldAllowVerificationRequired(
+      {
+        status: args.verificationDetected ? VERIFICATION_REQUIRED_STATUS : null,
+        verificationSignals: args.verificationSignals,
+        needsHuman: args.verificationDetected,
+      },
+      {
+        attemptedSelectors: args.attemptedSelectors,
+        applyCtaFound: args.applyCtaFound,
+        applyCtaClicked: args.applyCtaClicked,
+        hopCount: args.hopCount ?? undefined,
+        formScanAttempted: args.formScanAttempted,
+        formFound: args.formFound ?? args.formDetected,
+        formFillAttempted: args.formFillAttempted,
+        verificationEvidence: args.verificationEvidence,
+      },
+    )
+  );
 }
 
 function isVerificationRawResult(result: RawPlaywrightResult) {
@@ -508,6 +577,14 @@ function isVerificationRawResult(result: RawPlaywrightResult) {
     verificationSignals: result.debug?.verificationSignals ?? [],
     message: result.message ?? null,
     finalUrl: result.finalUrl ?? result.openUrl ?? result.debug?.finalUrl ?? null,
+    attemptedSelectors: result.debug?.attemptedSelectors ?? [],
+    applyCtaFound: result.debug?.applyCtaFound,
+    applyCtaClicked: result.debug?.applyCtaClicked,
+    hopCount: result.debug?.hopCount,
+    formScanAttempted: result.debug?.formScanAttempted,
+    formFound: result.debug?.formFound,
+    formDetected: result.debug?.formDetected,
+    formFillAttempted: result.debug?.formFillAttempted,
   });
 }
 
@@ -522,6 +599,15 @@ function isVerificationExecutionResult(result: ApplyExecutionResult) {
       finalReason: result.debug.finalReason ?? null,
       message: result.message ?? null,
       finalUrl: result.finalUrl ?? result.debug.finalUrl ?? null,
+      attemptedSelectors: result.debug.attemptedSelectors,
+      applyCtaFound: result.debug.applyCtaFound,
+      applyCtaClicked: result.debug.applyCtaClicked,
+      hopCount: result.debug.hopCount,
+      formScanAttempted: result.debug.formScanAttempted,
+      formFound: result.debug.formFound,
+      formDetected: result.debug.formDetected,
+      formFillAttempted: result.debug.formFillAttempted,
+      verificationEvidence: result.debug.verificationEvidence,
     })
   );
 }
@@ -549,21 +635,47 @@ function readPreferredKnownDirectUrl(application: LoadedApplication) {
     normalizeJobUrl(application.jobUrl ?? ""),
   ].filter(Boolean);
 
-  return (
-    candidates.find((candidate) => isKnownDirectEmployerJobUrl(candidate)) ??
-    null
-  );
+  for (const candidate of candidates) {
+    if (!isKnownDirectEmployerJobUrl(candidate)) {
+      continue;
+    }
+
+    const compatibility = getResolvedUrlCompatibility({
+      url: candidate,
+      companyName: application.company,
+      jobTitle: application.title ?? application.jobTitle,
+      sourceUrl: application.jobUrl,
+    });
+
+    if (compatibility.compatible) {
+      return candidate;
+    }
+
+    console.info("[AUTO_APPLY_ROUTE] preferred direct URL rejected", {
+      applicationId: application.id,
+      sourceJobId: application.sourceJobId ?? null,
+      companyName: application.company ?? null,
+      jobTitle: application.title ?? application.jobTitle ?? null,
+      originalSourceUrl: application.jobUrl ?? null,
+      candidateUrl: candidate,
+      rejectedReason: compatibility.reason,
+      mismatchFamily: compatibility.mismatchFamily ?? null,
+    });
+  }
+
+  return null;
 }
 
 function shouldAttemptDirectResolution(application: LoadedApplication) {
   const jobUrl = normalizeJobUrl(application.jobUrl ?? "");
-  const source = normalizeSourceLabel(application.source);
 
   if (!jobUrl) return false;
 
   return (
-    source.includes("adzuna") ||
-    source.includes("external") ||
+    isThirdPartyJobSource({
+      source: application.source,
+      url: jobUrl,
+    }) ||
     isAggregatorHandoffUrl(jobUrl)
   );
 }
@@ -803,6 +915,10 @@ function mergeDirectResolutionAudit(args: {
       provider: "playwright",
       debug: {
         ...previousDebug,
+        targetUrl: undefined,
+        currentUrl: undefined,
+        stoppedAtUrl: undefined,
+        stoppedAtTitle: undefined,
         ...args.debug,
       },
     },
@@ -1103,6 +1219,17 @@ function looksLikeLoginRequired(value: string | null | undefined) {
   ].some((signal) => normalized.includes(signal));
 }
 
+function looksLikeMissingRequiredFields(value: string | null | undefined) {
+  if (!value) return false;
+
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("missing_required_answers_after_ai") ||
+    normalized.includes("missing_required_fields") ||
+    normalized.includes("missing required field")
+  );
+}
+
 function deriveLastActionFromRawResult(
   result: RawPlaywrightResult,
 ): AutoApplyLastAction {
@@ -1127,6 +1254,12 @@ function deriveLastActionFromRawResult(
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
+
+  if (looksLikeMissingRequiredFields(verificationText)) {
+    return result.debug?.aiFormAnswerEngineRan
+      ? "missing_required_answers_after_ai"
+      : "missing_required_fields";
+  }
 
   return looksLikeLoginRequired(verificationText)
     ? "login_required"
@@ -1156,6 +1289,12 @@ function deriveLastActionFromExecutionResult(
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
+
+  if (looksLikeMissingRequiredFields(verificationText)) {
+    return result.debug.aiFormAnswerEngineRan
+      ? "missing_required_answers_after_ai"
+      : "missing_required_fields";
+  }
 
   return looksLikeLoginRequired(verificationText)
     ? "login_required"
@@ -1201,6 +1340,19 @@ function buildStopDebugFromRawResult(
     status: result.status,
     needsHuman: result.needsHuman === true,
     formDetected: result.debug?.formDetected === true,
+    formScanAttempted: result.debug?.formScanAttempted,
+    formFound: result.debug?.formFound,
+    formFillAttempted: result.debug?.formFillAttempted,
+    filledFieldCount: result.debug?.filledFieldCount,
+    requiredFieldCount: result.debug?.requiredFieldCount,
+    missingRequiredFields: result.debug?.missingRequiredFields,
+    unsupportedRequiredFields: result.debug?.unsupportedRequiredFields,
+    aiFormAnswerEngineRan: result.debug?.aiFormAnswerEngineRan,
+    aiFormAnswersGenerated: result.debug?.aiFormAnswersGenerated,
+    aiFormAutofillCompleted: result.debug?.aiFormAutofillCompleted,
+    aiFormBlockedCount: result.debug?.aiFormBlockedCount,
+    aiFormRemainingRequiredFields: result.debug?.aiFormRemainingRequiredFields,
+    aiFormBlockedFields: result.debug?.aiFormBlockedFields,
   });
 
   logRtxStopReasonClassified({
@@ -2879,6 +3031,8 @@ async function runBackgroundApply(args: {
   resumePath: string;
   urlResolution: DirectResolutionContext;
   strategyGuidance?: MatchedStrategyGuidance | null;
+  strategyRuntimeStartUrl?: string | null;
+  aiFormResumeText?: string | null;
 }) {
   try {
     let result = applyRouteLevelSubmissionGuard({
@@ -2894,6 +3048,9 @@ async function runBackgroundApply(args: {
           title: args.application.title ?? args.application.jobTitle,
           company: args.application.company,
           location: args.application.location,
+          userProfile: args.application.userProfile,
+          resumeText: args.aiFormResumeText ?? undefined,
+          resumeSummary: args.aiFormResumeText ?? undefined,
           strategy: args.strategyGuidance
             ? {
                 id: args.strategyGuidance.strategy.id ?? null,
@@ -2907,7 +3064,7 @@ async function runBackgroundApply(args: {
                   args.strategyGuidance.derivedInstruction ?? null,
                 automationPrompt:
                   args.strategyGuidance.automationPrompt ?? null,
-                startUrl: args.strategyGuidance.startUrl ?? null,
+                startUrl: args.strategyRuntimeStartUrl ?? null,
                 steps: args.strategyGuidance.sanitizedSteps,
               }
             : undefined,
@@ -3346,12 +3503,94 @@ export async function POST(
     const matchedStrategyGuidance = strategyDomainRejection
       ? null
       : rawMatchedStrategyGuidance;
+    const strategyRuntimeStartDecision = matchedStrategyGuidance
+      ? resolveRuntimeStrategyStartUrl({
+          strategy: matchedStrategyGuidance.strategy,
+          strategyStartUrl: matchedStrategyGuidance.startUrl,
+          preferredTargetUrl:
+            prepared.targetUrl ??
+            initialRoutingDecision.selectedUrl ??
+            urlResolution.resolvedDirectUrl ??
+            application.jobUrl,
+        })
+      : null;
+    const runtimeStrategyStartUrl =
+      strategyRuntimeStartDecision?.action === "replayed"
+        ? strategyRuntimeStartDecision.selectedUrl ?? undefined
+        : undefined;
+    const convertedStrategyTargetUrl =
+      strategyRuntimeStartDecision?.action === "converted"
+        ? strategyRuntimeStartDecision.selectedUrl ?? undefined
+        : undefined;
+
+    if (process.env.NODE_ENV !== "production") {
+      if (rawMatchedStrategyGuidance && strategyDomainRejection) {
+        console.info("[AUTO_APPLY_STRATEGY] skipped", {
+          applicationId: application.id,
+          hostname:
+            rawMatchedStrategyGuidance.strategy.destinationHost ??
+            rawMatchedStrategyGuidance.strategy.sourceHost ??
+            rawMatchedStrategyGuidance.strategy.hostname,
+          strategyId: rawMatchedStrategyGuidance.strategy.id ?? null,
+          reason: strategyDomainRejection,
+          stepCount:
+            rawMatchedStrategyGuidance.sanitizedSteps?.length ?? 0,
+        });
+      } else if (matchedStrategyGuidance) {
+        console.info("[AUTO_APPLY_STRATEGY] detected", {
+          applicationId: application.id,
+          hostname:
+            matchedStrategyGuidance.strategy.destinationHost ??
+            matchedStrategyGuidance.strategy.sourceHost ??
+            matchedStrategyGuidance.strategy.hostname,
+          strategyId: matchedStrategyGuidance.strategy.id ?? null,
+          strategyType:
+            matchedStrategyGuidance.strategy.strategyType ?? null,
+          strategyPageType:
+            matchedStrategyGuidance.strategy.pageType ?? null,
+          strategyStartUrl: matchedStrategyGuidance.startUrl ?? null,
+          preferredTargetUrl: prepared.targetUrl ?? null,
+          stepCount:
+            matchedStrategyGuidance.sanitizedSteps?.length ?? 0,
+        });
+        console.info(
+          `[AUTO_APPLY_STRATEGY] ${strategyRuntimeStartDecision?.action ?? "replayed"}`,
+          {
+            applicationId: application.id,
+            hostname:
+              matchedStrategyGuidance.strategy.destinationHost ??
+              matchedStrategyGuidance.strategy.sourceHost ??
+              matchedStrategyGuidance.strategy.hostname,
+            strategyId: matchedStrategyGuidance.strategy.id ?? null,
+            originalStrategyStartUrl:
+              strategyRuntimeStartDecision?.strategyStartUrl ??
+              matchedStrategyGuidance.startUrl ??
+              null,
+            selectedUrl:
+              strategyRuntimeStartDecision?.selectedUrl ??
+              matchedStrategyGuidance.startUrl ??
+              null,
+            reason:
+              strategyRuntimeStartDecision?.reason ??
+              "strategy_start_url_selected",
+            stopReason: matchedStrategyGuidance.strategy.stopReason ?? null,
+            stepCount:
+              matchedStrategyGuidance.sanitizedSteps?.length ?? 0,
+          },
+        );
+      }
+    }
+
     const finalRoutingDecision = selectInitialAutomationTarget({
       sourceProvider: application.source,
       candidates: [
         {
           label: "strategy_start_url",
-          url: matchedStrategyGuidance?.startUrl,
+          url: runtimeStrategyStartUrl,
+        },
+        {
+          label: "strategy_converted_target_url",
+          url: convertedStrategyTargetUrl,
         },
         {
           label: "initial_selected_url",
@@ -3382,6 +3621,61 @@ export async function POST(
     let effectiveRequiresEcosiaSearch = finalRoutingDecision.requiresEcosiaSearch;
     let selectedStartSource: string | null =
       finalRoutingDecision.selectedFrom ?? null;
+    const retainCompatibleResolvedUrl = (
+      candidateUrl: string | null | undefined,
+      candidateLabel: string,
+    ) => {
+      const normalizedCandidateUrl = normalizeJobUrl(String(candidateUrl ?? ""));
+      if (!normalizedCandidateUrl) {
+        return undefined;
+      }
+
+      const compatibility = getResolvedUrlCompatibility({
+        url: normalizedCandidateUrl,
+        companyName: application.company,
+        jobTitle: application.title ?? application.jobTitle,
+        sourceUrl: urlResolution.originalUrl ?? application.jobUrl,
+      });
+
+      if (compatibility.compatible) {
+        return normalizedCandidateUrl;
+      }
+
+      console.warn("[AUTO_APPLY_ROUTE] incompatible resolved URL rejected", {
+        applicationId: application.id,
+        sourceJobId: application.sourceJobId ?? null,
+        companyName: application.company ?? null,
+        jobTitle: application.title ?? application.jobTitle ?? null,
+        originalSourceUrl: urlResolution.originalUrl ?? application.jobUrl ?? null,
+        selectedResolver: selectedStartSource ?? candidateLabel,
+        rejectedCandidateUrl: normalizedCandidateUrl,
+        rejectedReason: compatibility.reason,
+        mismatchFamily: compatibility.mismatchFamily ?? null,
+      });
+
+      return undefined;
+    };
+
+    effectiveResolvedDirectUrl =
+      retainCompatibleResolvedUrl(
+        effectiveResolvedDirectUrl,
+        "resolved_direct_url",
+      ) ?? null;
+    effectiveTargetUrl = retainCompatibleResolvedUrl(
+      effectiveTargetUrl,
+      selectedStartSource ?? "selected_target_url",
+    );
+
+    if (
+      !effectiveTargetUrl &&
+      isValidResolvedAutomationStartUrl(effectiveResolvedDirectUrl)
+    ) {
+      effectiveTargetUrl = effectiveResolvedDirectUrl ?? undefined;
+      selectedStartSource = "resolved_direct_url";
+      effectiveUsedResolvedDirectUrl = true;
+      effectiveRequiresEcosiaSearch = false;
+    }
+
     const directResolutionSearchProvider = String(
       urlResolution.resolution?.searchProvider ?? "",
     )
@@ -3397,6 +3691,16 @@ export async function POST(
       effectiveRequiresEcosiaSearch = false;
       effectiveUsedResolvedDirectUrl = true;
     }
+    console.info("[AUTO_APPLY_ROUTE] resolver selection", {
+      applicationId: application.id,
+      sourceJobId: application.sourceJobId ?? null,
+      companyName: application.company ?? null,
+      jobTitle: application.title ?? application.jobTitle ?? null,
+      originalSourceUrl: urlResolution.originalUrl ?? application.jobUrl ?? null,
+      selectedResolver: selectedStartSource,
+      acceptedResolvedUrl: effectiveResolvedDirectUrl,
+      targetUrl: effectiveTargetUrl,
+    });
     const configuredRemoteBrowserProvider =
       process.env.REMOTE_BROWSER_PROVIDER?.trim().toLowerCase() || "local";
     const adzunaHandoffUrlCandidates = [
@@ -3636,48 +3940,65 @@ export async function POST(
       const scrapflyResolvedDownstreamUrl =
         pickDownstreamUrlFromAdzunaScrapflyResult(scrapflyResolution);
       if (scrapflyResolvedDownstreamUrl) {
-        effectiveResolvedDirectUrl = scrapflyResolvedDownstreamUrl;
-        effectiveTargetUrl = scrapflyResolvedDownstreamUrl;
-        effectiveUsedResolvedDirectUrl = true;
-        effectiveRequiresEcosiaSearch = false;
-        selectedStartSource = "adzuna_scrapfly_resolver";
-        adzunaResolverDebug.resolvedDirectUrl = scrapflyResolvedDownstreamUrl;
-        adzunaResolverDebug.usedResolvedDirectUrl = true;
-        adzunaResolverDebug.adzunaScrapflyResolvedUrl =
-          scrapflyResolvedDownstreamUrl;
-        adzunaResolverDebug.finalChosenUrlKind =
-          classifyJobUrlKind(scrapflyResolvedDownstreamUrl);
-        console.info(
-          "[AUTO_APPLY_ROUTE] Adzuna Scrapfly resolved downstream URL accepted",
-          {
-            applicationId: application.id,
-            originalUrl: urlResolution.originalUrl ?? null,
-            resolvedDirectUrl: effectiveResolvedDirectUrl,
-            targetUrl: effectiveTargetUrl,
-            selectedStartSource,
-            scrapflySessionId: scrapflyResolution.sessionId ?? null,
-            resolutionStatus: scrapflyResolution.ok ? "ok" : "stop_required",
-          },
-        );
+        const compatibleScrapflyResolvedDownstreamUrl =
+          retainCompatibleResolvedUrl(
+            scrapflyResolvedDownstreamUrl,
+            "adzuna_scrapfly_resolver",
+          );
+        if (compatibleScrapflyResolvedDownstreamUrl) {
+          effectiveResolvedDirectUrl =
+            compatibleScrapflyResolvedDownstreamUrl;
+          effectiveTargetUrl = compatibleScrapflyResolvedDownstreamUrl;
+          effectiveUsedResolvedDirectUrl = true;
+          effectiveRequiresEcosiaSearch = false;
+          selectedStartSource = "adzuna_scrapfly_resolver";
+          adzunaResolverDebug.resolvedDirectUrl =
+            compatibleScrapflyResolvedDownstreamUrl;
+          adzunaResolverDebug.usedResolvedDirectUrl = true;
+          adzunaResolverDebug.adzunaScrapflyResolvedUrl =
+            compatibleScrapflyResolvedDownstreamUrl;
+          adzunaResolverDebug.finalChosenUrlKind = classifyJobUrlKind(
+            compatibleScrapflyResolvedDownstreamUrl,
+          );
+          console.info(
+            "[AUTO_APPLY_ROUTE] Adzuna Scrapfly resolved downstream URL accepted",
+            {
+              applicationId: application.id,
+              originalUrl: urlResolution.originalUrl ?? null,
+              resolvedDirectUrl: effectiveResolvedDirectUrl,
+              targetUrl: effectiveTargetUrl,
+              selectedStartSource,
+              scrapflySessionId: scrapflyResolution.sessionId ?? null,
+              resolutionStatus: scrapflyResolution.ok ? "ok" : "stop_required",
+            },
+          );
+        }
       }
 
       if (scrapflyResolution.ok) {
-        effectiveTargetUrl = scrapflyResolution.resolvedUrl;
-        effectiveResolvedDirectUrl = scrapflyResolution.resolvedUrl;
-        effectiveUsedResolvedDirectUrl = true;
-        effectiveRequiresEcosiaSearch = false;
-        selectedStartSource = "adzuna_scrapfly_resolver";
-        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = true;
-        adzunaResolverDebug.adzunaScrapflyResolvedUrl =
-          scrapflyResolution.resolvedUrl;
-        adzunaResolverDebug.resolvedDirectUrl =
-          scrapflyResolution.resolvedUrl;
-        adzunaResolverDebug.usedResolvedDirectUrl = true;
-        adzunaResolverDebug.finalChosenUrlKind =
-          classifyJobUrlKind(scrapflyResolution.resolvedUrl);
-        adzunaResolverDebug.adzunaScrapflyResolutionMethod =
-          scrapflyResolution.method;
-        adzunaResolverDebug.selectedStopSource = "scrapfly_resolved_url";
+        const compatibleScrapflyResolvedUrl = retainCompatibleResolvedUrl(
+          scrapflyResolution.resolvedUrl,
+          "adzuna_scrapfly_resolver",
+        );
+        if (compatibleScrapflyResolvedUrl) {
+          effectiveTargetUrl = compatibleScrapflyResolvedUrl;
+          effectiveResolvedDirectUrl = compatibleScrapflyResolvedUrl;
+          effectiveUsedResolvedDirectUrl = true;
+          effectiveRequiresEcosiaSearch = false;
+          selectedStartSource = "adzuna_scrapfly_resolver";
+          adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = true;
+          adzunaResolverDebug.adzunaScrapflyResolvedUrl =
+            compatibleScrapflyResolvedUrl;
+          adzunaResolverDebug.resolvedDirectUrl =
+            compatibleScrapflyResolvedUrl;
+          adzunaResolverDebug.usedResolvedDirectUrl = true;
+          adzunaResolverDebug.finalChosenUrlKind =
+            classifyJobUrlKind(compatibleScrapflyResolvedUrl);
+          adzunaResolverDebug.adzunaScrapflyResolutionMethod =
+            scrapflyResolution.method;
+          adzunaResolverDebug.selectedStopSource =
+            "scrapfly_resolved_url";
+        }
       } else if (scrapflyResolution.verificationRequired) {
         const verificationUrl =
           scrapflyResolution.stoppedAtUrl ??
@@ -3842,27 +4163,32 @@ export async function POST(
         const fallbackResolvedUrl = normalizeJobUrl(
           accessDeniedFallbackResolution.resolvedUrl ?? "",
         );
+        const compatibleFallbackResolvedUrl = retainCompatibleResolvedUrl(
+          fallbackResolvedUrl,
+          "access_denied_direct_search",
+        );
         if (
           accessDeniedFallbackResolution.ok &&
-          fallbackResolvedUrl &&
-          !isAdzunaUrl(fallbackResolvedUrl) &&
-          !isSearchResultsUrl(fallbackResolvedUrl)
+          compatibleFallbackResolvedUrl &&
+          !isAdzunaUrl(compatibleFallbackResolvedUrl) &&
+          !isSearchResultsUrl(compatibleFallbackResolvedUrl)
         ) {
           console.info("[DIRECT_JOB_RESOLVER] candidate accepted", {
-            resolvedDirectUrl: fallbackResolvedUrl,
+            resolvedDirectUrl: compatibleFallbackResolvedUrl,
             confidence: accessDeniedFallbackResolution.confidence ?? null,
             provider: accessDeniedFallbackResolution.provider ?? null,
             reason: accessDeniedFallbackResolution.matchReason ?? null,
           });
-          effectiveTargetUrl = fallbackResolvedUrl;
-          effectiveResolvedDirectUrl = fallbackResolvedUrl;
+          effectiveTargetUrl = compatibleFallbackResolvedUrl;
+          effectiveResolvedDirectUrl = compatibleFallbackResolvedUrl;
           effectiveUsedResolvedDirectUrl = true;
           effectiveRequiresEcosiaSearch = false;
           selectedStartSource = "resolved_direct_url";
-          adzunaResolverDebug.resolvedDirectUrl = fallbackResolvedUrl;
+          adzunaResolverDebug.resolvedDirectUrl =
+            compatibleFallbackResolvedUrl;
           adzunaResolverDebug.usedResolvedDirectUrl = true;
           adzunaResolverDebug.finalChosenUrlKind =
-            classifyJobUrlKind(fallbackResolvedUrl);
+            classifyJobUrlKind(compatibleFallbackResolvedUrl);
           adzunaResolverDebug.selectedStopSource = "scrapfly_resolved_url";
           adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
         } else {
@@ -4055,6 +4381,10 @@ export async function POST(
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
       strategyStartUrl: matchedStrategyGuidance?.startUrl ?? null,
+      strategyRuntimeAction: strategyRuntimeStartDecision?.action ?? null,
+      strategyRuntimeReason: strategyRuntimeStartDecision?.reason ?? null,
+      strategyRuntimeStartUrl:
+        strategyRuntimeStartDecision?.selectedUrl ?? null,
       usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
       targetUrl: effectiveTargetUrl ?? null,
       selectedStartSource,
@@ -4081,6 +4411,10 @@ export async function POST(
       strategyDomainRejected: Boolean(strategyDomainRejection),
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+      strategyRuntimeAction: strategyRuntimeStartDecision?.action ?? null,
+      strategyRuntimeReason: strategyRuntimeStartDecision?.reason ?? null,
+      strategyRuntimeStartUrl:
+        strategyRuntimeStartDecision?.selectedUrl ?? null,
       selectedStartSource,
       requiresEcosiaSearch: effectiveRequiresEcosiaSearch,
       usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
@@ -4177,6 +4511,8 @@ export async function POST(
         lastAction:
           earlyStop.status === VERIFICATION_REQUIRED_STATUS
             ? "verification_required"
+            : earlyStop.stopClassification.reason === "missing_required_fields"
+              ? "missing_required_fields"
             : earlyStop.stopClassification.reason === "login_required"
               ? "login_required"
               : earlyStop.stopClassification.reason === "adzuna_rate_limited" ||
@@ -4188,6 +4524,8 @@ export async function POST(
           earlyStop.errorCode ??
           (earlyStop.status === VERIFICATION_REQUIRED_STATUS
             ? "verification_required"
+            : earlyStop.stopClassification.reason === "missing_required_fields"
+              ? "missing_required_fields"
             : earlyStop.stopClassification.reason === "login_required"
               ? "login_required"
             : REAL_POSTING_NOT_FOUND_CODE),
@@ -4503,6 +4841,9 @@ export async function POST(
     }
 
     const tempResume = await writeResumeToTemp(application.userProfileId);
+    const aiFormResumeText = await loadAiFormResumeText(
+      application.userProfileId,
+    ).catch(() => null);
 
     console.log("[AUTO_APPLY_ROUTE] temp resume lookup", {
       applicationId: application.id,
@@ -4556,6 +4897,19 @@ export async function POST(
         status: "STARTING",
         lastUrl: effectiveTargetUrl,
         message: "Starting Playwright automation.",
+        debug: {
+          originalJobUrl: urlResolution.originalUrl ?? application.jobUrl ?? undefined,
+          resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
+          targetUrl: effectiveTargetUrl ?? undefined,
+          currentUrl:
+            effectiveTargetUrl ??
+            effectiveResolvedDirectUrl ??
+            urlResolution.originalUrl ??
+            application.jobUrl ??
+            undefined,
+          stoppedAtUrl: undefined,
+          stoppedAtTitle: undefined,
+        },
       }, {
         caller: "POST /api/applications/[id]/apply",
         sourcePath: "app/api/applications/[id]/apply/route.ts",
@@ -4586,6 +4940,8 @@ export async function POST(
         resumePath: tempResume.path,
         urlResolution,
         strategyGuidance: matchedStrategyGuidance,
+        strategyRuntimeStartUrl: runtimeStrategyStartUrl ?? null,
+        aiFormResumeText,
       });
 
       return NextResponse.json({
@@ -4619,6 +4975,9 @@ export async function POST(
             title: application.title ?? application.jobTitle,
             company: application.company,
             location: application.location,
+            userProfile: application.userProfile,
+            resumeText: aiFormResumeText ?? undefined,
+            resumeSummary: aiFormResumeText ?? undefined,
             strategy: matchedStrategyGuidance
               ? {
                   id: matchedStrategyGuidance.strategy.id ?? null,
@@ -4633,7 +4992,7 @@ export async function POST(
                     matchedStrategyGuidance.derivedInstruction ?? null,
                   automationPrompt:
                     matchedStrategyGuidance.automationPrompt ?? null,
-                  startUrl: matchedStrategyGuidance.startUrl ?? null,
+                  startUrl: runtimeStrategyStartUrl ?? null,
                   steps: matchedStrategyGuidance.sanitizedSteps,
                 }
               : undefined,

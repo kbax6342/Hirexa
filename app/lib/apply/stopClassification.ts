@@ -1,8 +1,19 @@
 export type ApplyStopReason =
   | "no_apply_cta"
+  | "apply_cta_click_failed"
   | "adzuna_rate_limited"
   | "login_required"
+  | "account_required"
   | "verification_required"
+  | "real_verification_required"
+  | "ai_form_answers_generated"
+  | "ai_form_autofill_completed"
+  | "user_review_required_for_form_fields"
+  | "missing_required_answers_after_ai"
+  | "missing_required_fields"
+  | "unsupported_required_field"
+  | "form_not_found_after_apply"
+  | "user_review_required"
   | "human_verification_required"
   | "wrong_employer_domain"
   | "invalid_start_url"
@@ -45,11 +56,31 @@ export type ApplyStopClassification = {
   suggestedAction: ApplyStopSuggestedAction;
 };
 
+export type VerificationEvidence = {
+  detected: boolean;
+  matchedPattern?: string;
+  textSnippet?: string | null;
+  selector?: string;
+  url?: string;
+  title?: string;
+};
+
 export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "no_apply_cta",
+  "apply_cta_click_failed",
   "adzuna_rate_limited",
   "login_required",
+  "account_required",
   "verification_required",
+  "real_verification_required",
+  "ai_form_answers_generated",
+  "ai_form_autofill_completed",
+  "user_review_required_for_form_fields",
+  "missing_required_answers_after_ai",
+  "missing_required_fields",
+  "unsupported_required_field",
+  "form_not_found_after_apply",
+  "user_review_required",
   "human_verification_required",
   "wrong_employer_domain",
   "invalid_start_url",
@@ -65,6 +96,7 @@ type StopClassificationInput = {
   targetUrl?: string | null;
   finalUrl?: string | null;
   currentUrl?: string | null;
+  attemptedSelectors?: string[] | null;
   applyCtaFound?: boolean;
   applyCtaClicked?: boolean;
   hopCount?: number;
@@ -72,6 +104,7 @@ type StopClassificationInput = {
   submitButtonClicked?: boolean;
   confirmationTextFound?: boolean;
   verificationSignals?: string[];
+  verificationEvidence?: VerificationEvidence | null;
   status?: string | null;
   needsHuman?: boolean;
   hasPasswordField?: boolean;
@@ -80,6 +113,24 @@ type StopClassificationInput = {
   message?: string | null;
   lastAction?: string | null;
   formDetected?: boolean;
+  formScanAttempted?: boolean;
+  formFound?: boolean;
+  formFillAttempted?: boolean;
+  filledFieldCount?: number;
+  requiredFieldCount?: number;
+  missingRequiredFields?: string[] | null;
+  unsupportedRequiredFields?: string[] | null;
+  aiFormAnswerEngineRan?: boolean | null;
+  aiFormAnswersGenerated?: boolean | null;
+  aiFormAutofillCompleted?: boolean | null;
+  aiFormBlockedCount?: number | null;
+  aiFormRemainingRequiredFields?: string[] | null;
+  aiFormBlockedFields?: Array<{
+    fieldId?: string;
+    label?: string;
+    reason?: string;
+    category?: string;
+  }> | null;
 };
 
 export const APPLY_STOP_AGGREGATOR_HOST_PATTERNS = [
@@ -179,6 +230,13 @@ const WRONG_EMPLOYER_DOMAIN_KEYWORDS = [
   "wrong_employer_domain",
 ];
 
+const MISSING_REQUIRED_FIELDS_KEYWORDS = [
+  "missing_required_fields",
+  "missing_required_answers_after_ai",
+  "missing required fields",
+  "missing required field",
+];
+
 const RTX_RECOVERY_KEYWORDS = [
   "rtx_",
   "rtx_prelude_error",
@@ -225,6 +283,62 @@ function normalizeSignalText(args: StopClassificationInput) {
     .toLowerCase();
 }
 
+export function shouldAllowVerificationRequired(
+  result: {
+    status?: string | null;
+    lastAction?: string | null;
+    verificationSignals?: string[] | null;
+    needsHuman?: boolean | null;
+  } | null | undefined,
+  pageEvidence: {
+    attemptedSelectors?: string[] | null;
+    applyCtaFound?: boolean | null;
+    applyCtaClicked?: boolean | null;
+    hopCount?: number | null;
+    formScanAttempted?: boolean | null;
+    formFound?: boolean | null;
+    formFillAttempted?: boolean | null;
+    verificationEvidence?: VerificationEvidence | null;
+  } | null | undefined,
+) {
+  const evidence = pageEvidence?.verificationEvidence;
+  const hasRealVerificationEvidence =
+    evidence?.detected === true &&
+    Boolean(evidence.matchedPattern || evidence.selector || evidence.textSnippet);
+  if (!hasRealVerificationEvidence) {
+    return false;
+  }
+
+  const verificationSignalPresent =
+    normalizeStatus(result?.status) === "VERIFICATION_REQUIRED" ||
+    result?.lastAction === "verification_required" ||
+    (Array.isArray(result?.verificationSignals) &&
+      result.verificationSignals.length > 0) ||
+    result?.needsHuman === true ||
+    hasRealVerificationEvidence;
+  if (!verificationSignalPresent) {
+    return false;
+  }
+
+  const attemptedSelectors = pageEvidence?.attemptedSelectors ?? [];
+  const hopCount =
+    typeof pageEvidence?.hopCount === "number" ? pageEvidence.hopCount : 0;
+  const preFormBlocked =
+    attemptedSelectors.length === 0 &&
+    hopCount === 0 &&
+    pageEvidence?.applyCtaFound !== true &&
+    pageEvidence?.applyCtaClicked !== true &&
+    pageEvidence?.formScanAttempted !== true &&
+    pageEvidence?.formFound !== true;
+  const attemptedApplicationFlow =
+    pageEvidence?.formScanAttempted === true ||
+    pageEvidence?.formFillAttempted === true ||
+    pageEvidence?.applyCtaClicked === true ||
+    hopCount > 0;
+
+  return preFormBlocked || attemptedApplicationFlow;
+}
+
 export function isAggregatorStopHostname(hostname: string) {
   return APPLY_STOP_AGGREGATOR_HOST_PATTERNS.some((pattern) =>
     hostname.includes(pattern),
@@ -245,17 +359,64 @@ export function deriveStopClassification(
   const signalText = normalizeSignalText(args);
   const normalizedStatus = normalizeStatus(args.status);
   const hopCount = typeof args.hopCount === "number" ? args.hopCount : 0;
+  const ctaScanRan =
+    Array.isArray(args.attemptedSelectors) &&
+    args.attemptedSelectors.length > 0;
   const applyCtaMissing =
-    args.applyCtaFound === false ||
-    (args.applyCtaClicked !== true && hopCount === 0);
+    ctaScanRan &&
+    (args.applyCtaFound === false ||
+      (args.applyCtaClicked !== true && hopCount === 0));
+  const hasMissingRequiredFieldSignals =
+    args.lastAction === "missing_required_fields" ||
+    (Array.isArray(args.missingRequiredFields) &&
+      args.missingRequiredFields.length > 0) ||
+    (Array.isArray(args.aiFormRemainingRequiredFields) &&
+      args.aiFormRemainingRequiredFields.length > 0) ||
+    includesAnySignal(signalText, MISSING_REQUIRED_FIELDS_KEYWORDS);
+  const hasAiFormReviewSignals =
+    args.aiFormAnswerEngineRan === true &&
+    ((typeof args.aiFormBlockedCount === "number" && args.aiFormBlockedCount > 0) ||
+      (Array.isArray(args.aiFormBlockedFields) &&
+        args.aiFormBlockedFields.length > 0) ||
+      signalText.includes("user_review_required_for_form_fields"));
+  const hasUnsupportedRequiredFieldSignals =
+    args.lastAction === "unsupported_required_field" ||
+    (Array.isArray(args.unsupportedRequiredFields) &&
+      args.unsupportedRequiredFields.length > 0) ||
+    signalText.includes("unsupported_required_field") ||
+    signalText.includes("unsupported required field");
   const hasVerificationSignals =
-    args.needsHuman === true ||
-    normalizedStatus === "VERIFICATION_REQUIRED" ||
-    normalizedStatus === "WAITING_HUMAN" ||
-    args.lastAction === "verification_required" ||
     (Array.isArray(args.verificationSignals) &&
       args.verificationSignals.length > 0) ||
     includesAnySignal(signalText, VERIFICATION_KEYWORDS);
+  const inferredVerificationEvidence =
+    args.verificationEvidence ??
+    (hasVerificationSignals
+      ? {
+          detected: true,
+          matchedPattern:
+            args.verificationSignals?.[0] ??
+            VERIFICATION_KEYWORDS.find((keyword) => signalText.includes(keyword)),
+        }
+      : null);
+  const allowVerificationRequired = shouldAllowVerificationRequired(
+    {
+      status: normalizedStatus,
+      lastAction: args.lastAction,
+      verificationSignals: args.verificationSignals,
+      needsHuman: args.needsHuman,
+    },
+    {
+      attemptedSelectors: args.attemptedSelectors,
+      applyCtaFound: args.applyCtaFound,
+      applyCtaClicked: args.applyCtaClicked,
+      hopCount,
+      formScanAttempted: args.formScanAttempted,
+      formFound: args.formFound ?? args.formDetected,
+      formFillAttempted: args.formFillAttempted,
+      verificationEvidence: inferredVerificationEvidence,
+    },
+  );
   const hasPasswordSignal =
     args.hasPasswordField === true || signalText.includes("password");
   const hasEmailPasswordSignal =
@@ -290,7 +451,7 @@ export function deriveStopClassification(
     };
   }
 
-  if (hasVerificationSignals) {
+  if (hasVerificationSignals && allowVerificationRequired) {
     return {
       reason: "verification_required",
       pageType: "human_verification_gate",
@@ -303,6 +464,44 @@ export function deriveStopClassification(
       reason: "login_required",
       pageType: "auth_gate",
       suggestedAction: "sign_in_and_retry",
+    };
+  }
+
+  if (hasAiFormReviewSignals) {
+    return {
+      reason: "user_review_required_for_form_fields",
+      pageType: "application_form",
+      suggestedAction: "review_and_retry",
+    };
+  }
+
+  if (hasMissingRequiredFieldSignals) {
+    return {
+      reason: args.aiFormAnswerEngineRan
+        ? "missing_required_answers_after_ai"
+        : "missing_required_fields",
+      pageType: "application_form",
+      suggestedAction: "review_and_retry",
+    };
+  }
+
+  if (hasUnsupportedRequiredFieldSignals) {
+    return {
+      reason: "unsupported_required_field",
+      pageType: "application_form",
+      suggestedAction: "review_and_retry",
+    };
+  }
+
+  if (
+    args.applyCtaClicked === true &&
+    args.formScanAttempted === true &&
+    args.formFound === false
+  ) {
+    return {
+      reason: "form_not_found_after_apply",
+      pageType: "employer_site",
+      suggestedAction: "review_and_retry",
     };
   }
 
@@ -386,12 +585,34 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
   switch (reason) {
     case "no_apply_cta":
       return "No apply button was found";
+    case "apply_cta_click_failed":
+      return "Apply button click failed";
     case "adzuna_rate_limited":
       return "Adzuna rate-limited handoff";
     case "login_required":
       return "Sign-in required";
+    case "account_required":
+      return "Account required";
     case "verification_required":
       return "Verification required";
+    case "real_verification_required":
+      return "Real verification required";
+    case "ai_form_answers_generated":
+      return "AI form answers generated";
+    case "ai_form_autofill_completed":
+      return "AI form autofill completed";
+    case "user_review_required_for_form_fields":
+      return "User review required for form fields";
+    case "missing_required_answers_after_ai":
+      return "Missing required answers after AI";
+    case "missing_required_fields":
+      return "Missing required fields";
+    case "unsupported_required_field":
+      return "Unsupported required field";
+    case "form_not_found_after_apply":
+      return "Application form was not found after apply";
+    case "user_review_required":
+      return "User review required";
     case "human_verification_required":
       return "Human verification required";
     case "wrong_employer_domain":

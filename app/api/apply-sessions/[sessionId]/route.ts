@@ -15,6 +15,7 @@ import {
   inferApplyAutomationErrorCode,
   prefixErrorCodeInMessage,
 } from "@/app/lib/apply/errorCodes";
+import { shouldAllowVerificationRequired } from "@/app/lib/apply/stopClassification";
 
 export const runtime = "nodejs";
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
@@ -157,13 +158,32 @@ function buildVerificationStopPayload(
         .filter((value): value is string => typeof value === "string" && value.length > 0)
         .join("\n"),
     ) ?? null;
+  const allowVerificationRequired = shouldAllowVerificationRequired(
+    {
+      status: session.status,
+      lastAction: session.debug?.lastAction,
+      verificationSignals: debugVerificationSignals,
+      needsHuman: session.debug?.needsHuman,
+    },
+    {
+      attemptedSelectors: session.debug?.attemptedSelectors,
+      applyCtaFound: session.debug?.applyCtaFound,
+      applyCtaClicked: session.debug?.applyCtaClicked,
+      hopCount: session.debug?.hopCount,
+      formScanAttempted: session.debug?.formScanAttempted,
+      formFound: session.debug?.formFound ?? session.debug?.formDetected,
+      formFillAttempted: session.debug?.formFillAttempted,
+      verificationEvidence: session.debug?.verificationEvidence,
+    },
+  );
   const isVerificationStop =
-    session.status === "VERIFICATION_REQUIRED" ||
-    stopClassification?.reason === "verification_required" ||
-    stopClassification?.suggestedAction === "complete_verification" ||
-    session.debug?.verificationDetected === true ||
-    debugVerificationSignals.length > 0 ||
-    Boolean(verificationSignalFromText);
+    ((session.status === "VERIFICATION_REQUIRED" ||
+      stopClassification?.reason === "verification_required" ||
+      stopClassification?.suggestedAction === "complete_verification") &&
+      allowVerificationRequired) ||
+    (session.debug?.verificationDetected === true && allowVerificationRequired) ||
+    (debugVerificationSignals.length > 0 && allowVerificationRequired) ||
+    (Boolean(verificationSignalFromText) && allowVerificationRequired);
 
   if (!isVerificationStop) {
     return null;

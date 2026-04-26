@@ -1,17 +1,29 @@
-import type { Locator, Page } from "playwright-core";
+import type { Frame, Locator, Page } from "playwright-core";
 import { cssEscape } from "@/app/lib/apply/cssEscape";
 
+type LocatorSearchRoot = Page | Frame;
+
 const FIELD_ALIASES: Record<string, string[]> = {
+  fullName: ["full name", "name", "legal name"],
   firstName: ["first name", "first_name", "firstname", "given name"],
   lastName: ["last name", "last_name", "lastname", "family name", "surname"],
   email: ["email", "e-mail"],
   phone: ["phone", "mobile", "phone number", "telephone"],
   address: ["address", "street", "street address"],
+  location: ["location", "current location"],
   city: ["city", "town"],
   state: ["state", "province", "region"],
   postalCode: ["zip", "zip code", "postal", "postcode", "postal code"],
+  country: ["country", "country/region"],
   linkedin: ["linkedin", "linkedin url"],
   website: ["website", "portfolio", "personal site", "url"],
+  workAuthorization: [
+    "work authorization",
+    "work authorisation",
+    "authorized to work",
+    "authorised to work",
+  ],
+  sponsorship: ["sponsorship", "visa sponsorship", "sponsor", "visa"],
 };
 
 function escapeRegex(value: string) {
@@ -128,7 +140,7 @@ export async function extractLocatorText(locator: Locator) {
 }
 
 export async function findMatchingLocator(
-  page: Page,
+  page: LocatorSearchRoot,
   name: string,
   attemptedSelectors: string[],
   options?: {

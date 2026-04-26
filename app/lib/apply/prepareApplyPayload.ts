@@ -1,4 +1,5 @@
 import { mapProfileToForm } from "@/app/lib/greenhouse/mapProfileToForm";
+import { isGreenhouseBoardUrl } from "@/app/lib/apply/providers/greenhouse";
 import {
   parseGreenhouseForm,
   type GhField,
@@ -7,19 +8,20 @@ import {
 type AnswerValue = string | string[];
 export type AnswersMap = Record<string, AnswerValue>;
 
-function isGreenhouseBoardUrl(jobUrl: string) {
-  try {
-    const host = new URL(jobUrl).hostname.toLowerCase();
-    return (
-      host === "job-boards.greenhouse.io" || host === "boards.greenhouse.io"
-    );
-  } catch {
-    return false;
-  }
-}
-
 function toText(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function toYesNo(value: unknown) {
+  const normalized = toText(value).toLowerCase();
+  if (!normalized) return "";
+  if (["yes", "y", "true", "authorized", "authorized to work in us"].includes(normalized)) {
+    return "Yes";
+  }
+  if (["no", "n", "false", "not authorized"].includes(normalized)) {
+    return "No";
+  }
+  return "";
 }
 
 function normalizeAnswer(value: unknown, field: GhField): AnswerValue {
@@ -56,17 +58,33 @@ function mergeValue(
 function buildGenericPrefill(
   profile: Parameters<typeof mapProfileToForm>[1],
 ): AnswersMap {
+  const location = [toText(profile.city), toText(profile.state)]
+    .filter(Boolean)
+    .join(", ");
+  const fullName = [toText(profile.firstName), toText(profile.lastName)]
+    .filter(Boolean)
+    .join(" ");
+
   return {
+    fullName,
     firstName: toText(profile.firstName),
     lastName: toText(profile.lastName),
     email: toText(profile.email),
     phone: toText(profile.phone),
     address: toText(profile.address),
+    location,
     city: toText(profile.city),
     state: toText(profile.state),
     postalCode: toText(profile.postalCode),
+    country: toText((profile as { country?: string | null }).country),
     linkedin: toText(profile.linkedinUrl),
     website: toText(profile.portfolioUrl),
+    workAuthorization: toYesNo(
+      (profile as { authorizedUS?: string | null }).authorizedUS,
+    ),
+    sponsorship: toYesNo(
+      (profile as { sponsorship?: string | null }).sponsorship,
+    ),
   };
 }
 

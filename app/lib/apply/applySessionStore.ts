@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { JobSearchFallbackCandidate } from "@/app/lib/apply/jobSearchFallback";
 import type { ApplyAutomationErrorCode } from "@/app/lib/apply/errorCodes";
-import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification";
+import type {
+  ApplyStopClassification,
+  VerificationEvidence,
+} from "@/app/lib/apply/stopClassification";
 import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
 
 export type ApplySessionClickRecord = {
@@ -16,7 +19,7 @@ export type ApplySessionClickRecord = {
 };
 
 export type ApplySessionCtaAttemptRecord = {
-  phase: "entry" | "handoff" | "cookie";
+  phase: "entry" | "handoff" | "cookie" | "universal";
   action?: "scan" | "click";
   selector: string;
   text: string;
@@ -184,7 +187,39 @@ export type ApplySessionDebug = {
   urlBeforeClick?: string;
   urlAfterClick?: string;
   currentUrl?: string;
+  providerDetected?: string;
+  formContextUrl?: string;
   formDetected?: boolean;
+  visibleFieldCount?: number;
+  fillableFieldCount?: number;
+  filledFieldCount?: number;
+  requiredFieldCount?: number;
+  missingRequiredFields?: string[];
+  unsupportedRequiredFields?: string[];
+  formScanAttempted?: boolean;
+  formFound?: boolean;
+  formFillAttempted?: boolean;
+  resumeUploadAttempted?: boolean;
+  resumeUploadSucceeded?: boolean;
+  submitOrContinueAttempted?: boolean;
+  submitOrContinueClicked?: boolean;
+  aiFormAnswerEngineRan?: boolean;
+  aiFormAnswersGenerated?: boolean;
+  aiFormAutofillCompleted?: boolean;
+  aiFormFieldCount?: number;
+  aiFormRequiredFieldCount?: number;
+  aiFormAnsweredCount?: number;
+  aiFormBlockedCount?: number;
+  aiFormFilledCount?: number;
+  aiFormRemainingRequiredFields?: string[];
+  aiFormBlockedFields?: Array<{
+    fieldId: string;
+    label: string;
+    reason: string;
+    category: string;
+  }>;
+  verificationOverriddenByVisibleForm?: boolean;
+  needsHuman?: boolean;
   submitButtonFound?: boolean;
   submitButtonClicked?: boolean;
   confirmationDetected?: boolean;
@@ -192,6 +227,7 @@ export type ApplySessionDebug = {
   confirmationTextSnippet?: string | null;
   successUrlPatternMatched?: boolean;
   verificationDetected?: boolean;
+  verificationEvidence?: VerificationEvidence;
   verificationSignals?: string[];
   submissionConfirmed?: boolean;
   stopReason?: "HUMAN_INTERVENTION_REQUIRED";
@@ -199,6 +235,9 @@ export type ApplySessionDebug = {
     | "no_apply_cta"
     | "login_required"
     | "verification_required"
+    | "missing_required_fields"
+    | "missing_required_answers_after_ai"
+    | "user_review_required_for_form_fields"
     | "adzuna_handoff_rate_limited";
   stopClassification?: ApplyStopClassification;
   finalReason?: string;

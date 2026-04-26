@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { collectVerificationSignals } from "@/app/lib/apply/playwrightSignals";
-import { deriveStopClassification } from "@/app/lib/apply/stopClassification";
+import {
+  deriveStopClassification,
+  shouldAllowVerificationRequired,
+} from "@/app/lib/apply/stopClassification";
 
 test("normal RTX apply CTA copy does not trigger verification signals", () => {
   const signals = collectVerificationSignals([
@@ -115,4 +118,101 @@ test("login pages still classify as auth gates", () => {
   expect(stop.reason).toBe("login_required");
   expect(stop.pageType).toBe("auth_gate");
   expect(stop.suggestedAction).toBe("sign_in_and_retry");
+});
+
+test("missing required fields do not collapse into verification required", () => {
+  const stop = deriveStopClassification({
+    targetUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    finalUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    currentUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    status: "WAITING_HUMAN",
+    needsHuman: true,
+    formDetected: true,
+    applyCtaFound: true,
+    applyCtaClicked: true,
+    hopCount: 1,
+    submitButtonFound: true,
+    finalReason: "missing_required_fields",
+    message: "Missing required fields: Work authorization",
+  });
+
+  expect(stop.reason).toBe("missing_required_fields");
+  expect(stop.pageType).toBe("application_form");
+  expect(stop.suggestedAction).toBe("review_and_retry");
+});
+
+test("no-cta classification requires evidence that the universal scan actually ran", () => {
+  const stop = deriveStopClassification({
+    targetUrl: "https://careers.example.com/job/123",
+    finalUrl: "https://careers.example.com/job/123",
+    currentUrl: "https://careers.example.com/job/123",
+    applyCtaFound: false,
+    applyCtaClicked: false,
+    hopCount: 0,
+    attemptedSelectors: [],
+  });
+
+  expect(stop.reason).not.toBe("no_apply_cta");
+});
+
+test("verification required is blocked without concrete verification evidence", () => {
+  const allowed = shouldAllowVerificationRequired(
+    {
+      status: "VERIFICATION_REQUIRED",
+      verificationSignals: [],
+      needsHuman: true,
+    },
+    {
+      attemptedSelectors: [],
+      applyCtaFound: false,
+      applyCtaClicked: false,
+      hopCount: 0,
+      formScanAttempted: false,
+      formFound: false,
+      formFillAttempted: false,
+      verificationEvidence: { detected: false },
+    },
+  );
+
+  expect(allowed).toBe(false);
+
+  const stop = deriveStopClassification({
+    targetUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    finalUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    currentUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975356004",
+    status: "VERIFICATION_REQUIRED",
+    applyCtaFound: false,
+    applyCtaClicked: false,
+    hopCount: 0,
+    attemptedSelectors: [],
+    verificationEvidence: { detected: false },
+  });
+
+  expect(stop.reason).not.toBe("verification_required");
+});
+
+test("verification required is allowed for a real pre-form CAPTCHA blocker", () => {
+  expect(
+    shouldAllowVerificationRequired(
+      {
+        status: "VERIFICATION_REQUIRED",
+        verificationSignals: ["recaptcha"],
+        needsHuman: true,
+      },
+      {
+        attemptedSelectors: [],
+        applyCtaFound: false,
+        applyCtaClicked: false,
+        hopCount: 0,
+        formScanAttempted: false,
+        formFound: false,
+        formFillAttempted: false,
+        verificationEvidence: {
+          detected: true,
+          matchedPattern: "recaptcha",
+          selector: "iframe[src*='recaptcha']",
+        },
+      },
+    ),
+  ).toBe(true);
 });

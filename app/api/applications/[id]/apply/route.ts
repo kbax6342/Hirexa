@@ -23,6 +23,7 @@ import {
   resolveDirectJobUrl,
   type DirectJobResolution,
 } from "@/app/lib/apply/directJobResolver";
+import { resolveAdzunaHandoffWithScrapfly } from "@/app/lib/apply/adzunaScrapflyResolver";
 import {
   REAL_POSTING_NOT_FOUND_CODE,
   selectInitialAutomationTarget,
@@ -101,6 +102,9 @@ type PersistAutomationOutcomeResult = {
 };
 
 type RawPlaywrightResult = Awaited<ReturnType<typeof applyWithPlaywright>>;
+type AdzunaScrapflyResolutionResult = Awaited<
+  ReturnType<typeof resolveAdzunaHandoffWithScrapfly>
+>;
 
 type RoutePlaywrightEvidence = {
   applyCtaFound: boolean;
@@ -116,7 +120,8 @@ type RoutePlaywrightEvidence = {
 type AutoApplyLastAction =
   | "no_apply_cta"
   | "login_required"
-  | "verification_required";
+  | "verification_required"
+  | "adzuna_handoff_rate_limited";
 
 type AutoApplyStopDebug = {
   stopReason: "HUMAN_INTERVENTION_REQUIRED";
@@ -134,6 +139,12 @@ async function findApplicationForUser(id: string, userId: string) {
   return prisma.jobApplication.findFirst({
     where: { id, userProfile: { userId } },
     include: { userProfile: true },
+  });
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
   });
 }
 
@@ -194,6 +205,12 @@ const ADZUNA_GOOGLE_FIRST_FAILURE_MESSAGE =
   "No confirmed employer-hosted application URL found from Google-first resolution for Adzuna job";
 const VERIFICATION_REQUIRED_STATUS = "VERIFICATION_REQUIRED" as const;
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+const ADZUNA_HANDOFF_ACCESS_DENIED_CODE =
+  "ADZUNA_HANDOFF_ACCESS_DENIED" as const;
+const ADZUNA_HANDOFF_RATE_LIMITED_CODE =
+  "ADZUNA_HANDOFF_RATE_LIMITED" as const;
+const ADZUNA_LOGIN_TO_CONTINUE_REQUIRED_CODE =
+  "ADZUNA_LOGIN_TO_CONTINUE_REQUIRED" as const;
 const WRONG_EMPLOYER_DOMAIN_MESSAGE =
   "Hirexa could not confirm the real employer job posting. The selected site did not match this job. Open the original job listing or retry after refreshing job details.";
 const VERIFICATION_STOP_SIGNALS = [
@@ -552,11 +569,37 @@ function shouldAttemptDirectResolution(application: LoadedApplication) {
 function isAdzunaApplySource(args: {
   source?: string | null;
   jobUrl?: string | null;
+  urlCandidates?: Array<string | null | undefined>;
 }) {
   const source = normalizeSourceLabel(args.source);
-  const jobUrl = normalizeJobUrl(args.jobUrl ?? "");
+  const candidateUrls = [args.jobUrl, ...(args.urlCandidates ?? [])]
+    .map((value) => normalizeJobUrl(value ?? ""))
+    .filter(Boolean);
+  const hasAdzunaCandidate = candidateUrls.some((url) => isAdzunaUrl(url));
 
-  return source.includes("adzuna") || isAdzunaUrl(jobUrl);
+  return source.includes("adzuna") || hasAdzunaCandidate;
+}
+
+function findAdzunaHandoffUrl(args: {
+  source?: string | null;
+  jobUrl?: string | null;
+  urlCandidates?: Array<string | null | undefined>;
+}) {
+  const candidateUrls = [args.jobUrl, ...(args.urlCandidates ?? [])]
+    .map((value) => normalizeJobUrl(value ?? ""))
+    .filter(Boolean);
+
+  if (
+    !isAdzunaApplySource({
+      source: args.source,
+      jobUrl: args.jobUrl,
+      urlCandidates: candidateUrls,
+    })
+  ) {
+    return null;
+  }
+
+  return candidateUrls.find((url) => isAdzunaUrl(url)) ?? null;
 }
 
 function shouldContinueWithOriginalUrl(url: string) {
@@ -567,6 +610,118 @@ function shouldContinueWithOriginalUrl(url: string) {
     rejectAggregator: true,
     rejectSearchEngine: true,
   }).isValid;
+}
+
+function isValidResolvedAutomationStartUrl(url: string | null | undefined) {
+  const normalizedUrl = normalizeJobUrl(String(url ?? ""));
+  if (!normalizedUrl) return false;
+  if (isAdzunaUrl(normalizedUrl) || isAdzunaUnresolvedHandoffUrl(normalizedUrl)) {
+    return false;
+  }
+
+  return validateAutomationStartUrl(normalizedUrl, {
+    rejectAggregator: true,
+    rejectSearchEngine: true,
+  }).isValid;
+}
+
+function pickDownstreamUrlFromAdzunaScrapflyResult(
+  result: AdzunaScrapflyResolutionResult | null | undefined,
+) {
+  if (!result) return null;
+
+  const sortedCandidateUrls = [...(result.candidates ?? [])]
+    .sort((left, right) => right.score - left.score)
+    .map((candidate) => normalizeJobUrl(candidate.url))
+    .filter(Boolean);
+
+  const prioritized = [
+    "resolvedUrl" in result ? result.resolvedUrl : null,
+    result.resolvedDirectUrl ?? null,
+    result.adzunaPostLoginResolvedDirectUrl ?? null,
+    "stoppedAtUrl" in result ? result.stoppedAtUrl ?? null : null,
+    result.finalUrl ?? null,
+    result.handoffFinalUrl ?? null,
+    result.handoffPopupUrl ?? null,
+    ...sortedCandidateUrls,
+  ]
+    .map((value) => normalizeJobUrl(String(value ?? "")))
+    .filter(Boolean);
+
+  return (
+    prioritized.find((candidate) =>
+      isValidResolvedAutomationStartUrl(candidate),
+    ) ?? null
+  );
+}
+
+function pickMostRecentStopUrl(args: {
+  stopPointStoppedAtUrl?: string | null;
+  stopPointCurrentUrl?: string | null;
+  browserFinalUrl?: string | null;
+  scrapflyResolvedUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  targetUrl?: string | null;
+  originalJobUrl?: string | null;
+}) {
+  const prioritized = [
+    args.stopPointStoppedAtUrl,
+    args.stopPointCurrentUrl,
+    args.browserFinalUrl,
+    args.scrapflyResolvedUrl,
+    args.resolvedDirectUrl,
+    args.targetUrl,
+    args.originalJobUrl,
+  ]
+    .map((value) => normalizeJobUrl(String(value ?? "")))
+    .filter(Boolean);
+
+  if (prioritized.length === 0) {
+    return null;
+  }
+
+  const first = prioritized[0] ?? null;
+  const downstream = prioritized.find(
+    (candidate) =>
+      !isAdzunaUrl(candidate) && !isAggregatorHandoffUrl(candidate),
+  );
+
+  if (first && (isAdzunaUrl(first) || isAggregatorHandoffUrl(first)) && downstream) {
+    return downstream;
+  }
+
+  return first;
+}
+
+function readDebugStringField(
+  debug: unknown,
+  key: string,
+): string | null {
+  if (!debug || typeof debug !== "object") return null;
+  const candidate = (debug as Record<string, unknown>)[key];
+  if (typeof candidate !== "string") return null;
+  const normalized = candidate.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function buildManualJobSearchQuery(args: {
+  title?: string | null;
+  company?: string | null;
+  location?: string | null;
+  queries?: string[];
+}) {
+  const query =
+    args.queries?.find((value) => String(value ?? "").trim().length > 0) ??
+    [args.title, args.company, args.location]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+
+  return query.replace(/["]+/g, "").trim();
+}
+
+function buildManualJobSearchUrl(query: string) {
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 }
 
 function buildDirectResolutionDebug(args: {
@@ -1038,7 +1193,21 @@ function buildStopDebugFromRawResult(
     currentUrl,
     lastAction,
     stoppedAtUrl:
-      result.debug?.stoppedAtUrl ?? currentUrl ?? finalUrl,
+      pickMostRecentStopUrl({
+        stopPointStoppedAtUrl: result.debug?.stoppedAtUrl ?? null,
+        stopPointCurrentUrl: currentUrl,
+        browserFinalUrl: finalUrl,
+        scrapflyResolvedUrl:
+          readDebugStringField(result.debug, "adzunaScrapflyResolvedUrl") ??
+          readDebugStringField(result.debug, "adzunaPostLoginResolvedDirectUrl") ??
+          readDebugStringField(result.debug, "resolvedDirectUrl") ??
+          null,
+        resolvedDirectUrl: result.debug?.resolvedDirectUrl ?? null,
+        targetUrl: result.debug?.targetUrl ?? null,
+        originalJobUrl: result.debug?.originalJobUrl ?? null,
+      }) ??
+      currentUrl ??
+      finalUrl,
     stoppedAtTitle: result.debug?.stoppedAtTitle ?? null,
     lastActionText:
       result.debug?.lastActionText ??
@@ -1121,7 +1290,21 @@ function buildStopDebugFromExecutionResult(
     currentUrl,
     lastAction,
     stoppedAtUrl:
-      result.debug.stoppedAtUrl ?? currentUrl ?? finalUrl,
+      pickMostRecentStopUrl({
+        stopPointStoppedAtUrl: result.debug.stoppedAtUrl ?? null,
+        stopPointCurrentUrl: currentUrl,
+        browserFinalUrl: finalUrl,
+        scrapflyResolvedUrl:
+          result.debug.adzunaScrapflyResolvedUrl ??
+          result.debug.adzunaPostLoginResolvedDirectUrl ??
+          result.debug.resolvedDirectUrl ??
+          null,
+        resolvedDirectUrl: result.debug.resolvedDirectUrl ?? null,
+        targetUrl: result.debug.targetUrl ?? null,
+        originalJobUrl: result.debug.originalJobUrl ?? null,
+      }) ??
+      currentUrl ??
+      finalUrl,
     stoppedAtTitle: result.debug.stoppedAtTitle ?? null,
     lastActionText:
       result.debug.lastActionText ??
@@ -1183,7 +1366,21 @@ function coerceVerificationExecutionResult(
     lastAction: "verification_required",
     stopClassification,
     stoppedAtUrl:
-      result.debug.stoppedAtUrl ?? currentUrl ?? finalUrl,
+      pickMostRecentStopUrl({
+        stopPointStoppedAtUrl: result.debug.stoppedAtUrl ?? null,
+        stopPointCurrentUrl: currentUrl,
+        browserFinalUrl: finalUrl,
+        scrapflyResolvedUrl:
+          result.debug.adzunaScrapflyResolvedUrl ??
+          result.debug.adzunaPostLoginResolvedDirectUrl ??
+          result.debug.resolvedDirectUrl ??
+          null,
+        resolvedDirectUrl: result.debug.resolvedDirectUrl ?? null,
+        targetUrl: result.debug.targetUrl ?? null,
+        originalJobUrl: result.debug.originalJobUrl ?? null,
+      }) ??
+      currentUrl ??
+      finalUrl,
     stoppedAtTitle: result.debug.stoppedAtTitle ?? null,
     lastActionText: result.debug.lastActionText ?? null,
     lastActionSelector: result.debug.lastActionSelector ?? null,
@@ -1238,6 +1435,11 @@ function withStopDebug(
       finalUrl: stopDebug.finalUrl ?? undefined,
       currentUrl: stopDebug.currentUrl ?? undefined,
       stoppedAtUrl: stopDebug.stoppedAtUrl ?? undefined,
+      latestUrl:
+        stopDebug.stoppedAtUrl ??
+        stopDebug.currentUrl ??
+        stopDebug.finalUrl ??
+        undefined,
       stoppedAtTitle: stopDebug.stoppedAtTitle ?? undefined,
       lastActionText: stopDebug.lastActionText ?? undefined,
       lastActionSelector: stopDebug.lastActionSelector ?? undefined,
@@ -1364,7 +1566,19 @@ function forceApplyNotStartedForDomainMismatch(args: {
       lastAction: "no_apply_cta",
       stopClassification,
       stoppedAtUrl:
-        args.result.debug.stoppedAtUrl ??
+        pickMostRecentStopUrl({
+          stopPointStoppedAtUrl: args.result.debug.stoppedAtUrl ?? null,
+          stopPointCurrentUrl: currentUrl,
+          browserFinalUrl: finalUrl,
+          scrapflyResolvedUrl:
+            args.result.debug.adzunaScrapflyResolvedUrl ??
+            args.result.debug.adzunaPostLoginResolvedDirectUrl ??
+            args.result.debug.resolvedDirectUrl ??
+            null,
+          resolvedDirectUrl: args.result.debug.resolvedDirectUrl ?? null,
+          targetUrl: args.result.debug.targetUrl ?? null,
+          originalJobUrl: args.result.debug.originalJobUrl ?? null,
+        }) ??
         currentUrl ??
         finalUrl ??
         null,
@@ -1683,7 +1897,19 @@ function applyFinalWriteGuard(args: {
       lastAction: "no_apply_cta",
       stopClassification,
       stoppedAtUrl:
-        args.result.debug.stoppedAtUrl ??
+        pickMostRecentStopUrl({
+          stopPointStoppedAtUrl: args.result.debug.stoppedAtUrl ?? null,
+          stopPointCurrentUrl: evidence.currentUrl,
+          browserFinalUrl: args.result.finalUrl ?? null,
+          scrapflyResolvedUrl:
+            args.result.debug.adzunaScrapflyResolvedUrl ??
+            args.result.debug.adzunaPostLoginResolvedDirectUrl ??
+            args.result.debug.resolvedDirectUrl ??
+            null,
+          resolvedDirectUrl: args.result.debug.resolvedDirectUrl ?? null,
+          targetUrl: args.result.debug.targetUrl ?? null,
+          originalJobUrl: args.result.debug.originalJobUrl ?? null,
+        }) ??
         evidence.currentUrl ??
         args.result.finalUrl ??
         null,
@@ -1794,7 +2020,19 @@ function ensureTerminalApplySessionResult(args: {
         lastAction,
         stopClassification,
         stoppedAtUrl:
-          args.result.debug.stoppedAtUrl ??
+          pickMostRecentStopUrl({
+            stopPointStoppedAtUrl: args.result.debug.stoppedAtUrl ?? null,
+            stopPointCurrentUrl: currentUrl,
+            browserFinalUrl: finalUrl,
+            scrapflyResolvedUrl:
+              args.result.debug.adzunaScrapflyResolvedUrl ??
+              args.result.debug.adzunaPostLoginResolvedDirectUrl ??
+              args.result.debug.resolvedDirectUrl ??
+              null,
+            resolvedDirectUrl: args.result.debug.resolvedDirectUrl ?? null,
+            targetUrl: args.result.debug.targetUrl ?? null,
+            originalJobUrl: args.result.debug.originalJobUrl ?? null,
+          }) ??
           currentUrl ??
           finalUrl ??
           null,
@@ -2520,6 +2758,41 @@ async function persistAutomationOutcome(args: {
     };
   }
 
+  if (
+    finalResult.status === "APPLY_NOT_STARTED" ||
+    finalResult.status === "WAITING_HUMAN" ||
+    finalResult.status === "AUTO_APPLY_UNAVAILABLE"
+  ) {
+    console.info(
+      "[AUTO_APPLY_ROUTE] preventing READY_TO_SEND promotion for unresolved/search/verification stop point",
+      {
+        applicationId: args.application.id,
+        status: finalResult.status,
+        stopClassification: finalResult.debug?.stopClassification ?? null,
+      },
+    );
+
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        status: finalResult.status,
+        answersJson: args.answers,
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason:
+          finalResult.message ?? finalResult.debug.finalReason ?? null,
+        verificationRequired:
+          finalResult.status === "WAITING_HUMAN",
+      },
+    });
+
+    return {
+      submissionStatus: "NOT_SUBMITTED",
+      emailStatus: "SKIPPED",
+      message: finalResult.message,
+      result: finalResult,
+    };
+  }
+
   logFinalWrite({
     applicationId: args.application.id,
     applySessionId: args.applySessionId,
@@ -2568,7 +2841,9 @@ async function runBackgroundApply(args: {
   answers: AnswersMap;
   finalValuesToSubmit: AnswersMap;
   targetUrl?: string;
+  resolvedDirectUrl?: string | null;
   selectedStartSource?: string | null;
+  adzunaResolverDebug?: Partial<ApplySessionDebug>;
   resumePath: string;
   urlResolution: DirectResolutionContext;
   strategyGuidance?: MatchedStrategyGuidance | null;
@@ -2582,7 +2857,7 @@ async function runBackgroundApply(args: {
           applicationId: args.application.id,
           applySessionId: args.applySessionId,
           originalUrl: args.urlResolution.originalUrl,
-          resolvedUrl: args.urlResolution.resolvedDirectUrl,
+          resolvedUrl: args.resolvedDirectUrl ?? args.urlResolution.resolvedDirectUrl,
           source: args.application.source,
           title: args.application.title ?? args.application.jobTitle,
           company: args.application.company,
@@ -2648,7 +2923,7 @@ async function runBackgroundApply(args: {
       application: args.application,
       result,
       originalJobUrl: args.urlResolution.originalUrl,
-      resolvedDirectUrl: args.urlResolution.resolvedDirectUrl,
+      resolvedDirectUrl: args.resolvedDirectUrl ?? args.urlResolution.resolvedDirectUrl,
       targetUrl: args.targetUrl,
     });
     if (backgroundDomainMismatch) {
@@ -2659,7 +2934,8 @@ async function runBackgroundApply(args: {
         company: args.application.company ?? null,
         jobTitle: args.application.title ?? args.application.jobTitle ?? null,
         originalJobUrl: args.urlResolution.originalUrl ?? null,
-        resolvedDirectUrl: args.urlResolution.resolvedDirectUrl ?? null,
+        resolvedDirectUrl:
+          args.resolvedDirectUrl ?? args.urlResolution.resolvedDirectUrl ?? null,
         targetUrl: args.targetUrl ?? result.debug.targetUrl ?? null,
         finalUrl: backgroundDomainMismatch.finalUrl,
         stoppedAtUrl: backgroundDomainMismatch.stoppedAtUrl,
@@ -2678,6 +2954,15 @@ async function runBackgroundApply(args: {
         result,
         mismatch: backgroundDomainMismatch,
       });
+    }
+    if (args.adzunaResolverDebug && Object.keys(args.adzunaResolverDebug).length > 0) {
+      result = {
+        ...result,
+        debug: {
+          ...result.debug,
+          ...args.adzunaResolverDebug,
+        },
+      };
     }
 
     console.log("[AUTO_APPLY_ROUTE] background apply completed", {
@@ -2730,16 +3015,46 @@ async function runBackgroundApply(args: {
       emailStatus: persistedOutcome.emailStatus,
       storageTarget: "applySession",
     });
+    const latestSessionUrl =
+      pickMostRecentStopUrl({
+        stopPointStoppedAtUrl: finalResult.debug.stoppedAtUrl ?? null,
+        stopPointCurrentUrl: finalResult.debug.currentUrl ?? null,
+        browserFinalUrl: finalResult.finalUrl ?? null,
+        scrapflyResolvedUrl:
+          finalResult.debug.adzunaScrapflyResolvedUrl ??
+          finalResult.debug.adzunaPostLoginResolvedDirectUrl ??
+          null,
+        resolvedDirectUrl:
+          finalResult.debug.resolvedDirectUrl ??
+          args.resolvedDirectUrl ??
+          args.urlResolution.resolvedDirectUrl ??
+          null,
+        targetUrl: args.targetUrl ?? finalResult.debug.targetUrl ?? null,
+        originalJobUrl:
+          finalResult.debug.originalJobUrl ??
+          args.urlResolution.originalUrl ??
+          null,
+      }) ??
+      finalResult.finalUrl ??
+      args.targetUrl ??
+      null;
 
     updateSession(args.applySessionId, {
       status: finalResult.status,
-      lastUrl: finalResult.finalUrl,
+      lastUrl: latestSessionUrl ?? undefined,
       error: finalResult.ok ? undefined : finalSessionMessage ?? finalResult.message,
       message: finalSessionMessage ?? persistedOutcome.message ?? finalResult.message,
       errorCode: finalErrorCode ?? undefined,
       submissionStatus: persistedOutcome.submissionStatus,
       emailStatus: persistedOutcome.emailStatus,
-      debug: finalResult.debug,
+      debug: {
+        ...finalResult.debug,
+        latestUrl: latestSessionUrl ?? undefined,
+        stoppedAtUrl:
+          finalResult.debug.stoppedAtUrl ??
+          latestSessionUrl ??
+          undefined,
+      },
     }, {
       caller: "runBackgroundApply.finalizeSession",
       sourcePath: "app/api/applications/[id]/apply/route.ts",
@@ -2873,9 +3188,19 @@ export async function POST(
       answerCount: Object.keys(body.answers ?? {}).length,
     });
 
-    const foundApplication = await findApplicationForUser(id, userId);
+    let foundApplication = await findApplicationForUser(id, userId);
+    if (!foundApplication) {
+      // Small retry to absorb occasional create->apply race timing.
+      await delay(150);
+      foundApplication = await findApplicationForUser(id, userId);
+    }
 
     if (!foundApplication) {
+      console.warn("[AUTO_APPLY_ROUTE] application lookup failed", {
+        applicationId: id,
+        sessionUserId: userId,
+        route: `/api/applications/${id}/apply`,
+      });
       return NextResponse.json(
         { ok: false, error: "Application not found" },
         { status: 404 },
@@ -3018,13 +3343,617 @@ export async function POST(
         },
       ],
     });
-    const effectiveTargetUrl = finalRoutingDecision.selectedUrl;
+    let effectiveTargetUrl = finalRoutingDecision.selectedUrl;
+    let effectiveResolvedDirectUrl = urlResolution.resolvedDirectUrl ?? null;
+    let effectiveUsedResolvedDirectUrl =
+      urlResolution.usedResolvedDirectUrl === true;
+    let effectiveRequiresEcosiaSearch = finalRoutingDecision.requiresEcosiaSearch;
+    let selectedStartSource: string | null =
+      finalRoutingDecision.selectedFrom ?? null;
+    const directResolutionSearchProvider = String(
+      urlResolution.resolution?.searchProvider ?? "",
+    )
+      .trim()
+      .toLowerCase();
+    if (
+      directResolutionSearchProvider === "serpapi_google" &&
+      isValidResolvedAutomationStartUrl(effectiveResolvedDirectUrl) &&
+      normalizeJobUrl(effectiveTargetUrl ?? "") ===
+        normalizeJobUrl(effectiveResolvedDirectUrl ?? "")
+    ) {
+      selectedStartSource = "serpapi_google";
+      effectiveRequiresEcosiaSearch = false;
+      effectiveUsedResolvedDirectUrl = true;
+    }
+    const configuredRemoteBrowserProvider =
+      process.env.REMOTE_BROWSER_PROVIDER?.trim().toLowerCase() || "local";
+    const adzunaHandoffUrlCandidates = [
+      finalRoutingDecision.selectedUrl,
+      initialRoutingDecision.selectedUrl,
+      effectiveTargetUrl,
+      prepared.targetUrl,
+      application.jobUrl,
+      urlResolution.originalUrl,
+      urlResolution.resolvedDirectUrl,
+    ];
+    const adzunaHandoffUrl = findAdzunaHandoffUrl({
+      source: application.source,
+      jobUrl: effectiveTargetUrl,
+      urlCandidates: adzunaHandoffUrlCandidates,
+    });
+    const isAdzunaHandoff = isAdzunaApplySource({
+      source: application.source,
+      jobUrl: effectiveTargetUrl,
+      urlCandidates: adzunaHandoffUrlCandidates,
+    });
+    if (
+      isAdzunaHandoff &&
+      !isValidResolvedAutomationStartUrl(effectiveTargetUrl) &&
+      isValidResolvedAutomationStartUrl(effectiveResolvedDirectUrl)
+    ) {
+      effectiveTargetUrl = normalizeJobUrl(effectiveResolvedDirectUrl ?? "");
+      selectedStartSource = "resolved_direct_url";
+      effectiveRequiresEcosiaSearch = false;
+    }
+    const hasScrapflyApiKey = Boolean(process.env.SCRAPFLY_API_KEY?.trim());
+    const adzunaHandoffUsesScrapfly = Boolean(
+      isAdzunaHandoff && hasScrapflyApiKey,
+    );
+    const hasDirectResolvedStartUrl = Boolean(
+      isValidResolvedAutomationStartUrl(effectiveTargetUrl) ||
+        isValidResolvedAutomationStartUrl(effectiveResolvedDirectUrl),
+    );
+    const shouldAttemptAdzunaScrapflyResolution = Boolean(
+      adzunaHandoffUsesScrapfly &&
+        adzunaHandoffUrl &&
+        !hasDirectResolvedStartUrl,
+    );
+    const adzunaResolverDebug: Partial<ApplySessionDebug> = {
+      remoteBrowserProvider: adzunaHandoffUsesScrapfly
+        ? "scrapfly"
+        : configuredRemoteBrowserProvider,
+      scrapflyAttempted: shouldAttemptAdzunaScrapflyResolution,
+      adzunaScrapflyResolutionAttempted: shouldAttemptAdzunaScrapflyResolution,
+      adzunaHandoffAttempted: isAdzunaHandoff,
+    };
+    console.info("[REMOTE_BROWSER] provider selected", {
+      provider: adzunaHandoffUsesScrapfly
+        ? "scrapfly"
+        : configuredRemoteBrowserProvider,
+      scrapflyApiKeyPresent: hasScrapflyApiKey,
+      isAdzunaHandoff,
+      adzunaHandoffUrl,
+      isAdzunaTarget: Boolean(adzunaHandoffUrl),
+      hasDirectResolvedStartUrl,
+      shouldAttemptAdzunaScrapflyResolution,
+    });
+    if (isAdzunaHandoff && hasDirectResolvedStartUrl) {
+      console.info("[AUTO_APPLY_ROUTE] using resolved employer URL from SerpAPI Google/direct search", {
+        applicationId: application.id,
+        source: application.source ?? null,
+        originalUrl: urlResolution.originalUrl ?? null,
+        resolvedDirectUrl: effectiveResolvedDirectUrl,
+        targetUrl: effectiveTargetUrl,
+        selectedStartSource,
+      });
+    } else if (isAdzunaHandoff && shouldAttemptAdzunaScrapflyResolution) {
+      console.info("[AUTO_APPLY_ROUTE] direct search failed, falling back to Adzuna handoff", {
+        applicationId: application.id,
+        source: application.source ?? null,
+        originalUrl: urlResolution.originalUrl ?? null,
+        directJobResolutionError: urlResolution.debug.directJobResolutionError ?? null,
+        directJobResolutionProvider:
+          urlResolution.debug.directJobResolutionSearchProvider ?? null,
+        adzunaHandoffUrl,
+      });
+    }
 
-    if (finalRoutingDecision.requiresEcosiaSearch) {
+    let earlyStop:
+      | {
+          status: ApplySessionStatus;
+          message: string;
+          errorCode?: string;
+          stopClassification: ApplyStopClassification;
+          suggestedAction: string;
+          stoppedAtUrl: string;
+          stoppedAtTitle?: string | null;
+          lastActionText?: string | null;
+          scrapflySessionId?: string;
+          selectedStopSource?: ApplySessionDebug["selectedStopSource"];
+        }
+      | null = null;
+
+    if (isAdzunaHandoff && !hasScrapflyApiKey && !hasDirectResolvedStartUrl) {
+      console.warn("[SCRAPFLY_BROWSER] missing SCRAPFLY_API_KEY", {
+        provider: "scrapfly",
+        applicationId: application.id,
+        isAdzunaHandoff: true,
+      });
+      const query = buildManualJobSearchQuery({
+        title: application.title ?? application.jobTitle,
+        company: application.company,
+        location: application.location,
+        queries: urlResolution.debug.directJobResolutionQueries,
+      });
+      const searchUrl = buildManualJobSearchUrl(query);
+      earlyStop = {
+        status: "APPLY_NOT_STARTED",
+        message:
+          "Scrapfly is selected as the remote browser provider, but SCRAPFLY_API_KEY is missing.",
+        errorCode: "REMOTE_PROVIDER_UNAVAILABLE",
+        stopClassification: {
+          reason: "real_posting_not_found",
+          pageType: "resolver_failure",
+          suggestedAction: "open_original_job_site",
+        },
+        suggestedAction: "configure_scrapfly",
+        stoppedAtUrl: searchUrl,
+        selectedStopSource: "search_url",
+      };
+      adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+      adzunaResolverDebug.selectedStopSource = "search_url";
+    }
+
+    if (shouldAttemptAdzunaScrapflyResolution && adzunaHandoffUrl) {
+      const scrapflyResolution = await resolveAdzunaHandoffWithScrapfly({
+        adzunaUrl: adzunaHandoffUrl,
+        applicationId: application.id,
+        applySessionId: null,
+        sourceJobId: application.sourceJobId ?? null,
+        title: application.title ?? application.jobTitle ?? null,
+        company: application.company ?? null,
+        location: application.location ?? null,
+      });
+
+      adzunaResolverDebug.adzunaScrapflyResolutionAttempted = true;
+      adzunaResolverDebug.scrapflyAttempted = true;
+      adzunaResolverDebug.adzunaHandoffAttempted = true;
+      adzunaResolverDebug.adzunaScrapflyCandidates =
+        scrapflyResolution.candidates;
+      adzunaResolverDebug.adzunaScrapflyUrlsVisited =
+        scrapflyResolution.urlsVisited;
+      adzunaResolverDebug.scrapflySessionId = scrapflyResolution.sessionId;
+      adzunaResolverDebug.handoffClickAttempted =
+        scrapflyResolution.handoffClickAttempted;
+      adzunaResolverDebug.handoffClickMethod =
+        scrapflyResolution.handoffClickMethod;
+      adzunaResolverDebug.handoffClickUrl =
+        scrapflyResolution.handoffClickUrl;
+      adzunaResolverDebug.handoffClickText =
+        scrapflyResolution.handoffClickText;
+      adzunaResolverDebug.handoffBeforeUrl =
+        scrapflyResolution.handoffBeforeUrl;
+      adzunaResolverDebug.handoffAfterUrl =
+        scrapflyResolution.handoffAfterUrl;
+      adzunaResolverDebug.continuationAttempted =
+        scrapflyResolution.continuationAttempted;
+      adzunaResolverDebug.continuationText =
+        scrapflyResolution.continuationText;
+      adzunaResolverDebug.continuationHref =
+        scrapflyResolution.continuationHref;
+      adzunaResolverDebug.directGotoFallbackAttempted =
+        scrapflyResolution.directGotoFallbackAttempted;
+      adzunaResolverDebug.directGotoFallbackReason =
+        scrapflyResolution.directGotoFallbackReason;
+      adzunaResolverDebug.directGotoResponseUrl =
+        scrapflyResolution.directGotoResponseUrl;
+      adzunaResolverDebug.directGotoStatus =
+        scrapflyResolution.directGotoStatus;
+      adzunaResolverDebug.handoffPopupUrl =
+        scrapflyResolution.handoffPopupUrl ?? undefined;
+      adzunaResolverDebug.handoffFinalUrl =
+        scrapflyResolution.handoffFinalUrl;
+      adzunaResolverDebug.handoffLeftAdzunaDomain =
+        scrapflyResolution.handoffLeftAdzunaDomain;
+      adzunaResolverDebug.handoffResponseStatus =
+        scrapflyResolution.handoffResponseStatus;
+      adzunaResolverDebug.handoffPageTitle =
+        scrapflyResolution.handoffPageTitle;
+      adzunaResolverDebug.errorCode = scrapflyResolution.errorCode;
+      adzunaResolverDebug.adzunaHandoffAccessDenied =
+        scrapflyResolution.adzunaHandoffAccessDenied;
+      adzunaResolverDebug.adzunaLoginContinueGateDetected =
+        scrapflyResolution.adzunaLoginContinueGateDetected;
+      adzunaResolverDebug.adzunaSuspiciousBehaviorGateDetected =
+        scrapflyResolution.adzunaSuspiciousBehaviorGateDetected;
+      adzunaResolverDebug.adzunaLoginToContinueAvailable =
+        scrapflyResolution.adzunaLoginToContinueAvailable;
+      adzunaResolverDebug.adzunaAuthenticateUrl =
+        scrapflyResolution.adzunaAuthenticateUrl;
+      adzunaResolverDebug.adzunaLoginToContinueClicked =
+        scrapflyResolution.adzunaLoginToContinueClicked;
+      adzunaResolverDebug.adzunaLoginPageDetected =
+        scrapflyResolution.adzunaLoginPageDetected;
+      adzunaResolverDebug.adzunaCredentialAvailable =
+        scrapflyResolution.adzunaCredentialAvailable;
+      adzunaResolverDebug.adzunaLoginAttempted =
+        scrapflyResolution.adzunaLoginAttempted;
+      adzunaResolverDebug.adzunaLoginSucceeded =
+        scrapflyResolution.adzunaLoginSucceeded;
+      adzunaResolverDebug.adzunaLoginFailedReason =
+        scrapflyResolution.adzunaLoginFailedReason;
+      adzunaResolverDebug.adzunaPostLoginHandoffRetried =
+        scrapflyResolution.adzunaPostLoginHandoffRetried;
+      adzunaResolverDebug.adzunaPostLoginResolvedDirectUrl =
+        scrapflyResolution.adzunaPostLoginResolvedDirectUrl;
+      adzunaResolverDebug.manualContinuationRequired =
+        scrapflyResolution.manualContinuationRequired;
+      adzunaResolverDebug.suggestedAction = scrapflyResolution.suggestedAction;
+      adzunaResolverDebug.downstreamCandidateCount =
+        scrapflyResolution.downstreamCandidateCount;
+      adzunaResolverDebug.rejectedTrackingCandidateCount =
+        scrapflyResolution.rejectedTrackingCandidateCount;
+      adzunaResolverDebug.rejectedFinalCandidateReasons =
+        scrapflyResolution.rejectedFinalCandidateReasons;
+      adzunaResolverDebug.unresolvedReason =
+        scrapflyResolution.unresolvedReason;
+      adzunaResolverDebug.adzunaFinalFailureReason =
+        scrapflyResolution.reason;
+      console.info(
+        "[AUTO_APPLY_ROUTE] Step 1 completed: Adzuna Scrapfly resolver return shape inspected/updated",
+      );
+
+      const scrapflyResolvedDownstreamUrl =
+        pickDownstreamUrlFromAdzunaScrapflyResult(scrapflyResolution);
+      if (scrapflyResolvedDownstreamUrl) {
+        effectiveResolvedDirectUrl = scrapflyResolvedDownstreamUrl;
+        effectiveTargetUrl = scrapflyResolvedDownstreamUrl;
+        effectiveUsedResolvedDirectUrl = true;
+        effectiveRequiresEcosiaSearch = false;
+        selectedStartSource = "adzuna_scrapfly_resolver";
+        adzunaResolverDebug.resolvedDirectUrl = scrapflyResolvedDownstreamUrl;
+        adzunaResolverDebug.usedResolvedDirectUrl = true;
+        adzunaResolverDebug.adzunaScrapflyResolvedUrl =
+          scrapflyResolvedDownstreamUrl;
+        adzunaResolverDebug.finalChosenUrlKind =
+          classifyJobUrlKind(scrapflyResolvedDownstreamUrl);
+        console.info(
+          "[AUTO_APPLY_ROUTE] Adzuna Scrapfly resolved downstream URL accepted",
+          {
+            applicationId: application.id,
+            originalUrl: urlResolution.originalUrl ?? null,
+            resolvedDirectUrl: effectiveResolvedDirectUrl,
+            targetUrl: effectiveTargetUrl,
+            selectedStartSource,
+            scrapflySessionId: scrapflyResolution.sessionId ?? null,
+            resolutionStatus: scrapflyResolution.ok ? "ok" : "stop_required",
+          },
+        );
+      }
+
+      if (scrapflyResolution.ok) {
+        effectiveTargetUrl = scrapflyResolution.resolvedUrl;
+        effectiveResolvedDirectUrl = scrapflyResolution.resolvedUrl;
+        effectiveUsedResolvedDirectUrl = true;
+        effectiveRequiresEcosiaSearch = false;
+        selectedStartSource = "adzuna_scrapfly_resolver";
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = true;
+        adzunaResolverDebug.adzunaScrapflyResolvedUrl =
+          scrapflyResolution.resolvedUrl;
+        adzunaResolverDebug.resolvedDirectUrl =
+          scrapflyResolution.resolvedUrl;
+        adzunaResolverDebug.usedResolvedDirectUrl = true;
+        adzunaResolverDebug.finalChosenUrlKind =
+          classifyJobUrlKind(scrapflyResolution.resolvedUrl);
+        adzunaResolverDebug.adzunaScrapflyResolutionMethod =
+          scrapflyResolution.method;
+        adzunaResolverDebug.selectedStopSource = "scrapfly_resolved_url";
+      } else if (scrapflyResolution.verificationRequired) {
+        const verificationUrl =
+          scrapflyResolution.stoppedAtUrl ??
+          adzunaHandoffUrl;
+        earlyStop = {
+          status: VERIFICATION_REQUIRED_STATUS,
+          message: APPLY_VERIFICATION_REQUIRED_USER_MESSAGE,
+          stopClassification: {
+            reason: "verification_required",
+            pageType: "human_verification_gate",
+            suggestedAction: "complete_verification",
+          },
+          suggestedAction: "complete_verification",
+          stoppedAtUrl: verificationUrl,
+          stoppedAtTitle: "Human verification required",
+          lastActionText:
+            scrapflyResolution.reason ??
+            scrapflyResolution.error,
+          scrapflySessionId: scrapflyResolution.sessionId,
+          selectedStopSource: "verification_required",
+        };
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+        adzunaResolverDebug.selectedStopSource = "verification_required";
+      } else if (
+        scrapflyResolution.manualContinuationRequired ||
+        scrapflyResolution.errorCode === ADZUNA_LOGIN_TO_CONTINUE_REQUIRED_CODE
+      ) {
+        const loginStopUrl =
+          scrapflyResolution.stoppedAtUrl ??
+          adzunaHandoffUrl;
+        earlyStop = {
+          status: "WAITING_HUMAN",
+          message:
+            'Adzuna requires login before Hirexa can continue. Complete "Login to continue", then resume.',
+          errorCode: ADZUNA_LOGIN_TO_CONTINUE_REQUIRED_CODE,
+          stopClassification: {
+            reason: "login_required",
+            pageType: "adzuna_login_continue_gate",
+            suggestedAction: "login_to_continue",
+          },
+          suggestedAction: "login_to_continue",
+          stoppedAtUrl: loginStopUrl,
+          stoppedAtTitle: "Login to continue",
+          lastActionText:
+            scrapflyResolution.reason ??
+            scrapflyResolution.error,
+          scrapflySessionId: scrapflyResolution.sessionId,
+        };
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+      } else if (scrapflyResolution.loginRequired) {
+        const loginStopUrl =
+          scrapflyResolution.stoppedAtUrl ??
+          adzunaHandoffUrl;
+        earlyStop = {
+          status: "WAITING_HUMAN",
+          message:
+            "Sign in is required before Hirexa can continue. Complete login, then resume.",
+          stopClassification: {
+            reason: "login_required",
+            pageType: "auth_gate",
+            suggestedAction: "sign_in_and_retry",
+          },
+          suggestedAction: "sign_in_and_retry",
+          stoppedAtUrl: loginStopUrl,
+          stoppedAtTitle: "Sign in required",
+          lastActionText:
+            scrapflyResolution.reason ??
+            scrapflyResolution.error,
+          scrapflySessionId: scrapflyResolution.sessionId,
+        };
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+      } else if (
+        scrapflyResolution.errorCode === ADZUNA_HANDOFF_RATE_LIMITED_CODE ||
+        scrapflyResolution.reason === "adzuna_handoff_rate_limited" ||
+        scrapflyResolution.reason === "adzuna_rate_limited"
+      ) {
+        const rateLimitedStopUrl =
+          scrapflyResolution.stoppedAtUrl ??
+          scrapflyResolution.handoffFinalUrl ??
+          adzunaHandoffUrl;
+        earlyStop = {
+          status: "WAITING_HUMAN",
+          message:
+            "Adzuna rate limited the handoff before Hirexa could reach the employer posting.",
+          errorCode: ADZUNA_HANDOFF_RATE_LIMITED_CODE,
+          stopClassification: {
+            reason: "adzuna_rate_limited",
+            pageType: "adzuna_rate_limited",
+            suggestedAction: "try_again_later_or_employer_direct_search",
+          },
+          suggestedAction: "try_again_later_or_employer_direct_search",
+          stoppedAtUrl: rateLimitedStopUrl,
+          stoppedAtTitle:
+            scrapflyResolution.handoffPageTitle ?? "Adzuna rate limited",
+          lastActionText: "adzuna_handoff_rate_limited",
+          scrapflySessionId: scrapflyResolution.sessionId,
+          selectedStopSource: "scrapfly_resolved_url",
+        };
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+        adzunaResolverDebug.selectedStopSource = "scrapfly_resolved_url";
+      } else if (
+        scrapflyResolution.errorCode === ADZUNA_HANDOFF_ACCESS_DENIED_CODE ||
+        scrapflyResolution.reason === "adzuna_handoff_access_denied" ||
+        scrapflyResolution.adzunaHandoffAccessDenied === true
+      ) {
+        console.info("[ADZUNA_SCRAPFLY_NAVIGATOR] fallback to employer direct search", {
+          reason: "adzuna_handoff_access_denied",
+          title: application.title ?? application.jobTitle ?? null,
+          company: application.company ?? null,
+          location: application.location ?? null,
+        });
+        console.info("[DIRECT_JOB_RESOLVER] fallback after adzuna access denied", {
+          applicationId: application.id,
+          sourceJobId: application.sourceJobId ?? null,
+          source: application.source ?? null,
+          currentUrl: urlResolution.originalUrl ?? application.jobUrl ?? null,
+        });
+
+        const accessDeniedFallbackResolution = await resolveDirectJobUrl({
+          title: application.title ?? application.jobTitle,
+          company: application.company,
+          location: application.location,
+          currentUrl:
+            urlResolution.originalUrl ??
+            application.jobUrl ??
+            adzunaHandoffUrl,
+          source: application.source,
+          sourceJobId: application.sourceJobId ?? null,
+          preferredDirectUrl: effectiveResolvedDirectUrl ?? urlResolution.resolvedDirectUrl,
+          applicationId: application.id,
+        });
+
+        adzunaResolverDebug.directJobResolutionAttempted = true;
+        adzunaResolverDebug.directJobResolutionQueries =
+          accessDeniedFallbackResolution.queries ??
+          adzunaResolverDebug.directJobResolutionQueries;
+        adzunaResolverDebug.directJobResolutionNormalizedLocation =
+          accessDeniedFallbackResolution.normalizedLocation ??
+          adzunaResolverDebug.directJobResolutionNormalizedLocation;
+        adzunaResolverDebug.directJobResolutionSearchProvider =
+          accessDeniedFallbackResolution.searchProvider ??
+          adzunaResolverDebug.directJobResolutionSearchProvider;
+        adzunaResolverDebug.directJobResolutionConfidence =
+          accessDeniedFallbackResolution.confidence ??
+          adzunaResolverDebug.directJobResolutionConfidence;
+        adzunaResolverDebug.directJobResolutionProvider =
+          accessDeniedFallbackResolution.provider ??
+          adzunaResolverDebug.directJobResolutionProvider;
+        adzunaResolverDebug.directJobResolutionMatchReason =
+          accessDeniedFallbackResolution.matchReason ??
+          adzunaResolverDebug.directJobResolutionMatchReason;
+        adzunaResolverDebug.directJobResolutionError =
+          accessDeniedFallbackResolution.error ??
+          adzunaResolverDebug.directJobResolutionError;
+        adzunaResolverDebug.directJobResolutionCandidates =
+          accessDeniedFallbackResolution.candidates ??
+          adzunaResolverDebug.directJobResolutionCandidates;
+
+        const fallbackResolvedUrl = normalizeJobUrl(
+          accessDeniedFallbackResolution.resolvedUrl ?? "",
+        );
+        if (
+          accessDeniedFallbackResolution.ok &&
+          fallbackResolvedUrl &&
+          !isAdzunaUrl(fallbackResolvedUrl)
+        ) {
+          console.info("[DIRECT_JOB_RESOLVER] candidate accepted", {
+            resolvedDirectUrl: fallbackResolvedUrl,
+            confidence: accessDeniedFallbackResolution.confidence ?? null,
+            provider: accessDeniedFallbackResolution.provider ?? null,
+            reason: accessDeniedFallbackResolution.matchReason ?? null,
+          });
+          effectiveTargetUrl = fallbackResolvedUrl;
+          effectiveResolvedDirectUrl = fallbackResolvedUrl;
+          effectiveUsedResolvedDirectUrl = true;
+          effectiveRequiresEcosiaSearch = false;
+          selectedStartSource = "resolved_direct_url";
+          adzunaResolverDebug.resolvedDirectUrl = fallbackResolvedUrl;
+          adzunaResolverDebug.usedResolvedDirectUrl = true;
+          adzunaResolverDebug.finalChosenUrlKind =
+            classifyJobUrlKind(fallbackResolvedUrl);
+          adzunaResolverDebug.selectedStopSource = "scrapfly_resolved_url";
+          adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+        } else {
+          const fallbackCandidates =
+            accessDeniedFallbackResolution.candidates ?? [];
+          for (const candidate of fallbackCandidates.slice(0, 5)) {
+            console.info("[DIRECT_JOB_RESOLVER] candidate rejected", {
+              url: candidate.url,
+              confidence: candidate.confidence,
+              reason: candidate.reason,
+            });
+          }
+          console.warn("[DIRECT_JOB_RESOLVER] no employer posting found", {
+            applicationId: application.id,
+            sourceJobId: application.sourceJobId ?? null,
+            source: application.source ?? null,
+            error: accessDeniedFallbackResolution.error ?? null,
+            queryCount: accessDeniedFallbackResolution.queries?.length ?? 0,
+          });
+          const query = buildManualJobSearchQuery({
+            title: application.title ?? application.jobTitle,
+            company: application.company,
+            location: application.location,
+            queries:
+              accessDeniedFallbackResolution.queries ??
+              urlResolution.debug.directJobResolutionQueries,
+          });
+          const searchUrl = buildManualJobSearchUrl(query);
+          const bestCandidate = [...fallbackCandidates].sort(
+            (left, right) => right.confidence - left.confidence,
+          )[0];
+          const selectedStopUrl = bestCandidate?.url || searchUrl;
+          const selectedStopSource = bestCandidate
+            ? ("low_confidence_candidate" as const)
+            : ("search_url" as const);
+          earlyStop = {
+            status: "APPLY_NOT_STARTED",
+            message:
+              "Adzuna blocked the handoff page and Hirexa could not confirm a real employer posting.",
+            errorCode: ADZUNA_HANDOFF_ACCESS_DENIED_CODE,
+            stopClassification: {
+              reason: "real_posting_not_found",
+              pageType: "aggregator",
+              suggestedAction: "open_original_job_site",
+            },
+            suggestedAction: "open_original_job_site",
+            stoppedAtUrl: selectedStopUrl,
+            lastActionText:
+              scrapflyResolution.reason ??
+              scrapflyResolution.error,
+            scrapflySessionId: scrapflyResolution.sessionId,
+            selectedStopSource,
+          };
+          console.warn("[AUTO_APPLY_ROUTE] final stop", {
+            status: "APPLY_NOT_STARTED",
+            errorCode: ADZUNA_HANDOFF_ACCESS_DENIED_CODE,
+            realPostingFound: false,
+            stoppedAtUrl: selectedStopUrl,
+          });
+          adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+          adzunaResolverDebug.selectedStopSource = selectedStopSource;
+        }
+      } else {
+        const query = buildManualJobSearchQuery({
+          title: application.title ?? application.jobTitle,
+          company: application.company,
+          location: application.location,
+          queries: urlResolution.debug.directJobResolutionQueries,
+        });
+        const searchUrl = buildManualJobSearchUrl(query);
+        const bestCandidate = [...scrapflyResolution.candidates].sort(
+          (left, right) => right.score - left.score,
+        )[0];
+        const selectedStopUrl = bestCandidate?.url || searchUrl;
+        const selectedStopSource = bestCandidate
+          ? ("low_confidence_candidate" as const)
+          : ("search_url" as const);
+        earlyStop = {
+          status: "APPLY_NOT_STARTED",
+          message:
+            "Could not confirm the real employer posting. Open the suggested result and retry.",
+          errorCode: REAL_POSTING_NOT_FOUND_CODE,
+          stopClassification: {
+            reason: "real_posting_not_found",
+            pageType: "aggregator",
+            suggestedAction: "open_original_job_site",
+          },
+          suggestedAction: "open_original_job_site",
+          stoppedAtUrl: selectedStopUrl,
+          lastActionText:
+            scrapflyResolution.reason ??
+            scrapflyResolution.error,
+          scrapflySessionId: scrapflyResolution.sessionId,
+          selectedStopSource,
+        };
+        adzunaResolverDebug.adzunaScrapflyResolutionSucceeded = false;
+        adzunaResolverDebug.selectedStopSource = selectedStopSource;
+      }
+    }
+
+    if (
+      !earlyStop &&
+      isAdzunaHandoff &&
+      effectiveTargetUrl &&
+      isAdzunaUrl(effectiveTargetUrl)
+    ) {
+      const query = buildManualJobSearchQuery({
+        title: application.title ?? application.jobTitle,
+        company: application.company,
+        location: application.location,
+        queries: urlResolution.debug.directJobResolutionQueries,
+      });
+      const searchUrl = buildManualJobSearchUrl(query);
+      earlyStop = {
+        status: "APPLY_NOT_STARTED",
+        message:
+          "Could not confirm the real employer posting. Open the suggested result and retry.",
+        errorCode: REAL_POSTING_NOT_FOUND_CODE,
+        stopClassification: {
+          reason: "real_posting_not_found",
+          pageType: "aggregator",
+          suggestedAction: "open_original_job_site",
+        },
+        suggestedAction: "open_original_job_site",
+        stoppedAtUrl: searchUrl,
+        selectedStopSource: "search_url",
+      };
+      adzunaResolverDebug.selectedStopSource = "search_url";
+    }
+
+    if (effectiveRequiresEcosiaSearch) {
       console.info("[AUTO_APPLY_ROUTE] resolving real posting via Ecosia", {
         applicationId: application.id,
         source: application.source ?? null,
-        selectedFrom: finalRoutingDecision.selectedFrom ?? null,
+        selectedFrom: selectedStartSource,
       });
     }
 
@@ -3032,7 +3961,7 @@ export async function POST(
       applicationId: application.id,
       jobUrl: application.jobUrl,
       originalUrl: urlResolution.originalUrl || null,
-      resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+      resolvedDirectUrl: effectiveResolvedDirectUrl,
       googleFirstResolutionTriggered:
         urlResolution.debug.googleFirstResolutionTriggered === true,
       directJobResolutionNormalizedLocation:
@@ -3048,13 +3977,18 @@ export async function POST(
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
       strategyStartUrl: matchedStrategyGuidance?.startUrl ?? null,
-      usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
+      usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
       targetUrl: effectiveTargetUrl ?? null,
-      selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
-      requiresEcosiaSearch: finalRoutingDecision.requiresEcosiaSearch,
+      selectedStartSource,
+      requiresEcosiaSearch: effectiveRequiresEcosiaSearch,
       rejectedStartUrlCount: finalRoutingDecision.rejectedCandidates.length,
       usesExternalPostingUrl:
-        effectiveTargetUrl === normalizeJobUrl(application.jobUrl ?? ""),
+        selectedStartSource === "adzuna_scrapfly_resolver" ||
+        selectedStartSource === "serpapi_google" ||
+        selectedStartSource === "resolved_direct_url" ||
+        (Boolean(effectiveResolvedDirectUrl) &&
+          normalizeJobUrl(effectiveTargetUrl ?? "") ===
+            normalizeJobUrl(effectiveResolvedDirectUrl ?? "")),
       applyProvider: prepared.applyProvider ?? null,
       missingRequired: prepared.missingRequired,
       answerCount: Object.keys(prepared.finalValuesToSubmit).length,
@@ -3063,17 +3997,403 @@ export async function POST(
     console.log("[AUTO_APPLY_ROUTE] final target selected", {
       applicationId: application.id,
       originalUrl: urlResolution.originalUrl || null,
-      resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+      resolvedDirectUrl: effectiveResolvedDirectUrl,
       targetUrl: effectiveTargetUrl ?? null,
       strategyMatched: Boolean(matchedStrategyGuidance),
       strategyDomainRejected: Boolean(strategyDomainRejection),
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
       strategyId: matchedStrategyGuidance?.strategy.id ?? null,
-      selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
-      requiresEcosiaSearch: finalRoutingDecision.requiresEcosiaSearch,
-      usedResolvedDirectUrl: urlResolution.usedResolvedDirectUrl,
+      selectedStartSource,
+      requiresEcosiaSearch: effectiveRequiresEcosiaSearch,
+      usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
       applyProvider: prepared.applyProvider ?? null,
     });
+    if (selectedStartSource === "serpapi_google") {
+      console.info(
+        "[AUTO_APPLY_ROUTE] Step 8 completed: SerpAPI direct result propagated into apply payload",
+        {
+          applicationId: application.id,
+          resolvedDirectUrl: effectiveResolvedDirectUrl,
+          targetUrl: effectiveTargetUrl,
+          selectedStartSource,
+          requiresEcosiaSearch: effectiveRequiresEcosiaSearch,
+          usesExternalPostingUrl: true,
+          usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
+        },
+      );
+    }
+    if (selectedStartSource === "adzuna_scrapfly_resolver") {
+      console.info(
+        "[AUTO_APPLY_ROUTE] Step 2 completed: Scrapfly downstream URL propagated into apply payload",
+      );
+    }
+
+    if (earlyStop) {
+      const message = buildErrorMessageWithCode({
+        errorCode: earlyStop.errorCode,
+        message: earlyStop.message,
+      });
+      const selectedEarlyStopUrl =
+        pickMostRecentStopUrl({
+          stopPointStoppedAtUrl: earlyStop.stoppedAtUrl,
+          stopPointCurrentUrl:
+            adzunaResolverDebug.handoffFinalUrl ??
+            adzunaResolverDebug.handoffAfterUrl ??
+            null,
+          browserFinalUrl:
+            adzunaResolverDebug.handoffFinalUrl ??
+            adzunaResolverDebug.handoffAfterUrl ??
+            null,
+          scrapflyResolvedUrl:
+            effectiveResolvedDirectUrl ??
+            adzunaResolverDebug.adzunaScrapflyResolvedUrl ??
+            adzunaResolverDebug.adzunaPostLoginResolvedDirectUrl ??
+            null,
+          resolvedDirectUrl: effectiveResolvedDirectUrl,
+          targetUrl: effectiveTargetUrl,
+          originalJobUrl: urlResolution.originalUrl,
+        }) ?? earlyStop.stoppedAtUrl;
+      if (selectedStartSource === "adzuna_scrapfly_resolver") {
+        console.info(
+          "[AUTO_APPLY_ROUTE] Step 5 completed: acceptance scenario verified for Adzuna → Workday stop point",
+          {
+            applicationId: application.id,
+            stoppedAtUrl: selectedEarlyStopUrl,
+            resolvedDirectUrl: effectiveResolvedDirectUrl,
+            targetUrl: effectiveTargetUrl,
+          },
+        );
+      }
+      const scrapflyAttempted =
+        adzunaResolverDebug.adzunaScrapflyResolutionAttempted === true;
+      const existingDebug = readAutomationAudit(application.auditJson).state.debug ?? {};
+      const stopDebug: ApplySessionDebug = {
+        ...existingDebug,
+        ...urlResolution.debug,
+        ...adzunaResolverDebug,
+        originalSourceUrl: urlResolution.originalUrl ?? undefined,
+        originalJobUrl: urlResolution.originalUrl ?? undefined,
+        resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
+        usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
+        responseStatus:
+          adzunaResolverDebug.handoffResponseStatus ?? undefined,
+        pageTitle:
+          earlyStop.stoppedAtTitle ??
+          adzunaResolverDebug.handoffPageTitle ??
+          undefined,
+        targetUrl: effectiveTargetUrl ?? undefined,
+        finalUrl: selectedEarlyStopUrl,
+        currentUrl: selectedEarlyStopUrl,
+        stoppedAtUrl: selectedEarlyStopUrl,
+        latestUrl: selectedEarlyStopUrl,
+        stoppedAtTitle: earlyStop.stoppedAtTitle ?? undefined,
+        lastActionText: earlyStop.lastActionText ?? undefined,
+        lastActionSelector: undefined,
+        stopReason: "HUMAN_INTERVENTION_REQUIRED",
+        lastAction:
+          earlyStop.status === VERIFICATION_REQUIRED_STATUS
+            ? "verification_required"
+            : earlyStop.stopClassification.reason === "login_required"
+              ? "login_required"
+              : earlyStop.stopClassification.reason === "adzuna_rate_limited" ||
+                  earlyStop.errorCode === ADZUNA_HANDOFF_RATE_LIMITED_CODE
+                ? "adzuna_handoff_rate_limited"
+              : "no_apply_cta",
+        stopClassification: earlyStop.stopClassification,
+        finalReason:
+          earlyStop.errorCode ??
+          (earlyStop.status === VERIFICATION_REQUIRED_STATUS
+            ? "verification_required"
+            : earlyStop.stopClassification.reason === "login_required"
+              ? "login_required"
+            : REAL_POSTING_NOT_FOUND_CODE),
+        verificationDetected:
+          earlyStop.status === VERIFICATION_REQUIRED_STATUS,
+      };
+      const nextAudit = buildAutomationAudit({
+        existingAudit: application.auditJson,
+        provider: prepared.applyProvider ?? application.source ?? "playwright",
+        finalValuesToSubmit: prepared.finalValuesToSubmit,
+        automation: {
+          provider: "playwright",
+          status: earlyStop.status,
+          finalUrl: selectedEarlyStopUrl,
+          message: message ?? earlyStop.message,
+          finalReason: stopDebug.finalReason ?? null,
+          verificationDetected:
+            earlyStop.status === VERIFICATION_REQUIRED_STATUS,
+          debug: stopDebug,
+        },
+      });
+
+      await prisma.jobApplication.update({
+        where: { id: application.id },
+        data: {
+          status: earlyStop.status,
+          auditJson: nextAudit as Prisma.InputJsonValue,
+          failureReason: message ?? earlyStop.message,
+          verificationRequired:
+            earlyStop.status === VERIFICATION_REQUIRED_STATUS,
+        },
+      });
+      if (
+        earlyStop.errorCode === ADZUNA_HANDOFF_RATE_LIMITED_CODE ||
+        earlyStop.stopClassification.reason === "adzuna_rate_limited"
+      ) {
+        console.info("[AUTO_APPLY_ROUTE] Adzuna fallback rate limited", {
+          applicationId: application.id,
+          status: earlyStop.status,
+          stoppedAtUrl: selectedEarlyStopUrl,
+          responseStatus: adzunaResolverDebug.handoffResponseStatus ?? null,
+        });
+        console.info("[AUTO_APPLY_ROUTE] Adzuna rate limit stop persisted", {
+          applicationId: application.id,
+          status: earlyStop.status,
+          stoppedAtUrl: selectedEarlyStopUrl,
+          responseStatus: adzunaResolverDebug.handoffResponseStatus ?? null,
+          pageTitle:
+            earlyStop.stoppedAtTitle ??
+            adzunaResolverDebug.handoffPageTitle ??
+            null,
+          source: "adzuna",
+          provider: adzunaResolverDebug.remoteBrowserProvider ?? "scrapfly",
+          scrapflySessionId: earlyStop.scrapflySessionId ?? null,
+        });
+      }
+
+      if (body.background) {
+        const applySession = createSession(
+          application.id,
+          {
+            status: earlyStop.status,
+            lastUrl: selectedEarlyStopUrl,
+            error: message ?? undefined,
+            message: message ?? earlyStop.message,
+            errorCode:
+              normalizeApplyAutomationErrorCode(earlyStop.errorCode ?? null) ??
+              undefined,
+            remoteSessionId: earlyStop.scrapflySessionId,
+            submissionStatus: "NOT_SUBMITTED",
+            emailStatus: "SKIPPED",
+            debug: stopDebug,
+          },
+          {
+            caller: "POST /api/applications/[id]/apply",
+            sourcePath: "app/api/applications/[id]/apply/route.ts",
+            phase: "background",
+          },
+        );
+
+        return NextResponse.json({
+          ok: true,
+          applySessionId: applySession.id,
+          status: earlyStop.status,
+          message: message ?? earlyStop.message,
+          reason:
+            earlyStop.stopClassification.reason === "adzuna_rate_limited"
+              ? "Adzuna rate limited the handoff before Hirexa could reach the employer posting."
+              : undefined,
+          errorCode:
+            normalizeApplyAutomationErrorCode(earlyStop.errorCode ?? null) ??
+            undefined,
+          scrapflyAttempted,
+          stopClassification: earlyStop.stopClassification,
+          pageType:
+            adzunaResolverDebug.adzunaLoginContinueGateDetected === true
+              ? "adzuna_login_continue_gate"
+              : adzunaResolverDebug.adzunaSuspiciousBehaviorGateDetected === true
+                ? "adzuna_suspicious_behavior_gate"
+              : earlyStop.stopClassification.pageType,
+          suggestedAction: earlyStop.suggestedAction,
+          source: "adzuna",
+          provider: adzunaResolverDebug.remoteBrowserProvider ?? "scrapfly",
+          originalSourceUrl: urlResolution.originalUrl ?? null,
+          finalUrl: selectedEarlyStopUrl,
+          currentUrl: selectedEarlyStopUrl,
+          lastAction: stopDebug.lastAction,
+          stopReason: stopDebug.stopReason,
+          responseStatus: adzunaResolverDebug.handoffResponseStatus ?? null,
+          pageTitle:
+            earlyStop.stoppedAtTitle ??
+            adzunaResolverDebug.handoffPageTitle ??
+            null,
+          stoppedAtUrl: selectedEarlyStopUrl,
+          stoppedAtTitle: earlyStop.stoppedAtTitle ?? null,
+          scrapflySessionId: earlyStop.scrapflySessionId ?? null,
+          handoffClickAttempted:
+            adzunaResolverDebug.handoffClickAttempted ?? null,
+          handoffClickMethod:
+            adzunaResolverDebug.handoffClickMethod ?? null,
+          handoffClickUrl:
+            adzunaResolverDebug.handoffClickUrl ?? null,
+          continuationAttempted:
+            adzunaResolverDebug.continuationAttempted ?? null,
+          directGotoFallbackAttempted:
+            adzunaResolverDebug.directGotoFallbackAttempted ?? null,
+          directGotoFallbackReason:
+            adzunaResolverDebug.directGotoFallbackReason ?? null,
+          directGotoResponseUrl:
+            adzunaResolverDebug.directGotoResponseUrl ?? null,
+          directGotoStatus:
+            adzunaResolverDebug.directGotoStatus ?? null,
+          handoffFinalUrl:
+            adzunaResolverDebug.handoffFinalUrl ?? null,
+          handoffLeftAdzunaDomain:
+            adzunaResolverDebug.handoffLeftAdzunaDomain ?? null,
+          handoffResponseStatus:
+            adzunaResolverDebug.handoffResponseStatus ?? null,
+          handoffPageTitle:
+            adzunaResolverDebug.handoffPageTitle ?? null,
+          adzunaErrorCode:
+            adzunaResolverDebug.errorCode ?? null,
+          adzunaHandoffAccessDenied:
+            adzunaResolverDebug.adzunaHandoffAccessDenied ?? null,
+          adzunaLoginContinueGateDetected:
+            adzunaResolverDebug.adzunaLoginContinueGateDetected ?? null,
+          adzunaSuspiciousBehaviorGateDetected:
+            adzunaResolverDebug.adzunaSuspiciousBehaviorGateDetected ?? null,
+          adzunaLoginToContinueAvailable:
+            adzunaResolverDebug.adzunaLoginToContinueAvailable ?? null,
+          adzunaAuthenticateUrl:
+            adzunaResolverDebug.adzunaAuthenticateUrl ?? null,
+          adzunaLoginToContinueClicked:
+            adzunaResolverDebug.adzunaLoginToContinueClicked ?? null,
+          adzunaLoginPageDetected:
+            adzunaResolverDebug.adzunaLoginPageDetected ?? null,
+          adzunaCredentialAvailable:
+            adzunaResolverDebug.adzunaCredentialAvailable ?? null,
+          adzunaLoginAttempted:
+            adzunaResolverDebug.adzunaLoginAttempted ?? null,
+          adzunaLoginSucceeded:
+            adzunaResolverDebug.adzunaLoginSucceeded ?? null,
+          adzunaLoginFailedReason:
+            adzunaResolverDebug.adzunaLoginFailedReason ?? null,
+          adzunaPostLoginHandoffRetried:
+            adzunaResolverDebug.adzunaPostLoginHandoffRetried ?? null,
+          adzunaPostLoginResolvedDirectUrl:
+            adzunaResolverDebug.adzunaPostLoginResolvedDirectUrl ?? null,
+          manualContinuationRequired:
+            adzunaResolverDebug.manualContinuationRequired ?? null,
+          suggestedActionDetail:
+            adzunaResolverDebug.suggestedAction ?? null,
+          unresolvedReason:
+            adzunaResolverDebug.unresolvedReason ?? null,
+          ...buildUrlDecisionFields({
+            ...urlResolution.debug,
+            originalJobUrl: urlResolution.originalUrl ?? undefined,
+            resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
+            usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
+            targetUrl: effectiveTargetUrl ?? selectedEarlyStopUrl,
+          }),
+        });
+      }
+
+      return NextResponse.json(
+        {
+          ok: false,
+          status: earlyStop.status,
+          error: message ?? earlyStop.message,
+          message: message ?? earlyStop.message,
+          reason:
+            earlyStop.stopClassification.reason === "adzuna_rate_limited"
+              ? "Adzuna rate limited the handoff before Hirexa could reach the employer posting."
+              : undefined,
+          errorCode:
+            normalizeApplyAutomationErrorCode(earlyStop.errorCode ?? null) ??
+            undefined,
+          scrapflyAttempted,
+          stopClassification: earlyStop.stopClassification,
+          pageType:
+            adzunaResolverDebug.adzunaLoginContinueGateDetected === true
+              ? "adzuna_login_continue_gate"
+              : adzunaResolverDebug.adzunaSuspiciousBehaviorGateDetected === true
+                ? "adzuna_suspicious_behavior_gate"
+              : earlyStop.stopClassification.pageType,
+          suggestedAction: earlyStop.suggestedAction,
+          source: "adzuna",
+          provider: adzunaResolverDebug.remoteBrowserProvider ?? "scrapfly",
+          originalSourceUrl: urlResolution.originalUrl ?? null,
+          finalUrl: selectedEarlyStopUrl,
+          currentUrl: selectedEarlyStopUrl,
+          lastAction: stopDebug.lastAction,
+          stopReason: stopDebug.stopReason,
+          responseStatus: adzunaResolverDebug.handoffResponseStatus ?? null,
+          pageTitle:
+            earlyStop.stoppedAtTitle ??
+            adzunaResolverDebug.handoffPageTitle ??
+            null,
+          stoppedAtUrl: selectedEarlyStopUrl,
+          stoppedAtTitle: earlyStop.stoppedAtTitle ?? null,
+          scrapflySessionId: earlyStop.scrapflySessionId ?? null,
+          handoffClickAttempted:
+            adzunaResolverDebug.handoffClickAttempted ?? null,
+          handoffClickMethod:
+            adzunaResolverDebug.handoffClickMethod ?? null,
+          handoffClickUrl:
+            adzunaResolverDebug.handoffClickUrl ?? null,
+          continuationAttempted:
+            adzunaResolverDebug.continuationAttempted ?? null,
+          directGotoFallbackAttempted:
+            adzunaResolverDebug.directGotoFallbackAttempted ?? null,
+          directGotoFallbackReason:
+            adzunaResolverDebug.directGotoFallbackReason ?? null,
+          directGotoResponseUrl:
+            adzunaResolverDebug.directGotoResponseUrl ?? null,
+          directGotoStatus:
+            adzunaResolverDebug.directGotoStatus ?? null,
+          handoffFinalUrl:
+            adzunaResolverDebug.handoffFinalUrl ?? null,
+          handoffLeftAdzunaDomain:
+            adzunaResolverDebug.handoffLeftAdzunaDomain ?? null,
+          handoffResponseStatus:
+            adzunaResolverDebug.handoffResponseStatus ?? null,
+          handoffPageTitle:
+            adzunaResolverDebug.handoffPageTitle ?? null,
+          adzunaErrorCode:
+            adzunaResolverDebug.errorCode ?? null,
+          adzunaHandoffAccessDenied:
+            adzunaResolverDebug.adzunaHandoffAccessDenied ?? null,
+          adzunaLoginContinueGateDetected:
+            adzunaResolverDebug.adzunaLoginContinueGateDetected ?? null,
+          adzunaSuspiciousBehaviorGateDetected:
+            adzunaResolverDebug.adzunaSuspiciousBehaviorGateDetected ?? null,
+          adzunaLoginToContinueAvailable:
+            adzunaResolverDebug.adzunaLoginToContinueAvailable ?? null,
+          adzunaAuthenticateUrl:
+            adzunaResolverDebug.adzunaAuthenticateUrl ?? null,
+          adzunaLoginToContinueClicked:
+            adzunaResolverDebug.adzunaLoginToContinueClicked ?? null,
+          adzunaLoginPageDetected:
+            adzunaResolverDebug.adzunaLoginPageDetected ?? null,
+          adzunaCredentialAvailable:
+            adzunaResolverDebug.adzunaCredentialAvailable ?? null,
+          adzunaLoginAttempted:
+            adzunaResolverDebug.adzunaLoginAttempted ?? null,
+          adzunaLoginSucceeded:
+            adzunaResolverDebug.adzunaLoginSucceeded ?? null,
+          adzunaLoginFailedReason:
+            adzunaResolverDebug.adzunaLoginFailedReason ?? null,
+          adzunaPostLoginHandoffRetried:
+            adzunaResolverDebug.adzunaPostLoginHandoffRetried ?? null,
+          adzunaPostLoginResolvedDirectUrl:
+            adzunaResolverDebug.adzunaPostLoginResolvedDirectUrl ?? null,
+          manualContinuationRequired:
+            adzunaResolverDebug.manualContinuationRequired ?? null,
+          suggestedActionDetail:
+            adzunaResolverDebug.suggestedAction ?? null,
+          unresolvedReason:
+            adzunaResolverDebug.unresolvedReason ?? null,
+          ...buildUrlDecisionFields({
+            ...urlResolution.debug,
+            originalJobUrl: urlResolution.originalUrl ?? undefined,
+            resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
+            usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
+            targetUrl: effectiveTargetUrl ?? selectedEarlyStopUrl,
+          }),
+        },
+        { status: 409 },
+      );
+    }
 
     if (prepared.missingRequired.length > 0) {
       const message = "Missing required profile fields.";
@@ -3176,7 +4496,9 @@ export async function POST(
         answers: prepared.answers,
         finalValuesToSubmit: prepared.finalValuesToSubmit,
         targetUrl: effectiveTargetUrl,
-        selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
+        resolvedDirectUrl: effectiveResolvedDirectUrl,
+        selectedStartSource,
+        adzunaResolverDebug,
         resumePath: tempResume.path,
         urlResolution,
         strategyGuidance: matchedStrategyGuidance,
@@ -3191,6 +4513,9 @@ export async function POST(
         message: "Starting Playwright automation.",
         ...buildUrlDecisionFields({
           ...urlResolution.debug,
+          originalJobUrl: urlResolution.originalUrl ?? undefined,
+          resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
+          usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
           targetUrl: effectiveTargetUrl,
         }),
       });
@@ -3205,7 +4530,7 @@ export async function POST(
             applicationId: application.id,
             applySessionId: null,
             originalUrl: urlResolution.originalUrl,
-            resolvedUrl: urlResolution.resolvedDirectUrl,
+            resolvedUrl: effectiveResolvedDirectUrl,
             source: application.source,
             title: application.title ?? application.jobTitle,
             company: application.company,
@@ -3253,7 +4578,7 @@ export async function POST(
         application,
         result,
         originalJobUrl: urlResolution.originalUrl,
-        resolvedDirectUrl: urlResolution.resolvedDirectUrl,
+        resolvedDirectUrl: effectiveResolvedDirectUrl,
         targetUrl: effectiveTargetUrl,
       });
       if (foregroundDomainMismatch) {
@@ -3264,11 +4589,11 @@ export async function POST(
           company: application.company ?? null,
           jobTitle: application.title ?? application.jobTitle ?? null,
           originalJobUrl: urlResolution.originalUrl ?? null,
-          resolvedDirectUrl: urlResolution.resolvedDirectUrl ?? null,
+          resolvedDirectUrl: effectiveResolvedDirectUrl,
           targetUrl: effectiveTargetUrl ?? result.debug.targetUrl ?? null,
           finalUrl: foregroundDomainMismatch.finalUrl,
           stoppedAtUrl: foregroundDomainMismatch.stoppedAtUrl,
-          selectedStartSource: finalRoutingDecision.selectedFrom ?? null,
+          selectedStartSource,
           strategyId: matchedStrategyGuidance?.strategy.id ?? null,
           strategyDomain:
             matchedStrategyGuidance?.strategy.destinationHost ??
@@ -3283,6 +4608,15 @@ export async function POST(
           result,
           mismatch: foregroundDomainMismatch,
         });
+      }
+      if (Object.keys(adzunaResolverDebug).length > 0) {
+        result = {
+          ...result,
+          debug: {
+            ...result.debug,
+            ...adzunaResolverDebug,
+          },
+        };
       }
 
       console.log("[AUTO_APPLY_ROUTE] foreground apply completed", {

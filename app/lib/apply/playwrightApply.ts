@@ -20,6 +20,7 @@ import {
   classifyAdzunaHandoffUrl,
   extractAdzunaHandoffSignals,
   isAdzunaLandAdUrl,
+  isAdzunaUnresolvedHandoffUrl,
   isAdzunaUrl,
   isLikelyDownstreamApplicationUrl,
 } from "@/app/lib/apply/adzunaHandoff";
@@ -11303,7 +11304,12 @@ export async function applyWithPlaywright(args: {
       parseHostname(targetUrl) || parseHostname(entryUrl) || null;
 
     if (shouldUseRemoteBrowser()) {
-      remoteSession = await createRemoteSession();
+      remoteSession = await createRemoteSession({
+        applicationId,
+        applySessionId,
+        purpose: "apply",
+        keepAlive: false,
+      });
       const useScrapflyRemote = remoteSession.provider === "scrapfly";
       const useCdp = useScrapflyRemote || shouldUseCdp(remoteSession.connectUrl);
       playwrightLaunchStrategy = "remote";
@@ -11668,6 +11674,12 @@ export async function applyWithPlaywright(args: {
       openUrl: targetUrl,
       remoteSessionId: remoteSession?.sessionId,
     });
+
+    if (isAdzunaUrl(targetUrl) || isAdzunaUnresolvedHandoffUrl(targetUrl)) {
+      throw new Error(
+        "Refusing to start apply automation on unresolved Adzuna URL.",
+      );
+    }
 
     console.log("[AUTO_APPLY_PLAYWRIGHT] navigating", {
       entryUrl,

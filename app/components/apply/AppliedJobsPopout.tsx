@@ -38,9 +38,13 @@ type ApplySessionPollResponse = {
     errorCode?: string | null;
     debug?: {
       finalUrl?: string | null;
+      latestUrl?: string | null;
       stoppedAtUrl?: string | null;
       stoppedAtTitle?: string | null;
       currentUrl?: string | null;
+      originalJobUrl?: string | null;
+      resolvedDirectUrl?: string | null;
+      targetUrl?: string | null;
       lastAction?: string | null;
       lastActionText?: string | null;
       lastActionSelector?: string | null;
@@ -93,6 +97,29 @@ function isStoppedAutoApplyStatus(status: string | null | undefined) {
     status === "APPLY_NOT_STARTED" ||
     status === "WAITING_HUMAN" ||
     status === "FAILED"
+  );
+}
+
+function pickLatestAutoApplyStopUrl(item: {
+  stoppedAtUrl?: string | null;
+  latestUrl?: string | null;
+  currentUrl?: string | null;
+  lastUrl?: string | null;
+  targetUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  originalJobUrl?: string | null;
+  jobUrl?: string | null;
+}) {
+  return (
+    item.stoppedAtUrl ??
+    item.latestUrl ??
+    item.currentUrl ??
+    item.lastUrl ??
+    item.targetUrl ??
+    item.resolvedDirectUrl ??
+    item.originalJobUrl ??
+    item.jobUrl ??
+    null
   );
 }
 
@@ -281,15 +308,45 @@ export default function AppliedJobsPopout({
                 normalizeApplyAutomationErrorCode(payload.session.errorCode) ??
                 null,
               lastUrl:
+                payload.session.debug?.latestUrl ??
                 payload.session.debug?.finalUrl ??
+                payload.session.debug?.currentUrl ??
                 payload.session.lastUrl ??
+                nextItems[item.applicationId]?.lastUrl ??
                 item.lastUrl ??
                 null,
-              stoppedAtUrl:
+              latestUrl:
+                payload.session.debug?.latestUrl ??
                 payload.session.debug?.stoppedAtUrl ??
-                nextItems[item.applicationId]?.stoppedAtUrl ??
-                item.stoppedAtUrl ??
+                payload.session.debug?.currentUrl ??
+                payload.session.debug?.finalUrl ??
+                payload.session.lastUrl ??
+                nextItems[item.applicationId]?.latestUrl ??
+                item.latestUrl ??
                 null,
+              stoppedAtUrl: pickLatestAutoApplyStopUrl({
+                stoppedAtUrl: payload.session.debug?.stoppedAtUrl,
+                latestUrl: payload.session.debug?.latestUrl,
+                currentUrl: payload.session.debug?.currentUrl,
+                lastUrl:
+                  payload.session.debug?.finalUrl ?? payload.session.lastUrl,
+                targetUrl:
+                  payload.session.debug?.targetUrl ??
+                  nextItems[item.applicationId]?.targetUrl ??
+                  item.targetUrl,
+                resolvedDirectUrl:
+                  payload.session.debug?.resolvedDirectUrl ??
+                  nextItems[item.applicationId]?.resolvedDirectUrl ??
+                  item.resolvedDirectUrl,
+                originalJobUrl:
+                  payload.session.debug?.originalJobUrl ??
+                  nextItems[item.applicationId]?.originalJobUrl ??
+                  item.originalJobUrl,
+                jobUrl:
+                  nextItems[item.applicationId]?.jobUrl ??
+                  item.jobUrl ??
+                  null,
+              }),
               stoppedAtTitle:
                 payload.session.debug?.stoppedAtTitle ??
                 nextItems[item.applicationId]?.stoppedAtTitle ??
@@ -324,6 +381,21 @@ export default function AppliedJobsPopout({
                 payload.session.debug?.stopClassification ??
                 nextItems[item.applicationId]?.stopClassification ??
                 item.stopClassification ??
+                null,
+              originalJobUrl:
+                payload.session.debug?.originalJobUrl ??
+                nextItems[item.applicationId]?.originalJobUrl ??
+                item.originalJobUrl ??
+                null,
+              resolvedDirectUrl:
+                payload.session.debug?.resolvedDirectUrl ??
+                nextItems[item.applicationId]?.resolvedDirectUrl ??
+                item.resolvedDirectUrl ??
+                null,
+              targetUrl:
+                payload.session.debug?.targetUrl ??
+                nextItems[item.applicationId]?.targetUrl ??
+                item.targetUrl ??
                 null,
               updatedAt: now,
             } satisfies AutoApplyPopupItem;
@@ -375,8 +447,7 @@ export default function AppliedJobsPopout({
               const submitted = isApplySessionSuccessStatus(item.status);
               const statusLabel = formatAutoApplyStatusLabel(item.status);
               const stoppedStatus = isStoppedAutoApplyStatus(item.status);
-              const stoppedUrl =
-                item.lastUrl ?? item.currentUrl ?? item.jobUrl ?? null;
+              const stoppedUrl = pickLatestAutoApplyStopUrl(item);
               const canRenderStoppedPageUi =
                 stoppedStatus &&
                 Boolean(

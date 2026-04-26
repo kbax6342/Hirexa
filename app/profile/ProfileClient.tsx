@@ -16,6 +16,7 @@ import { ALL_BENEFIT_OPTIONS } from "@/app/lib/benefits/catalog";
 import {
   getLocationSuggestions,
   normalizeLocationLabel,
+  normalizeStateInput,
   type LocationSuggestion,
 } from "@/app/lib/locationOptions";
 import { calculateProfileStrength } from "@/app/lib/profile/profileStrength";
@@ -229,6 +230,54 @@ function createPersonalDetailsForm(
   };
 }
 
+function buildCityStateInputLabel(city?: string | null, state?: string | null) {
+  const normalizedCity = String(city ?? "").trim();
+  const normalizedState = String(state ?? "").trim();
+  if (normalizedCity && normalizedState) {
+    return `${normalizedCity}, ${normalizedState}`;
+  }
+  return normalizedCity || normalizedState;
+}
+
+function parseSelectedLocationLabel(rawLabel: string) {
+  const normalizedLabel = normalizeLocationLabel(rawLabel);
+  if (!normalizedLabel) {
+    return {
+      city: "",
+      state: "",
+      normalizedLabel: "",
+    };
+  }
+
+  const commaIndex = normalizedLabel.indexOf(",");
+  if (commaIndex >= 0) {
+    const city = normalizedLabel.slice(0, commaIndex).trim();
+    const stateInput = normalizedLabel.slice(commaIndex + 1).trim();
+    const matchedState = normalizeStateInput(stateInput);
+    const state = matchedState?.code ?? stateInput;
+    return {
+      city,
+      state,
+      normalizedLabel: city && state ? `${city}, ${state}` : normalizedLabel,
+    };
+  }
+
+  const matchedState = normalizeStateInput(normalizedLabel);
+  if (matchedState) {
+    return {
+      city: "",
+      state: matchedState.code,
+      normalizedLabel: matchedState.name,
+    };
+  }
+
+  return {
+    city: normalizedLabel,
+    state: "",
+    normalizedLabel,
+  };
+}
+
 // ✅ Change your accent text color to sky-500
 const NON_DB_TEXT_CLASS = "text-sky-500";
 
@@ -312,6 +361,7 @@ export default function ProfileClient({
     postalCode: "",
     professionalLinks: [],
   });
+  const [personalLocationInput, setPersonalLocationInput] = useState("");
 
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
@@ -690,7 +740,9 @@ export default function ProfileClient({
   useEffect(() => {
     if (editingPersonalSection) return;
 
-    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+    const nextForm = createPersonalDetailsForm(profile);
+    setPersonalDetailsForm(nextForm);
+    setPersonalLocationInput(buildCityStateInputLabel(nextForm.city, nextForm.state));
   }, [editingPersonalSection, profile]);
 
   const displayPersonalDetails = useMemo(
@@ -1344,7 +1396,9 @@ export default function ProfileClient({
   }
 
   function startEditPersonal() {
-    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+    const nextForm = createPersonalDetailsForm(profile);
+    setPersonalDetailsForm(nextForm);
+    setPersonalLocationInput(buildCityStateInputLabel(nextForm.city, nextForm.state));
     setEditingPersonalSection("personal-info");
   }
 
@@ -1413,7 +1467,75 @@ function ToggleField({
   function cancelEditPersonal() {
     setEditingPersonalSection(null);
     setError(null);
-    setPersonalDetailsForm(createPersonalDetailsForm(profile));
+    const nextForm = createPersonalDetailsForm(profile);
+    setPersonalDetailsForm(nextForm);
+    setPersonalLocationInput(buildCityStateInputLabel(nextForm.city, nextForm.state));
+  }
+
+  function maybeSyncWorkplaceLocationFromPersonalSelection(
+    nextLocationLabel: string,
+    previousCity: string,
+    previousState: string
+  ) {
+    const normalizedNext = normalizeLocationLabel(nextLocationLabel);
+    if (!normalizedNext) return;
+
+    setPreferencesForm((prev) => {
+      const currentPrimary = normalizeLocationLabel(prev.workplaceLocations[0] ?? "");
+      const previousPersonal = normalizeLocationLabel(
+        buildCityStateInputLabel(previousCity, previousState)
+      );
+      const shouldUpdate =
+        prev.workplaceLocations.length === 0 ||
+        !currentPrimary ||
+        (Boolean(previousPersonal) &&
+          currentPrimary.toLowerCase() === previousPersonal.toLowerCase());
+
+      if (!shouldUpdate) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        workplaceLocations: prev.workplaceLocations.length
+          ? [normalizedNext, ...prev.workplaceLocations.slice(1)]
+          : [normalizedNext],
+      };
+    });
+  }
+
+  function applyPersonalLocationInput(rawLabel: string) {
+    const trimmed = rawLabel.trim();
+    if (!trimmed) {
+      setPersonalLocationInput("");
+      setPersonalDetailsForm((prev) => ({ ...prev, city: "", state: "" }));
+      return;
+    }
+
+    const previousCity = personalDetailsForm.city;
+    const previousState = personalDetailsForm.state;
+    const parsed = parseSelectedLocationLabel(trimmed);
+    const nextInputValue = parsed.normalizedLabel || trimmed;
+
+    setPersonalLocationInput(nextInputValue);
+    setPersonalDetailsForm((prev) => ({
+      ...prev,
+      city: parsed.city,
+      state: parsed.state,
+    }));
+    maybeSyncWorkplaceLocationFromPersonalSelection(
+      nextInputValue,
+      previousCity,
+      previousState
+    );
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[profile location autocomplete] selected", {
+        label: nextInputValue,
+        city: parsed.city,
+        state: parsed.state,
+      });
+    }
   }
 
   function renderProfileSectionContent(sectionId: ProfileSectionId) {
@@ -1569,19 +1691,31 @@ function ToggleField({
                       setPersonalDetailsForm((prev) => ({ ...prev, address: value }))
                     }
                   />
-                  <TextField
-                    label="City"
-                    value={personalDetailsForm.city}
-                    onChange={(value) =>
-                      setPersonalDetailsForm((prev) => ({ ...prev, city: value }))
-                    }
-                  />
-                  <TextField
-                    label="State"
-                    value={personalDetailsForm.state}
-                    onChange={(value) =>
-                      setPersonalDetailsForm((prev) => ({ ...prev, state: value }))
-                    }
+                  <LocationAutocompleteField
+                    label="City or state"
+                    value={personalLocationInput}
+                    placeholder="Search city or state..."
+                    minSearchChars={2}
+                    loadingText="Searching..."
+                    emptyText="No results."
+                    onChange={(value) => {
+                      setPersonalLocationInput(value);
+                      if (!value.trim()) {
+                        setPersonalDetailsForm((prev) => ({
+                          ...prev,
+                          city: "",
+                          state: "",
+                        }));
+                      }
+                    }}
+                    onSuggestionSelect={(suggestion) => {
+                      applyPersonalLocationInput(suggestion.label);
+                    }}
+                    onInputBlur={(value) => {
+                      if (value.trim()) {
+                        applyPersonalLocationInput(value);
+                      }
+                    }}
                   />
                   <TextField
                     label="Postal code"
@@ -2597,24 +2731,56 @@ function LocationAutocompleteField({
   label,
   value,
   onChange,
+  placeholder = "Detroit, MI or Michigan",
+  minSearchChars = 1,
+  loadingText = "Searching...",
+  emptyText = "No results.",
+  onSuggestionSelect,
+  onInputBlur,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
+  minSearchChars?: number;
+  loadingText?: string;
+  emptyText?: string;
+  onSuggestionSelect?: (suggestion: LocationSuggestion) => void;
+  onInputBlur?: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const suggestions = useMemo(
-    () =>
-      value.trim()
-        ? getLocationSuggestions(value).filter(
-            (suggestion) => suggestion.label.toLowerCase() !== value.trim().toLowerCase()
-          )
-        : [],
-    [value]
-  );
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
+  const normalizedValue = value.trim();
+
+  useEffect(() => {
+    if (!open || normalizedValue.length < minSearchChars) {
+      setSuggestions([]);
+      setLoadingSearch(false);
+      return;
+    }
+
+    setLoadingSearch(true);
+    const timeoutId = window.setTimeout(() => {
+      const nextSuggestions = getLocationSuggestions(normalizedValue).filter(
+        (suggestion) =>
+          suggestion.label.toLowerCase() !== normalizedValue.toLowerCase()
+      );
+      setSuggestions(nextSuggestions);
+      setLoadingSearch(false);
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [minSearchChars, normalizedValue, open]);
 
   const handleSelect = (suggestion: LocationSuggestion) => {
-    onChange(suggestion.label);
+    if (onSuggestionSelect) {
+      onSuggestionSelect(suggestion);
+    } else {
+      onChange(suggestion.label);
+    }
     setOpen(false);
   };
 
@@ -2625,35 +2791,57 @@ function LocationAutocompleteField({
         value={value}
         onFocus={() => setOpen(true)}
         onBlur={() => {
+          onInputBlur?.(value);
           window.setTimeout(() => setOpen(false), 120);
         }}
         onChange={(event) => {
           onChange(event.target.value);
           setOpen(true);
         }}
-        placeholder="Detroit, MI or Michigan"
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter" &&
+            open &&
+            !loadingSearch &&
+            suggestions.length > 0
+          ) {
+            event.preventDefault();
+            handleSelect(suggestions[0]);
+          }
+        }}
+        placeholder={placeholder}
         autoComplete="off"
         className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       />
 
-      {open && suggestions.length > 0 ? (
-        <div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-lg">
-          {suggestions.map((suggestion) => (
-            <button
-              key={suggestion.label}
-              type="button"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                handleSelect(suggestion);
-              }}
-              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-            >
-              <span>{suggestion.label}</span>
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                {suggestion.kind}
-              </span>
-            </button>
-          ))}
+      {open && normalizedValue.length >= minSearchChars ? (
+        <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-lg">
+          {loadingSearch ? (
+            <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
+              {loadingText}
+            </div>
+          ) : suggestions.length > 0 ? (
+            suggestions.map((suggestion) => (
+              <button
+                key={`${suggestion.kind}:${suggestion.label}`}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  handleSelect(suggestion);
+                }}
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+              >
+                <span>{suggestion.label}</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  {suggestion.kind}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="rounded-xl px-3 py-2 text-sm text-slate-500">
+              {emptyText}
+            </div>
+          )}
         </div>
       ) : null}
     </label>

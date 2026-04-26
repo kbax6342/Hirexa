@@ -538,6 +538,7 @@ export default function SavedStrategyPanel({
         return null;
       case "open_original_job_site":
       case "sign_in_and_retry":
+      case "login_to_continue":
       case "complete_verification":
       case "review_and_retry":
       default:

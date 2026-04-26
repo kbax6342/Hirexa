@@ -6,6 +6,11 @@ import {
 import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 import { detectVerificationGate } from "@/app/lib/apply/verification";
 import {
+  isAdzunaUrl,
+  isAggregatorHandoffUrl,
+  normalizeJobUrl,
+} from "@/app/lib/jobSources";
+import {
   inferApplyAutomationErrorCode,
   prefixErrorCodeInMessage,
 } from "@/app/lib/apply/errorCodes";
@@ -39,6 +44,41 @@ function detectVerificationSignal(value: string | null | undefined) {
     pageText: value,
   });
   return detection.detected ? detection.signal ?? "verification_required" : null;
+}
+
+function pickLatestSessionStopUrl(
+  session: NonNullable<ReturnType<typeof getSession>>,
+) {
+  const prioritized = [
+    session.debug?.stoppedAtUrl ?? null,
+    session.debug?.latestUrl ?? null,
+    session.debug?.currentUrl ?? null,
+    session.debug?.finalUrl ?? null,
+    session.lastUrl ?? null,
+    session.debug?.handoffFinalUrl ?? null,
+    session.debug?.handoffAfterUrl ?? null,
+    session.debug?.resolvedDirectUrl ?? null,
+    session.debug?.targetUrl ?? null,
+    session.debug?.originalJobUrl ?? null,
+  ]
+    .map((value) => normalizeJobUrl(String(value ?? "")))
+    .filter(Boolean);
+
+  if (prioritized.length === 0) {
+    return null;
+  }
+
+  const first = prioritized[0] ?? null;
+  const downstream = prioritized.find(
+    (candidate) =>
+      !isAdzunaUrl(candidate) && !isAggregatorHandoffUrl(candidate),
+  );
+
+  if (first && (isAdzunaUrl(first) || isAggregatorHandoffUrl(first)) && downstream) {
+    return downstream;
+  }
+
+  return first;
 }
 
 function isVerificationClassification(
@@ -135,7 +175,11 @@ function buildVerificationStopPayload(
         };
   const rtxStop = buildRtxStopPayload(session);
   const stoppedAtUrl =
-    session.debug?.stoppedAtUrl ?? session.debug?.finalUrl ?? session.lastUrl ?? null;
+    pickLatestSessionStopUrl(session) ??
+    session.debug?.stoppedAtUrl ??
+    session.debug?.finalUrl ??
+    session.lastUrl ??
+    null;
   const stoppedAtTitle = session.debug?.stoppedAtTitle ?? null;
   const currentUrl = session.debug?.currentUrl ?? session.lastUrl ?? stoppedAtUrl;
   const scrapflySessionId = session.remoteSessionId ?? null;
@@ -238,6 +282,13 @@ export async function GET(
 
   const verificationStop = buildVerificationStopPayload(session);
   const rtxStop = buildRtxStopPayload(session);
+  const latestSessionStopUrl =
+    pickLatestSessionStopUrl(session) ??
+    session.debug?.stoppedAtUrl ??
+    session.debug?.currentUrl ??
+    session.debug?.finalUrl ??
+    session.lastUrl ??
+    null;
   const inferredErrorCode = inferApplyAutomationErrorCode({
     errorCode: session.errorCode ?? null,
     stopClassification:
@@ -277,9 +328,50 @@ export async function GET(
             session.debug?.lastAction === "verification_required"
               ? session.debug.lastAction
               : "verification_required",
+          latestUrl: latestSessionStopUrl ?? undefined,
+          stoppedAtUrl:
+            latestSessionStopUrl ??
+            session.debug?.stoppedAtUrl ??
+            undefined,
+          currentUrl:
+            session.debug?.currentUrl ??
+            latestSessionStopUrl ??
+            undefined,
+          finalUrl:
+            session.debug?.finalUrl ??
+            latestSessionStopUrl ??
+            undefined,
         },
       }
-    : session;
+    : {
+        ...session,
+        debug: {
+          ...(session.debug ?? {}),
+          latestUrl: latestSessionStopUrl ?? undefined,
+          stoppedAtUrl:
+            latestSessionStopUrl ??
+            session.debug?.stoppedAtUrl ??
+            undefined,
+          currentUrl:
+            session.debug?.currentUrl ??
+            latestSessionStopUrl ??
+            undefined,
+          finalUrl:
+            session.debug?.finalUrl ??
+            latestSessionStopUrl ??
+            undefined,
+        },
+      };
+
+  console.info(
+    "[APPLY_SESSION] Step 3 completed: stop-point URL now prefers latest downstream browser URL",
+    {
+      sessionId,
+      status: sessionPayload.status,
+      stoppedAtUrl: sessionPayload.debug?.stoppedAtUrl ?? null,
+      latestUrl: sessionPayload.debug?.latestUrl ?? null,
+    },
+  );
 
   return NextResponse.json({
     ok: true,

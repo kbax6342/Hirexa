@@ -34,6 +34,7 @@ export type ApplySessionDebug = {
   entryUrl?: string;
   initialLoadedUrl?: string;
   finalUrl?: string;
+  originalSourceUrl?: string;
   originalJobUrl?: string;
   resolvedDirectUrl?: string;
   applySource?: string;
@@ -62,9 +63,66 @@ export type ApplySessionDebug = {
   searchFallbackAttemptCount?: number;
   searchFallbackSuccess?: boolean;
   searchFallbackFailureReason?: string;
+  remoteBrowserProvider?: string;
+  scrapflyAttempted?: boolean;
+  scrapflySessionId?: string;
+  adzunaScrapflyResolutionAttempted?: boolean;
+  adzunaScrapflyResolutionSucceeded?: boolean;
+  adzunaScrapflyResolvedUrl?: string;
+  adzunaScrapflyResolutionMethod?: string;
+  adzunaHandoffAttempted?: boolean;
+  handoffClickAttempted?: boolean;
+  handoffClickMethod?: "element_click" | "continuation_click" | "direct_goto";
+  handoffClickUrl?: string;
+  handoffClickText?: string;
+  handoffBeforeUrl?: string;
+  handoffAfterUrl?: string;
+  continuationAttempted?: boolean;
+  continuationText?: string;
+  continuationHref?: string;
+  directGotoFallbackAttempted?: boolean;
+  directGotoFallbackReason?: string;
+  directGotoResponseUrl?: string;
+  directGotoStatus?: number;
+  handoffPopupUrl?: string;
+  handoffFinalUrl?: string;
+  handoffLeftAdzunaDomain?: boolean;
+  handoffResponseStatus?: number;
+  handoffPageTitle?: string;
+  errorCode?: string;
+  adzunaHandoffAccessDenied?: boolean;
+  adzunaLoginContinueGateDetected?: boolean;
+  adzunaSuspiciousBehaviorGateDetected?: boolean;
+  adzunaLoginToContinueAvailable?: boolean;
+  adzunaAuthenticateUrl?: string;
+  adzunaLoginToContinueClicked?: boolean;
+  adzunaLoginPageDetected?: boolean;
+  adzunaCredentialAvailable?: boolean;
+  adzunaLoginAttempted?: boolean;
+  adzunaLoginSucceeded?: boolean;
+  adzunaLoginFailedReason?: string;
+  adzunaPostLoginHandoffRetried?: boolean;
+  adzunaPostLoginResolvedDirectUrl?: string;
+  manualContinuationRequired?: boolean;
+  suggestedAction?: string;
+  downstreamCandidateCount?: number;
+  rejectedTrackingCandidateCount?: number;
+  rejectedFinalCandidateReasons?: string[];
+  unresolvedReason?: string;
+  adzunaScrapflyCandidates?: Array<{
+    url: string;
+    source: string;
+    score: number;
+    reason: string;
+  }>;
+  adzunaScrapflyUrlsVisited?: string[];
+  selectedStopSource?: "scrapfly_resolved_url" | "search_url" | "low_confidence_candidate" | "verification_required";
   startingUrlKind?: "aggregator_handoff" | "direct_ats" | "company_careers" | "unknown";
   finalChosenUrlKind?: "aggregator_handoff" | "direct_ats" | "company_careers" | "unknown";
   domain?: string;
+  latestUrl?: string;
+  responseStatus?: number;
+  pageTitle?: string;
   stoppedAtUrl?: string;
   stoppedAtTitle?: string;
   lastActionText?: string;
@@ -124,7 +182,11 @@ export type ApplySessionDebug = {
   verificationSignals?: string[];
   submissionConfirmed?: boolean;
   stopReason?: "HUMAN_INTERVENTION_REQUIRED";
-  lastAction?: "no_apply_cta" | "login_required" | "verification_required";
+  lastAction?:
+    | "no_apply_cta"
+    | "login_required"
+    | "verification_required"
+    | "adzuna_handoff_rate_limited";
   stopClassification?: ApplyStopClassification;
   finalReason?: string;
   resolverAttemptedLinks?: string[];
@@ -164,9 +226,6 @@ export type ApplySessionDebug = {
   adzunaDownstreamConfirmed?: boolean;
   adzunaAuthPageDetected?: boolean;
   adzunaForgotPasswordDetected?: boolean;
-  adzunaLoginAttempted?: boolean;
-  adzunaLoginSucceeded?: boolean;
-  adzunaLoginFailedReason?: string;
   blockedResolvedHandoffCandidates?: Array<{
     href: string;
     hostname: string;

@@ -3,6 +3,9 @@ import type { ApplyStopClassification } from "@/app/lib/apply/stopClassification
 export const APPLY_AUTOMATION_ERROR_CODES = [
   "WRONG_EMPLOYER_DOMAIN",
   "REAL_POSTING_NOT_FOUND",
+  "ADZUNA_HANDOFF_ACCESS_DENIED",
+  "ADZUNA_HANDOFF_RATE_LIMITED",
+  "ADZUNA_LOGIN_TO_CONTINUE_REQUIRED",
   "REMOTE_PROVIDER_UNAVAILABLE",
   "REMOTE_SESSION_DISCONNECTED",
   "REMOTE_SESSION_EXPIRED",
@@ -32,6 +35,12 @@ export function getApplyAutomationErrorMessage(code: ApplyAutomationErrorCode) {
       return "The selected URL belongs to a different employer than this job.";
     case "REAL_POSTING_NOT_FOUND":
       return "Hirexa could not confirm a real employer job posting URL.";
+    case "ADZUNA_HANDOFF_ACCESS_DENIED":
+      return "Adzuna blocked handoff navigation to the employer posting (Access Denied).";
+    case "ADZUNA_HANDOFF_RATE_LIMITED":
+      return "Adzuna temporarily rate-limited the handoff request.";
+    case "ADZUNA_LOGIN_TO_CONTINUE_REQUIRED":
+      return "Adzuna requires login before continuing to the employer posting.";
     case "REMOTE_PROVIDER_UNAVAILABLE":
       return "The configured remote browser provider is unavailable.";
     case "REMOTE_SESSION_DISCONNECTED":
@@ -81,7 +90,37 @@ export function inferApplyAutomationErrorCode(args: {
   }
 
   if (
+    text.includes("adzuna_handoff_access_denied") ||
+    text.includes("adzuna handoff access denied") ||
+    (text.includes("access denied") && text.includes("adzuna"))
+  ) {
+    return "ADZUNA_HANDOFF_ACCESS_DENIED" as const;
+  }
+
+  if (
+    text.includes("adzuna_rate_limited") ||
+    text.includes("adzuna_handoff_rate_limited") ||
+    text.includes("adzuna handoff rate limited") ||
+    (text.includes("rate limit") && text.includes("adzuna")) ||
+    (text.includes("too many requests") && text.includes("adzuna"))
+  ) {
+    return "ADZUNA_HANDOFF_RATE_LIMITED" as const;
+  }
+
+  if (
+    text.includes("adzuna_login_to_continue_required") ||
+    text.includes("adzuna login to continue required") ||
+    (text.includes("login to continue") && text.includes("adzuna"))
+  ) {
+    return "ADZUNA_LOGIN_TO_CONTINUE_REQUIRED" as const;
+  }
+
+  if (
     text.includes("remote browser requested without a configured provider") ||
+    text.includes("missing scrapfly_api_key") ||
+    text.includes("missing scrapfly api key") ||
+    text.includes("playwright-extra runtime unavailable for scrapfly") ||
+    text.includes("runtime unavailable for scrapfly") ||
     ((text.includes("missing required env var") ||
       text.includes("missing environment variable")) &&
       (text.includes("remote_browser_provider") ||

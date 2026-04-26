@@ -1,16 +1,23 @@
 export type ApplyStopReason =
   | "no_apply_cta"
+  | "adzuna_rate_limited"
   | "login_required"
   | "verification_required"
+  | "human_verification_required"
   | "wrong_employer_domain"
   | "invalid_start_url"
   | "real_posting_not_found"
+  | "candidate_needs_review"
   | "aggregator_no_cta"
   | "external_redirect_needed"
   | "unknown_human_intervention";
 
 export type ApplyStopPageType =
   | "human_verification_gate"
+  | "adzuna_rate_limited"
+  | "adzuna_login_continue_gate"
+  | "search"
+  | "job_posting_candidate"
   | "aggregator"
   | "resolver_failure"
   | "employer_site"
@@ -22,7 +29,11 @@ export type ApplyStopPageType =
 
 export type ApplyStopSuggestedAction =
   | "open_original_job_site"
+  | "try_again_later_or_employer_direct_search"
+  | "open_real_job_posting"
+  | "review_possible_real_posting"
   | "sign_in_and_retry"
+  | "login_to_continue"
   | "complete_verification"
   | "teach_this_page"
   | "review_and_retry";
@@ -35,11 +46,14 @@ export type ApplyStopClassification = {
 
 export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "no_apply_cta",
+  "adzuna_rate_limited",
   "login_required",
   "verification_required",
+  "human_verification_required",
   "wrong_employer_domain",
   "invalid_start_url",
   "real_posting_not_found",
+  "candidate_needs_review",
   "aggregator_no_cta",
   "external_redirect_needed",
   "unknown_human_intervention",
@@ -143,6 +157,15 @@ const REAL_POSTING_NOT_FOUND_KEYWORDS = [
   "real_posting_not_found",
 ];
 
+const ADZUNA_RATE_LIMIT_KEYWORDS = [
+  "adzuna_rate_limited",
+  "adzuna handoff rate limited",
+  "adzuna_handoff_rate_limited",
+  "adzuna rate limited",
+  "rate-limited",
+  "too many requests",
+];
+
 const WRONG_EMPLOYER_DOMAIN_KEYWORDS = [
   "wrong employer domain",
   "wrong_employer_domain",
@@ -238,11 +261,26 @@ export function deriveStopClassification(
       (hasPasswordSignal ||
         signalText.includes("to apply") ||
         signalText.includes("sign in to continue")));
+  const adzunaLandAdSignal =
+    signalText.includes("adzuna.com/land/ad/") ||
+    signalText.includes("/land/ad/");
+  const hasAdzunaRateLimitSignals =
+    includesAnySignal(signalText, ADZUNA_RATE_LIMIT_KEYWORDS) ||
+    (adzunaLandAdSignal && signalText.includes("429")) ||
+    (adzunaLandAdSignal && signalText.includes("rate limit"));
   const aggregatorHost = isAggregatorStopHostname(activeHostname);
   const hostChanged =
     Boolean(targetHostname) &&
     Boolean(activeHostname) &&
     targetHostname !== activeHostname;
+
+  if (hasAdzunaRateLimitSignals) {
+    return {
+      reason: "adzuna_rate_limited",
+      pageType: "adzuna_rate_limited",
+      suggestedAction: "try_again_later_or_employer_direct_search",
+    };
+  }
 
   if (hasVerificationSignals) {
     return {
@@ -332,16 +370,22 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
   switch (reason) {
     case "no_apply_cta":
       return "No apply button was found";
+    case "adzuna_rate_limited":
+      return "Adzuna rate-limited handoff";
     case "login_required":
       return "Sign-in required";
     case "verification_required":
       return "Verification required";
+    case "human_verification_required":
+      return "Human verification required";
     case "wrong_employer_domain":
       return "Wrong employer domain";
     case "invalid_start_url":
       return "Start URL was invalid";
     case "real_posting_not_found":
       return "Real posting was not found";
+    case "candidate_needs_review":
+      return "A possible job posting needs review";
     case "aggregator_no_cta":
       return "No apply button was found on the aggregator page";
     case "external_redirect_needed":
@@ -356,6 +400,14 @@ export function getStopPageTypeLabel(pageType: ApplyStopPageType) {
   switch (pageType) {
     case "human_verification_gate":
       return "Human verification gate";
+    case "adzuna_rate_limited":
+      return "Adzuna rate-limited handoff";
+    case "adzuna_login_continue_gate":
+      return "Adzuna login gate";
+    case "search":
+      return "Search page";
+    case "job_posting_candidate":
+      return "Job posting candidate";
     case "resolver_failure":
       return "Resolver failure";
     case "handoff_page":
@@ -379,8 +431,16 @@ export function getStopSuggestedActionLabel(
   switch (suggestedAction) {
     case "open_original_job_site":
       return "Open original job site";
+    case "try_again_later_or_employer_direct_search":
+      return "Retry later or search employer site";
+    case "open_real_job_posting":
+      return "Open real job posting";
+    case "review_possible_real_posting":
+      return "Review possible real posting";
     case "sign_in_and_retry":
       return "Sign in and retry";
+    case "login_to_continue":
+      return "Login to continue";
     case "complete_verification":
       return "Complete verification";
     case "teach_this_page":

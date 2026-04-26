@@ -7,7 +7,10 @@ import {
   hasOpenClawConfig,
   type OpenClawConfig,
 } from "@/app/lib/apply/providers/openclaw";
-import { createScrapflyRemoteSession } from "@/app/lib/apply/scrapfly-browser";
+import {
+  buildScrapflyBrowserWsUrl,
+  getScrapflySessionId,
+} from "@/app/lib/apply/scrapfly-browser";
 
 export type RemoteBrowserProvider = "browserbase" | "openclaw" | "scrapfly";
 
@@ -25,6 +28,13 @@ export type RemoteBrowserRuntime = {
   serverSideOnly: true;
 };
 
+export type RemoteSessionCreateOptions = {
+  applicationId?: string | null;
+  applySessionId?: string | null;
+  purpose?: "apply" | "adzuna_handoff" | "resume" | "training" | "replay";
+  keepAlive?: boolean;
+};
+
 function getConfiguredRemoteBrowserProvider() {
   return process.env.REMOTE_BROWSER_PROVIDER?.trim().toLowerCase() ?? "";
 }
@@ -39,17 +49,32 @@ function hasScrapflyConfig() {
 
 export function getRemoteBrowserProvider(): RemoteBrowserProvider | null {
   const provider = getConfiguredRemoteBrowserProvider();
+  const scrapflyConfigured = hasScrapflyConfig();
+  const browserbaseConfigured = hasBrowserbaseConfig();
+  const openclawConfigured = hasOpenClawConfig();
+
+  console.info("[REMOTE_BROWSER] provider selected", {
+    provider: provider || "local",
+    browserbaseConfigured,
+    openclawConfigured,
+    scrapflyConfigured,
+    scrapflyApiKeyPresent: scrapflyConfigured,
+  });
 
   if (provider === "browserbase") {
-    return hasBrowserbaseConfig() ? "browserbase" : null;
+    return browserbaseConfigured ? "browserbase" : null;
   }
 
   if (provider === "openclaw") {
-    return hasOpenClawConfig() ? "openclaw" : null;
+    return openclawConfigured ? "openclaw" : null;
   }
 
   if (provider === "scrapfly") {
-    return hasScrapflyConfig() ? "scrapfly" : null;
+    console.info("[REMOTE_BROWSER] scrapfly configured", {
+      provider,
+      apiKeyPresent: scrapflyConfigured,
+    });
+    return scrapflyConfigured ? "scrapfly" : null;
   }
 
   return null;
@@ -63,36 +88,82 @@ export function shouldUseRemoteBrowser() {
   return getRemoteBrowserProvider() !== null;
 }
 
-export async function createRemoteSession(): Promise<RemoteSession> {
+export async function createRemoteSession(
+  options: RemoteSessionCreateOptions = {},
+): Promise<RemoteSession> {
   const provider = getRemoteBrowserProvider();
+  console.info("[REMOTE_BROWSER] creating remote session", {
+    provider: provider ?? "local",
+    purpose: options.purpose ?? "apply",
+    hasApplySessionId: Boolean(options.applySessionId),
+    hasApplicationId: Boolean(options.applicationId),
+  });
 
-  if (provider === "browserbase") {
-    return createBrowserbaseSession();
+  try {
+    if (provider === "browserbase") {
+      const session = await createBrowserbaseSession();
+      console.info("[REMOTE_BROWSER] remote session created", {
+        provider: session.provider,
+        sessionId: session.sessionId,
+      });
+      return session;
+    }
+
+    if (provider === "openclaw") {
+      const config = getOpenClawConfig();
+
+      const session: RemoteSession = {
+        provider: "openclaw",
+        sessionId: `openclaw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        connectUrl: config.apiUrl,
+      };
+      console.info("[REMOTE_BROWSER] remote session created", {
+        provider: session.provider,
+        sessionId: session.sessionId,
+      });
+      return session;
+    }
+
+    if (provider === "scrapfly") {
+      const sessionId = getScrapflySessionId({
+        sessionId: options.applySessionId ?? undefined,
+        applySessionId: options.applySessionId,
+        applicationId: options.applicationId,
+        purpose: options.purpose ?? "apply",
+        keepAlive: options.keepAlive,
+      });
+      const connectUrl = buildScrapflyBrowserWsUrl({
+        applySessionId: options.applySessionId ?? sessionId,
+        applicationId: options.applicationId,
+        purpose: options.purpose ?? "apply",
+        keepAlive: options.keepAlive,
+      });
+      console.info("[REMOTE_BROWSER] scrapfly session id selected", {
+        sessionId,
+      });
+
+      console.info("[REMOTE_BROWSER] remote session created", {
+        provider: "scrapfly",
+        sessionId,
+      });
+
+      return {
+        provider: "scrapfly",
+        sessionId,
+        connectUrl,
+      };
+    }
+
+    throw new Error(
+      "[AUTO_APPLY_REMOTE] Remote browser requested without a configured provider.",
+    );
+  } catch (error) {
+    console.warn("[REMOTE_BROWSER] remote session failed", {
+      provider: provider ?? "local",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-
-  if (provider === "openclaw") {
-    const config = getOpenClawConfig();
-
-    return {
-      provider: "openclaw",
-      sessionId: `openclaw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      connectUrl: config.apiUrl,
-    };
-  }
-
-  if (provider === "scrapfly") {
-    const scrapflySession = createScrapflyRemoteSession();
-
-    return {
-      provider: "scrapfly",
-      sessionId: scrapflySession.sessionId,
-      connectUrl: scrapflySession.wsEndpoint,
-    };
-  }
-
-  throw new Error(
-    "[AUTO_APPLY_REMOTE] Remote browser requested without a configured provider.",
-  );
 }
 
 export async function closeRemoteSession(

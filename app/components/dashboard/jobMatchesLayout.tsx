@@ -122,6 +122,9 @@ type AutoApplyStartResponse = {
   stoppedAtUrl?: string | null;
   stoppedAtTitle?: string | null;
   currentUrl?: string | null;
+  originalUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  chosenApplyUrl?: string | null;
   lastAction?: string | null;
   lastActionText?: string | null;
   lastActionSelector?: string | null;
@@ -134,6 +137,52 @@ type AutoApplyBannerState = {
   message: string;
   ctaLabel: string;
   ctaHref: string;
+};
+
+type ResolvedApplyUrlStatus =
+  | "idle"
+  | "searching"
+  | "found"
+  | "not_found"
+  | "fallback_required"
+  | "rate_limited"
+  | "error";
+
+type ResolveApplyUrlResponse = {
+  ok?: boolean;
+  status?: "found" | "not_found" | "fallback_required" | "error";
+  source?: string | null;
+  isAggregatorJob?: boolean;
+  originalSourceUrl?: string | null;
+  resolvedApplyUrl?: string | null;
+  resolvedApplyUrlSource?: string | null;
+  resolvedApplyUrlProvider?: string | null;
+  resolvedApplyUrlConfidence?: number | null;
+  resolvedApplyUrlMatchReason?: string | null;
+  resolvedApplyUrlStatus?: string | null;
+  queries?: string[];
+  candidates?: Array<{
+    url: string;
+    title?: string;
+    provider?: string;
+    confidence: number;
+    reason: string;
+  }>;
+  error?: string | null;
+};
+
+type ResolvedApplyUrlState = {
+  status: ResolvedApplyUrlStatus;
+  source?: string | null;
+  isAggregatorJob?: boolean;
+  originalSourceUrl?: string | null;
+  resolvedApplyUrl?: string | null;
+  resolvedApplyUrlSource?: string | null;
+  resolvedApplyUrlProvider?: string | null;
+  resolvedApplyUrlConfidence?: number | null;
+  resolvedApplyUrlMatchReason?: string | null;
+  message?: string | null;
+  updatedAt: number;
 };
 
 type ApplySessionPollResponse = {
@@ -150,9 +199,13 @@ type ApplySessionPollResponse = {
     errorCode?: string | null;
     debug?: {
       finalUrl?: string | null;
+      latestUrl?: string | null;
       stoppedAtUrl?: string | null;
       stoppedAtTitle?: string | null;
       currentUrl?: string | null;
+      originalJobUrl?: string | null;
+      resolvedDirectUrl?: string | null;
+      targetUrl?: string | null;
       lastAction?: string | null;
       lastActionText?: string | null;
       lastActionSelector?: string | null;
@@ -248,6 +301,29 @@ function getAutoApplyStartFailureMessage(
       message: payload?.message ?? payload?.error ?? "Unable to start auto apply.",
       errorCode: payload?.errorCode ?? null,
     }) ?? "Unable to start auto apply."
+  );
+}
+
+function pickLatestAutoApplyStopUrl(item: {
+  stoppedAtUrl?: string | null;
+  latestUrl?: string | null;
+  currentUrl?: string | null;
+  lastUrl?: string | null;
+  targetUrl?: string | null;
+  resolvedDirectUrl?: string | null;
+  originalJobUrl?: string | null;
+  jobUrl?: string | null;
+}) {
+  return (
+    item.stoppedAtUrl ??
+    item.latestUrl ??
+    item.currentUrl ??
+    item.lastUrl ??
+    item.targetUrl ??
+    item.resolvedDirectUrl ??
+    item.originalJobUrl ??
+    item.jobUrl ??
+    null
   );
 }
 
@@ -467,6 +543,9 @@ export default function JobMatchesLayout({
 
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [selectedDetails, setSelectedDetails] = useState<JobDetail | null>(null);
+  const [resolvedApplyUrlByJobId, setResolvedApplyUrlByJobId] = useState<
+    Record<string, ResolvedApplyUrlState>
+  >({});
 
   const [pretty, setPretty] = useState<JobPretty>({ sections: [], highlights: [] });
   const [formatted, setFormatted] = useState<FormattedJob | null>(null);
@@ -503,6 +582,10 @@ export default function JobMatchesLayout({
     () => toJobDetailSummary(selectedSummary),
     [selectedSummary]
   );
+  const selectedResolvedApplyUrlState = useMemo(
+    () => (selectedSummary ? resolvedApplyUrlByJobId[selectedSummary.id] ?? null : null),
+    [resolvedApplyUrlByJobId, selectedSummary],
+  );
   const autoApplyItems = useMemo(
     () =>
       Object.values(autoApplyPopupState.items).sort(
@@ -537,12 +620,7 @@ export default function JobMatchesLayout({
       return null;
     }
 
-    const stoppedAtUrl =
-      selectedAutoApplyItem.stoppedAtUrl ??
-      selectedAutoApplyItem.lastUrl ??
-      selectedAutoApplyItem.currentUrl ??
-      selectedAutoApplyItem.jobUrl ??
-      null;
+    const stoppedAtUrl = pickLatestAutoApplyStopUrl(selectedAutoApplyItem);
     const hasStopPoint = Boolean(
       stoppedAtUrl ||
         selectedAutoApplyItem.stoppedAtTitle ||
@@ -563,12 +641,53 @@ export default function JobMatchesLayout({
         null,
       lastActionSelector: selectedAutoApplyItem.lastActionSelector ?? null,
       status: formatAutoApplyStatusLabel(selectedAutoApplyItem.status),
+      originalJobUrl: selectedAutoApplyItem.originalJobUrl ?? null,
+      resolvedDirectUrl:
+        selectedAutoApplyItem.resolvedDirectUrl ??
+        selectedAutoApplyItem.targetUrl ??
+        null,
     };
   }, [selectedAutoApplyItem]);
+
+  useEffect(() => {
+    if (!rightAutoApplyStopPoint?.stoppedAtUrl) return;
+    console.info(
+      "[AUTO_APPLY_UI] Step 4 completed: Auto Apply Stop Point displays latest resolved URL",
+      {
+        stoppedAtUrl: rightAutoApplyStopPoint.stoppedAtUrl,
+        originalJobUrl: rightAutoApplyStopPoint.originalJobUrl ?? null,
+        resolvedDirectUrl: rightAutoApplyStopPoint.resolvedDirectUrl ?? null,
+      },
+    );
+  }, [rightAutoApplyStopPoint]);
 
   const right = selectedDetails ?? selectedSummaryDetail;
   const rightAiApplyLabel = AUTO_APPLY_CTA_LABEL;
   const rightAiApplyLoadingLabel = AUTO_APPLY_LOADING_LABEL;
+  const rightResolvedApplyUrlState = useMemo(() => {
+    if (selectedResolvedApplyUrlState) {
+      return selectedResolvedApplyUrlState;
+    }
+
+    if (
+      selectedAutoApplyItem?.stopClassification?.reason === "adzuna_rate_limited" ||
+      selectedAutoApplyItem?.lastAction === "adzuna_handoff_rate_limited"
+    ) {
+      return {
+        status: "rate_limited" as const,
+        source: selectedSummary?.source ?? "adzuna",
+        originalSourceUrl:
+          selectedAutoApplyItem.originalJobUrl ?? selectedSummary?.jobUrl ?? null,
+        resolvedApplyUrl:
+          selectedAutoApplyItem.resolvedDirectUrl ?? selectedAutoApplyItem.targetUrl ?? null,
+        message:
+          "Adzuna rate limited the handoff before Hirexa could reach the employer posting.",
+        updatedAt: Date.now(),
+      };
+    }
+
+    return null;
+  }, [selectedAutoApplyItem, selectedResolvedApplyUrlState, selectedSummary?.jobUrl, selectedSummary?.source]);
   const shareJobUrl = right?.jobUrl?.trim() ?? "";
   const displayCompany = right?.company?.trim() || "Unknown company";
   const displayLocation = right?.location?.trim() || "Location not provided";
@@ -1039,15 +1158,45 @@ export default function JobMatchesLayout({
                 normalizeApplyAutomationErrorCode(payload.session.errorCode) ??
                 null,
               lastUrl:
+                payload.session.debug?.latestUrl ??
                 payload.session.debug?.finalUrl ??
+                payload.session.debug?.currentUrl ??
                 payload.session.lastUrl ??
+                nextItems[item.applicationId]?.lastUrl ??
                 item.lastUrl ??
                 null,
-              stoppedAtUrl:
+              latestUrl:
+                payload.session.debug?.latestUrl ??
                 payload.session.debug?.stoppedAtUrl ??
-                nextItems[item.applicationId]?.stoppedAtUrl ??
-                item.stoppedAtUrl ??
+                payload.session.debug?.currentUrl ??
+                payload.session.debug?.finalUrl ??
+                payload.session.lastUrl ??
+                nextItems[item.applicationId]?.latestUrl ??
+                item.latestUrl ??
                 null,
+              stoppedAtUrl: pickLatestAutoApplyStopUrl({
+                stoppedAtUrl: payload.session.debug?.stoppedAtUrl,
+                latestUrl: payload.session.debug?.latestUrl,
+                currentUrl: payload.session.debug?.currentUrl,
+                lastUrl:
+                  payload.session.debug?.finalUrl ?? payload.session.lastUrl,
+                targetUrl:
+                  payload.session.debug?.targetUrl ??
+                  nextItems[item.applicationId]?.targetUrl ??
+                  item.targetUrl,
+                resolvedDirectUrl:
+                  payload.session.debug?.resolvedDirectUrl ??
+                  nextItems[item.applicationId]?.resolvedDirectUrl ??
+                  item.resolvedDirectUrl,
+                originalJobUrl:
+                  payload.session.debug?.originalJobUrl ??
+                  nextItems[item.applicationId]?.originalJobUrl ??
+                  item.originalJobUrl,
+                jobUrl:
+                  nextItems[item.applicationId]?.jobUrl ??
+                  item.jobUrl ??
+                  null,
+              }),
               stoppedAtTitle:
                 payload.session.debug?.stoppedAtTitle ??
                 nextItems[item.applicationId]?.stoppedAtTitle ??
@@ -1082,6 +1231,21 @@ export default function JobMatchesLayout({
                 payload.session.debug?.stopClassification ??
                 nextItems[item.applicationId]?.stopClassification ??
                 item.stopClassification ??
+                null,
+              originalJobUrl:
+                payload.session.debug?.originalJobUrl ??
+                nextItems[item.applicationId]?.originalJobUrl ??
+                item.originalJobUrl ??
+                null,
+              resolvedDirectUrl:
+                payload.session.debug?.resolvedDirectUrl ??
+                nextItems[item.applicationId]?.resolvedDirectUrl ??
+                item.resolvedDirectUrl ??
+                null,
+              targetUrl:
+                payload.session.debug?.targetUrl ??
+                nextItems[item.applicationId]?.targetUrl ??
+                item.targetUrl ??
                 null,
               updatedAt: now,
             };
@@ -1686,6 +1850,141 @@ export default function JobMatchesLayout({
     [router]
   );
 
+  const resolveEmployerApplyUrl = useCallback(
+    async (
+      job: SupportedAutoApplyJob,
+      options?: { force?: boolean; silent?: boolean },
+    ) => {
+      if (!job?.id) {
+        return null;
+      }
+
+      const existingState = resolvedApplyUrlByJobId[job.id];
+      if (
+        !options?.force &&
+        (existingState?.status === "searching" || existingState?.status === "found")
+      ) {
+        return existingState;
+      }
+
+      setResolvedApplyUrlByJobId((current) => ({
+        ...current,
+        [job.id]: {
+          ...(current[job.id] ?? {}),
+          status: "searching",
+          source: job.source,
+          isAggregatorJob:
+            job.source === "adzuna" || isAggregatorHandoffUrl(job.jobUrl ?? ""),
+          originalSourceUrl: job.jobUrl ?? null,
+          message: "Searching for employer apply page...",
+          updatedAt: Date.now(),
+        },
+      }));
+
+      try {
+        const response = await fetch("/api/jobs/resolve-apply-url", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...buildApplyProviderPayload(job),
+            originalSourceUrl: job.jobUrl ?? null,
+          }),
+        });
+
+        const payload = (await response.json()) as ResolveApplyUrlResponse;
+        const status: ResolvedApplyUrlStatus =
+          payload.status === "found"
+            ? "found"
+            : payload.status === "fallback_required"
+              ? "fallback_required"
+              : payload.status === "error"
+                ? "error"
+                : "not_found";
+        const nextState: ResolvedApplyUrlState = {
+          status,
+          source: payload.source ?? job.source,
+          isAggregatorJob: payload.isAggregatorJob,
+          originalSourceUrl: payload.originalSourceUrl ?? job.jobUrl ?? null,
+          resolvedApplyUrl: payload.resolvedApplyUrl ?? null,
+          resolvedApplyUrlSource: payload.resolvedApplyUrlSource ?? null,
+          resolvedApplyUrlProvider: payload.resolvedApplyUrlProvider ?? null,
+          resolvedApplyUrlConfidence: payload.resolvedApplyUrlConfidence ?? null,
+          resolvedApplyUrlMatchReason: payload.resolvedApplyUrlMatchReason ?? null,
+          message:
+            status === "found"
+              ? "Employer apply page found"
+              : status === "fallback_required"
+                ? "Adzuna handoff fallback required"
+                : status === "not_found"
+                  ? "Could not confirm employer apply page"
+                  : payload.error ?? "Failed to resolve employer apply page.",
+          updatedAt: Date.now(),
+        };
+
+        setResolvedApplyUrlByJobId((current) => ({
+          ...current,
+          [job.id]: nextState,
+        }));
+        console.info("[BOARD_JOB_DETAILS] resolved apply URL loaded", {
+          jobId: job.id,
+          source: nextState.source ?? null,
+          status: nextState.status,
+          resolvedApplyUrl: nextState.resolvedApplyUrl ?? null,
+          provider: nextState.resolvedApplyUrlProvider ?? null,
+          confidence: nextState.resolvedApplyUrlConfidence ?? null,
+        });
+
+        return nextState;
+      } catch (error) {
+        const nextState: ResolvedApplyUrlState = {
+          status: "error",
+          source: job.source,
+          isAggregatorJob:
+            job.source === "adzuna" || isAggregatorHandoffUrl(job.jobUrl ?? ""),
+          originalSourceUrl: job.jobUrl ?? null,
+          resolvedApplyUrl: null,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to resolve employer apply page.",
+          updatedAt: Date.now(),
+        };
+        setResolvedApplyUrlByJobId((current) => ({
+          ...current,
+          [job.id]: nextState,
+        }));
+
+        if (!options?.silent) {
+          console.error("[BOARD_JOB_DETAILS] resolved apply URL lookup failed", {
+            jobId: job.id,
+            error: nextState.message,
+          });
+        }
+
+        return nextState;
+      }
+    },
+    [resolvedApplyUrlByJobId],
+  );
+
+  useEffect(() => {
+    if (!selectedSummary || selectedSummary.source !== "adzuna") {
+      return;
+    }
+
+    const existing = resolvedApplyUrlByJobId[selectedSummary.id];
+    if (
+      existing?.status === "searching" ||
+      existing?.status === "found" ||
+      existing?.status === "fallback_required" ||
+      existing?.status === "not_found"
+    ) {
+      return;
+    }
+
+    void resolveEmployerApplyUrl(selectedSummary, { silent: true });
+  }, [resolvedApplyUrlByJobId, resolveEmployerApplyUrl, selectedSummary]);
+
   const startDashboardAutoApply = useCallback(
     async (job: SupportedAutoApplyJob) => {
       setAutoApplyBanner(null);
@@ -1742,7 +2041,23 @@ export default function JobMatchesLayout({
       const cachedDetail = detailCache.current.get(job.id)?.job ?? null;
       const preferredDetail =
         (selectedId === job.id ? selectedDetails : null) ?? cachedDetail;
-      const preferredDirectUrl = pickPreferredDirectJobUrl(
+      let resolvedApplyState: ResolvedApplyUrlState | null =
+        resolvedApplyUrlByJobId[job.id] ?? null;
+      if (
+        (!resolvedApplyState ||
+          !isTrustedEmployerJobUrl(resolvedApplyState.resolvedApplyUrl)) &&
+        job.source === "adzuna"
+      ) {
+        resolvedApplyState = await resolveEmployerApplyUrl(job, {
+          force: true,
+          silent: true,
+        });
+      }
+      const preferredDirectUrl =
+        (isTrustedEmployerJobUrl(resolvedApplyState?.resolvedApplyUrl)
+          ? normalizeEmployerJobUrl(resolvedApplyState?.resolvedApplyUrl ?? "")
+          : null) ??
+        pickPreferredDirectJobUrl(
         job,
         preferredDetail,
       );
@@ -1817,9 +2132,17 @@ export default function JobMatchesLayout({
           errorCode:
             normalizeApplyAutomationErrorCode(startData?.errorCode) ?? null,
           lastUrl: startData?.finalUrl ?? null,
+          latestUrl:
+            startData?.stoppedAtUrl ??
+            startData?.currentUrl ??
+            startData?.finalUrl ??
+            null,
           stoppedAtUrl: startData?.stoppedAtUrl ?? null,
           stoppedAtTitle: startData?.stoppedAtTitle ?? null,
           currentUrl: startData?.currentUrl ?? null,
+          originalJobUrl: startData?.originalUrl ?? null,
+          resolvedDirectUrl: startData?.resolvedDirectUrl ?? null,
+          targetUrl: startData?.chosenApplyUrl ?? null,
           lastAction: startData?.lastAction ?? null,
           lastActionText: startData?.lastActionText ?? null,
           lastActionSelector: startData?.lastActionSelector ?? null,
@@ -1857,6 +2180,18 @@ export default function JobMatchesLayout({
         }),
         errorCode:
           normalizeApplyAutomationErrorCode(startData.errorCode) ?? null,
+        lastUrl: startData.finalUrl ?? null,
+        latestUrl:
+          startData.stoppedAtUrl ??
+          startData.currentUrl ??
+          startData.finalUrl ??
+          null,
+        stoppedAtUrl: startData.stoppedAtUrl ?? null,
+        stoppedAtTitle: startData.stoppedAtTitle ?? null,
+        currentUrl: startData.currentUrl ?? null,
+        originalJobUrl: startData.originalUrl ?? null,
+        resolvedDirectUrl: startData.resolvedDirectUrl ?? null,
+        targetUrl: startData.chosenApplyUrl ?? null,
       });
 
       console.info("[AUTO_APPLY_DASHBOARD] started background auto-apply", {
@@ -1871,6 +2206,8 @@ export default function JobMatchesLayout({
       authStatus,
       readCreditStatus,
       readPlanStatus,
+      resolveEmployerApplyUrl,
+      resolvedApplyUrlByJobId,
       router,
       selectedDetails,
       selectedId,
@@ -1891,6 +2228,11 @@ export default function JobMatchesLayout({
   const handleCareerCoachFromDetails = () => {
     router.push("/job-tools/career-coach");
   };
+
+  const handleFindEmployerApplyPageFromDetails = useCallback(async () => {
+    if (!selectedSummary) return;
+    await resolveEmployerApplyUrl(selectedSummary, { force: true });
+  }, [resolveEmployerApplyUrl, selectedSummary]);
 
   const handleAiApplyFromCard = async (job: Job) => {
     const loadingId = getJobIdentity(job);
@@ -2329,6 +2671,15 @@ export default function JobMatchesLayout({
             aiApplyLabel={rightAiApplyLabel}
             aiApplyLoadingLabel={rightAiApplyLoadingLabel}
             autoApplyStopPoint={rightAutoApplyStopPoint}
+            resolvedApplyUrlState={rightResolvedApplyUrlState}
+            resolveApplyUrlLoading={
+              rightResolvedApplyUrlState?.status === "searching"
+            }
+            onResolveApplyUrl={
+              right && selectedSummary?.source === "adzuna"
+                ? () => void handleFindEmployerApplyPageFromDetails()
+                : null
+            }
             onAiApply={handleAiApplyFromDetails}
             onCareerCoach={handleCareerCoachFromDetails}
             shareActions={
@@ -2368,8 +2719,7 @@ export default function JobMatchesLayout({
                   const submitted = isApplySessionSuccessStatus(item.status);
                   const statusLabel = formatAutoApplyStatusLabel(item.status);
                   const stoppedStatus = isStoppedAutoApplyStatus(item.status);
-                  const stoppedUrl =
-                    item.lastUrl ?? item.currentUrl ?? item.jobUrl ?? null;
+                  const stoppedUrl = pickLatestAutoApplyStopUrl(item);
                   const canRenderStoppedPageUi =
                     stoppedStatus &&
                     Boolean(

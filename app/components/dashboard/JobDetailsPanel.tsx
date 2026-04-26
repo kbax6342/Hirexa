@@ -60,8 +60,22 @@ type JobDetailsPanelProps = {
     stoppedAtTitle?: string | null;
     lastActionText?: string | null;
     lastActionSelector?: string | null;
+    originalJobUrl?: string | null;
+    resolvedDirectUrl?: string | null;
     status?: string | null;
   } | null;
+  resolvedApplyUrlState?: {
+    status?: "idle" | "searching" | "found" | "not_found" | "fallback_required" | "rate_limited" | "error";
+    resolvedApplyUrl?: string | null;
+    source?: string | null;
+    provider?: string | null;
+    confidence?: number | null;
+    matchReason?: string | null;
+    originalSourceUrl?: string | null;
+    message?: string | null;
+  } | null;
+  resolveApplyUrlLoading?: boolean;
+  onResolveApplyUrl?: (() => void) | null;
 };
 
 function normalizeRenderedParagraph(value: string) {
@@ -192,6 +206,9 @@ export default function JobDetailsPanel({
   hideAiApplyOnDesktop = false,
   hideAdzunaAttribution = false,
   autoApplyStopPoint = null,
+  resolvedApplyUrlState = null,
+  resolveApplyUrlLoading = false,
+  onResolveApplyUrl = null,
 }: JobDetailsPanelProps) {
   const descriptionSource = String(job?.descriptionPlain ?? job?.description ?? "");
   const parsedMeta = useMemo(
@@ -440,6 +457,22 @@ export default function JobDetailsPanel({
               </div>
             ) : null}
 
+            {autoApplyStopPoint.originalJobUrl ||
+            autoApplyStopPoint.resolvedDirectUrl ? (
+              <div className="mt-2 space-y-1 text-[11px] text-amber-900">
+                {autoApplyStopPoint.originalJobUrl ? (
+                  <p className="break-all">
+                    Original source URL: {autoApplyStopPoint.originalJobUrl}
+                  </p>
+                ) : null}
+                {autoApplyStopPoint.resolvedDirectUrl ? (
+                  <p className="break-all">
+                    Resolved posting URL: {autoApplyStopPoint.resolvedDirectUrl}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             {autoApplyStopPoint.stoppedAtTitle ? (
               <div className="mt-2">
                 <p className="font-semibold text-amber-900">Page title</p>
@@ -471,6 +504,70 @@ export default function JobDetailsPanel({
                   {autoApplyStopPoint.status}
                 </p>
               </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {job &&
+        (job.source === "adzuna" || Boolean(resolvedApplyUrlState)) ? (
+          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-950">
+            <p className="font-semibold uppercase tracking-wide text-blue-800">
+              Employer Apply URL
+            </p>
+            <p className="mt-2 text-[11px] text-blue-900">
+              {resolvedApplyUrlState?.status === "searching"
+                ? "Searching for employer apply page..."
+                : resolvedApplyUrlState?.status === "found"
+                  ? "Employer apply page found"
+                  : resolvedApplyUrlState?.status === "rate_limited"
+                    ? "Adzuna rate limited fallback"
+                    : resolvedApplyUrlState?.status === "fallback_required"
+                      ? "Adzuna handoff fallback required"
+                      : resolvedApplyUrlState?.status === "not_found"
+                        ? "Could not confirm employer apply page"
+                        : resolvedApplyUrlState?.message ??
+                          "Find the direct employer/ATS posting before fallback handoff."}
+            </p>
+
+            {resolvedApplyUrlState?.resolvedApplyUrl ? (
+              <div className="mt-2 space-y-1 text-[11px] text-blue-900">
+                <p>
+                  Employer apply page found:
+                </p>
+                <a
+                  className="block break-all font-mono underline"
+                  href={resolvedApplyUrlState.resolvedApplyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {resolvedApplyUrlState.resolvedApplyUrl}
+                </a>
+                <p>
+                  Source: Resolved by SerpAPI Google/direct search
+                  {resolvedApplyUrlState.provider
+                    ? ` (${resolvedApplyUrlState.provider})`
+                    : ""}
+                </p>
+              </div>
+            ) : null}
+
+            {resolvedApplyUrlState?.originalSourceUrl ? (
+              <p className="mt-2 break-all text-[11px] text-blue-900">
+                Original source URL: {resolvedApplyUrlState.originalSourceUrl}
+              </p>
+            ) : null}
+
+            {onResolveApplyUrl ? (
+              <button
+                type="button"
+                onClick={onResolveApplyUrl}
+                disabled={resolveApplyUrlLoading}
+                className="mt-3 inline-flex rounded-md border border-blue-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-900 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {resolveApplyUrlLoading
+                  ? "Searching..."
+                  : "Find employer apply page"}
+              </button>
             ) : null}
           </div>
         ) : null}

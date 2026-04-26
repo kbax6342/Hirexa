@@ -1,19 +1,27 @@
 import * as cheerio from "cheerio";
 import { normalizeJobUrl } from "@/app/lib/jobSources";
+import { searchGoogleWithSerpApi } from "@/app/lib/jobs/serpapiSearchProvider";
 
 export type JobSearchResult = {
   title: string;
   url: string;
   snippet?: string;
+  displayedUrl?: string;
+  position?: number | null;
   source?: string;
 };
 
 export type SearchProviderName =
+  | "serpapi_google"
   | "duckduckgo_html"
   | "brave"
   | "serpapi"
   | "none";
 type SearchProviderPreference = SearchProviderName | "google_first";
+const DEFAULT_PROVIDER_ORDER: SearchProviderName[] = [
+  "serpapi_google",
+  "duckduckgo_html",
+];
 
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -38,35 +46,65 @@ const TOKEN_STOP_WORDS = new Set([
 export function resolveJobSearchProvider(args?: {
   preferredProvider?: SearchProviderPreference | string | null;
 }): SearchProviderName | string {
+  const order = resolveJobSearchProviderOrder(args);
+  return order[0] ?? "duckduckgo_html";
+}
+
+function normalizeProviderName(value: string): SearchProviderName | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "serpapi") return "serpapi_google";
+  if (
+    normalized === "serpapi_google" ||
+    normalized === "duckduckgo_html" ||
+    normalized === "brave" ||
+    normalized === "none"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function dedupeProviderOrder(order: SearchProviderName[]) {
+  const seen = new Set<SearchProviderName>();
+  const deduped: SearchProviderName[] = [];
+  for (const provider of order) {
+    if (seen.has(provider)) continue;
+    seen.add(provider);
+    deduped.push(provider);
+  }
+  return deduped;
+}
+
+export function resolveJobSearchProviderOrder(args?: {
+  preferredProvider?: SearchProviderPreference | string | null;
+}): SearchProviderName[] {
   const preferredProvider = String(args?.preferredProvider ?? "")
     .trim()
     .toLowerCase();
+  const envOrder = String(process.env.JOB_SEARCH_PROVIDER_ORDER ?? "")
+    .split(",")
+    .map((value) => normalizeProviderName(value))
+    .filter((value): value is SearchProviderName => Boolean(value));
+  const fallbackConfiguredProvider = normalizeProviderName(
+    String(process.env.JOB_SEARCH_PROVIDER ?? ""),
+  );
+  const baseline = dedupeProviderOrder([
+    ...(envOrder.length > 0 ? envOrder : DEFAULT_PROVIDER_ORDER),
+    ...(fallbackConfiguredProvider ? [fallbackConfiguredProvider] : []),
+    ...DEFAULT_PROVIDER_ORDER,
+  ]);
 
   if (preferredProvider === "google_first") {
-    if (process.env.SERPAPI_API_KEY?.trim()) {
-      return "serpapi";
-    }
-  } else if (preferredProvider) {
-    return preferredProvider;
+    return dedupeProviderOrder(["serpapi_google", ...baseline]);
   }
 
-  const configuredProvider = String(process.env.JOB_SEARCH_PROVIDER ?? "")
-    .trim()
-    .toLowerCase();
-
-  if (configuredProvider) {
-    return configuredProvider;
+  const preferredAsProvider = normalizeProviderName(preferredProvider);
+  if (preferredAsProvider) {
+    return dedupeProviderOrder([preferredAsProvider, ...baseline]);
   }
 
-  if (process.env.BRAVE_SEARCH_API_KEY) {
-    return "brave";
-  }
-
-  if (process.env.SERPAPI_API_KEY) {
-    return "serpapi";
-  }
-
-  return "duckduckgo_html";
+  return baseline.length > 0 ? baseline : [...DEFAULT_PROVIDER_ORDER];
 }
 
 function createTimeoutSignal(timeoutMs: number) {
@@ -351,67 +389,41 @@ async function searchBrave(query: string, limit: number) {
   }
 }
 
-async function searchSerpApi(query: string, limit: number) {
-  const apiKey = process.env.SERPAPI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("SERPAPI_API_KEY is not configured.");
-  }
-
-  const url = new URL("https://serpapi.com/search.json");
-  url.searchParams.set("engine", "google");
-  url.searchParams.set("q", query);
-  url.searchParams.set("api_key", apiKey);
-  url.searchParams.set("num", String(limit));
-
-  const timeout = createTimeoutSignal(SEARCH_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url.toString(), {
-      headers: {
-        accept: "application/json",
-        "user-agent": DEFAULT_USER_AGENT,
-      },
-      signal: timeout.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`SerpApi search failed (${response.status})`);
-    }
-
-    const data = (await response.json()) as {
-      organic_results?: Array<{
-        title?: string;
-        link?: string;
-        snippet?: string;
-      }>;
-    };
-
-    return (data.organic_results ?? [])
-      .map((result) => ({
-        title: String(result.title ?? "").trim(),
-        url: normalizeJobUrl(String(result.link ?? "").trim()),
-        snippet: String(result.snippet ?? "").trim() || undefined,
-        source: "serpapi",
-      }))
-      .filter((result) => result.title && result.url)
-      .slice(0, limit);
-  } finally {
-    timeout.clear();
-  }
+async function searchSerpApi(
+  query: string,
+  limit: number,
+  location?: string | null,
+) {
+  const results = await searchGoogleWithSerpApi({
+    query,
+    location,
+    limit,
+  });
+  return results.map((result) => ({
+    title: result.title,
+    url: normalizeJobUrl(result.url),
+    snippet: result.snippet ?? undefined,
+    displayedUrl: result.displayedUrl ?? undefined,
+    position: result.position ?? null,
+    source: "serpapi_google",
+  }));
 }
 
 async function searchSingleQuery(
   provider: SearchProviderName | string,
   query: string,
   limit: number,
+  location?: string | null,
 ) {
   switch (provider) {
+    case "serpapi_google":
+      return searchSerpApi(query, limit, location);
     case "duckduckgo_html":
       return searchDuckDuckGo(query, limit);
     case "brave":
       return searchBrave(query, limit);
     case "serpapi":
-      return searchSerpApi(query, limit);
+      return searchSerpApi(query, limit, location);
     case "none":
       console.warn("[JOB_SEARCH_PROVIDER] Search provider disabled", {
         query,
@@ -428,6 +440,7 @@ async function searchSingleQuery(
 
 export async function searchJobPages(args: {
   queries: string[];
+  location?: string | null;
   limit?: number;
   preferredProvider?: SearchProviderPreference | string | null;
 }): Promise<JobSearchResult[]> {
@@ -440,43 +453,60 @@ export async function searchJobPages(args: {
     return [];
   }
 
-  const provider = resolveJobSearchProvider({
+  const providers = resolveJobSearchProviderOrder({
     preferredProvider: args.preferredProvider,
   });
   const perQueryLimit = Math.max(3, Math.ceil(limit / queries.length) + 2);
-
-  console.log("[JOB_SEARCH_PROVIDER] search start", {
-    provider,
-    queryCount: queries.length,
-    limit,
-  });
-
-  const results = await Promise.allSettled(
-    queries.map((query) => searchSingleQuery(provider, query, perQueryLimit)),
-  );
-
   const combinedResults: JobSearchResult[] = [];
 
-  results.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      combinedResults.push(...result.value);
-      return;
-    }
+  console.info("[JOB_SEARCH_PROVIDER] Step 1 completed: existing direct resolver/search provider flow inspected");
+  console.info("[JOB_SEARCH_PROVIDER] provider order", {
+    providers,
+  });
+  console.info(
+    "[JOB_SEARCH_PROVIDER] Step 3 completed: SerpAPI-first provider order implemented",
+  );
 
-    console.warn("[JOB_SEARCH_PROVIDER] query failed", {
+  for (const provider of providers) {
+    console.info("[JOB_SEARCH_PROVIDER] search start", {
       provider,
-      query: queries[index],
-      error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      queryCount: queries.length,
+      limit,
     });
-  });
 
-  const deduped = dedupeJobSearchResults(combinedResults).slice(0, limit);
+    const results = await Promise.allSettled(
+      queries.map((query) =>
+        searchSingleQuery(provider, query, perQueryLimit, args.location),
+      ),
+    );
 
-  console.log("[JOB_SEARCH_PROVIDER] search completed", {
-    provider,
-    queryCount: queries.length,
-    resultCount: deduped.length,
-  });
+    const providerCombined: JobSearchResult[] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        providerCombined.push(...result.value);
+        return;
+      }
 
-  return deduped;
+      console.warn("[JOB_SEARCH_PROVIDER] query failed", {
+        provider,
+        query: queries[index],
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason),
+      });
+    });
+
+    const providerDeduped = dedupeJobSearchResults(providerCombined);
+    combinedResults.push(...providerDeduped);
+
+    console.info("[JOB_SEARCH_PROVIDER] search completed", {
+      provider,
+      queryCount: queries.length,
+      resultCount: providerDeduped.length,
+    });
+  }
+
+  const maxResults = Math.max(limit, limit * Math.max(providers.length, 1));
+  return dedupeJobSearchResults(combinedResults).slice(0, maxResults);
 }

@@ -216,3 +216,47 @@ test("verification required is allowed for a real pre-form CAPTCHA blocker", () 
     ),
   ).toBe(true);
 });
+
+test("post-submit uncertainty is not classified as human verification", () => {
+  const stop = deriveStopClassification({
+    targetUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    finalUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    currentUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    status: "WAITING_FOR_CONFIRMATION",
+    formDetected: true,
+    applyCtaFound: true,
+    applyCtaClicked: true,
+    submitButtonFound: true,
+    submitButtonClicked: true,
+    confirmationTextFound: false,
+    verificationSignals: [],
+    missingRequiredFields: [],
+  });
+
+  expect(stop.reason).toBe("submission_status_unclear");
+  expect(stop.pageType).toBe("post_submit_unknown");
+  expect(stop.suggestedAction).toBe("check_confirmation_tab_or_email");
+});
+
+test("post-submit validation errors outrank generic missing fields", () => {
+  const stop = deriveStopClassification({
+    targetUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    finalUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    currentUrl: "https://job-boards.greenhouse.io/speechify/jobs/5975009004",
+    status: "NEEDS_USER_ANSWERS",
+    formDetected: true,
+    applyCtaFound: true,
+    applyCtaClicked: true,
+    submitButtonFound: true,
+    submitButtonClicked: true,
+    confirmationTextFound: false,
+    finalReason: "submit_blocked_by_validation_errors",
+    message:
+      "Submit blocked by validation errors. Greenhouse returned validation errors after submit.",
+    missingRequiredFields: ["Please select a location. — Where are you located?"],
+  });
+
+  expect(stop.reason).toBe("submit_blocked_by_validation_errors");
+  expect(stop.pageType).toBe("application_form");
+  expect(stop.suggestedAction).toBe("review_validation_errors");
+});

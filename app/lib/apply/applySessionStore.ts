@@ -257,6 +257,28 @@ export type ApplySessionDebug = {
   submitAttempted?: boolean;
   lastFormRecheckAt?: number;
   visibleValidationErrors?: string[];
+  postSubmitValidationErrorCount?: number;
+  postSubmitValidationErrors?: Array<{
+    text: string;
+    normalizedText?: string;
+    fieldLabel: string | null;
+    fieldName?: string | null;
+    fieldId: string | null;
+    fieldType?: string | null;
+    selectorHint: string | null;
+    ariaInvalid?: boolean;
+    ariaDescribedBy?: string | null;
+    describedByText?: string | null;
+    closestFormGroupText?: string | null;
+    nearbyText: string | null;
+    isVisible?: boolean;
+    visible: boolean;
+    required: boolean | null;
+    repairable: boolean;
+    category: string;
+  }>;
+  postSubmitValidationRepairAttempted?: boolean;
+  postSubmitValidationRepairSucceeded?: boolean;
   fileUploadPending?: boolean;
   verificationChallengeVisible?: boolean;
   reviewBeforeSubmit?: boolean;
@@ -268,6 +290,15 @@ export type ApplySessionDebug = {
   successUrlPatternMatched?: boolean;
   confirmationMatchedBy?: "url" | "text" | "popup" | "context-page";
   confirmationFinalUrl?: string;
+  confirmationUrl?: string;
+  confirmationSource?: string | null;
+  popupUrl?: string | null;
+  sameTabUrl?: string | null;
+  strategyUrlRejected?: boolean;
+  strategyUrlRejectionReason?: string | null;
+  strategyStepsReplayedWithoutUrlOverride?: boolean;
+  strategyRuntimeStartUrl?: string | null;
+  strategyRuntimeReason?: string | null;
   verificationDetected?: boolean;
   verificationEvidence?: VerificationEvidence;
   verificationSignals?: string[];
@@ -280,7 +311,10 @@ export type ApplySessionDebug = {
     | "missing_required_fields"
     | "missing_required_answers_after_ai"
     | "user_review_required_for_form_fields"
-    | "adzuna_handoff_rate_limited";
+    | "adzuna_handoff_rate_limited"
+    | "stale_strategy_domain_mismatch"
+    | "submit_blocked_by_validation_errors"
+    | "verification_required_after_submit";
   stopClassification?: ApplyStopClassification;
   finalReason?: string;
   resolverAttemptedLinks?: string[];

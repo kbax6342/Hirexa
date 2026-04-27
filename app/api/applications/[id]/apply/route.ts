@@ -88,6 +88,7 @@ import {
   compareAtsJobIdentityFromUrls,
   extractAtsJobIdentityFromUrl,
 } from "@/app/lib/apply/atsUrlIdentity";
+import { isSavedStrategyCompatibleWithSelectedJob } from "@/app/lib/apply/savedStrategyCompatibility";
 
 export const runtime = "nodejs";
 
@@ -144,7 +145,10 @@ type AutoApplyLastAction =
   | "missing_required_fields"
   | "missing_required_answers_after_ai"
   | "user_review_required_for_form_fields"
-  | "adzuna_handoff_rate_limited";
+  | "adzuna_handoff_rate_limited"
+  | "stale_strategy_domain_mismatch"
+  | "submit_blocked_by_validation_errors"
+  | "verification_required_after_submit";
 
 type AutoApplyStopDebug = {
   stopReason: "HUMAN_INTERVENTION_REQUIRED";
@@ -210,6 +214,29 @@ function buildAtsTokenMismatchResponse(args: {
       actualTargetUrl: args.actualTargetUrl ?? null,
       expectedToken: args.expectedToken ?? null,
       actualToken: args.actualToken ?? null,
+      strategyId: args.strategyId ?? null,
+    },
+    { status: 409 },
+  );
+}
+
+function buildStrategyDomainMismatchResponse(args: {
+  message: string;
+  expectedUrl?: string | null;
+  actualTargetUrl?: string | null;
+  reason?: string | null;
+  strategyId?: string | null;
+}) {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "STRATEGY_DOMAIN_MISMATCH",
+      status: "FAILED",
+      error: args.message,
+      message: args.message,
+      expectedUrl: args.expectedUrl ?? null,
+      actualTargetUrl: args.actualTargetUrl ?? null,
+      reason: args.reason ?? null,
       strategyId: args.strategyId ?? null,
     },
     { status: 409 },
@@ -625,6 +652,10 @@ function hasVerificationDebugSignal(args: {
 }
 
 function isVerificationRawResult(result: RawPlaywrightResult) {
+  if (isPostSubmitConfirmationUnclearRawResult(result)) {
+    return false;
+  }
+
   return hasVerificationDebugSignal({
     verificationDetected: result.debug?.verificationDetected,
     stopClassification: result.debug?.stopClassification,
@@ -646,6 +677,10 @@ function isVerificationRawResult(result: RawPlaywrightResult) {
 }
 
 function isVerificationExecutionResult(result: ApplyExecutionResult) {
+  if (isPostSubmitConfirmationUnclearExecutionResult(result)) {
+    return false;
+  }
+
   return (
     result.status === VERIFICATION_REQUIRED_STATUS ||
     hasVerificationDebugSignal({
@@ -1244,6 +1279,38 @@ function readRoutePlaywrightEvidence(result: RawPlaywrightResult): RoutePlaywrig
   };
 }
 
+function buildSubmissionUnclearStopClassification(): ApplyStopClassification {
+  return {
+    reason: "submission_status_unclear",
+    pageType: "post_submit_unknown",
+    suggestedAction: "check_confirmation_tab_or_email",
+  };
+}
+
+function isPostSubmitConfirmationUnclearRawResult(result: RawPlaywrightResult) {
+  return (
+    result.debug?.submitButtonClicked === true &&
+    result.debug?.submissionConfirmed !== true &&
+    (result.debug?.missingRequiredFields?.length ?? 0) === 0 &&
+    (result.debug?.visibleValidationErrors?.length ?? 0) === 0 &&
+    (result.debug?.postSubmitValidationErrorCount ?? 0) === 0 &&
+    (result.debug?.verificationSignals?.length ?? 0) === 0
+  );
+}
+
+function isPostSubmitConfirmationUnclearExecutionResult(
+  result: ApplyExecutionResult,
+) {
+  return (
+    result.debug.submitButtonClicked === true &&
+    result.debug.submissionConfirmed !== true &&
+    (result.debug.missingRequiredFields?.length ?? 0) === 0 &&
+    (result.debug.visibleValidationErrors?.length ?? 0) === 0 &&
+    (result.debug.postSubmitValidationErrorCount ?? 0) === 0 &&
+    (result.debug.verificationSignals?.length ?? 0) === 0
+  );
+}
+
 function shouldForceApplyNotStarted(evidence: RoutePlaywrightEvidence) {
   return (
     !evidence.applyCtaClicked &&
@@ -1290,6 +1357,33 @@ function looksLikeMissingRequiredFields(value: string | null | undefined) {
 function deriveLastActionFromRawResult(
   result: RawPlaywrightResult,
 ): AutoApplyLastAction {
+  const finalReasonText = [
+    result.debug?.finalReason,
+    result.message,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  if (
+    finalReasonText.includes("strategy_domain_mismatch") ||
+    finalReasonText.includes("stale saved strategy")
+  ) {
+    return "stale_strategy_domain_mismatch";
+  }
+  if (
+    finalReasonText.includes("verification_required_after_submit") ||
+    finalReasonText.includes("verification check after submit")
+  ) {
+    return "verification_required_after_submit";
+  }
+  if (
+    finalReasonText.includes("submit_blocked_by_validation_errors") ||
+    finalReasonText.includes("submit blocked by validation errors") ||
+    (result.debug?.postSubmitValidationErrorCount ?? 0) > 0
+  ) {
+    return "submit_blocked_by_validation_errors";
+  }
+
   if (isVerificationRawResult(result)) {
     return "verification_required";
   }
@@ -1326,6 +1420,33 @@ function deriveLastActionFromRawResult(
 function deriveLastActionFromExecutionResult(
   result: ApplyExecutionResult,
 ): AutoApplyLastAction {
+  const finalReasonText = [
+    result.debug.finalReason,
+    result.message,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  if (
+    finalReasonText.includes("strategy_domain_mismatch") ||
+    finalReasonText.includes("stale saved strategy")
+  ) {
+    return "stale_strategy_domain_mismatch";
+  }
+  if (
+    finalReasonText.includes("verification_required_after_submit") ||
+    finalReasonText.includes("verification check after submit")
+  ) {
+    return "verification_required_after_submit";
+  }
+  if (
+    finalReasonText.includes("submit_blocked_by_validation_errors") ||
+    finalReasonText.includes("submit blocked by validation errors") ||
+    (result.debug.postSubmitValidationErrorCount ?? 0) > 0
+  ) {
+    return "submit_blocked_by_validation_errors";
+  }
+
   if (isVerificationExecutionResult(result)) {
     return "verification_required";
   }
@@ -2039,12 +2160,61 @@ function applyRouteLevelSubmissionGuard(args: {
     };
   }
 
-  const normalized = coerceVerificationExecutionResult(
-    withStopDebug(
-      normalizePlaywrightResult(guardedResult),
-      buildStopDebugFromRawResult(guardedResult),
-    ),
-  );
+  const submissionUnclearAfterSubmit =
+    isPostSubmitConfirmationUnclearRawResult(guardedResult);
+  const normalized = submissionUnclearAfterSubmit
+    ? withStopDebug(
+        normalizePlaywrightResult({
+          ...guardedResult,
+          ok: false,
+          status: "WAITING_FOR_CONFIRMATION",
+          needsHuman: false,
+          unavailable: false,
+          message:
+            guardedResult.message ??
+            "Hirexa clicked Submit Application but could not confirm the Greenhouse confirmation page.",
+          debug: guardedResult.debug
+            ? {
+                ...guardedResult.debug,
+                verificationDetected: false,
+                verificationSignals: [],
+                stopClassification: buildSubmissionUnclearStopClassification(),
+                finalStatus: "WAITING_FOR_CONFIRMATION",
+                finalReason: "submission_status_unclear",
+                submissionConfirmed: false,
+              }
+            : guardedResult.debug,
+        }),
+        null,
+      )
+    : coerceVerificationExecutionResult(
+        withStopDebug(
+          normalizePlaywrightResult(guardedResult),
+          buildStopDebugFromRawResult(guardedResult),
+        ),
+      );
+  if (normalized.status === "SUBMITTED" && normalized.debug.submissionConfirmed === true) {
+    console.log("[AUTO_APPLY_ROUTE] final status submitted from confirmation", {
+      applicationId: args.applicationId,
+      phase: args.phase,
+      applySessionId: args.applySessionId ?? null,
+      confirmationUrl:
+        normalized.debug.confirmationUrl ??
+        normalized.debug.confirmationFinalUrl ??
+        normalized.finalUrl ??
+        null,
+      confirmationSource: normalized.debug.confirmationSource ?? null,
+    });
+  } else if (submissionUnclearAfterSubmit) {
+    console.log("[AUTO_APPLY_ROUTE] final status submission unclear after submit", {
+      applicationId: args.applicationId,
+      phase: args.phase,
+      applySessionId: args.applySessionId ?? null,
+      submitButtonClicked: true,
+      missingRequiredFields: guardedResult.debug?.missingRequiredFields ?? [],
+      verificationSignals: [],
+    });
+  }
   console.log("[AUTO_APPLY_ROUTE] playwright final promotion", {
     applicationId: args.applicationId,
     phase: args.phase,
@@ -2999,6 +3169,76 @@ async function persistAutomationOutcome(args: {
     };
   }
 
+  if (finalResult.status === "WAITING_FOR_CONFIRMATION") {
+    console.info("[AUTO_APPLY_ROUTE] final status submission unclear after submit", {
+      applicationId: args.application.id,
+      applySessionId: args.applySessionId ?? null,
+      submitButtonClicked: finalResult.debug.submitButtonClicked === true,
+      missingRequiredFields: finalResult.debug.missingRequiredFields ?? [],
+      verificationSignals: finalResult.debug.verificationSignals ?? [],
+    });
+
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        status: "WAITING_FOR_CONFIRMATION",
+        answersJson: args.answers,
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason:
+          finalResult.message ??
+          "Hirexa clicked Submit Application but could not confirm the Greenhouse confirmation page.",
+        verificationRequired: false,
+      },
+    });
+
+    return {
+      submissionStatus: "NOT_SUBMITTED",
+      emailStatus: "SKIPPED",
+      message: finalResult.message,
+      result: finalResult,
+    };
+  }
+
+  if (finalResult.status === "NEEDS_USER_ANSWERS") {
+    if (
+      finalResult.debug.stopClassification?.reason ===
+        "submit_blocked_by_validation_errors" ||
+      (finalResult.debug.postSubmitValidationErrorCount ?? 0) > 0
+    ) {
+      console.info("[AUTO_APPLY_ROUTE] final status submit blocked by validation errors", {
+        applicationId: args.application.id,
+        applySessionId: args.applySessionId ?? null,
+        validationErrorCount: finalResult.debug.postSubmitValidationErrorCount ?? 0,
+        validationErrors:
+          finalResult.debug.postSubmitValidationErrors?.map((error) => ({
+            text: error.text,
+            fieldLabel: error.fieldLabel,
+            category: error.category,
+            repairable: error.repairable,
+          })) ?? [],
+      });
+    }
+
+    await prisma.jobApplication.update({
+      where: { id: args.application.id },
+      data: {
+        status: "NEEDS_USER_ANSWERS",
+        answersJson: args.answers,
+        auditJson: nextAudit as Prisma.InputJsonValue,
+        failureReason:
+          finalResult.message ?? finalResult.debug.finalReason ?? null,
+        verificationRequired: false,
+      },
+    });
+
+    return {
+      submissionStatus: "NOT_SUBMITTED",
+      emailStatus: "SKIPPED",
+      message: finalResult.message,
+      result: finalResult,
+    };
+  }
+
   if (
     finalResult.status === "APPLY_NOT_STARTED" ||
     finalResult.status === "WAITING_HUMAN" ||
@@ -3089,6 +3329,7 @@ async function runBackgroundApply(args: {
   urlResolution: DirectResolutionContext;
   strategyGuidance?: MatchedStrategyGuidance | null;
   strategyRuntimeStartUrl?: string | null;
+  strategyRuntimePageType?: string | null;
   aiFormResumeText?: string | null;
 }) {
   let heartbeatTimer: NodeJS.Timeout | null = null;
@@ -3139,7 +3380,12 @@ async function runBackgroundApply(args: {
                   args.strategyGuidance.strategy.destinationHost ?? null,
                 strategyType:
                   args.strategyGuidance.strategy.strategyType ?? null,
-                pageType: args.strategyGuidance.strategy.pageType ?? null,
+                pageType:
+                  args.strategyRuntimePageType === null
+                    ? null
+                    : args.strategyRuntimePageType ??
+                      args.strategyGuidance.strategy.pageType ??
+                      null,
                 derivedInstruction:
                   args.strategyGuidance.derivedInstruction ?? null,
                 automationPrompt:
@@ -3781,6 +4027,21 @@ export async function POST(
           targetUrl: initialRoutingDecision.selectedUrl,
         })
       : null;
+    const rawStrategyCompatibility = rawMatchedStrategyGuidance
+      ? isSavedStrategyCompatibleWithSelectedJob({
+          strategy: rawMatchedStrategyGuidance.strategy,
+          strategyStartUrl: rawMatchedStrategyGuidance.startUrl,
+          selectedJobIdentity: expectedJobIdentity ?? resolvedApplicationJobIdentity,
+          resolvedDirectUrl:
+            initialRoutingDecision.selectedUrl ??
+            urlResolution.resolvedDirectUrl ??
+            prepared.targetUrl ??
+            application.jobUrl,
+          companyName: application.company,
+          jobTitle: application.title ?? application.jobTitle,
+          applyProvider: prepared.applyProvider,
+        })
+      : null;
     const strategyDomainRejection = rejectStrategyForDomainMismatch({
       application,
       originalUrl: urlResolution.originalUrl,
@@ -3788,7 +4049,33 @@ export async function POST(
       expectedTargetUrl: initialRoutingDecision.selectedUrl,
       guidance: rawMatchedStrategyGuidance,
     });
-    const matchedStrategyGuidance = strategyDomainRejection
+    const strategyCompatibilityRejected =
+      rawStrategyCompatibility?.severity === "reject";
+    const strategyCompatibilityStepsOnly =
+      rawStrategyCompatibility?.severity === "steps_only";
+    if (rawMatchedStrategyGuidance && rawStrategyCompatibility?.severity !== "allow") {
+      console.warn("[AUTO_APPLY_STRATEGY] incompatible strategy rejected", {
+        applicationId: application.id,
+        strategyId: rawMatchedStrategyGuidance.strategy.id ?? null,
+        reason: rawStrategyCompatibility?.reason ?? "unknown",
+        severity: rawStrategyCompatibility?.severity ?? "reject",
+        selectedProvider: rawStrategyCompatibility?.selectedProvider ?? null,
+        strategyProvider: rawStrategyCompatibility?.strategyProvider ?? null,
+        selectedToken: rawStrategyCompatibility?.selectedToken ?? null,
+        strategyToken: rawStrategyCompatibility?.strategyToken ?? null,
+        selectedHost: rawStrategyCompatibility?.selectedHost ?? null,
+        strategyHost: rawStrategyCompatibility?.strategyHost ?? null,
+        rejectedUrl: rawStrategyCompatibility?.rejectedUrl ?? null,
+      });
+    }
+    if (rawMatchedStrategyGuidance && strategyCompatibilityRejected) {
+      console.warn("[AUTO_APPLY_STRATEGY] rejected strategy guidance skipped", {
+        applicationId: application.id,
+        strategyId: rawMatchedStrategyGuidance.strategy.id ?? null,
+        reason: rawStrategyCompatibility?.reason ?? "unknown",
+      });
+    }
+    const matchedStrategyGuidance = strategyDomainRejection || strategyCompatibilityRejected
       ? null
       : rawMatchedStrategyGuidance;
     const strategyRuntimeStartDecision = matchedStrategyGuidance
@@ -3802,14 +4089,117 @@ export async function POST(
             application.jobUrl,
         })
       : null;
-    const runtimeStrategyStartUrl =
+    let runtimeStrategyStartUrl =
       strategyRuntimeStartDecision?.action === "replayed"
         ? strategyRuntimeStartDecision.selectedUrl ?? undefined
         : undefined;
-    const convertedStrategyTargetUrl =
+    let convertedStrategyTargetUrl =
       strategyRuntimeStartDecision?.action === "converted"
         ? strategyRuntimeStartDecision.selectedUrl ?? undefined
         : undefined;
+    const selectedResolvedStartUrl =
+      initialRoutingDecision.selectedUrl ??
+      urlResolution.resolvedDirectUrl ??
+      prepared.targetUrl ??
+      application.jobUrl ??
+      null;
+    const strategyStartUrlForIdentity =
+      strategyRuntimeStartDecision?.strategyStartUrl ??
+      matchedStrategyGuidance?.startUrl ??
+      null;
+    const strategyAtsIdentityComparison =
+      matchedStrategyGuidance && selectedResolvedStartUrl && strategyStartUrlForIdentity
+        ? compareAtsJobIdentityFromUrls(
+            selectedResolvedStartUrl,
+            strategyStartUrlForIdentity,
+          )
+        : null;
+    const strategyUrlRejectedByAtsMismatch =
+      strategyAtsIdentityComparison?.comparable === true &&
+      strategyAtsIdentityComparison.matches === false;
+    const strategyUrlRejected =
+      strategyUrlRejectedByAtsMismatch ||
+      strategyCompatibilityStepsOnly ||
+      strategyCompatibilityRejected ||
+      Boolean(strategyDomainRejection);
+    const strategyUrlRejectionReason =
+      strategyCompatibilityRejected || strategyCompatibilityStepsOnly
+        ? rawStrategyCompatibility?.reason ?? "unknown"
+        : strategyUrlRejectedByAtsMismatch
+          ? "ats_token_mismatch"
+          : strategyDomainRejection ?? null;
+    if (strategyUrlRejectedByAtsMismatch || strategyCompatibilityStepsOnly) {
+      console.warn("[AUTO_APPLY_STRATEGY] token mismatch ignored", {
+        applicationId: application.id,
+        strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+        selectedResolvedUrl: selectedResolvedStartUrl,
+        strategyStartUrl: strategyStartUrlForIdentity,
+        expectedToken:
+          strategyAtsIdentityComparison?.expected.token ??
+          rawStrategyCompatibility?.selectedToken ??
+          null,
+        actualToken:
+          strategyAtsIdentityComparison?.actual.token ??
+          rawStrategyCompatibility?.strategyToken ??
+          null,
+      });
+      console.warn("[AUTO_APPLY_STRATEGY] stale start URL rejected", {
+        applicationId: application.id,
+        strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+        strategyStartUrl: strategyStartUrlForIdentity,
+        reason: "greenhouse_ats_token_mismatch",
+      });
+      console.warn("[AUTO_APPLY_IDENTITY] strategy URL rejected due to ATS token mismatch", {
+        applicationId: application.id,
+        expectedUrl: selectedResolvedStartUrl,
+        actualTargetUrl: strategyStartUrlForIdentity,
+        expectedToken:
+          strategyAtsIdentityComparison?.expected.token ??
+          rawStrategyCompatibility?.selectedToken ??
+          null,
+        actualToken:
+          strategyAtsIdentityComparison?.actual.token ??
+          rawStrategyCompatibility?.strategyToken ??
+          null,
+      });
+      console.info("[AUTO_APPLY_STRATEGY] replay steps allowed without URL override", {
+        applicationId: application.id,
+        strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+        stepCount: matchedStrategyGuidance?.sanitizedSteps?.length ?? 0,
+      });
+      if (matchedStrategyGuidance?.strategy.stopReason) {
+        console.info("[AUTO_APPLY_STRATEGY] rejected strategy stop reason ignored", {
+          applicationId: application.id,
+          strategyId: matchedStrategyGuidance.strategy.id ?? null,
+          rejectedStopReason: matchedStrategyGuidance.strategy.stopReason,
+          reason: "greenhouse_ats_token_mismatch",
+        });
+      }
+      runtimeStrategyStartUrl = undefined;
+      convertedStrategyTargetUrl = undefined;
+    }
+    if (strategyUrlRejected) {
+      console.warn("[AUTO_APPLY_STRATEGY] rejected strategy scrubbed from runtime", {
+        applicationId: application.id,
+        strategyId:
+          matchedStrategyGuidance?.strategy.id ??
+          rawMatchedStrategyGuidance?.strategy.id ??
+          null,
+        reason: strategyUrlRejectionReason,
+        selectedStartSource: "resolved_direct_url",
+        targetUrl:
+          initialRoutingDecision.selectedUrl ??
+          urlResolution.resolvedDirectUrl ??
+          prepared.targetUrl ??
+          application.jobUrl ??
+          null,
+      });
+      runtimeStrategyStartUrl = undefined;
+      convertedStrategyTargetUrl = undefined;
+    }
+    const runtimeStrategyPageType = strategyUrlRejected
+      ? null
+      : matchedStrategyGuidance?.strategy.pageType ?? null;
 
     if (process.env.NODE_ENV !== "production") {
       if (rawMatchedStrategyGuidance && strategyDomainRejection) {
@@ -3834,8 +4224,7 @@ export async function POST(
           strategyId: matchedStrategyGuidance.strategy.id ?? null,
           strategyType:
             matchedStrategyGuidance.strategy.strategyType ?? null,
-          strategyPageType:
-            matchedStrategyGuidance.strategy.pageType ?? null,
+          strategyPageType: runtimeStrategyPageType,
           strategyStartUrl: matchedStrategyGuidance.startUrl ?? null,
           preferredTargetUrl: prepared.targetUrl ?? null,
           stepCount:
@@ -4667,12 +5056,28 @@ export async function POST(
       strategyMatched: Boolean(matchedStrategyGuidance),
       strategyDomainRejected: Boolean(strategyDomainRejection),
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
-      strategyId: matchedStrategyGuidance?.strategy.id ?? null,
-      strategyStartUrl: matchedStrategyGuidance?.startUrl ?? null,
-      strategyRuntimeAction: strategyRuntimeStartDecision?.action ?? null,
-      strategyRuntimeReason: strategyRuntimeStartDecision?.reason ?? null,
-      strategyRuntimeStartUrl:
-        strategyRuntimeStartDecision?.selectedUrl ?? null,
+      strategyUrlRejected,
+      strategyUrlRejectionReason,
+      strategyStepsReplayedWithoutUrlOverride:
+        !strategyCompatibilityRejected &&
+        strategyUrlRejected &&
+        (matchedStrategyGuidance?.sanitizedSteps?.length ?? 0) > 0,
+      strategyId:
+        matchedStrategyGuidance?.strategy.id ??
+        rawMatchedStrategyGuidance?.strategy.id ??
+        null,
+      strategyStartUrl: strategyUrlRejected ? null : matchedStrategyGuidance?.startUrl ?? null,
+      strategyRuntimeAction: strategyUrlRejected
+        ? strategyCompatibilityRejected
+          ? "rejected"
+          : "steps_replayed_without_url_override"
+        : strategyRuntimeStartDecision?.action ?? null,
+      strategyRuntimeReason: strategyUrlRejected
+        ? strategyUrlRejectionReason
+        : strategyRuntimeStartDecision?.reason ?? null,
+      strategyRuntimeStartUrl: strategyUrlRejected
+        ? null
+        : strategyRuntimeStartDecision?.selectedUrl ?? null,
       usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
       targetUrl: effectiveTargetUrl ?? null,
       selectedStartSource,
@@ -4698,11 +5103,27 @@ export async function POST(
       strategyMatched: Boolean(matchedStrategyGuidance),
       strategyDomainRejected: Boolean(strategyDomainRejection),
       strategyDomainRejectionReason: strategyDomainRejection ?? null,
-      strategyId: matchedStrategyGuidance?.strategy.id ?? null,
-      strategyRuntimeAction: strategyRuntimeStartDecision?.action ?? null,
-      strategyRuntimeReason: strategyRuntimeStartDecision?.reason ?? null,
-      strategyRuntimeStartUrl:
-        strategyRuntimeStartDecision?.selectedUrl ?? null,
+      strategyUrlRejected,
+      strategyUrlRejectionReason,
+      strategyStepsReplayedWithoutUrlOverride:
+        !strategyCompatibilityRejected &&
+        strategyUrlRejected &&
+        (matchedStrategyGuidance?.sanitizedSteps?.length ?? 0) > 0,
+      strategyId:
+        matchedStrategyGuidance?.strategy.id ??
+        rawMatchedStrategyGuidance?.strategy.id ??
+        null,
+      strategyRuntimeAction: strategyUrlRejected
+        ? strategyCompatibilityRejected
+          ? "rejected"
+          : "steps_replayed_without_url_override"
+        : strategyRuntimeStartDecision?.action ?? null,
+      strategyRuntimeReason: strategyUrlRejected
+        ? strategyUrlRejectionReason
+        : strategyRuntimeStartDecision?.reason ?? null,
+      strategyRuntimeStartUrl: strategyUrlRejected
+        ? null
+        : strategyRuntimeStartDecision?.selectedUrl ?? null,
       selectedStartSource,
       requiresEcosiaSearch: effectiveRequiresEcosiaSearch,
       usedResolvedDirectUrl: effectiveUsedResolvedDirectUrl,
@@ -5108,6 +5529,78 @@ export async function POST(
       );
     }
 
+    const expectedFinalAtsUrl =
+      effectiveResolvedDirectUrl ??
+      urlResolution.resolvedDirectUrl ??
+      selectedResolvedStartUrl ??
+      null;
+    const finalTargetCompatibility = getResolvedUrlCompatibility({
+      url: effectiveTargetUrl,
+      companyName: application.company,
+      jobTitle: application.title ?? application.jobTitle,
+      sourceUrl: expectedFinalAtsUrl ?? application.jobUrl,
+    });
+    if (effectiveTargetUrl && !finalTargetCompatibility.compatible) {
+      const message =
+        "Auto Apply blocked a stale saved strategy because it tried to use a different employer domain.";
+      console.warn("[AUTO_APPLY_TARGET_GUARD] blocked stale strategy target", {
+        applicationId: application.id,
+        expectedTargetUrl: expectedFinalAtsUrl,
+        actualTargetUrl: effectiveTargetUrl,
+        reason: finalTargetCompatibility.reason,
+        mismatchFamily: finalTargetCompatibility.mismatchFamily ?? null,
+        selectedStartSource,
+        strategyId:
+          matchedStrategyGuidance?.strategy.id ??
+          rawMatchedStrategyGuidance?.strategy.id ??
+          null,
+      });
+      return buildStrategyDomainMismatchResponse({
+        message,
+        expectedUrl: expectedFinalAtsUrl,
+        actualTargetUrl: effectiveTargetUrl,
+        reason: finalTargetCompatibility.reason,
+        strategyId:
+          matchedStrategyGuidance?.strategy.id ??
+          rawMatchedStrategyGuidance?.strategy.id ??
+          null,
+      });
+    }
+    console.info("[AUTO_APPLY_TARGET_GUARD] pre-launch target validated", {
+      applicationId: application.id,
+      expectedTargetUrl: expectedFinalAtsUrl,
+      actualTargetUrl: effectiveTargetUrl,
+      reason: finalTargetCompatibility.reason,
+      selectedStartSource,
+    });
+    const finalTargetAtsComparison =
+      expectedFinalAtsUrl && effectiveTargetUrl
+        ? compareAtsJobIdentityFromUrls(expectedFinalAtsUrl, effectiveTargetUrl)
+        : null;
+    if (
+      finalTargetAtsComparison?.comparable === true &&
+      finalTargetAtsComparison.matches === false
+    ) {
+      const message =
+        "Auto Apply blocked because a saved strategy tried to switch to a different Greenhouse job.";
+      console.warn("[AUTO_APPLY_IDENTITY] strategy URL rejected due to ATS token mismatch", {
+        applicationId: application.id,
+        expectedUrl: expectedFinalAtsUrl,
+        actualTargetUrl: effectiveTargetUrl,
+        expectedToken: finalTargetAtsComparison.expected.token ?? null,
+        actualToken: finalTargetAtsComparison.actual.token ?? null,
+        selectedStartSource,
+      });
+      return buildAtsTokenMismatchResponse({
+        message,
+        expectedUrl: expectedFinalAtsUrl,
+        actualTargetUrl: effectiveTargetUrl,
+        expectedToken: finalTargetAtsComparison.expected.token ?? null,
+        actualToken: finalTargetAtsComparison.actual.token ?? null,
+        strategyId: matchedStrategyGuidance?.strategy.id ?? null,
+      });
+    }
+
     if (prepared.missingRequired.length > 0) {
       const message = "Missing required profile fields.";
 
@@ -5195,6 +5688,18 @@ export async function POST(
           originalJobUrl: urlResolution.originalUrl ?? application.jobUrl ?? undefined,
           resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
           targetUrl: effectiveTargetUrl ?? undefined,
+          strategyUrlRejected,
+          strategyUrlRejectionReason,
+          strategyStepsReplayedWithoutUrlOverride:
+            !strategyCompatibilityRejected &&
+            strategyUrlRejected &&
+            (matchedStrategyGuidance?.sanitizedSteps?.length ?? 0) > 0,
+          strategyRuntimeStartUrl: strategyUrlRejected
+            ? null
+            : strategyRuntimeStartDecision?.selectedUrl ?? null,
+          strategyRuntimeReason: strategyUrlRejected
+            ? strategyUrlRejectionReason
+            : strategyRuntimeStartDecision?.reason ?? null,
           currentUrl:
             effectiveTargetUrl ??
             effectiveResolvedDirectUrl ??
@@ -5235,6 +5740,9 @@ export async function POST(
         urlResolution,
         strategyGuidance: matchedStrategyGuidance,
         strategyRuntimeStartUrl: runtimeStrategyStartUrl ?? null,
+        strategyRuntimePageType: strategyUrlRejected
+          ? null
+          : matchedStrategyGuidance?.strategy.pageType ?? null,
         aiFormResumeText,
       });
 
@@ -5281,7 +5789,9 @@ export async function POST(
                     matchedStrategyGuidance.strategy.destinationHost ?? null,
                   strategyType:
                     matchedStrategyGuidance.strategy.strategyType ?? null,
-                  pageType: matchedStrategyGuidance.strategy.pageType ?? null,
+                  pageType: strategyUrlRejected
+                    ? null
+                    : matchedStrategyGuidance.strategy.pageType ?? null,
                   derivedInstruction:
                     matchedStrategyGuidance.derivedInstruction ?? null,
                   automationPrompt:

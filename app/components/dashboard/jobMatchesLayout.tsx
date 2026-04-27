@@ -141,6 +141,11 @@ type AutoApplyStartResponse = {
   expectedJob?: JobIdentitySnapshot;
   actualJob?: JobIdentitySnapshot;
   mismatches?: JobIdentityMismatch[];
+  expectedUrl?: string | null;
+  actualTargetUrl?: string | null;
+  expectedToken?: string | null;
+  actualToken?: string | null;
+  strategyId?: string | null;
 };
 
 type AutoApplyBannerState = {
@@ -307,6 +312,18 @@ function getAutoApplyStartFailureMessage(
   }
 
   if (payload?.code === "JOB_IDENTITY_MISMATCH") {
+    if (payload.expectedToken || payload.actualToken) {
+      return [
+        "Auto Apply blocked because a saved strategy tried to switch to a different Greenhouse job.",
+        payload.expectedToken
+          ? `Selected Greenhouse job ID: ${payload.expectedToken}.`
+          : null,
+        payload.actualToken
+          ? `Strategy/browser target Greenhouse job ID: ${payload.actualToken}.`
+          : null,
+        "Retry Auto Apply after clearing the stale saved strategy for this Greenhouse job.",
+      ].filter(Boolean).join(" ");
+    }
     const expected = payload.expectedJob;
     const actual = payload.actualJob;
     const selectedLabel = expected
@@ -316,6 +333,19 @@ function getAutoApplyStartFailureMessage(
       ? `${actual.title || "different job"}${actual.sourceJobId ? ` (${actual.sourceJobId})` : ""}`
       : "a different job";
     return `Auto Apply blocked because the selected job changed before apply started. You selected ${selectedLabel}, but Auto Apply was about to use ${actualLabel}. Refresh the job details and try again.`;
+  }
+
+  if (payload?.code === "STRATEGY_DOMAIN_MISMATCH") {
+    return [
+      "Auto Apply blocked a stale saved strategy.",
+      payload.resolvedDirectUrl || payload.expectedUrl
+        ? `Hirexa selected ${payload.resolvedDirectUrl ?? payload.expectedUrl}.`
+        : null,
+      payload.actualTargetUrl
+        ? `A saved strategy tried to send the browser to ${payload.actualTargetUrl}.`
+        : null,
+      "Disable or delete the stale strategy, then retry Auto Apply.",
+    ].filter(Boolean).join(" ");
   }
 
   return (
@@ -427,11 +457,22 @@ function autoApplyStatusCopy(status: string | null | undefined, message?: string
   if (status === "WAITING_CONFIRMATION" || status === "WAITING_FOR_CONFIRMATION") {
     return {
       title: "Submission status unclear",
-      message: message ?? "Hirexa clicked submit but could not confirm the final result.",
-      action: "Check application page",
+      message:
+        message ??
+        "Hirexa clicked Submit Application but could not confirm the final Greenhouse confirmation page.",
+      action: "Check confirmation tab or email",
     };
   }
   if (status === "NEEDS_USER_ANSWERS") {
+    if (/submit blocked by validation errors|greenhouse returned validation errors/i.test(message ?? "")) {
+      return {
+        title: "Submit blocked by validation errors",
+        message:
+          message ??
+          "Hirexa clicked Submit Application, but Greenhouse returned validation errors and did not open the confirmation page.",
+        action: "Review validation errors",
+      };
+    }
     return {
       title: "Needs answers",
       message: message ?? "Hirexa needs your input for fields it should not guess.",

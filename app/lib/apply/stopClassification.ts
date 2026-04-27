@@ -22,6 +22,10 @@ export type ApplyStopReason =
   | "candidate_needs_review"
   | "aggregator_no_cta"
   | "external_redirect_needed"
+  | "submission_status_unclear"
+  | "submit_blocked_by_validation_errors"
+  | "verification_required_after_submit"
+  | "stale_strategy_domain_mismatch"
   | "unknown_human_intervention";
 
 export type ApplyStopPageType =
@@ -37,6 +41,8 @@ export type ApplyStopPageType =
   | "handoff_page"
   | "job_page"
   | "application_form"
+  | "confirmation_page"
+  | "post_submit_unknown"
   | "unknown";
 
 export type ApplyStopSuggestedAction =
@@ -48,6 +54,8 @@ export type ApplyStopSuggestedAction =
   | "login_to_continue"
   | "complete_verification"
   | "teach_this_page"
+  | "check_confirmation_tab_or_email"
+  | "review_validation_errors"
   | "review_and_retry";
 
 export type ApplyStopClassification = {
@@ -89,6 +97,10 @@ export const APPLY_STOP_REASONS: ApplyStopReason[] = [
   "candidate_needs_review",
   "aggregator_no_cta",
   "external_redirect_needed",
+  "submission_status_unclear",
+  "submit_blocked_by_validation_errors",
+  "verification_required_after_submit",
+  "stale_strategy_domain_mismatch",
   "unknown_human_intervention",
 ];
 
@@ -451,6 +463,17 @@ export function deriveStopClassification(
     };
   }
 
+  if (
+    signalText.includes("verification_required_after_submit") ||
+    signalText.includes("verification check after submit")
+  ) {
+    return {
+      reason: "verification_required_after_submit",
+      pageType: "human_verification_gate",
+      suggestedAction: "complete_verification",
+    };
+  }
+
   if (hasVerificationSignals && allowVerificationRequired) {
     return {
       reason: "verification_required",
@@ -464,6 +487,29 @@ export function deriveStopClassification(
       reason: "login_required",
       pageType: "auth_gate",
       suggestedAction: "sign_in_and_retry",
+    };
+  }
+
+  if (
+    signalText.includes("submit_blocked_by_validation_errors") ||
+    signalText.includes("submit blocked by validation errors") ||
+    signalText.includes("greenhouse returned validation errors")
+  ) {
+    return {
+      reason: "submit_blocked_by_validation_errors",
+      pageType: "application_form",
+      suggestedAction: "review_validation_errors",
+    };
+  }
+
+  if (
+    signalText.includes("verification_required_after_submit") ||
+    signalText.includes("verification check after submit")
+  ) {
+    return {
+      reason: "verification_required_after_submit",
+      pageType: "human_verification_gate",
+      suggestedAction: "complete_verification",
     };
   }
 
@@ -545,6 +591,40 @@ export function deriveStopClassification(
     };
   }
 
+  if (
+    signalText.includes("strategy_domain_mismatch") ||
+    signalText.includes("stale saved strategy")
+  ) {
+    return {
+      reason: "stale_strategy_domain_mismatch",
+      pageType: "resolver_failure",
+      suggestedAction: "review_and_retry",
+    };
+  }
+
+  if (
+    signalText.includes("submit_blocked_by_validation_errors") ||
+    signalText.includes("submit blocked by validation errors") ||
+    signalText.includes("greenhouse returned validation errors")
+  ) {
+    return {
+      reason: "submit_blocked_by_validation_errors",
+      pageType: "application_form",
+      suggestedAction: "review_validation_errors",
+    };
+  }
+
+  if (
+    signalText.includes("verification_required_after_submit") ||
+    signalText.includes("verification check after submit")
+  ) {
+    return {
+      reason: "verification_required_after_submit",
+      pageType: "human_verification_gate",
+      suggestedAction: "complete_verification",
+    };
+  }
+
   if (includesAnySignal(signalText, RTX_RECOVERY_KEYWORDS)) {
     return {
       reason: "unknown_human_intervention",
@@ -563,6 +643,14 @@ export function deriveStopClassification(
       reason: "external_redirect_needed",
       pageType: args.formDetected ? "application_form" : "employer_site",
       suggestedAction: "review_and_retry",
+    };
+  }
+
+  if (args.submitButtonClicked === true && args.confirmationTextFound !== true) {
+    return {
+      reason: "submission_status_unclear",
+      pageType: "post_submit_unknown",
+      suggestedAction: "check_confirmation_tab_or_email",
     };
   }
 
@@ -629,6 +717,14 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
       return "No apply button was found on the aggregator page";
     case "external_redirect_needed":
       return "A redirect to another application page is needed";
+    case "submission_status_unclear":
+      return "Submission status unclear";
+    case "submit_blocked_by_validation_errors":
+      return "Submit blocked by validation errors";
+    case "verification_required_after_submit":
+      return "Verification required after submit";
+    case "stale_strategy_domain_mismatch":
+      return "Stale saved strategy was blocked";
     case "unknown_human_intervention":
     default:
       return "Human intervention is required";
@@ -651,6 +747,10 @@ export function getStopPageTypeLabel(pageType: ApplyStopPageType) {
       return "Resolver failure";
     case "handoff_page":
       return "Handoff page";
+    case "confirmation_page":
+      return "Confirmation page";
+    case "post_submit_unknown":
+      return "Post-submit confirmation pending";
     case "job_page":
     case "aggregator":
     case "employer_site":
@@ -684,6 +784,10 @@ export function getStopSuggestedActionLabel(
       return "Complete verification";
     case "teach_this_page":
       return "Teach this page";
+    case "check_confirmation_tab_or_email":
+      return "Check confirmation tab or email";
+    case "review_validation_errors":
+      return "Review validation errors";
     case "review_and_retry":
     default:
       return "Review and retry";

@@ -209,7 +209,7 @@ function recoverStaleSessionIfNeeded(
     recoveredStatus === "READY_FOR_USER_REVIEW"
       ? "Hirexa filled the application. Review the form before submitting."
       : recoveredStatus === "WAITING_FOR_CONFIRMATION"
-        ? "Hirexa clicked submit but could not confirm the final result."
+        ? "Hirexa clicked Submit Application but could not confirm the final Greenhouse confirmation page."
         : recoveredStatus === "NEEDS_USER_ANSWERS"
           ? "The application returned validation errors after submit."
           : STALE_SESSION_MESSAGE;
@@ -217,7 +217,7 @@ function recoverStaleSessionIfNeeded(
     recoveredStatus === "READY_FOR_USER_REVIEW"
       ? "Open review."
       : recoveredStatus === "WAITING_FOR_CONFIRMATION"
-        ? "Check the application page."
+        ? "Check the opened confirmation tab or your email."
         : recoveredStatus === "NEEDS_USER_ANSWERS"
           ? "Answer questions to continue."
           : STALE_SESSION_SUGGESTED_ACTION;
@@ -282,6 +282,8 @@ function pickLatestSessionStopUrl(
   session: NonNullable<ReturnType<typeof getSession>>,
 ) {
   const prioritized = [
+    session.debug?.confirmationUrl ?? null,
+    session.debug?.confirmationFinalUrl ?? null,
     session.debug?.stoppedAtUrl ?? null,
     session.debug?.latestUrl ?? null,
     session.debug?.currentUrl ?? null,
@@ -371,6 +373,14 @@ function buildRtxStopPayload(
 function buildVerificationStopPayload(
   session: NonNullable<ReturnType<typeof getSession>>,
 ) {
+  if (
+    session.status === "WAITING_FOR_CONFIRMATION" ||
+    session.status === "WAITING_CONFIRMATION" ||
+    session.debug?.stopClassification?.reason === "submission_status_unclear"
+  ) {
+    return null;
+  }
+
   const stopClassification = session.debug?.stopClassification ?? null;
   const debugVerificationSignals = session.debug?.verificationSignals ?? [];
   const verificationSignalFromDebug = debugVerificationSignals[0] ?? null;
@@ -607,6 +617,19 @@ export async function GET(
         ...session,
         debug: {
           ...(session.debug ?? {}),
+          ...(session.status === "WAITING_FOR_CONFIRMATION" ||
+          session.status === "WAITING_CONFIRMATION"
+            ? {
+                stopReason: undefined,
+                stopClassification: {
+                  reason: "submission_status_unclear" as const,
+                  pageType: "post_submit_unknown" as const,
+                  suggestedAction: "check_confirmation_tab_or_email" as const,
+                },
+                verificationDetected: false,
+                verificationSignals: [],
+              }
+            : {}),
           latestUrl: latestSessionStopUrl ?? undefined,
           stoppedAtUrl:
             latestSessionStopUrl ??

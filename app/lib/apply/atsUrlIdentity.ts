@@ -3,6 +3,7 @@ export type AtsJobUrlProvider =
   | "lever"
   | "ashby"
   | "workable"
+  | "workday"
   | "unknown";
 
 export type AtsJobUrlIdentity = {
@@ -40,7 +41,14 @@ export function extractAtsJobIdentityFromUrl(
   value: string | null | undefined,
 ): AtsJobUrlIdentity {
   try {
-    const url = new URL(String(value ?? ""));
+    const raw = String(value ?? "").trim();
+    const url = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
+        ? raw
+        : raw.includes(".")
+          ? `https://${raw}`
+          : raw,
+    );
     const host = normalizeHost(url.hostname);
     const segments = cleanPathSegments(url.pathname);
 
@@ -87,6 +95,15 @@ export function extractAtsJobIdentityFromUrl(
         provider: "workable",
         board: segments[0] ?? null,
         token: viewIndex >= 0 ? segments[viewIndex + 1] ?? null : segments.at(-1) ?? null,
+        host,
+      };
+    }
+
+    if (host.includes("workdayjobs.com") || host.includes("myworkdayjobs.com")) {
+      return {
+        provider: "workday",
+        board: segments[0] ?? null,
+        token: segments.at(-1) ?? null,
         host,
       };
     }

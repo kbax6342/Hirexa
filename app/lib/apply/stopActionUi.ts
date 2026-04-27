@@ -50,6 +50,18 @@ export function getStopSuggestedActionUi(
         recommendationText:
           "Hirexa could not confidently continue on this page. Teach this page to record the correct flow for this site.",
       };
+    case "check_confirmation_tab_or_email":
+      return {
+        label: getStopSuggestedActionLabel(suggestedAction),
+        recommendationText:
+          "Hirexa clicked Submit Application but could not confirm the final Greenhouse confirmation page. Check the opened confirmation tab or your email.",
+      };
+    case "review_validation_errors":
+      return {
+        label: getStopSuggestedActionLabel(suggestedAction),
+        recommendationText:
+          "Greenhouse returned validation errors after submit. Review the highlighted fields, then retry after they are corrected.",
+      };
     case "review_and_retry":
     default:
       return {

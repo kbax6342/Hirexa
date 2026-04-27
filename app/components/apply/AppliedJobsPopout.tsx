@@ -141,11 +141,22 @@ function autoApplyStatusCopy(status: string | null | undefined, message?: string
   if (status === "WAITING_CONFIRMATION" || status === "WAITING_FOR_CONFIRMATION") {
     return {
       title: "Submission status unclear",
-      message: message ?? "Hirexa clicked submit but could not confirm the final result.",
-      action: "Check application page",
+      message:
+        message ??
+        "Hirexa clicked Submit Application but could not confirm the final Greenhouse confirmation page.",
+      action: "Check confirmation tab or email",
     };
   }
   if (status === "NEEDS_USER_ANSWERS") {
+    if (/submit blocked by validation errors|greenhouse returned validation errors/i.test(message ?? "")) {
+      return {
+        title: "Submit blocked by validation errors",
+        message:
+          message ??
+          "Hirexa clicked Submit Application, but Greenhouse returned validation errors and did not open the confirmation page.",
+        action: "Review validation errors",
+      };
+    }
     return {
       title: "Needs answers",
       message: message ?? "Hirexa needs your input for fields it should not guess.",

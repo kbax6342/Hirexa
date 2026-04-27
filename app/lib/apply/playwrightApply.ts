@@ -97,6 +97,24 @@ import {
   validateAutomationStartUrl,
 } from "@/app/lib/apply/urlValidation";
 import { classifyJobUrlKind, normalizeJobUrl } from "@/app/lib/jobSources";
+import { compareAtsJobIdentityFromUrls } from "@/app/lib/apply/atsUrlIdentity";
+import {
+  extractGreenhouseValidationErrors,
+  type GreenhouseValidationExtractionResult,
+} from "@/app/lib/apply/greenhouseValidationErrors";
+import {
+  detectGreenhouseSubmissionConfirmation,
+  detectSubmissionConfirmationAcrossPages,
+  isSubmissionConfirmationUrl,
+  submitAndDetectGreenhouseConfirmation,
+  type SubmissionConfirmationMatch,
+} from "@/app/lib/apply/confirmationDetector";
+
+export {
+  detectSubmissionConfirmationAcrossPages,
+  isSubmissionConfirmationText,
+  isSubmissionConfirmationUrl,
+} from "@/app/lib/apply/confirmationDetector";
 
 export type PlaywrightApplyResult = {
   ok: boolean;
@@ -160,6 +178,10 @@ export type PlaywrightApplyResult = {
     successUrlPatternMatched: boolean;
     confirmationMatchedBy?: "url" | "text" | "popup" | "context-page";
     confirmationFinalUrl?: string;
+    confirmationUrl?: string;
+    confirmationSource?: string | null;
+    popupUrl?: string | null;
+    sameTabUrl?: string | null;
     submissionConfirmed: boolean;
     finalRequiredCheckPassed?: boolean;
     allRequiredFieldsFilled?: boolean;
@@ -168,6 +190,10 @@ export type PlaywrightApplyResult = {
     readyToSubmit?: boolean;
     submitAttempted?: boolean;
     visibleValidationErrors?: string[];
+    postSubmitValidationErrorCount?: number;
+    postSubmitValidationErrors?: GreenhouseValidationExtractionResult["errors"];
+    postSubmitValidationRepairAttempted?: boolean;
+    postSubmitValidationRepairSucceeded?: boolean;
     fileUploadPending?: boolean;
     verificationChallengeVisible?: boolean;
     reviewBeforeSubmit?: boolean;
@@ -1319,6 +1345,10 @@ function buildDebugPayload(args: {
   successUrlPatternMatched: boolean;
   confirmationMatchedBy?: "url" | "text" | "popup" | "context-page";
   confirmationFinalUrl?: string;
+  confirmationUrl?: string;
+  confirmationSource?: string | null;
+  popupUrl?: string | null;
+  sameTabUrl?: string | null;
   submissionConfirmed: boolean;
   finalRequiredCheckPassed?: boolean;
   allRequiredFieldsFilled?: boolean;
@@ -1327,6 +1357,10 @@ function buildDebugPayload(args: {
   readyToSubmit?: boolean;
   submitAttempted?: boolean;
   visibleValidationErrors?: string[];
+  postSubmitValidationErrorCount?: number;
+  postSubmitValidationErrors?: GreenhouseValidationExtractionResult["errors"];
+  postSubmitValidationRepairAttempted?: boolean;
+  postSubmitValidationRepairSucceeded?: boolean;
   fileUploadPending?: boolean;
   verificationChallengeVisible?: boolean;
   reviewBeforeSubmit?: boolean;
@@ -1564,6 +1598,9 @@ function buildDebugPayload(args: {
     successUrlPatternMatched: args.successUrlPatternMatched,
     confirmationMatchedBy: args.confirmationMatchedBy,
     confirmationFinalUrl: args.confirmationFinalUrl,
+    confirmationUrl: args.confirmationUrl,
+    confirmationSource: args.confirmationSource,
+    popupUrl: args.popupUrl,
     submissionConfirmed: args.submissionConfirmed,
     finalRequiredCheckPassed: args.finalRequiredCheckPassed,
     allRequiredFieldsFilled: args.allRequiredFieldsFilled,
@@ -2240,6 +2277,18 @@ async function collectVisibleValidationErrors(page: Page | Frame): Promise<strin
     .catch(() => []);
 }
 
+function formatPostSubmitValidationError(error: GreenhouseValidationExtractionResult["errors"][number]) {
+  return error.fieldLabel ? `${error.text} — ${error.fieldLabel}` : error.text;
+}
+
+function hasPostSubmitSecurityValidation(validation: GreenhouseValidationExtractionResult) {
+  return validation.errors.some((error) => error.category === "recaptcha_or_security");
+}
+
+function hasRepairablePostSubmitValidation(validation: GreenhouseValidationExtractionResult) {
+  return validation.errors.some((error) => error.repairable);
+}
+
 async function runFinalRequiredFieldRecheck(args: {
   page: Page;
   submitRoot: Page | Frame;
@@ -2373,107 +2422,6 @@ function resolveSubmissionConfirmed(args: {
   }
 
   return false;
-}
-
-const SUBMISSION_CONFIRMATION_URL_PATTERN =
-  /(?:\/confirmation(?:[/?#]|$)|\/thank(?:[-_a-z0-9]*)?(?:[/?#]|$)|\/submitted(?:[/?#]|$)|application[-_]?submitted|submission[-_]?confirmed|success)/i;
-
-const SUBMISSION_CONFIRMATION_TEXT_PATTERN =
-  /\b(thank you|thank you for applying|application submitted|submitted successfully|we have received|your application has been received|your application has been submitted)\b/i;
-
-export type SubmissionConfirmationMatch = {
-  confirmed: boolean;
-  finalUrl: string;
-  pageTextSnippet?: string;
-  matchedBy?: "url" | "text" | "popup" | "context-page";
-};
-
-export function isSubmissionConfirmationUrl(rawUrl: string | null | undefined) {
-  if (!rawUrl) return false;
-  try {
-    const parsed = new URL(rawUrl);
-    return SUBMISSION_CONFIRMATION_URL_PATTERN.test(
-      `${parsed.pathname}${parsed.search}${parsed.hash}`,
-    );
-  } catch {
-    return SUBMISSION_CONFIRMATION_URL_PATTERN.test(rawUrl);
-  }
-}
-
-export function isSubmissionConfirmationText(text: string | null | undefined) {
-  return SUBMISSION_CONFIRMATION_TEXT_PATTERN.test(text ?? "");
-}
-
-function extractSubmissionConfirmationSnippet(text: string) {
-  const source = text.replace(/\s+/g, " ").trim();
-  if (!source) return undefined;
-  const match = SUBMISSION_CONFIRMATION_TEXT_PATTERN.exec(source);
-  if (!match || match.index < 0) return source.slice(0, 220);
-  const start = Math.max(0, match.index - 70);
-  const end = Math.min(source.length, match.index + match[0].length + 150);
-  return source.slice(start, end).trim();
-}
-
-async function inspectSubmissionConfirmationPage(args: {
-  page: Page;
-  currentPage: Page;
-  targetUrl: string;
-}): Promise<SubmissionConfirmationMatch | null> {
-  const page = args.page;
-  const finalUrl = page.url() || args.targetUrl;
-  const isCurrentPage = page === args.currentPage;
-  const opener = isCurrentPage ? null : await page.opener().catch(() => null);
-  const nonCurrentMatchedBy = opener === args.currentPage ? "popup" : "context-page";
-
-  if (isSubmissionConfirmationUrl(finalUrl)) {
-    return {
-      confirmed: true,
-      finalUrl,
-      matchedBy: isCurrentPage ? "url" : nonCurrentMatchedBy,
-    };
-  }
-
-  await page.waitForLoadState("domcontentloaded", { timeout: 2_000 }).catch(
-    () => undefined,
-  );
-  const pageText = await page.locator("body").innerText({ timeout: 2_000 }).catch(
-    () => "",
-  );
-  if (isSubmissionConfirmationText(pageText)) {
-    return {
-      confirmed: true,
-      finalUrl,
-      pageTextSnippet: extractSubmissionConfirmationSnippet(pageText),
-      matchedBy: isCurrentPage ? "text" : nonCurrentMatchedBy,
-    };
-  }
-
-  return null;
-}
-
-export async function detectSubmissionConfirmationAcrossPages(
-  context: BrowserContext,
-  currentPage: Page,
-  targetUrl: string,
-): Promise<SubmissionConfirmationMatch> {
-  const pages = [
-    currentPage,
-    ...context.pages().filter((candidate) => candidate !== currentPage),
-  ];
-
-  for (const page of pages) {
-    const match = await inspectSubmissionConfirmationPage({
-      page,
-      currentPage,
-      targetUrl,
-    }).catch(() => null);
-    if (match) return match;
-  }
-
-  return {
-    confirmed: false,
-    finalUrl: currentPage.url() || targetUrl,
-  };
 }
 
 function logPlaywrightEvidence(evidence: PlaywrightEvidence) {
@@ -12647,6 +12595,141 @@ export async function applyWithPlaywright(args: {
       initialLoadedUrl,
       domain,
     });
+    const expectedResolvedHost = parseHostname(resolvedDirectUrl);
+    const landedHost = parseHostname(initialLoadedUrl);
+    if (
+      resolvedDirectUrl &&
+      expectedResolvedHost &&
+      landedHost &&
+      !hostsEquivalentOrSubdomain(landedHost, expectedResolvedHost) &&
+      (isKnownAtsHost(expectedResolvedHost) || isKnownAtsHost(landedHost))
+    ) {
+      const message =
+        "Auto Apply blocked a stale saved strategy because it tried to send the browser to a different employer domain.";
+      console.error("[AUTO_APPLY_TARGET_GUARD] post-navigation mismatch detected", {
+        applicationId: applicationId ?? null,
+        applySessionId: applySessionId ?? null,
+        expectedUrl: resolvedDirectUrl,
+        actualUrl: initialLoadedUrl,
+        expectedHost: expectedResolvedHost,
+        actualHost: landedHost,
+      });
+      return {
+        ok: false,
+        status: "FAILED",
+        finalUrl: resolvedDirectUrl,
+        openUrl: resolvedDirectUrl,
+        needsHuman: false,
+        unavailable: true,
+        message,
+        debug: {
+          attemptedSelectors,
+          missingNames,
+          entryUrl,
+          initialLoadedUrl,
+          finalUrl: resolvedDirectUrl,
+          stoppedAtUrl: resolvedDirectUrl,
+          originalJobUrl,
+          resolvedDirectUrl,
+          applySource,
+          usedResolvedDirectUrl,
+          startingUrlKind,
+          finalChosenUrlKind,
+          domain,
+          targetUrl,
+          currentUrl: resolvedDirectUrl,
+          applyCtaFound: false,
+          applyCtaClicked: false,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationDetected: false,
+          verificationDetected: false,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          verificationSignals: [],
+          confirmationSignals: [],
+          finalStatus: "FAILED",
+          success: false,
+          needsHuman: false,
+          unavailable: true,
+          hopCount: 0,
+          urlsVisited: [resolvedDirectUrl],
+          clicks: [],
+          formDetected: false,
+          finalReason: "STRATEGY_DOMAIN_MISMATCH",
+        },
+      };
+    }
+    const landedAtsComparison = resolvedDirectUrl
+      ? compareAtsJobIdentityFromUrls(resolvedDirectUrl, initialLoadedUrl)
+      : null;
+    if (
+      landedAtsComparison?.comparable === true &&
+      landedAtsComparison.matches === false
+    ) {
+      const message =
+        "Auto Apply blocked because the browser landed on a different Greenhouse job than the selected posting.";
+      console.error("[AUTO_APPLY_IDENTITY] browser landed on mismatched ATS job", {
+        applicationId: applicationId ?? null,
+        applySessionId: applySessionId ?? null,
+        expectedUrl: resolvedDirectUrl,
+        actualUrl: initialLoadedUrl,
+        expectedToken: landedAtsComparison.expected.token ?? null,
+        actualToken: landedAtsComparison.actual.token ?? null,
+      });
+      console.error("[AUTO_APPLY_IDENTITY] stopped before form fill due to wrong Greenhouse token", {
+        applicationId: applicationId ?? null,
+        applySessionId: applySessionId ?? null,
+        currentUrl: initialLoadedUrl,
+      });
+      return {
+        ok: false,
+        status: "FAILED",
+        finalUrl: initialLoadedUrl,
+        openUrl: initialLoadedUrl,
+        needsHuman: false,
+        unavailable: true,
+        message,
+        debug: {
+          attemptedSelectors,
+          missingNames,
+          entryUrl,
+          initialLoadedUrl,
+          finalUrl: initialLoadedUrl,
+          originalJobUrl,
+          resolvedDirectUrl,
+          applySource,
+          usedResolvedDirectUrl,
+          startingUrlKind,
+          finalChosenUrlKind,
+          domain,
+          targetUrl,
+          currentUrl: initialLoadedUrl,
+          providerDetected: landedAtsComparison.actual.provider,
+          applyCtaFound: false,
+          applyCtaClicked: false,
+          submitButtonFound: false,
+          submitButtonClicked: false,
+          confirmationTextFound: false,
+          confirmationDetected: false,
+          verificationDetected: false,
+          successUrlPatternMatched: false,
+          submissionConfirmed: false,
+          verificationSignals: [],
+          confirmationSignals: [],
+          finalStatus: "FAILED",
+          success: false,
+          needsHuman: false,
+          unavailable: true,
+          hopCount: 0,
+          urlsVisited: [initialLoadedUrl],
+          clicks: [],
+          formDetected: false,
+          finalReason: "JOB_IDENTITY_MISMATCH",
+        },
+      };
+    }
 
     if (browserDiagnosticsEnabled) {
       try {
@@ -15825,6 +15908,17 @@ export async function applyWithPlaywright(args: {
     let submitButtonFound = finalRecheck.submitButtonFound;
     let submitButtonEnabled = finalRecheck.submitButtonEnabled;
     let submitButtonClicked = false;
+    let submitConfirmationUrl: string | null = null;
+    let submitPopupUrl: string | null = null;
+    let submitSameTabUrl: string | null = null;
+    let submitConfirmationSource:
+      | "popup_url"
+      | "same_tab_url"
+      | "popup_text"
+      | "same_tab_text"
+      | "network_response"
+      | "unknown"
+      | null = null;
     if (!context) {
       throw new Error("Playwright context was unavailable before submit.");
     }
@@ -15869,35 +15963,20 @@ export async function applyWithPlaywright(args: {
         selector: submitSelector,
       });
       console.log("[AUTO_APPLY_CRAWL] clicking submit", submitSelector);
-      const popupPromise = page
-        .waitForEvent("popup", { timeout: 12_000 })
-        .catch(() => null);
-      const contextPagePromise = submissionContext
-        .waitForEvent("page", { timeout: 12_000 })
-        .catch(() => null);
-      const successUrlPromise = page
-        .waitForURL(
-          (url) => isSubmissionConfirmationUrl(url.toString()),
-          { timeout: 12_000 },
-        )
-        .catch(() => null);
-      await Promise.all([
-        page
-          .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 })
-          .catch(() => null),
-        button.click(),
-      ]);
-      await Promise.race([
-        Promise.all([popupPromise, contextPagePromise, successUrlPromise]),
-        page.waitForTimeout(6_000),
-      ]).catch(() => undefined);
-      submitButtonClicked = true;
-      submitOrContinueClicked = true;
-      console.log("[AUTO_APPLY_SUBMIT] clicked submit", {
+      const submitConfirmation = await submitAndDetectGreenhouseConfirmation({
+        page,
+        submitLocator: button,
+        provider: providerForFinalCheck,
         applicationId: applicationId ?? null,
-        currentUrl: page.url(),
-        selector: submitSelector,
+        sessionId: sessionIdForFinalCheck,
+        targetUrl,
       });
+      submitButtonClicked = submitConfirmation.submitClicked;
+      submitOrContinueClicked = submitConfirmation.submitClicked;
+      submitConfirmationUrl = submitConfirmation.confirmationUrl;
+      submitPopupUrl = submitConfirmation.popupUrl;
+      submitSameTabUrl = submitConfirmation.sameTabUrl;
+      submitConfirmationSource = submitConfirmation.confirmationSource;
       break;
     }
 
@@ -16045,17 +16124,54 @@ export async function applyWithPlaywright(args: {
     await waitForDomAndSettle(page);
     const currentPageFinalUrl = captureCurrentUrl(page);
     const finalSignals = await detectPageSignals(page);
-    const confirmationMatch = submitButtonClicked
-      ? await detectSubmissionConfirmationAcrossPages(
-          submissionContext,
-          page,
-          targetUrl,
-        )
-      : ({
-          confirmed: false,
-          finalUrl: currentPageFinalUrl,
-        } satisfies SubmissionConfirmationMatch);
-    const finalUrl = confirmationMatch.confirmed
+    let greenhouseConfirmation = submitButtonClicked
+      ? submitConfirmationUrl
+        ? ({
+            confirmed: true,
+            confirmationUrl: submitConfirmationUrl,
+            confirmationSource: submitConfirmationSource ?? "unknown",
+            reason: "Confirmation was detected while handling the submit click.",
+            pageTextSnippet: undefined,
+            popupUrl: submitPopupUrl,
+          } as const)
+        : await detectGreenhouseSubmissionConfirmation({
+            context: submissionContext,
+            page,
+            observedPages: [],
+            provider: providerForFinalCheck,
+            targetUrl,
+          })
+      : null;
+    let confirmationMatch = greenhouseConfirmation?.confirmed
+      ? ({
+          confirmed: true,
+          finalUrl: greenhouseConfirmation.confirmationUrl ?? currentPageFinalUrl,
+          pageTextSnippet: greenhouseConfirmation.pageTextSnippet,
+          popupUrl: greenhouseConfirmation.popupUrl ?? null,
+          matchedBy:
+            greenhouseConfirmation.confirmationSource === "popup_url" ||
+            greenhouseConfirmation.confirmationSource === "popup_text"
+              ? "popup"
+              : greenhouseConfirmation.confirmationSource === "same_tab_url"
+                ? "url"
+                : greenhouseConfirmation.confirmationSource === "same_tab_text"
+                  ? "text"
+                  : greenhouseConfirmation.confirmationSource === "network_response"
+                    ? "url"
+                    : "context-page",
+        } satisfies SubmissionConfirmationMatch)
+      : submitButtonClicked
+        ? await detectSubmissionConfirmationAcrossPages(
+            submissionContext,
+            page,
+            targetUrl,
+            [],
+          )
+        : ({
+            confirmed: false,
+            finalUrl: currentPageFinalUrl,
+          } satisfies SubmissionConfirmationMatch);
+    let finalUrl = confirmationMatch.confirmed
       ? confirmationMatch.finalUrl
       : currentPageFinalUrl;
     const crossPageConfirmationTextFound =
@@ -16065,21 +16181,37 @@ export async function applyWithPlaywright(args: {
     const crossPageSuccessUrlPatternMatched =
       confirmationMatch.confirmed &&
       isSubmissionConfirmationUrl(confirmationMatch.finalUrl);
-    const confirmationTextFound =
+    let confirmationTextFound =
       finalSignals.confirmationTextFound || crossPageConfirmationTextFound;
     const confirmationTextSnippet =
       confirmationMatch.pageTextSnippet ??
       finalSignals.confirmationTextSnippet ??
       null;
-    const successUrlPatternMatched =
+    let successUrlPatternMatched =
       finalSignals.successUrlPatternMatched || crossPageSuccessUrlPatternMatched;
-    const confirmationSignals = [
+    let confirmationSignals = [
       ...finalSignals.confirmationSignals,
       ...(confirmationMatch.confirmed
         ? [`submission-confirmation:${confirmationMatch.matchedBy ?? "unknown"}`]
         : []),
     ];
     if (confirmationMatch.confirmed) {
+      if (isSubmissionConfirmationUrl(finalUrl)) {
+        console.log("[AUTO_APPLY_CONFIRMATION] greenhouse /confirmation detected", {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          finalUrl,
+          matchedBy: confirmationMatch.matchedBy ?? null,
+        });
+      } else if (confirmationMatch.matchedBy === "url") {
+        console.log("[AUTO_APPLY_CONFIRMATION] same-tab confirmation detected", {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          finalUrl,
+        });
+      }
       console.log("[AUTO_APPLY_CONFIRMATION] detected", {
         applicationId: applicationId ?? null,
         applySessionId: sessionIdForFinalCheck,
@@ -16092,8 +16224,7 @@ export async function applyWithPlaywright(args: {
         submissionConfirmed: true,
       });
     }
-    const postSubmitValidationErrors = await collectVisibleValidationErrors(page);
-    const success = resolveSubmissionConfirmed({
+    let success = resolveSubmissionConfirmed({
       confirmationTextFound,
       successUrlPatternMatched,
       submitButtonClicked,
@@ -16102,12 +16233,255 @@ export async function applyWithPlaywright(args: {
       currentUrl: finalUrl,
       targetUrl,
     }) || (submitButtonClicked && confirmationMatch.confirmed);
-    const validationErrorsAfterSubmit =
-      !success && postSubmitValidationErrors.length > 0;
-    const finalStatus: ApplySessionStatus = success
+    let postSubmitValidation = success
+      ? ({
+          validationErrorCount: 0,
+          errors: [],
+        } satisfies GreenhouseValidationExtractionResult)
+      : await extractGreenhouseValidationErrors({
+          page,
+          provider: providerForFinalCheck,
+        });
+    let postSubmitValidationErrors = postSubmitValidation.errors.map(
+      formatPostSubmitValidationError,
+    );
+    let postSubmitValidationRepairAttempted = false;
+    let postSubmitValidationRepairSucceeded = false;
+    let validationErrorsAfterSubmit =
+      !success && postSubmitValidation.validationErrorCount > 0;
+    let securityValidationAfterSubmit =
+      validationErrorsAfterSubmit && hasPostSubmitSecurityValidation(postSubmitValidation);
+
+    if (validationErrorsAfterSubmit) {
+      console.log("[AUTO_APPLY_SUBMIT_VALIDATION_ERRORS] extracted validation errors", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        currentUrl: finalUrl,
+        validationErrorCount: postSubmitValidation.validationErrorCount,
+        errors: postSubmitValidation.errors.map((error) => ({
+          text: error.text,
+          normalizedText: error.normalizedText,
+          fieldLabel: error.fieldLabel,
+          fieldName: error.fieldName,
+          fieldId: error.fieldId,
+          fieldType: error.fieldType,
+          selectorHint: error.selectorHint,
+          ariaInvalid: error.ariaInvalid,
+          ariaDescribedBy: error.ariaDescribedBy,
+          describedByText: error.describedByText,
+          closestFormGroupText: error.closestFormGroupText,
+          nearbyText: error.nearbyText,
+          category: error.category,
+          repairable: error.repairable,
+        })),
+      });
+      for (const error of postSubmitValidation.errors) {
+        console.log("[AUTO_APPLY_SUBMIT_VALIDATION_ERRORS] mapped validation error to field", {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          text: error.text,
+          fieldLabel: error.fieldLabel,
+          fieldName: error.fieldName,
+          fieldId: error.fieldId,
+          fieldType: error.fieldType,
+          ariaInvalid: error.ariaInvalid,
+          ariaDescribedBy: error.ariaDescribedBy,
+          describedByText: error.describedByText,
+          closestFormGroupText: error.closestFormGroupText,
+          nearbyText: error.nearbyText,
+          category: error.category,
+          repairable: error.repairable,
+        });
+      }
+    }
+
+    if (
+      validationErrorsAfterSubmit &&
+      !securityValidationAfterSubmit &&
+      hasRepairablePostSubmitValidation(postSubmitValidation)
+    ) {
+      postSubmitValidationRepairAttempted = true;
+      console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair attempted", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        currentUrl: finalUrl,
+        repairableCount: postSubmitValidation.errors.filter((error) => error.repairable).length,
+      });
+      const repairResult = await fillApplicationFormIteratively({
+        page,
+        applicationId: applicationId ?? "unknown_application",
+        sessionId:
+          sessionIdForFinalCheck ??
+          applicationId ??
+          `post-submit-${Date.now().toString(36)}`,
+        jobContext: {
+          jobTitle: searchJobTitle,
+          companyName: searchCompany,
+          jobDescription: args.metadata?.jobDescription,
+          source: applySource,
+        },
+        userProfile: args.metadata?.userProfile ?? args.values,
+        resumeContext: {
+          resumeText: args.metadata?.resumeText,
+          resumeSummary: args.metadata?.resumeSummary,
+        },
+        existingApplicationMaterials: {
+          values: args.values,
+          pageUrl: page.url(),
+        },
+        resumePath: args.resumePath,
+        maxPasses: 1,
+        autoSubmit: false,
+      }).catch((error) => {
+        console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed", {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          reason: error instanceof Error ? error.message : "repair_failed",
+        });
+        return null;
+      });
+      const validationAfterRepair = await extractGreenhouseValidationErrors({
+        page,
+        provider: providerForFinalCheck,
+      });
+      postSubmitValidationRepairSucceeded =
+        Boolean(repairResult) && validationAfterRepair.validationErrorCount === 0;
+      postSubmitValidation = validationAfterRepair;
+      postSubmitValidationErrors = postSubmitValidation.errors.map(
+        formatPostSubmitValidationError,
+      );
+      validationErrorsAfterSubmit = postSubmitValidation.validationErrorCount > 0;
+      securityValidationAfterSubmit =
+        validationErrorsAfterSubmit && hasPostSubmitSecurityValidation(postSubmitValidation);
+
+      console.log(
+        postSubmitValidationRepairSucceeded
+          ? "[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair succeeded"
+          : "[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed",
+        {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          remainingValidationErrorCount: postSubmitValidation.validationErrorCount,
+          fieldsFilled: repairResult?.fieldsFilled ?? 0,
+        },
+      );
+
+      if (postSubmitValidationRepairSucceeded && submitUsed) {
+        const repairSubmitButton = greenhouseSubmitRoot.locator(submitUsed).first();
+        if (
+          (await repairSubmitButton.count()) > 0 &&
+          (await repairSubmitButton.isVisible().catch(() => false)) &&
+          (await repairSubmitButton.isEnabled().catch(() => false))
+        ) {
+          console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] re-submit attempted", {
+            applicationId: applicationId ?? null,
+            applySessionId: sessionIdForFinalCheck,
+            provider: providerForFinalCheck,
+            currentUrl: page.url(),
+            selector: submitUsed,
+          });
+          const repairSubmit = await submitAndDetectGreenhouseConfirmation({
+            page,
+            submitLocator: repairSubmitButton,
+            provider: providerForFinalCheck,
+            applicationId: applicationId ?? null,
+            sessionId: sessionIdForFinalCheck,
+            targetUrl,
+          });
+          submitButtonClicked = submitButtonClicked || repairSubmit.submitClicked;
+          submitConfirmationUrl = repairSubmit.confirmationUrl ?? submitConfirmationUrl;
+          submitPopupUrl = repairSubmit.popupUrl ?? submitPopupUrl;
+          submitSameTabUrl = repairSubmit.sameTabUrl ?? submitSameTabUrl;
+          submitConfirmationSource =
+            repairSubmit.confirmationSource !== "unknown"
+              ? repairSubmit.confirmationSource
+              : submitConfirmationSource;
+          if (repairSubmit.submissionConfirmed && repairSubmit.confirmationUrl) {
+            console.log(
+              "[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] confirmation detected after repair",
+              {
+                applicationId: applicationId ?? null,
+                applySessionId: sessionIdForFinalCheck,
+                provider: providerForFinalCheck,
+                confirmationUrl: repairSubmit.confirmationUrl,
+                confirmationSource: repairSubmit.confirmationSource,
+              },
+            );
+            greenhouseConfirmation = {
+              confirmed: true,
+              confirmationUrl: repairSubmit.confirmationUrl,
+              confirmationSource: repairSubmit.confirmationSource,
+              reason: "Confirmation was detected after repairing submit validation errors.",
+              pageTextSnippet: undefined,
+              popupUrl: repairSubmit.popupUrl,
+            };
+            confirmationMatch = {
+              confirmed: true,
+              finalUrl: repairSubmit.confirmationUrl,
+              popupUrl: repairSubmit.popupUrl,
+              matchedBy:
+                repairSubmit.confirmationSource === "popup_url" ||
+                repairSubmit.confirmationSource === "popup_text"
+                  ? "popup"
+                  : repairSubmit.confirmationSource === "same_tab_text"
+                    ? "text"
+                    : "url",
+            };
+            finalUrl = repairSubmit.confirmationUrl;
+            confirmationTextFound =
+              confirmationTextFound ||
+              repairSubmit.confirmationSource === "popup_text" ||
+              repairSubmit.confirmationSource === "same_tab_text";
+            successUrlPatternMatched =
+              successUrlPatternMatched ||
+              isSubmissionConfirmationUrl(repairSubmit.confirmationUrl);
+            confirmationSignals = [
+              ...confirmationSignals,
+              `submission-confirmation:${confirmationMatch.matchedBy ?? "unknown"}`,
+            ];
+            success = true;
+            postSubmitValidation = { validationErrorCount: 0, errors: [] };
+            postSubmitValidationErrors = [];
+            validationErrorsAfterSubmit = false;
+            securityValidationAfterSubmit = false;
+          }
+        }
+      }
+    }
+
+    const postSubmitStopClassification: ApplyStopClassification | undefined =
+      validationErrorsAfterSubmit
+        ? securityValidationAfterSubmit
+          ? {
+              reason: "verification_required_after_submit",
+              pageType: "human_verification_gate",
+              suggestedAction: "complete_verification",
+            }
+          : {
+              reason: "submit_blocked_by_validation_errors",
+              pageType: "application_form",
+              suggestedAction: "review_validation_errors",
+            }
+        : undefined;
+    const postSubmitLastAction:
+      | "submit_blocked_by_validation_errors"
+      | "verification_required_after_submit"
+      | undefined =
+      postSubmitStopClassification?.reason === "submit_blocked_by_validation_errors" ||
+      postSubmitStopClassification?.reason === "verification_required_after_submit"
+        ? postSubmitStopClassification.reason
+        : undefined;
+    let finalStatus: ApplySessionStatus = success
       ? "SUBMITTED"
       : validationErrorsAfterSubmit
-        ? "NEEDS_USER_ANSWERS"
+        ? securityValidationAfterSubmit
+          ? "VERIFICATION_REQUIRED"
+          : "NEEDS_USER_ANSWERS"
         : "WAITING_FOR_CONFIRMATION";
     if (success) {
       console.log("[AUTO_APPLY_SUBMITTED_CONFIRMED]", {
@@ -16123,6 +16497,28 @@ export async function applyWithPlaywright(args: {
         applicationId: applicationId ?? null,
         currentUrl: finalUrl,
         validationErrorCount: postSubmitValidationErrors.length,
+        stopReason: postSubmitStopClassification?.reason,
+      });
+      console.log("[AUTO_APPLY_SUBMIT_VALIDATION_ERRORS] stopping due to remaining validation errors", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        currentUrl: finalUrl,
+        validationErrorCount: postSubmitValidationErrors.length,
+        errors: postSubmitValidation.errors.map((error) => ({
+          text: error.text,
+          fieldLabel: error.fieldLabel,
+          fieldName: error.fieldName,
+          fieldId: error.fieldId,
+          fieldType: error.fieldType,
+          ariaInvalid: error.ariaInvalid,
+          ariaDescribedBy: error.ariaDescribedBy,
+          describedByText: error.describedByText,
+          closestFormGroupText: error.closestFormGroupText,
+          nearbyText: error.nearbyText,
+          category: error.category,
+          repairable: error.repairable,
+        })),
       });
     } else {
       console.log("[AUTO_APPLY_SUBMIT_CONFIRMATION_UNCLEAR]", {
@@ -16131,6 +16527,14 @@ export async function applyWithPlaywright(args: {
         submitButtonClicked,
         confirmationTextFound,
         successUrlPatternMatched,
+      });
+      console.log("[AUTO_APPLY_CONFIRMATION] confirmation not detected after submit", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        currentUrl: finalUrl,
+        popupUrl: submitPopupUrl,
+        sameTabUrl: submitSameTabUrl,
       });
     }
 
@@ -16173,7 +16577,12 @@ export async function applyWithPlaywright(args: {
       verificationDetected: success ? false : finalSignals.needsHuman,
     });
 
-    if (finalSignals.needsHuman && !validationErrorsAfterSubmit && !success) {
+    if (
+      finalSignals.needsHuman &&
+      finalSignals.verificationSignals.length > 0 &&
+      !validationErrorsAfterSubmit &&
+      !success
+    ) {
       keepBrowserOpen = true;
       const verificationRequired =
         finalSignals.verificationSignals.length > 0;
@@ -16301,13 +16710,59 @@ export async function applyWithPlaywright(args: {
       };
     }
 
-    const finalNeedsHuman = finalStatus === "NEEDS_USER_ANSWERS";
+    const finalNeedsHuman =
+      finalStatus === "NEEDS_USER_ANSWERS" ||
+      finalStatus === "VERIFICATION_REQUIRED";
     const submittedAt = success ? new Date().toISOString() : undefined;
+    const confirmationSource =
+      greenhouseConfirmation?.confirmationSource ??
+      confirmationMatch.matchedBy ??
+      null;
+    const popupUrl =
+      confirmationMatch.popupUrl ??
+      greenhouseConfirmation?.popupUrl ??
+      submitPopupUrl ??
+      null;
+    const sameTabUrl = submitSameTabUrl ?? currentPageFinalUrl;
     const finalMessage = success
       ? "Application submitted successfully."
       : finalStatus === "NEEDS_USER_ANSWERS"
-        ? "The application returned validation errors after submit."
-        : "Hirexa clicked submit but could not confirm the final result.";
+        ? [
+            "Submit blocked by validation errors. Hirexa clicked Submit Application, but Greenhouse returned validation errors and did not open the confirmation page.",
+            ...postSubmitValidation.errors
+              .slice(0, 5)
+              .map((error) => `- ${error.text} — ${error.fieldLabel ?? "Unknown field"}`),
+          ].join("\n")
+        : finalStatus === "VERIFICATION_REQUIRED"
+          ? "Greenhouse blocked final submission with a verification check after submit."
+        : "Hirexa clicked Submit Application but could not confirm the final Greenhouse confirmation page. Check the opened confirmation tab or your email.";
+    if (success) {
+      console.log("[AUTO_APPLY_SESSION] confirmation url saved", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        confirmationUrl: finalUrl,
+        popupUrl,
+        sameTabUrl,
+        confirmationSource,
+      });
+    } else if (postSubmitValidation.validationErrorCount > 0) {
+      console.log("[AUTO_APPLY_SESSION] post-submit validation errors saved", {
+        applicationId: applicationId ?? null,
+        applySessionId: sessionIdForFinalCheck,
+        provider: providerForFinalCheck,
+        currentUrl: finalUrl,
+        validationErrorCount: postSubmitValidation.validationErrorCount,
+        errors: postSubmitValidation.errors.map((error) => ({
+          text: error.text,
+          fieldLabel: error.fieldLabel,
+          fieldName: error.fieldName,
+          fieldId: error.fieldId,
+          category: error.category,
+          repairable: error.repairable,
+        })),
+      });
+    }
     await args.onStatus?.({
       status: finalStatus,
       lastUrl: finalUrl,
@@ -16334,11 +16789,21 @@ export async function applyWithPlaywright(args: {
         successUrlPatternMatched,
         confirmationMatchedBy: confirmationMatch.matchedBy,
         confirmationFinalUrl: confirmationMatch.confirmed ? finalUrl : undefined,
+        confirmationUrl: confirmationMatch.confirmed ? finalUrl : undefined,
+        confirmationSource,
+        popupUrl,
+        sameTabUrl,
         verificationDetected: false,
         verificationSignals: success ? [] : finalSignals.verificationSignals,
         submissionConfirmed: success,
         submittedAt,
         visibleValidationErrors: postSubmitValidationErrors,
+        postSubmitValidationErrorCount: postSubmitValidation.validationErrorCount,
+        postSubmitValidationErrors: postSubmitValidation.errors,
+        postSubmitValidationRepairAttempted,
+        postSubmitValidationRepairSucceeded,
+        stopClassification: postSubmitStopClassification,
+        lastAction: postSubmitLastAction,
         missingRequiredFields: validationErrorsAfterSubmit
           ? postSubmitValidationErrors
           : [],
@@ -16388,6 +16853,10 @@ export async function applyWithPlaywright(args: {
         successUrlPatternMatched,
         confirmationMatchedBy: confirmationMatch.matchedBy,
         confirmationFinalUrl: confirmationMatch.confirmed ? finalUrl : undefined,
+        confirmationUrl: confirmationMatch.confirmed ? finalUrl : undefined,
+        confirmationSource,
+        popupUrl,
+        sameTabUrl,
         submissionConfirmed: success,
         submittedAt,
         finalRequiredCheckPassed: finalRecheckPassed,
@@ -16397,6 +16866,11 @@ export async function applyWithPlaywright(args: {
         readyToSubmit,
         submitAttempted: true,
         visibleValidationErrors: postSubmitValidationErrors,
+        postSubmitValidationErrorCount: postSubmitValidation.validationErrorCount,
+        postSubmitValidationErrors: postSubmitValidation.errors,
+        postSubmitValidationRepairAttempted,
+        postSubmitValidationRepairSucceeded,
+        stopClassification: postSubmitStopClassification,
         fileUploadPending: finalRecheck.fileUploadPending,
         verificationChallengeVisible: finalRecheck.verificationChallengeVisible,
         reviewBeforeSubmit,
@@ -16420,7 +16894,7 @@ export async function applyWithPlaywright(args: {
         verificationDetected: false,
         finalReason: success
           ? "Submission confirmed."
-          : finalMessage,
+          : postSubmitStopClassification?.reason ?? finalMessage,
         resolverAttemptedLinks,
         resolverSelectedLink,
         resolverSuccess,

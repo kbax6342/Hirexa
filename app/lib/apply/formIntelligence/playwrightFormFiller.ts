@@ -9,6 +9,11 @@ import {
   normalizeLabelKey,
 } from "@/app/lib/apply/formIntelligence/answerPolicy";
 import { scanCurrentForm } from "@/app/lib/apply/formIntelligence/formScanner";
+import {
+  isPreferNotEquivalent,
+  isPreferNotToAnswer,
+} from "@/app/lib/profile/voluntarySelfIdOptions";
+import { fillTextLikeField } from "@/app/lib/apply/textFieldFiller";
 
 function text(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -16,6 +21,21 @@ function text(value: unknown) {
 
 function normalize(value: unknown) {
   return text(value).toLowerCase();
+}
+
+function isSecurityTokenField(field: FormFieldDescriptor) {
+  return /(g-recaptcha-response|recaptcha|hcaptcha|cf-turnstile|turnstile|captcha|security.?token)/i.test(
+    [
+      field.label,
+      field.name,
+      field.idAttribute,
+      field.ariaLabel,
+      field.placeholder,
+      field.selector,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 }
 
 function answerValues(value: string | string[] | boolean) {
@@ -38,6 +58,13 @@ function answerForField(
 function findOptionValue(field: FormFieldDescriptor, value: string) {
   const normalized = normalize(value);
   if (!normalized) return "";
+  if (isPreferNotToAnswer(value)) {
+    const preferNot = field.options?.find((option) =>
+      isPreferNotEquivalent(`${option.label} ${option.value}`),
+    );
+    if (preferNot) return preferNot.value || preferNot.label;
+  }
+
   const exact = field.options?.find(
     (option) =>
       normalize(option.value) === normalized ||
@@ -59,6 +86,23 @@ function locatorForField(page: Page, field: FormFieldDescriptor) {
     ? page.frames().find((candidate) => candidate.url() === field.frameUrl)
     : null;
   return (frame ?? page).locator(field.selector).first();
+}
+
+async function readFieldValue(page: Page, field: FormFieldDescriptor) {
+  const locator = locatorForField(page, field);
+  return locator
+    .evaluate((element) => {
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        return element.value ?? "";
+      }
+      if (element instanceof HTMLSelectElement) return element.value ?? "";
+      if (element instanceof HTMLElement && element.isContentEditable) {
+        return element.innerText?.trim() || element.textContent?.trim() || "";
+      }
+      if (element instanceof HTMLElement) return element.textContent?.trim() || "";
+      return "";
+    })
+    .catch(() => "");
 }
 
 async function isFieldFilled(page: Page, field: FormFieldDescriptor) {
@@ -93,6 +137,8 @@ export async function fillGeneratedAnswers(
   options?: {
     fields?: FormFieldDescriptor[];
     resumePath?: string | null;
+    applicationId?: string | null;
+    sessionId?: string | null;
   },
 ): Promise<FillGeneratedAnswersResult> {
   const fields = options?.fields ?? (await scanCurrentForm(page));
@@ -172,6 +218,11 @@ export async function fillGeneratedAnswers(
         const selected = await locator
           .selectOption({ value: optionValue })
           .catch(() => locator.selectOption({ label: optionValue }));
+        await locator.evaluate((element) => {
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          if (element instanceof HTMLElement) element.blur();
+        }).catch(() => undefined);
         filled = selected.length > 0;
       } else if (field.inputType === "radio") {
         const optionValue = findOptionValue(field, value);
@@ -228,8 +279,15 @@ export async function fillGeneratedAnswers(
           });
           continue;
         }
-        await locator.fill(value);
-        filled = true;
+        const textFill = await fillTextLikeField({
+          locator,
+          answer: value,
+          label: field.label,
+          fieldType: field.inputType,
+          applicationId: options?.applicationId ?? null,
+          sessionId: options?.sessionId ?? null,
+        });
+        filled = textFill.filled;
       }
     } catch (error) {
       failedCount += 1;
@@ -251,6 +309,7 @@ export async function fillGeneratedAnswers(
   const remainingRequiredFields: string[] = [];
   for (const field of postFillFields) {
     if (!field.required || !field.visible || field.disabled) continue;
+    if (field.inputType === "hidden" || isSecurityTokenField(field)) continue;
     if (!(await isFieldFilled(page, field))) {
       remainingRequiredFields.push(field.label);
     }

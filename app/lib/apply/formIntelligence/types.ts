@@ -30,9 +30,12 @@ export type FormFieldDescriptor = {
   disabled: boolean;
   visible: boolean;
   placeholder?: string;
+  tagName?: string;
   name?: string;
   ariaLabel?: string;
+  roleAttribute?: string;
   idAttribute?: string;
+  inputMode?: string;
   autocomplete?: string;
   options?: FormFieldOption[];
   maxLength?: number;

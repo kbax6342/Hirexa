@@ -5,6 +5,7 @@ import { auth } from "@/app/lib/auth";
 import {
   createSession,
   getApplySessionStorageBackend,
+  getSession,
   type ApplyEmailStatus,
   type ApplySessionDebug,
   type ApplySubmissionStatus,
@@ -77,12 +78,23 @@ import {
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
 import { validateAutomationStartUrl } from "@/app/lib/apply/urlValidation";
+import {
+  buildJobIdentitySnapshot,
+  compareJobIdentitySnapshots,
+  type JobIdentityMismatch,
+  type JobIdentitySnapshot,
+} from "@/app/lib/jobs/jobIdentity";
+import {
+  compareAtsJobIdentityFromUrls,
+  extractAtsJobIdentityFromUrl,
+} from "@/app/lib/apply/atsUrlIdentity";
 
 export const runtime = "nodejs";
 
 type ApplyBody = {
   answers?: AnswersMap;
   background?: boolean;
+  selectedJobIdentity?: JobIdentitySnapshot;
 };
 
 type ApplyExecutionResult = {
@@ -157,6 +169,51 @@ function delay(ms: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function buildIdentityMismatchResponse(
+  expectedJob: JobIdentitySnapshot,
+  actualJob: JobIdentitySnapshot,
+  mismatches: JobIdentityMismatch[],
+) {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "JOB_IDENTITY_MISMATCH",
+      status: "FAILED",
+      error: "Auto Apply blocked because the selected job changed before apply started.",
+      message: "Auto Apply blocked because the selected job changed before apply started.",
+      expectedJob,
+      actualJob,
+      mismatches,
+    },
+    { status: 409 },
+  );
+}
+
+function buildAtsTokenMismatchResponse(args: {
+  message: string;
+  expectedUrl?: string | null;
+  actualTargetUrl?: string | null;
+  expectedToken?: string | null;
+  actualToken?: string | null;
+  strategyId?: string | null;
+}) {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "JOB_IDENTITY_MISMATCH",
+      status: "FAILED",
+      error: args.message,
+      message: args.message,
+      expectedUrl: args.expectedUrl ?? null,
+      actualTargetUrl: args.actualTargetUrl ?? null,
+      expectedToken: args.expectedToken ?? null,
+      actualToken: args.actualToken ?? null,
+      strategyId: args.strategyId ?? null,
+    },
+    { status: 409 },
+  );
 }
 
 type LoadedApplication = NonNullable<
@@ -3034,7 +3091,30 @@ async function runBackgroundApply(args: {
   strategyRuntimeStartUrl?: string | null;
   aiFormResumeText?: string | null;
 }) {
+  let heartbeatTimer: NodeJS.Timeout | null = null;
   try {
+    heartbeatTimer = setInterval(() => {
+      const heartbeatAt = Date.now();
+      updateSession(args.applySessionId, {
+        lastHeartbeatAt: heartbeatAt,
+        lastRunnerHeartbeatAt: heartbeatAt,
+        runnerActive: true,
+      }, {
+        caller: "runBackgroundApply.heartbeat",
+        sourcePath: "app/api/applications/[id]/apply/route.ts",
+        phase: "background",
+      });
+    }, 8_000);
+    const heartbeatAt = Date.now();
+    updateSession(args.applySessionId, {
+      lastHeartbeatAt: heartbeatAt,
+      lastRunnerHeartbeatAt: heartbeatAt,
+      runnerActive: true,
+    }, {
+      caller: "runBackgroundApply.startHeartbeat",
+      sourcePath: "app/api/applications/[id]/apply/route.ts",
+      phase: "background",
+    });
     let result = applyRouteLevelSubmissionGuard({
       rawResult: await applyWithPlaywright({
         jobUrl: args.application.jobUrl ?? "",
@@ -3085,19 +3165,39 @@ async function runBackgroundApply(args: {
         values: args.finalValuesToSubmit,
         resumePath: args.resumePath,
         freshSession: true,
-        onStatus: ({ status, lastUrl, error, message, openUrl, remoteSessionId }) => {
-          const sessionStatus = status === "SUBMITTED" ? "WAITING_CONFIRMATION" : status;
-          const sessionMessage =
-            status === "SUBMITTED"
-              ? "Verifying application submission."
-              : message;
-          updateSession(args.applySessionId, {
-            status: sessionStatus,
+        onStatus: ({
+          status,
+          lastUrl,
+          error,
+          message,
+          openUrl,
+          remoteSessionId,
+          submissionStatus,
+          debug,
+        }) => {
+          const currentSession = debug
+            ? getSession(args.applySessionId, {
+                caller: "runBackgroundApply.onStatus.mergeDebug",
+                sourcePath: "app/api/applications/[id]/apply/route.ts",
+                phase: "background",
+              })
+            : null;
+          const sessionPatch: Parameters<typeof updateSession>[1] = {
+            status,
             lastUrl: lastUrl ?? openUrl,
             error,
-            message: sessionMessage,
+            message,
             remoteSessionId,
-          }, {
+            submissionStatus,
+          };
+          if (debug) {
+            sessionPatch.debug = {
+              ...(currentSession?.debug ?? {}),
+              ...debug,
+              latestUrl: debug.latestUrl ?? debug.currentUrl ?? lastUrl ?? openUrl,
+            };
+          }
+          updateSession(args.applySessionId, sessionPatch, {
             caller: "runBackgroundApply.onStatus",
             sourcePath: "app/api/applications/[id]/apply/route.ts",
             phase: "background",
@@ -3230,6 +3330,9 @@ async function runBackgroundApply(args: {
 
     updateSession(args.applySessionId, {
       status: finalResult.status,
+      runnerActive: false,
+      lastHeartbeatAt: Date.now(),
+      lastRunnerHeartbeatAt: Date.now(),
       lastUrl: latestSessionUrl ?? undefined,
       error: finalResult.ok ? undefined : finalSessionMessage ?? finalResult.message,
       message: finalSessionMessage ?? persistedOutcome.message ?? finalResult.message,
@@ -3333,6 +3436,9 @@ async function runBackgroundApply(args: {
 
     updateSession(args.applySessionId, {
       status: "FAILED",
+      runnerActive: false,
+      lastHeartbeatAt: Date.now(),
+      lastRunnerHeartbeatAt: Date.now(),
       error: normalizedMessage,
       message: normalizedMessage,
       errorCode: errorCode ?? undefined,
@@ -3345,6 +3451,118 @@ async function runBackgroundApply(args: {
       phase: "background",
     });
   } finally {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+    const finalSession = getSession(args.applySessionId, {
+      caller: "runBackgroundApply.finallyRecovery",
+      sourcePath: "app/api/applications/[id]/apply/route.ts",
+      phase: "background",
+    });
+    if (
+      finalSession &&
+      ["STARTING", "OPENING_FORM", "FILLING_FORM", "SUBMITTING", "SUBMITTING_APPLICATION", "WAITING_CONFIRMATION", "WAITING_FOR_CONFIRMATION"].includes(finalSession.status)
+    ) {
+      const formWasDetected =
+        finalSession.debug?.formDetected === true ||
+        finalSession.debug?.formFound === true ||
+        (finalSession.debug?.fillableFieldCount ?? 0) > 0;
+      const finalRecheckPassed = finalSession.debug?.finalRecheckPassed === true;
+      const recoveredStatus =
+        finalRecheckPassed && finalSession.debug?.submitAttempted === true
+          ? finalSession.debug?.submissionConfirmed === true
+            ? "SUBMITTED"
+            : (finalSession.debug?.visibleValidationErrors?.length ?? 0) > 0
+              ? "NEEDS_USER_ANSWERS"
+              : "WAITING_FOR_CONFIRMATION"
+          : finalRecheckPassed && finalSession.debug?.reviewBeforeSubmit === true
+            ? "READY_FOR_USER_REVIEW"
+            : finalRecheckPassed
+              ? "READY_TO_RETRY"
+              : formWasDetected
+                ? "READY_TO_RETRY"
+                : "STALE_SESSION";
+      const recoveredMessage =
+        recoveredStatus === "READY_FOR_USER_REVIEW"
+          ? "Hirexa filled the application. Review the form before submitting."
+          : recoveredStatus === "WAITING_FOR_CONFIRMATION"
+            ? "Hirexa clicked submit but could not confirm the final result."
+            : recoveredStatus === "NEEDS_USER_ANSWERS"
+              ? "The application returned validation errors after submit."
+              : "The browser session stopped before Hirexa could finish this application.";
+      console.warn("[AUTO_APPLY_RUNNER_FINALLY_RECOVERY]", {
+        applicationId: args.application.id,
+        applySessionId: args.applySessionId,
+        previousStatus: finalSession.status,
+        recoveredStatus,
+        formWasDetected,
+        finalRecheckPassed,
+      });
+      console.warn("[AUTO_APPLY_RUNNER_EXIT_FINAL_STATUS]", {
+        applicationId: args.application.id,
+        sessionId: args.applySessionId,
+        previousStatus: finalSession.status,
+        finalStatus: recoveredStatus,
+        finalRequiredCheckPassed:
+          finalSession.debug?.finalRequiredCheckPassed === true ||
+          finalSession.debug?.finalRecheckPassed === true,
+        allRequiredFieldsFilled:
+          finalSession.debug?.allRequiredFieldsFilled === true ||
+          finalSession.debug?.finalRecheckPassed === true,
+        submitAttempted: finalSession.debug?.submitAttempted === true,
+        submissionConfirmed: finalSession.debug?.submissionConfirmed === true,
+      });
+      if (finalSession.status === "FILLING_FORM") {
+        console.warn("[AUTO_APPLY_RUNNER_STOPPED_BEFORE_FINAL_STATUS]", {
+          applicationId: args.application.id,
+          applySessionId: args.applySessionId,
+          recoveredStatus,
+          finalRecheckPassed,
+          missingRequiredFields:
+            finalSession.debug?.missingRequiredFields?.length ?? 0,
+          submitAttempted: finalSession.debug?.submitAttempted === true,
+          submissionConfirmed: finalSession.debug?.submissionConfirmed === true,
+        });
+        console.warn("[AUTO_APPLY_RUNNER_FINALLY_EXITED_FILLING_FORM]", {
+          applicationId: args.application.id,
+          applySessionId: args.applySessionId,
+          recoveredStatus,
+          finalRecheckPassed,
+          submitAttempted: finalSession.debug?.submitAttempted === true,
+          submissionConfirmed: finalSession.debug?.submissionConfirmed === true,
+        });
+      }
+      updateSession(args.applySessionId, {
+        status: recoveredStatus,
+        runnerActive: false,
+        recoveredFromStaleSession: true,
+        staleReason: "Background runner exited before writing a final state.",
+        message: recoveredMessage,
+        lastHeartbeatAt: Date.now(),
+        lastRunnerHeartbeatAt: Date.now(),
+        debug: {
+          ...(finalSession.debug ?? {}),
+          recoveredFromStaleSession: true,
+          staleReason: "Background runner exited before writing a final state.",
+          suggestedAction:
+            recoveredStatus === "READY_FOR_USER_REVIEW"
+              ? "Open review."
+              : recoveredStatus === "WAITING_FOR_CONFIRMATION"
+                ? "Check the application page."
+                : recoveredStatus === "NEEDS_USER_ANSWERS"
+                  ? "Answer questions to continue."
+                  : "Retry Auto Apply or open the application manually.",
+          finalReason:
+            finalRecheckPassed
+              ? "Final form recheck passed before the runner exited."
+              : "The apply browser session appears to have stopped before finishing.",
+        },
+      }, {
+        caller: "runBackgroundApply.finallyRecovery.update",
+        sourcePath: "app/api/applications/[id]/apply/route.ts",
+        phase: "background",
+      });
+    }
     await unlink(args.resumePath).catch(() => undefined);
   }
 }
@@ -3397,6 +3615,42 @@ export async function POST(
     }
 
     let application: LoadedApplication = foundApplication;
+    const expectedJobIdentity = body.selectedJobIdentity
+      ? buildJobIdentitySnapshot(body.selectedJobIdentity)
+      : null;
+    const applicationJobIdentity = buildJobIdentitySnapshot({
+      source: application.source,
+      sourceJobId: application.sourceJobId,
+      title: application.title ?? application.jobTitle,
+      company: application.company,
+      location: application.location,
+      jobUrl: application.jobUrl,
+    });
+
+    if (expectedJobIdentity) {
+      const comparison = compareJobIdentitySnapshots(
+        expectedJobIdentity,
+        applicationJobIdentity,
+      );
+      if (!comparison.matches) {
+        console.warn("[APPLY_IDENTITY] mismatch blocked before browser launch", {
+          applicationId: application.id,
+          expectedJob: expectedJobIdentity,
+          actualJob: applicationJobIdentity,
+          mismatches: comparison.mismatches,
+        });
+        return buildIdentityMismatchResponse(
+          expectedJobIdentity,
+          applicationJobIdentity,
+          comparison.mismatches,
+        );
+      }
+      console.log("[APPLY_IDENTITY] validated before session start", {
+        applicationId: application.id,
+        sourceJobId: application.sourceJobId,
+        expectedSourceJobId: expectedJobIdentity.sourceJobId,
+      });
+    }
 
     if (!application.jobUrl) {
       return NextResponse.json(
@@ -3410,6 +3664,40 @@ export async function POST(
     });
     const urlResolution = directResolution.context;
     application = urlResolution.application;
+    const resolvedUrlIdentity = extractAtsJobIdentityFromUrl(
+      urlResolution.resolvedDirectUrl ?? application.jobUrl,
+    );
+    const resolvedApplicationJobIdentity = buildJobIdentitySnapshot({
+      source: application.source,
+      sourceJobId: application.sourceJobId,
+      title: application.title ?? application.jobTitle,
+      company: application.company,
+      location: application.location,
+      jobUrl: application.jobUrl,
+      resolvedApplyUrl: urlResolution.resolvedDirectUrl,
+      applyProvider: resolvedUrlIdentity.provider,
+    });
+
+    if (expectedJobIdentity) {
+      const comparison = compareJobIdentitySnapshots(
+        expectedJobIdentity,
+        resolvedApplicationJobIdentity,
+      );
+      if (!comparison.matches) {
+        console.warn("[APPLY_IDENTITY] mismatch blocked before browser launch", {
+          applicationId: application.id,
+          expectedJob: expectedJobIdentity,
+          actualJob: resolvedApplicationJobIdentity,
+          resolvedUrlIdentity,
+          mismatches: comparison.mismatches,
+        });
+        return buildIdentityMismatchResponse(
+          expectedJobIdentity,
+          resolvedApplicationJobIdentity,
+          comparison.mismatches,
+        );
+      }
+    }
 
     if (directResolution.blocked) {
       const resolverStopClassification: ApplyStopClassification = {
@@ -4489,6 +4777,9 @@ export async function POST(
         ...existingDebug,
         ...urlResolution.debug,
         ...adzunaResolverDebug,
+        expectedJobIdentity: expectedJobIdentity ?? undefined,
+        applicationJobIdentity: resolvedApplicationJobIdentity,
+        resolvedUrlIdentity,
         originalSourceUrl: urlResolution.originalUrl ?? undefined,
         originalJobUrl: urlResolution.originalUrl ?? undefined,
         resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
@@ -4898,6 +5189,9 @@ export async function POST(
         lastUrl: effectiveTargetUrl,
         message: "Starting Playwright automation.",
         debug: {
+          expectedJobIdentity: expectedJobIdentity ?? undefined,
+          applicationJobIdentity: resolvedApplicationJobIdentity,
+          resolvedUrlIdentity,
           originalJobUrl: urlResolution.originalUrl ?? application.jobUrl ?? undefined,
           resolvedDirectUrl: effectiveResolvedDirectUrl ?? undefined,
           targetUrl: effectiveTargetUrl ?? undefined,
@@ -5171,22 +5465,31 @@ export async function POST(
         );
       }
 
-      if (finalResult.status === "UNCONFIRMED") {
+      if (
+        finalResult.status === "UNCONFIRMED" ||
+        finalResult.status === "WAITING_FOR_CONFIRMATION" ||
+        finalResult.status === "WAITING_CONFIRMATION"
+      ) {
         const errorCode = inferExecutionErrorCode({
           result: finalResult,
         });
         const message = buildErrorMessageWithCode({
           errorCode,
           message:
-            finalResult.message ?? "Application submission not confirmed.",
+            finalResult.message ??
+            "Hirexa clicked submit but could not confirm the final result.",
         });
 
         return NextResponse.json(
           {
             ok: false,
             status: finalResult.status,
-            error: message ?? "Application submission not confirmed.",
-            message: message ?? "Application submission not confirmed.",
+            error:
+              message ??
+              "Hirexa clicked submit but could not confirm the final result.",
+            message:
+              message ??
+              "Hirexa clicked submit but could not confirm the final result.",
             errorCode: errorCode ?? undefined,
             finalUrl: finalResult.finalUrl,
             ...buildUrlDecisionFields(finalResult.debug),

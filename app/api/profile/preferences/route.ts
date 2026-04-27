@@ -27,6 +27,11 @@ import {
   SALARY_BOUNDS,
   type CompensationType,
 } from "@/app/lib/salary";
+import {
+  normalizeVoluntarySelfIdOption,
+  sanitizeVoluntarySelfDescription,
+  type VoluntarySelfIdDropdownField,
+} from "@/app/lib/profile/voluntarySelfIdOptions";
 
 type PreferencesBody = {
   minCompensation?: number | null;
@@ -50,7 +55,42 @@ type PreferencesBody = {
   city?: string;
   state?: string;
   postalCode?: string;
+  applicationAnswerPreferences?: Record<string, unknown>;
 };
+
+const APPLICATION_ANSWER_STRING_FIELDS = [
+  "targetRole",
+  "availability",
+  "employmentType",
+  "seniorityLevel",
+  "salaryType",
+  "fallbackLocation",
+  "phoneCountryCode",
+] as const;
+
+const VOLUNTARY_SELF_ID_FIELDS = [
+  "gender",
+  "hispanicLatino",
+  "raceEthnicity",
+  "veteranStatus",
+  "disabilityStatus",
+] as const satisfies readonly VoluntarySelfIdDropdownField[];
+
+const VOLUNTARY_SELF_ID_SELF_DESCRIBE_FIELDS = [
+  "genderSelfDescribe",
+  "raceEthnicitySelfDescribe",
+] as const;
+
+const LEGACY_VOLUNTARY_SELF_ID_TEXT_FIELDS = [
+  "pronouns",
+] as const;
+
+const WORK_AUTH_FIELDS = [
+  "authorizedUS",
+  "requiresSponsorship",
+  "startDate",
+  "relocate",
+] as const;
 
 function normalizeList(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -99,6 +139,109 @@ function normalizeTextArray(value: unknown, maxItems = 8) {
   return normalized;
 }
 
+function readRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function hasVoluntarySelfIdPayload(value: unknown) {
+  return Object.prototype.hasOwnProperty.call(
+    readRecord(value),
+    "voluntarySelfId",
+  );
+}
+
+function sanitizeApplicationAnswerPreferences(
+  incoming: unknown,
+  existing: unknown = {},
+) {
+  const body = readRecord(incoming);
+  const previous = readRecord(existing);
+  const next: Record<string, unknown> = { ...previous };
+
+  for (const field of APPLICATION_ANSWER_STRING_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      const value = normalizeText(body[field]);
+      if (value) next[field] = value.slice(0, 240);
+      else delete next[field];
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "remote")) {
+    next.remote = Boolean(body.remote);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "minimumSalary")) {
+    const raw = body.minimumSalary;
+    if (raw === null || raw === "") {
+      delete next.minimumSalary;
+    } else {
+      const parsed = parseSalaryInputToNumber(raw);
+      if (parsed !== null) {
+        next.minimumSalary = Math.min(SALARY_BOUNDS.yearly.max, Math.max(0, parsed));
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "benefits")) {
+    next.benefits = normalizeTextArray(body.benefits, 30);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "customAnswers")) {
+    const custom = readRecord(body.customAnswers);
+    const normalizedCustom: Record<string, string> = {};
+    for (const [key, value] of Object.entries(custom).slice(0, 50)) {
+      const normalizedKey = normalizeText(key).slice(0, 180);
+      const normalizedValue = normalizeText(value).slice(0, 2000);
+      if (normalizedKey && normalizedValue) normalizedCustom[normalizedKey] = normalizedValue;
+    }
+    next.customAnswers = normalizedCustom;
+  }
+
+  const incomingWorkAuth = readRecord(body.workAuthorization);
+  const existingWorkAuth = readRecord(previous.workAuthorization);
+  const nextWorkAuth: Record<string, string> = { ...existingWorkAuth } as Record<string, string>;
+  for (const field of WORK_AUTH_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(incomingWorkAuth, field)) {
+      const value = normalizeText(incomingWorkAuth[field]);
+      if (value) nextWorkAuth[field] = value.slice(0, 120);
+      else delete nextWorkAuth[field];
+    }
+  }
+  if (Object.keys(nextWorkAuth).length) next.workAuthorization = nextWorkAuth;
+  else delete next.workAuthorization;
+
+  const incomingVoluntary = readRecord(body.voluntarySelfId);
+  const existingVoluntary = readRecord(previous.voluntarySelfId);
+  const nextVoluntary: Record<string, string | null> = { ...existingVoluntary } as Record<string, string | null>;
+  for (const field of VOLUNTARY_SELF_ID_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(incomingVoluntary, field)) {
+      const raw = normalizeText(incomingVoluntary[field]);
+      const normalized = normalizeVoluntarySelfIdOption(field, incomingVoluntary[field]);
+      if (raw && !normalized) {
+        continue;
+      }
+      nextVoluntary[field] = normalized;
+    }
+  }
+  for (const field of VOLUNTARY_SELF_ID_SELF_DESCRIBE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(incomingVoluntary, field)) {
+      nextVoluntary[field] = sanitizeVoluntarySelfDescription(incomingVoluntary[field]);
+    }
+  }
+  for (const field of LEGACY_VOLUNTARY_SELF_ID_TEXT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(incomingVoluntary, field)) {
+      const value = normalizeText(incomingVoluntary[field]);
+      nextVoluntary[field] = value ? value.slice(0, 100) : null;
+    }
+  }
+  if (Object.keys(nextVoluntary).length) next.voluntarySelfId = nextVoluntary;
+  else delete next.voluntarySelfId;
+
+  return next;
+}
+
 export async function GET() {
   try {
     const session = await auth();
@@ -136,7 +279,7 @@ export async function GET() {
           workplaceLocations,
           includeRemote: draftPreferences.includeRemote ?? true,
           selectedPlan: normalizeText(draftPreferences.selectedPlan),
-          benefits: normalizeTextArray(draftPreferences.benefits, 12),
+          benefits: normalizeTextArray(draftPreferences.benefits, 30),
           roleFocus: normalizeText(
             draftPreferences.roleFocus ?? draftJobInterests.roleFocus
           ),
@@ -163,6 +306,10 @@ export async function GET() {
           ),
           hiringSignalEmphasis: normalizeText(
             draftPreferences.hiringSignalEmphasis
+          ),
+          applicationAnswerPreferences: sanitizeApplicationAnswerPreferences(
+            draftPreferences.applicationAnswerPreferences,
+            {},
           ),
           city:
             typeof draftPreferences.city === "string" ? draftPreferences.city : null,
@@ -236,6 +383,10 @@ export async function GET() {
           10
         ),
         hiringSignalEmphasis: normalizeText(keyQuestions.hiringSignalEmphasis),
+        applicationAnswerPreferences: sanitizeApplicationAnswerPreferences(
+          keyQuestions.applicationAnswerPreferences,
+          {},
+        ),
         city: safePrivateFields.city,
         state: safePrivateFields.state,
         postalCode: safePrivateFields.postalCode,
@@ -368,9 +519,9 @@ export async function POST(req: Request) {
         : existingDraftPreferences.selectedPlan || "trial";
       const benefits = hasField("benefits")
         ? Array.isArray(body.benefits)
-          ? body.benefits.map((item) => String(item).trim()).filter(Boolean)
+          ? normalizeTextArray(body.benefits, 30)
           : []
-        : normalizeTextArray(existingDraftPreferences.benefits, 12);
+        : normalizeTextArray(existingDraftPreferences.benefits, 30);
       const roleFocus = hasField("roleFocus")
         ? normalizeText(body.roleFocus)
         : normalizeText(existingDraftPreferences.roleFocus);
@@ -407,6 +558,15 @@ export async function POST(req: Request) {
       const hiringSignalEmphasis = hasField("hiringSignalEmphasis")
         ? normalizeText(body.hiringSignalEmphasis)
         : normalizeText(existingDraftPreferences.hiringSignalEmphasis);
+      const applicationAnswerPreferences = hasField("applicationAnswerPreferences")
+        ? sanitizeApplicationAnswerPreferences(
+            body.applicationAnswerPreferences,
+            existingDraftPreferences.applicationAnswerPreferences,
+          )
+        : sanitizeApplicationAnswerPreferences(
+            existingDraftPreferences.applicationAnswerPreferences,
+            {},
+          );
 
       const nextPreferences: DraftPreferencesPayload = {
         ...existingDraftPreferences,
@@ -428,6 +588,7 @@ export async function POST(req: Request) {
         hirexaSupportExtras,
         hiringSignalTraits,
         hiringSignalEmphasis,
+        applicationAnswerPreferences,
         city: sanitizedLocationFields?.city ?? existingDraftPreferences.city ?? null,
         state:
           sanitizedLocationFields?.state ?? existingDraftPreferences.state ?? null,
@@ -444,6 +605,16 @@ export async function POST(req: Request) {
         },
         guestId: draftGuestId,
       });
+
+      if (
+        hasField("applicationAnswerPreferences") &&
+        hasVoluntarySelfIdPayload(body.applicationAnswerPreferences)
+      ) {
+        console.log("[VOLUNTARY_SELF_ID_SAVED]", {
+          profileScope: "draft",
+          fields: Object.keys(readRecord(readRecord(body.applicationAnswerPreferences).voluntarySelfId)),
+        });
+      }
 
       return NextResponse.json({
         ok: true,
@@ -584,7 +755,7 @@ export async function POST(req: Request) {
       : existingBenefit?.selectedPlan || "trial";
     const benefits = hasField("benefits")
       ? Array.isArray(body.benefits)
-        ? body.benefits.map((item) => String(item).trim()).filter(Boolean)
+        ? normalizeTextArray(body.benefits, 30)
         : []
       : existingBenefit?.benefits ?? [];
 
@@ -624,6 +795,15 @@ export async function POST(req: Request) {
     const hiringSignalEmphasis = hasField("hiringSignalEmphasis")
       ? normalizeText(body.hiringSignalEmphasis)
       : normalizeText(existingKeyQuestions.hiringSignalEmphasis);
+    const applicationAnswerPreferences = hasField("applicationAnswerPreferences")
+      ? sanitizeApplicationAnswerPreferences(
+          body.applicationAnswerPreferences,
+          existingKeyQuestions.applicationAnswerPreferences,
+        )
+      : sanitizeApplicationAnswerPreferences(
+          existingKeyQuestions.applicationAnswerPreferences,
+          {},
+        );
     const nextKeyQuestions = {
       ...existingKeyQuestions,
       roleFocus,
@@ -638,6 +818,7 @@ export async function POST(req: Request) {
       hirexaSupportExtras,
       hiringSignalTraits,
       hiringSignalEmphasis,
+      applicationAnswerPreferences,
     };
 
     const profile = await prisma.userProfile.upsert({
@@ -704,6 +885,16 @@ export async function POST(req: Request) {
 
     invalidateCachedProfile({ userId, guestId });
 
+    if (
+      hasField("applicationAnswerPreferences") &&
+      hasVoluntarySelfIdPayload(body.applicationAnswerPreferences)
+    ) {
+      console.log("[VOLUNTARY_SELF_ID_SAVED]", {
+        profileId: profile.id,
+        fields: Object.keys(readRecord(readRecord(body.applicationAnswerPreferences).voluntarySelfId)),
+      });
+    }
+
     return NextResponse.json({
       ok: true,
       preferences: {
@@ -717,6 +908,7 @@ export async function POST(req: Request) {
         availability,
         employmentType,
         seniorityLevel,
+        applicationAnswerPreferences,
         workSetup,
         commutePreference,
         schedulePreferences,

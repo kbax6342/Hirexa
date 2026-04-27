@@ -37,6 +37,8 @@ type ProfileBody = {
   city?: string;
   postalCode?: string;
   state?: string;
+  country?: string;
+  countryCode?: string;
   linkedinUrl?: string;
   portfolioUrl?: string;
   professionalLinks?: unknown;
@@ -47,6 +49,40 @@ type ProfileBody = {
 function normalizeText(value: unknown) {
   const text = String(value ?? "").trim();
   return text.length > 0 ? text : null;
+}
+
+function normalizeCountry(value: unknown) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  return text.length > 0 ? text.slice(0, 80) : null;
+}
+
+function normalizeCountryCode(value: unknown) {
+  const text = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+  return text.length > 0 ? text.slice(0, 2) : null;
+}
+
+function inferCountryFromLocation(input: {
+  country?: unknown;
+  countryCode?: unknown;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+}) {
+  const explicitCountry = normalizeCountry(input.country);
+  const explicitCountryCode = normalizeCountryCode(input.countryCode);
+  const state = String(input.state ?? "").trim().toUpperCase();
+  const postalCode = String(input.postalCode ?? "").trim();
+  const hasUsLocationSignal = /^[A-Z]{2}$/.test(state) || /^\d{5}(?:-\d{4})?$/.test(postalCode);
+  const country = explicitCountry ?? (hasUsLocationSignal ? "United States" : null);
+  const countryCode =
+    explicitCountryCode ??
+    (country && /^(united states|usa|us|america)$/i.test(country) ? "US" : null) ??
+    (hasUsLocationSignal ? "US" : null);
+
+  return { country, countryCode };
 }
 
 function dateFromDobString(value?: string | null) {
@@ -300,6 +336,13 @@ export async function POST(req: Request) {
       postalCode: body.postalCode,
       state: body.state,
     });
+    const inferredCountry = inferCountryFromLocation({
+      country: body.country,
+      countryCode: body.countryCode,
+      city: privateFields.city,
+      state: privateFields.state,
+      postalCode: privateFields.postalCode,
+    });
     const profileWhere = userId ? { userId } : { guestId: guestId as string };
     const profileCreateScope = userId ? { userId } : { guestId: guestId as string };
 
@@ -308,8 +351,12 @@ export async function POST(req: Request) {
       select: {
         workplaceLocations: true,
         registrationStatus: true,
+        country: true,
+        countryCode: true,
       },
     });
+    const country = inferredCountry.country ?? existingProfile?.country ?? null;
+    const countryCode = inferredCountry.countryCode ?? existingProfile?.countryCode ?? null;
     const hasExplicitWorkplaceLocation = Boolean(
       readFirstWorkplaceLocation(existingProfile?.workplaceLocations)
     );
@@ -341,6 +388,8 @@ export async function POST(req: Request) {
         state: null,
         stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
+        country,
+        countryCode,
         linkedinUrl: legacyProfessionalLinkFields.linkedinUrl,
         portfolioUrl: legacyProfessionalLinkFields.portfolioUrl,
         registrationStatus: nextRegistrationStatusAfterProfileSave(
@@ -368,6 +417,8 @@ export async function POST(req: Request) {
         state: null,
         stateEncrypted: privateFields.stateEncrypted,
         stateSearch: privateFields.stateSearch,
+        country,
+        countryCode,
         linkedinUrl: legacyProfessionalLinkFields.linkedinUrl,
         portfolioUrl: legacyProfessionalLinkFields.portfolioUrl,
         registrationStatus: nextRegistrationStatusAfterProfileSave(
@@ -384,6 +435,8 @@ export async function POST(req: Request) {
         lastName: true,
         email: true,
         phone: true,
+        country: true,
+        countryCode: true,
         linkedinUrl: true,
         portfolioUrl: true,
         newsletterOptIn: true,
@@ -415,6 +468,8 @@ export async function POST(req: Request) {
         city: privateFields.city,
         postalCode: privateFields.postalCode,
         state: privateFields.state,
+        country,
+        countryCode,
         dob: privateFields.dob,
       }),
     });
@@ -467,6 +522,8 @@ export async function GET() {
           responseProfileRecord?.displayPostalCode ??
           responseProfileRecord?.postalCode ??
           null,
+        country: responseProfileRecord?.country ?? null,
+        countryCode: responseProfileRecord?.countryCode ?? null,
       });
     }
 
@@ -495,6 +552,8 @@ function buildProfileSelect() {
     lastName: true,
     email: true,
     phone: true,
+    country: true,
+    countryCode: true,
     registrationStatus: true,
     welcomeEmailSentAt: true,
     keyQuestions: true,

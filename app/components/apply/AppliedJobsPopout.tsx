@@ -51,6 +51,7 @@ type ApplySessionPollResponse = {
       lastActionSelector?: string | null;
       stopReason?: string | null;
       stopClassification?: ApplyStopClassification | null;
+      missingQuestions?: AutoApplyPopupItem["missingQuestions"];
     };
   };
   error?: string;
@@ -70,6 +71,11 @@ function formatAutoApplyMessage(args: {
 }
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
+  const raw = String(status ?? "").trim().toUpperCase();
+  if (raw === "FILLING_FORM") return "Filling application...";
+  if (raw === "SUBMITTING_APPLICATION") return "Submitting application...";
+  if (raw === "SUBMITTED") return "Application submitted";
+  if (raw === "NEEDS_USER_ANSWERS") return "Answer questions to continue";
   const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
 
   switch (normalized) {
@@ -81,8 +87,16 @@ function formatAutoApplyStatusLabel(status: string | null | undefined) {
       return "Not available";
     case "UNCONFIRMED":
       return "Unconfirmed";
+    case "STALE_SESSION":
+    case "READY_TO_RETRY":
+      return "Auto Apply paused";
+    case "READY_FOR_USER_REVIEW":
+      return "Ready for review";
+    case "WAITING_CONFIRMATION":
+    case "WAITING_FOR_CONFIRMATION":
+      return "Submission status unclear";
     case "SUBMITTED":
-      return "Submitted";
+      return "Application submitted";
     default:
       return normalized
         .toLowerCase()
@@ -97,8 +111,48 @@ function isStoppedAutoApplyStatus(status: string | null | undefined) {
     status === "VERIFICATION_REQUIRED" ||
     status === "APPLY_NOT_STARTED" ||
     status === "WAITING_HUMAN" ||
+    status === "STALE_SESSION" ||
+    status === "READY_TO_RETRY" ||
+    status === "READY_FOR_USER_REVIEW" ||
+    status === "WAITING_CONFIRMATION" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "NEEDS_USER_ANSWERS" ||
     status === "FAILED"
   );
+}
+
+function autoApplyStatusCopy(status: string | null | undefined, message?: string | null) {
+  if (status === "STALE_SESSION" || status === "READY_TO_RETRY") {
+    return {
+      title: "Auto Apply paused",
+      message:
+        message ??
+        "The browser session stopped before Hirexa could finish this application.",
+      action: "Retry Auto Apply",
+    };
+  }
+  if (status === "READY_FOR_USER_REVIEW") {
+    return {
+      title: "Ready for review",
+      message: message ?? "Hirexa filled the application. Review the form before submitting.",
+      action: "Open review",
+    };
+  }
+  if (status === "WAITING_CONFIRMATION" || status === "WAITING_FOR_CONFIRMATION") {
+    return {
+      title: "Submission status unclear",
+      message: message ?? "Hirexa clicked submit but could not confirm the final result.",
+      action: "Check application page",
+    };
+  }
+  if (status === "NEEDS_USER_ANSWERS") {
+    return {
+      title: "Needs answers",
+      message: message ?? "Hirexa needs your input for fields it should not guess.",
+      action: "Answer questions to continue",
+    };
+  }
+  return { title: null, message, action: null };
 }
 
 function pickLatestAutoApplyStopUrl(item: {
@@ -141,6 +195,11 @@ export default function AppliedJobsPopout({
   );
   const [showAppliedPanel, setShowAppliedPanel] = useState(false);
   const autoApplyPollInFlightRef = useRef(false);
+  const [answeringItem, setAnsweringItem] = useState<AutoApplyPopupItem | null>(null);
+  const [answerValues, setAnswerValues] = useState<Record<string, string>>({});
+  const [saveAnswerValues, setSaveAnswerValues] = useState<Record<string, boolean>>({});
+  const [answerSubmitError, setAnswerSubmitError] = useState<string | null>(null);
+  const [answerSubmitLoading, setAnswerSubmitLoading] = useState(false);
 
   const autoApplyItems = useMemo(
     () =>
@@ -165,6 +224,29 @@ export default function AppliedJobsPopout({
       });
     },
     []
+  );
+
+  const retryAutoApply = useCallback(
+    async (item: AutoApplyPopupItem) => {
+      updateAutoApplyPopupState((current, now) => ({
+        ...current,
+        items: {
+          ...current.items,
+          [item.applicationId]: {
+            ...current.items[item.applicationId],
+            status: "STARTING",
+            message: "Retrying Auto Apply...",
+            updatedAt: now,
+          },
+        },
+      }));
+      await fetch(`/api/applications/${item.applicationId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ background: true }),
+      }).catch(() => null);
+    },
+    [updateAutoApplyPopupState],
   );
 
   const markAutoApplyActivity = useCallback(() => {
@@ -298,6 +380,11 @@ export default function AppliedJobsPopout({
               toApplySessionDisplayStatus(payload.session.status) ??
               payload.session.status ??
               item.status;
+            const payloadMissingQuestions =
+              payload.session.debug?.missingQuestions ??
+              nextItems[item.applicationId]?.missingQuestions ??
+              item.missingQuestions ??
+              [];
             const formattedMessage = formatAutoApplyMessage({
               message: payload.session.message ?? payload.session.error ?? null,
               errorCode: payload.session.errorCode ?? null,
@@ -305,7 +392,7 @@ export default function AppliedJobsPopout({
 
             nextItems[item.applicationId] = {
               ...nextItems[item.applicationId],
-              applySessionId: isApplySessionTerminalStatus(displayStatus)
+              applySessionId: isApplySessionTerminalStatus(displayStatus) && payloadMissingQuestions.length === 0
                 ? null
                 : nextItems[item.applicationId]?.applySessionId ??
                   item.applySessionId ??
@@ -390,6 +477,7 @@ export default function AppliedJobsPopout({
                 nextItems[item.applicationId]?.stopClassification ??
                 item.stopClassification ??
                 null,
+              missingQuestions: payloadMissingQuestions,
               originalJobUrl:
                 payload.session.debug?.originalJobUrl ??
                 nextItems[item.applicationId]?.originalJobUrl ??
@@ -456,6 +544,7 @@ export default function AppliedJobsPopout({
               const statusLabel = formatAutoApplyStatusLabel(item.status);
               const stoppedStatus = isStoppedAutoApplyStatus(item.status);
               const stoppedUrl = pickLatestAutoApplyStopUrl(item);
+              const statusCopy = autoApplyStatusCopy(item.status, item.message);
               const canRenderStoppedPageUi =
                 stoppedStatus &&
                 Boolean(
@@ -464,6 +553,7 @@ export default function AppliedJobsPopout({
                     item.stopReason ||
                     item.lastAction
                 );
+              const missingQuestions = item.missingQuestions ?? [];
 
               return (
                 <div
@@ -505,6 +595,12 @@ export default function AppliedJobsPopout({
                   {item.message ? (
                     canRenderStoppedPageUi ? (
                       <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                        {statusCopy.title ? (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                            <div className="font-semibold">{statusCopy.title}</div>
+                            <div className="mt-0.5">{statusCopy.message}</div>
+                          </div>
+                        ) : null}
                         {stoppedUrl ? (
                           <p>
                             Stopped at:{" "}
@@ -528,12 +624,78 @@ export default function AppliedJobsPopout({
                           compact
                           className="mt-2"
                         />
+                        {missingQuestions.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAnsweringItem(item);
+                              setAnswerSubmitError(null);
+                              setAnswerValues(
+                                Object.fromEntries(
+                                  missingQuestions.map((question) => [
+                                    question.label,
+                                    question.aiDraft ?? "",
+                                  ]),
+                                ),
+                              );
+                              setSaveAnswerValues({});
+                            }}
+                            className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                          >
+                            Answer questions to continue
+                          </button>
+                        ) : null}
+                        {item.status === "STALE_SESSION" || item.status === "READY_TO_RETRY" ? (
+                          <button
+                            type="button"
+                            onClick={() => void retryAutoApply(item)}
+                            className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                          >
+                            Retry Auto Apply
+                          </button>
+                        ) : null}
+                        {item.status === "READY_FOR_USER_REVIEW" || item.status === "WAITING_CONFIRMATION" || item.status === "WAITING_FOR_CONFIRMATION" ? (
+                          stoppedUrl ? (
+                            <a
+                              href={stoppedUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 inline-flex rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                            >
+                              {statusCopy.action ?? "Open application"}
+                            </a>
+                          ) : null
+                        ) : null}
                       </div>
                     ) : (
-                      <p className="mt-2 text-[11px] text-gray-600">{item.message}</p>
+                      <div className="mt-2 text-[11px] text-gray-600">
+                        {statusCopy.title ? (
+                          <div className="font-semibold text-gray-800">{statusCopy.title}</div>
+                        ) : null}
+                        <p>{statusCopy.message ?? item.message}</p>
+                        {submitted && stoppedUrl ? (
+                          <p>
+                            Final URL:{" "}
+                            <a
+                              className="break-all underline"
+                              href={stoppedUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {stoppedUrl}
+                            </a>
+                          </p>
+                        ) : null}
+                      </div>
                     )
                   ) : canRenderStoppedPageUi ? (
                     <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                      {statusCopy.title ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                          <div className="font-semibold">{statusCopy.title}</div>
+                          <div className="mt-0.5">{statusCopy.message}</div>
+                        </div>
+                      ) : null}
                       {stoppedUrl ? (
                         <p>
                           Stopped at:{" "}
@@ -557,11 +719,226 @@ export default function AppliedJobsPopout({
                         compact
                         className="mt-2"
                       />
+                      {missingQuestions.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAnsweringItem(item);
+                            setAnswerSubmitError(null);
+                            setAnswerValues(
+                              Object.fromEntries(
+                                missingQuestions.map((question) => [
+                                  question.label,
+                                  question.aiDraft ?? "",
+                                ]),
+                              ),
+                            );
+                            setSaveAnswerValues({});
+                          }}
+                          className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                        >
+                          Answer questions to continue
+                        </button>
+                      ) : null}
+                      {item.status === "STALE_SESSION" || item.status === "READY_TO_RETRY" ? (
+                        <button
+                          type="button"
+                          onClick={() => void retryAutoApply(item)}
+                          className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                        >
+                          Retry Auto Apply
+                        </button>
+                      ) : null}
+                      {item.status === "READY_FOR_USER_REVIEW" || item.status === "WAITING_CONFIRMATION" || item.status === "WAITING_FOR_CONFIRMATION" ? (
+                        stoppedUrl ? (
+                          <a
+                            href={stoppedUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-flex rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                          >
+                            {statusCopy.action ?? "Open application"}
+                          </a>
+                        ) : null
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : null}
+
+      {answeringItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">
+                  Answer application questions
+                </h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Hirexa needs your input for fields it should not guess.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAnsweringItem(null)}
+                className="rounded-md px-2 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {(answeringItem.missingQuestions ?? []).map((question) => {
+                const label = question.label;
+                const value = answerValues[label] ?? question.aiDraft ?? "";
+                const isChoice = (question.options?.length ?? 0) > 0;
+                return (
+                  <div key={question.fieldId || label} className="rounded-xl border border-gray-200 p-3">
+                    <label className="text-sm font-semibold text-gray-900">
+                      {label}
+                    </label>
+                    {question.aiDraft ? (
+                      <p className="mt-1 text-xs font-medium text-blue-700">
+                        AI draft - review before continuing
+                      </p>
+                    ) : null}
+                    {question.sensitive ? (
+                      <p className="mt-1 text-xs text-gray-600">
+                        This is voluntary/self-identification information. Hirexa will not guess this.
+                      </p>
+                    ) : null}
+                    {isChoice ? (
+                      <select
+                        value={value}
+                        onChange={(event) =>
+                          setAnswerValues((prev) => ({
+                            ...prev,
+                            [label]: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      >
+                        <option value="">Select an answer</option>
+                        {question.sensitive ? (
+                          <option value="Prefer not to answer">Prefer not to answer</option>
+                        ) : null}
+                        {question.options?.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <textarea
+                        value={value}
+                        onChange={(event) =>
+                          setAnswerValues((prev) => ({
+                            ...prev,
+                            [label]: event.target.value,
+                          }))
+                        }
+                        rows={question.aiDraft ? 5 : 3}
+                        className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      />
+                    )}
+                    <label className="mt-2 flex items-center gap-2 text-xs text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={saveAnswerValues[label] === true}
+                        onChange={(event) =>
+                          setSaveAnswerValues((prev) => ({
+                            ...prev,
+                            [label]: event.target.checked,
+                          }))
+                        }
+                      />
+                      {question.sensitive
+                        ? "Save this voluntary answer to my profile for future applications"
+                        : "Save this answer for future applications"}
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+
+            {answerSubmitError ? (
+              <p className="mt-3 text-sm text-red-600">{answerSubmitError}</p>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAnsweringItem(null)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={answerSubmitLoading}
+                onClick={async () => {
+                  if (!answeringItem.applySessionId) return;
+                  setAnswerSubmitLoading(true);
+                  setAnswerSubmitError(null);
+                  try {
+                    const answers = Object.fromEntries(
+                      Object.entries(answerValues).filter(([, value]) => value.trim()),
+                    );
+                    const saveRes = await fetch(
+                      `/api/apply-sessions/${answeringItem.applySessionId}/answers`,
+                      {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          answers,
+                          saveToProfile: saveAnswerValues,
+                        }),
+                      },
+                    );
+                    const savePayload = (await saveRes.json()) as {
+                      ok?: boolean;
+                      error?: string;
+                    };
+                    if (!saveRes.ok || !savePayload.ok) {
+                      throw new Error(savePayload.error ?? "Could not save answers.");
+                    }
+
+                    await fetch(`/api/applications/${answeringItem.applicationId}/apply`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ answers, background: true }),
+                    }).catch(() => null);
+
+                    setAnsweringItem(null);
+                    updateAutoApplyPopupState((current, now) => ({
+                      ...current,
+                      items: {
+                        ...current.items,
+                        [answeringItem.applicationId]: {
+                          ...current.items[answeringItem.applicationId],
+                          status: "STARTING",
+                          message: "Continuing Auto Apply with your answers...",
+                          updatedAt: now,
+                        },
+                      },
+                    }));
+                  } catch (error) {
+                    setAnswerSubmitError(
+                      error instanceof Error ? error.message : "Could not continue Auto Apply.",
+                    );
+                  } finally {
+                    setAnswerSubmitLoading(false);
+                  }
+                }}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {answerSubmitLoading ? "Saving..." : "Continue Auto Apply"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

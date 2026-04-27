@@ -14,6 +14,13 @@ import {
   isLikelyCompanyCareersUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
+import { extractAtsJobIdentityFromUrl } from "@/app/lib/apply/atsUrlIdentity";
+import {
+  buildJobIdentitySnapshot,
+  compareJobIdentitySnapshots,
+  type JobIdentityMismatch,
+  type JobIdentitySnapshot,
+} from "@/app/lib/jobs/jobIdentity";
 
 type AutoApplyBody = {
   sourceJobId?: string;
@@ -24,6 +31,7 @@ type AutoApplyBody = {
   preferredDirectUrl?: string;
   source?: string;
   applyProvider?: string;
+  selectedJobIdentity?: JobIdentitySnapshot;
 };
 
 function normalizeText(value: unknown) {
@@ -58,6 +66,25 @@ function chooseInitialApplicationJobUrl(values: Array<string | null | undefined>
   );
 }
 
+function buildIdentityMismatchResponse(
+  expectedJob: JobIdentitySnapshot,
+  actualJob: JobIdentitySnapshot,
+  mismatches: JobIdentityMismatch[],
+) {
+  return NextResponse.json(
+    {
+      ok: false,
+      code: "JOB_IDENTITY_MISMATCH",
+      message: "Auto Apply blocked because the selected job changed before apply started.",
+      error: "Auto Apply blocked because the selected job changed before apply started.",
+      expectedJob,
+      actualJob,
+      mismatches,
+    },
+    { status: 409 },
+  );
+}
+
 export async function POST(req: Request) {
   try {
     const session = await auth();
@@ -77,6 +104,9 @@ export async function POST(req: Request) {
       normalizeJobUrl(normalizeText(body.preferredDirectUrl)) || null;
     const requestedSource = normalizeText(body.source).toLowerCase();
     const requestedApplyProvider = normalizeApplyProvider(body.applyProvider);
+    const selectedJobIdentity = body.selectedJobIdentity
+      ? buildJobIdentitySnapshot(body.selectedJobIdentity)
+      : null;
 
     if (!jobTitle || !company) {
       return NextResponse.json(
@@ -93,6 +123,44 @@ export async function POST(req: Request) {
       sourceHint === "adzuna" || sourceJobLooksAdzuna
         ? normalizeAdzunaProviderId(rawSourceJobId)
         : rawSourceJobId;
+
+    const requestIdentity = buildJobIdentitySnapshot({
+      source: requestedSource || sourceHint,
+      sourceJobId,
+      rawSourceJobId,
+      title: jobTitle,
+      company,
+      location,
+      jobUrl: incomingJobUrl,
+      resolvedApplyUrl: preferredDirectUrl,
+      applyProvider: requestedApplyProvider,
+    });
+
+    if (selectedJobIdentity) {
+      console.log("[AUTO_APPLY_IDENTITY] received selected job identity", {
+        expectedSourceJobId: selectedJobIdentity.sourceJobId,
+        requestSourceJobId: requestIdentity.sourceJobId,
+        expectedTitle: selectedJobIdentity.title,
+        requestTitle: requestIdentity.title,
+      });
+      const comparison = compareJobIdentitySnapshots(
+        selectedJobIdentity,
+        requestIdentity,
+      );
+      if (!comparison.matches) {
+        console.warn("[AUTO_APPLY_IDENTITY] mismatch blocked", {
+          expectedJob: selectedJobIdentity,
+          actualJob: requestIdentity,
+          mismatches: comparison.mismatches,
+        });
+        return buildIdentityMismatchResponse(
+          selectedJobIdentity,
+          requestIdentity,
+          comparison.mismatches,
+        );
+      }
+    }
+
     const profile = await prisma.userProfile.upsert({
       where: { userId },
       create: {
@@ -113,20 +181,68 @@ export async function POST(req: Request) {
           select: {
             id: true,
             jobUrl: true,
+            source: true,
+            sourceJobId: true,
+            jobTitle: true,
+            title: true,
+            company: true,
+            location: true,
             auditJson: true,
           },
         })
       : null;
+    const existingApplicationIdentity = existingApplication
+      ? buildJobIdentitySnapshot({
+          source: existingApplication.source,
+          sourceJobId: existingApplication.sourceJobId,
+          title: existingApplication.title ?? existingApplication.jobTitle,
+          company: existingApplication.company,
+          location: existingApplication.location,
+          jobUrl: existingApplication.jobUrl,
+        })
+      : null;
+    const existingIdentityComparison =
+      selectedJobIdentity && existingApplicationIdentity
+        ? compareJobIdentitySnapshots(
+            selectedJobIdentity,
+            existingApplicationIdentity,
+          )
+        : { matches: true, mismatches: [] as JobIdentityMismatch[] };
+    if (selectedJobIdentity && existingApplicationIdentity) {
+      if (!existingIdentityComparison.matches) {
+        console.warn("[AUTO_APPLY_IDENTITY] existing application rejected due to sourceJobId mismatch", {
+          existingApplicationId: existingApplication?.id,
+          expectedJob: selectedJobIdentity,
+          actualJob: existingApplicationIdentity,
+          mismatches: existingIdentityComparison.mismatches,
+        });
+        return buildIdentityMismatchResponse(
+          selectedJobIdentity,
+          existingApplicationIdentity,
+          existingIdentityComparison.mismatches,
+        );
+      }
+      console.log("[AUTO_APPLY_IDENTITY] existing application matched selected job", {
+        existingApplicationId: existingApplication?.id,
+        sourceJobId,
+      });
+    }
     const existingAuditDebug = (existingApplication
       ? readAutomationAudit(existingApplication.auditJson).state.debug ?? {}
       : {}) as Record<string, unknown>;
+    const canReuseExistingDirectUrl =
+      Boolean(existingApplication) && existingIdentityComparison.matches;
     const jobUrl = chooseInitialApplicationJobUrl([
       preferredDirectUrl,
-      normalizeJobUrl(
-        normalizeText(existingAuditDebug.resolvedDirectUrl),
-      ) || null,
-      normalizeJobUrl(normalizeText(existingAuditDebug.targetUrl)) || null,
-      normalizeJobUrl(normalizeText(existingApplication?.jobUrl)) || null,
+      canReuseExistingDirectUrl
+        ? normalizeJobUrl(normalizeText(existingAuditDebug.resolvedDirectUrl)) || null
+        : null,
+      canReuseExistingDirectUrl
+        ? normalizeJobUrl(normalizeText(existingAuditDebug.targetUrl)) || null
+        : null,
+      canReuseExistingDirectUrl
+        ? normalizeJobUrl(normalizeText(existingApplication?.jobUrl)) || null
+        : null,
       incomingJobUrl,
     ]);
     const detectedApplyProvider =
@@ -139,6 +255,41 @@ export async function POST(req: Request) {
       detectedApplyProvider ||
       sourceHint ||
       deriveSourceFromUrl(jobUrl ?? "");
+    const actualIdentity = buildJobIdentitySnapshot({
+      source,
+      sourceJobId,
+      rawSourceJobId,
+      title: jobTitle,
+      company,
+      location,
+      jobUrl: incomingJobUrl,
+      resolvedApplyUrl: jobUrl,
+      applyProvider: detectedApplyProvider,
+    });
+    if (selectedJobIdentity) {
+      const comparison = compareJobIdentitySnapshots(
+        selectedJobIdentity,
+        actualIdentity,
+      );
+      if (!comparison.matches) {
+        console.warn("[AUTO_APPLY_IDENTITY] mismatch blocked", {
+          expectedJob: selectedJobIdentity,
+          actualJob: actualIdentity,
+          resolvedUrlIdentity: extractAtsJobIdentityFromUrl(jobUrl),
+          mismatches: comparison.mismatches,
+        });
+        return buildIdentityMismatchResponse(
+          selectedJobIdentity,
+          actualIdentity,
+          comparison.mismatches,
+        );
+      }
+      console.log("[AUTO_APPLY_IDENTITY] validated", {
+        sourceJobId,
+        source,
+        resolvedUrlIdentity: extractAtsJobIdentityFromUrl(jobUrl),
+      });
+    }
 
     console.log("[AUTO_APPLY_ROUTE] POST /api/auto-apply", {
       userId,
@@ -150,6 +301,7 @@ export async function POST(req: Request) {
       incomingJobUrl,
       jobUrl,
       preservedExistingDirectUrl:
+        canReuseExistingDirectUrl &&
         jobUrl !== incomingJobUrl &&
         Boolean(existingApplication?.jobUrl || existingAuditDebug.resolvedDirectUrl),
     });

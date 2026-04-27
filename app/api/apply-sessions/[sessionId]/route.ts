@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   getApplySessionStorageBackend,
   getSession,
+  updateSession,
 } from "@/app/lib/apply/applySessionStore";
 import { APPLY_VERIFICATION_REQUIRED_USER_MESSAGE } from "@/app/lib/apply/sessionStatus";
 import { detectVerificationGate } from "@/app/lib/apply/verification";
@@ -21,6 +22,24 @@ export const runtime = "nodejs";
 const VERIFICATION_REQUIRED_MESSAGE = APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
 const RTX_VERIFICATION_REQUIRED_MESSAGE =
   APPLY_VERIFICATION_REQUIRED_USER_MESSAGE;
+
+const ACTIVE_APPLY_SESSION_STATUSES = new Set([
+  "STARTING",
+  "OPENING_FORM",
+  "FILLING_FORM",
+  "SUBMITTING",
+  "SUBMITTING_APPLICATION",
+  "WAITING_CONFIRMATION",
+  "WAITING_FOR_CONFIRMATION",
+]);
+const NO_HEARTBEAT_STALE_MS = 90_000;
+const FILLING_FORM_NO_RUNNER_HEARTBEAT_MS = 60_000;
+const FILLING_FORM_NO_PROGRESS_MS = 120_000;
+const SUBMITTING_NO_CONFIRMATION_MS = 120_000;
+const STALE_SESSION_MESSAGE =
+  "The browser session stopped before Hirexa could finish this application.";
+const STALE_SESSION_SUGGESTED_ACTION =
+  "Retry Auto Apply or open the application manually.";
 function parseHostname(value: string | null | undefined) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -39,6 +58,217 @@ function isRtxHostname(hostname: string) {
     hostname.endsWith(".myworkdayjobs.com") ||
     hostname.endsWith(".workdayjobs.com")
   );
+}
+
+function isActiveSessionStatus(status: string | null | undefined) {
+  return ACTIVE_APPLY_SESSION_STATUSES.has(String(status ?? ""));
+}
+
+function recoverStaleSessionIfNeeded(
+  session: NonNullable<ReturnType<typeof getSession>>,
+) {
+  if (!isActiveSessionStatus(session.status) || session.recoveredFromStaleSession) {
+    return session;
+  }
+
+  const now = Date.now();
+  const fillingFormStartedAt =
+    session.fillingFormStartedAt ??
+    (session.status === "FILLING_FORM" ? session.lastStatusChangeAt ?? session.updatedAt ?? session.startedAt : 0);
+  const fillingFormAge = fillingFormStartedAt ? now - fillingFormStartedAt : 0;
+  const lastRunnerHeartbeatAt = session.lastRunnerHeartbeatAt ?? 0;
+  const lastMeaningfulFormProgressAt =
+    session.lastMeaningfulFormProgressAt ?? session.lastRunnerProgressAt ?? 0;
+  const lastSubmitAttemptAt =
+    session.debug?.submitAttempted === true
+      ? session.lastFormRecheckAt ?? session.lastRunnerProgressAt ?? session.updatedAt
+      : 0;
+  const heartbeatAge = lastRunnerHeartbeatAt
+    ? now - lastRunnerHeartbeatAt
+    : Number.POSITIVE_INFINITY;
+  const progressAge = lastMeaningfulFormProgressAt
+    ? now - lastMeaningfulFormProgressAt
+    : Number.POSITIVE_INFINITY;
+  const submitAttemptAge = lastSubmitAttemptAt
+    ? now - lastSubmitAttemptAt
+    : Number.POSITIVE_INFINITY;
+  let staleReason: string | null = null;
+  let recoveredStatus:
+    | typeof session.status
+    | "READY_TO_RETRY"
+    | "STALE_SESSION"
+    | "WAITING_FOR_CONFIRMATION"
+    | "SUBMITTING_APPLICATION"
+    | "READY_FOR_USER_REVIEW"
+    | "NEEDS_USER_ANSWERS"
+    | "SUBMITTED"
+    | null = null;
+
+  if (
+    session.status === "FILLING_FORM" &&
+    session.debug?.finalRecheckPassed === true &&
+    (session.debug?.missingRequiredFields?.length ?? 0) === 0 &&
+    (session.debug?.aiFormBlockedCount ?? 0) === 0 &&
+    session.debug?.readyToSubmit === true
+  ) {
+    staleReason = "Final form recheck passed but the session did not advance.";
+    recoveredStatus =
+      session.debug?.submitAttempted === true
+        ? session.debug?.submissionConfirmed === true
+          ? "SUBMITTED"
+          : submitAttemptAge > SUBMITTING_NO_CONFIRMATION_MS
+            ? "WAITING_FOR_CONFIRMATION"
+            : (session.debug?.visibleValidationErrors?.length ?? 0) > 0
+            ? "NEEDS_USER_ANSWERS"
+            : "SUBMITTING_APPLICATION"
+        : session.debug?.reviewBeforeSubmit === true
+          ? "READY_FOR_USER_REVIEW"
+          : "READY_TO_RETRY";
+  } else if (
+    session.status === "FILLING_FORM" &&
+    !lastRunnerHeartbeatAt &&
+    fillingFormAge > FILLING_FORM_NO_RUNNER_HEARTBEAT_MS
+  ) {
+    staleReason = "No active background runner heartbeat was found.";
+    recoveredStatus = "STALE_SESSION";
+  } else if (
+    (session.status === "FILLING_FORM" && heartbeatAge > NO_HEARTBEAT_STALE_MS) ||
+    ((session.status === "STARTING" || session.status === "OPENING_FORM") &&
+      heartbeatAge > NO_HEARTBEAT_STALE_MS)
+  ) {
+    staleReason =
+      session.status === "FILLING_FORM"
+        ? "The background apply runner stopped sending heartbeats."
+        : "No active background runner heartbeat was found.";
+    recoveredStatus =
+      session.status === "FILLING_FORM" &&
+      (session.debug?.formDetected === true || session.debug?.formFound === true)
+        ? "READY_TO_RETRY"
+        : "STALE_SESSION";
+  } else if (
+    session.status === "FILLING_FORM" &&
+    progressAge > FILLING_FORM_NO_PROGRESS_MS
+  ) {
+    staleReason = "No meaningful form progress was recorded before the timeout.";
+    recoveredStatus = "READY_TO_RETRY";
+  } else if (
+    (session.status === "SUBMITTING" ||
+      session.status === "SUBMITTING_APPLICATION" ||
+      session.status === "WAITING_CONFIRMATION" ||
+      session.status === "WAITING_FOR_CONFIRMATION") &&
+    progressAge > SUBMITTING_NO_CONFIRMATION_MS
+  ) {
+    staleReason = "Submit or confirmation did not finish before the timeout.";
+    recoveredStatus =
+      session.status === "SUBMITTING" || session.status === "SUBMITTING_APPLICATION"
+        ? "WAITING_FOR_CONFIRMATION"
+        : "READY_TO_RETRY";
+  }
+
+  if (!staleReason || !recoveredStatus) {
+    return session;
+  }
+
+  console.warn("[APPLY_SESSION_STALE_DETECTED]", {
+    sessionId: session.id,
+    applicationId: session.applicationId,
+    previousStatus: session.status,
+    recoveredStatus,
+    heartbeatAge,
+    progressAge,
+    fillingFormAge,
+    staleReason,
+    latestUrl:
+      session.debug?.latestUrl ?? session.debug?.currentUrl ?? session.lastUrl ?? null,
+  });
+  console.warn("[APPLY_SESSION_FILLING_FORM_RECOVERY]", {
+    sessionId: session.id,
+    applicationId: session.applicationId,
+    previousStatus: session.status,
+    recoveredStatus,
+    staleReason,
+    fillingFormAge,
+    heartbeatAge,
+    progressAge,
+    finalRecheckPassed: session.debug?.finalRecheckPassed === true,
+    readyToSubmit: session.debug?.readyToSubmit === true,
+    submitAttempted: session.debug?.submitAttempted === true,
+  });
+  console.warn("[APPLY_SESSION_FILLING_FORM_STALE_RECOVERY]", {
+    sessionId: session.id,
+    applicationId: session.applicationId,
+    previousStatus: session.status,
+    recoveredStatus,
+    staleReason,
+    fillingFormAge,
+    heartbeatAge,
+    progressAge,
+  });
+
+  const recoveredMessage =
+    recoveredStatus === "READY_FOR_USER_REVIEW"
+      ? "Hirexa filled the application. Review the form before submitting."
+      : recoveredStatus === "WAITING_FOR_CONFIRMATION"
+        ? "Hirexa clicked submit but could not confirm the final result."
+        : recoveredStatus === "NEEDS_USER_ANSWERS"
+          ? "The application returned validation errors after submit."
+          : STALE_SESSION_MESSAGE;
+  const recoveredSuggestedAction =
+    recoveredStatus === "READY_FOR_USER_REVIEW"
+      ? "Open review."
+      : recoveredStatus === "WAITING_FOR_CONFIRMATION"
+        ? "Check the application page."
+        : recoveredStatus === "NEEDS_USER_ANSWERS"
+          ? "Answer questions to continue."
+          : STALE_SESSION_SUGGESTED_ACTION;
+  const recovered = updateSession(
+    session.id,
+    {
+      status: recoveredStatus,
+      runnerActive: false,
+      recoveredFromStaleSession: recoveredStatus !== "SUBMITTING_APPLICATION",
+      staleReason,
+      message: recoveredMessage,
+      error: recoveredStatus === "STALE_SESSION" ? STALE_SESSION_MESSAGE : undefined,
+      lastUrl:
+        session.debug?.latestUrl ??
+        session.debug?.currentUrl ??
+        session.debug?.stoppedAtUrl ??
+        session.lastUrl,
+      debug: {
+        ...(session.debug ?? {}),
+        recoveredFromStaleSession: recoveredStatus !== "SUBMITTING_APPLICATION",
+        staleReason,
+        suggestedAction: recoveredSuggestedAction,
+        latestUrl:
+          session.debug?.latestUrl ??
+          session.debug?.currentUrl ??
+          session.debug?.stoppedAtUrl ??
+          session.lastUrl,
+        stoppedAtUrl:
+          session.debug?.stoppedAtUrl ??
+          session.debug?.latestUrl ??
+          session.debug?.currentUrl ??
+          session.lastUrl,
+        finalReason: "The apply browser session appears to have stopped before finishing.",
+      },
+    },
+    {
+      caller: "GET /api/apply-sessions/[sessionId].staleRecovery",
+      sourcePath: "app/api/apply-sessions/[sessionId]/route.ts",
+      phase: "poll",
+    },
+  );
+
+  console.warn("[APPLY_SESSION_STALE_RECOVERED]", {
+    sessionId: session.id,
+    applicationId: session.applicationId,
+    previousStatus: session.status,
+    recoveredStatus: recovered?.status ?? recoveredStatus,
+    staleReason,
+  });
+
+  return recovered ?? session;
 }
 
 function detectVerificationSignal(value: string | null | undefined) {
@@ -290,14 +520,14 @@ export async function GET(
   context: { params: Promise<{ sessionId: string }> },
 ) {
   const { sessionId } = await context.params;
-  const session = getSession(sessionId, {
+  const loadedSession = getSession(sessionId, {
     caller: "GET /api/apply-sessions/[sessionId]",
     sourcePath: "app/api/apply-sessions/[sessionId]/route.ts",
     phase: "poll",
   });
   const storageBackendUsed = getApplySessionStorageBackend();
 
-  if (!session) {
+  if (!loadedSession) {
     return NextResponse.json(
       {
         ok: false,
@@ -308,6 +538,7 @@ export async function GET(
       { status: 404 },
     );
   }
+  const session = recoverStaleSessionIfNeeded(loadedSession);
 
   const verificationStop = buildVerificationStopPayload(session);
   const rtxStop = buildRtxStopPayload(session);
@@ -409,6 +640,9 @@ export async function GET(
     session: {
       ...sessionPayload,
       message: normalizedMessage ?? sessionPayload.message,
+      recoveredFromStaleSession: sessionPayload.recoveredFromStaleSession,
+      staleReason: sessionPayload.staleReason,
+      suggestedAction: sessionPayload.debug?.suggestedAction ?? null,
       errorCode: inferredErrorCode ?? sessionPayload.errorCode,
       error:
         sessionPayload.error && inferredErrorCode

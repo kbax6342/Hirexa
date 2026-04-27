@@ -78,6 +78,7 @@ export type DraftPreferencesPayload = {
   hirexaSupportExtras?: string[];
   hiringSignalTraits?: string[];
   hiringSignalEmphasis?: string;
+  applicationAnswerPreferences?: Record<string, unknown>;
   city?: string | null;
   state?: string | null;
   postalCode?: string | null;

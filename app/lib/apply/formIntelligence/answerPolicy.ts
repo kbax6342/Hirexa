@@ -21,7 +21,7 @@ const RESUME_PATTERNS =
   /(years of experience|experience with|skills|technologies|current company|current title|education|degree|certification|project|hardest technical|technical problem|achievement|accomplishment)/i;
 
 const MOTIVATION_PATTERNS =
-  /(why (do|are) you|why.*interested|why.*work|what interests|cover letter|tell us about yourself|additional information|anything else|role fit|good fit|motivation)/i;
+  /(why (do|are) you|why.*interested|why.*work|why.*company|what interests|cover letter|tell us about yourself|about yourself|describe .*project|relevant experience|good fit|role fit|additional information|anything else|motivation)/i;
 
 function fieldText(field: FormFieldDescriptor) {
   return [
@@ -39,6 +39,16 @@ function fieldText(field: FormFieldDescriptor) {
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isLongFormApplicationQuestion(field: FormFieldDescriptor, text: string) {
+  return (
+    field.inputType === "textarea" ||
+    /\?/.test(text) ||
+    /\b(why|describe|tell us|what is|what are|how would|explain|worked on|interested in|good fit)\b/i.test(
+      text,
+    )
+  );
 }
 
 export function normalizeLabelKey(value: string) {
@@ -112,15 +122,6 @@ export function classifyByPolicy(field: FormFieldDescriptor): {
     };
   }
 
-  if (PROFILE_PATTERNS.test(text)) {
-    return {
-      category: "profile_direct",
-      reason: "Contact, location, or profile-link field.",
-      sensitive,
-      legal,
-    };
-  }
-
   if (RESUME_PATTERNS.test(text)) {
     return {
       category: field.options?.length ? "ai_choice_safe" : "resume_direct",
@@ -134,6 +135,25 @@ export function classifyByPolicy(field: FormFieldDescriptor): {
     return {
       category: field.options?.length ? "ai_choice_safe" : "ai_free_text_safe",
       reason: "Safe career motivation or role-fit question.",
+      sensitive,
+      legal,
+    };
+  }
+
+  if (PROFILE_PATTERNS.test(text) && !isLongFormApplicationQuestion(field, text)) {
+    return {
+      category: "profile_direct",
+      reason: "Contact, location, or profile-link field.",
+      sensitive,
+      legal,
+    };
+  }
+
+  if (PROFILE_PATTERNS.test(text)) {
+    return {
+      category: "ai_free_text_safe",
+      reason:
+        "Long-form application question references profile context but is safe to answer from profile, resume, and job context.",
       sensitive,
       legal,
     };

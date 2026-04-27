@@ -28,6 +28,16 @@ export type AutoApplyPopupItem = {
   stopReason?: string | null;
   errorCode?: string | null;
   stopClassification?: ApplyStopClassification | null;
+  missingQuestions?: Array<{
+    fieldId: string;
+    label: string;
+    type?: string;
+    options?: string[];
+    classification?: string;
+    reason?: string;
+    aiDraft?: string | null;
+    sensitive?: boolean;
+  }>;
   updatedAt: number;
 };
 

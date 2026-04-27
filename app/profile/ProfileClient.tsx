@@ -28,6 +28,15 @@ import {
   resolveProfessionalLinksForProfile,
   type ProfessionalLink,
 } from "@/app/lib/profile/professionalLinks";
+import {
+  DISABILITY_STATUS_OPTIONS,
+  GENDER_OPTIONS,
+  HISPANIC_LATINO_OPTIONS,
+  RACE_ETHNICITY_OPTIONS,
+  SELF_DESCRIBE_OPTION,
+  VETERAN_STATUS_OPTIONS,
+  optionLabel,
+} from "@/app/lib/profile/voluntarySelfIdOptions";
 import AppliedJobsPopout from "@/app/components/apply/AppliedJobsPopout";
 
 type ExperienceItem = {
@@ -53,6 +62,8 @@ type PersonalDetailsForm = {
   city: string;
   state: string;
   postalCode: string;
+  country: string;
+  countryCode: string;
   professionalLinks: ProfessionalLinkFormItem[];
 };
 
@@ -66,6 +77,26 @@ type PreferenceForm = {
   includeRemote: boolean;
   workplaceLocations: string[];
   benefits: string[];
+  applicationAnswerPreferences: ApplicationAnswerPreferencesForm;
+};
+
+type ApplicationAnswerPreferencesForm = {
+  workAuthorization: {
+    authorizedUS: string;
+    requiresSponsorship: string;
+    startDate: string;
+    relocate: string;
+  };
+  phoneCountryCode: string;
+  voluntarySelfId: {
+    gender: string;
+    genderSelfDescribe: string;
+    hispanicLatino: string;
+    raceEthnicity: string;
+    raceEthnicitySelfDescribe: string;
+    veteranStatus: string;
+    disabilityStatus: string;
+  };
 };
 
 type NewExperienceForm = {
@@ -142,6 +173,8 @@ export type ProfileApiResponse = {
     city?: string | null;
     postalCode?: string | null;
     state?: string | null;
+    country?: string | null;
+    countryCode?: string | null;
     displayAddress?: string | null;
     displayCity?: string | null;
     displayPostalCode?: string | null;
@@ -226,6 +259,44 @@ function createProfessionalLinkFormItems(
   }).map((link) => createProfessionalLinkFormItem(link));
 }
 
+function profileRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function profileText(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function readApplicationAnswerPreferences(
+  keyQuestions: unknown,
+): ApplicationAnswerPreferencesForm {
+  const preferences = profileRecord(
+    profileRecord(keyQuestions).applicationAnswerPreferences,
+  );
+  const workAuthorization = profileRecord(preferences.workAuthorization);
+  const voluntarySelfId = profileRecord(preferences.voluntarySelfId);
+  return {
+    workAuthorization: {
+      authorizedUS: profileText(workAuthorization.authorizedUS),
+      requiresSponsorship: profileText(workAuthorization.requiresSponsorship),
+      startDate: profileText(workAuthorization.startDate),
+      relocate: profileText(workAuthorization.relocate),
+    },
+    phoneCountryCode: profileText(preferences.phoneCountryCode),
+    voluntarySelfId: {
+      gender: profileText(voluntarySelfId.gender),
+      genderSelfDescribe: profileText(voluntarySelfId.genderSelfDescribe),
+      hispanicLatino: profileText(voluntarySelfId.hispanicLatino),
+      raceEthnicity: profileText(voluntarySelfId.raceEthnicity),
+      raceEthnicitySelfDescribe: profileText(voluntarySelfId.raceEthnicitySelfDescribe),
+      veteranStatus: profileText(voluntarySelfId.veteranStatus),
+      disabilityStatus: profileText(voluntarySelfId.disabilityStatus),
+    },
+  };
+}
+
 function stripProfessionalLinkUiState(
   link: ProfessionalLinkFormItem
 ): ProfessionalLink {
@@ -240,6 +311,12 @@ function stripProfessionalLinkUiState(
 function createPersonalDetailsForm(
   profile: ProfileApiResponse["profile"]
 ): PersonalDetailsForm {
+  const inferredCountry = inferCountryFromPersonalLocation({
+    city: profile?.displayCity ?? profile?.city,
+    state: profile?.displayState ?? profile?.state,
+    postalCode: profile?.displayPostalCode ?? profile?.postalCode,
+  });
+
   return {
     firstName: profile?.firstName ?? "",
     lastName: profile?.lastName ?? "",
@@ -249,6 +326,8 @@ function createPersonalDetailsForm(
     city: profile?.displayCity ?? profile?.city ?? "",
     state: profile?.displayState ?? profile?.state ?? "",
     postalCode: profile?.displayPostalCode ?? profile?.postalCode ?? "",
+    country: profile?.country ?? inferredCountry.country,
+    countryCode: profile?.countryCode ?? inferredCountry.countryCode,
     professionalLinks: createProfessionalLinkFormItems(profile),
   };
 }
@@ -260,6 +339,37 @@ function buildCityStateInputLabel(city?: string | null, state?: string | null) {
     return `${normalizedCity}, ${normalizedState}`;
   }
   return normalizedCity || normalizedState;
+}
+
+function inferCountryFromPersonalLocation(input: {
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+}) {
+  const state = String(input.state ?? "").trim().toUpperCase();
+  const postalCode = String(input.postalCode ?? "").trim();
+  const hasUsSignal = /^[A-Z]{2}$/.test(state) || /^\d{5}(?:-\d{4})?$/.test(postalCode);
+
+  return hasUsSignal
+    ? { country: "United States", countryCode: "US" }
+    : { country: "", countryCode: "" };
+}
+
+function withInferredPersonalCountry(form: PersonalDetailsForm): PersonalDetailsForm {
+  if (form.country.trim() && form.countryCode.trim()) {
+    return form;
+  }
+
+  const inferred = inferCountryFromPersonalLocation(form);
+  if (!inferred.country && !inferred.countryCode) {
+    return form;
+  }
+
+  return {
+    ...form,
+    country: form.country.trim() ? form.country : inferred.country,
+    countryCode: form.countryCode.trim() ? form.countryCode : inferred.countryCode,
+  };
 }
 
 function parseLocationSelectionLabel(rawLabel: string) {
@@ -395,7 +505,7 @@ const SENIORITY_LEVEL_OPTIONS = [
   "Lead",
   "Manager",
 ];
-
+const YES_NO_PREFER_OPTIONS = ["", "Yes", "No", "Prefer not to answer"];
 const PROFILE_SECTIONS = [
   { id: "personal-info", label: "Personal Info" },
   { id: "professional-links", label: "Professional Links" },
@@ -449,6 +559,8 @@ export default function ProfileClient({
     city: "",
     state: "",
     postalCode: "",
+    country: "",
+    countryCode: "",
     professionalLinks: [],
   });
   const [personalLocationInput, setPersonalLocationInput] = useState("");
@@ -466,12 +578,42 @@ export default function ProfileClient({
     includeRemote: true,
     workplaceLocations: [],
     benefits: [],
+    applicationAnswerPreferences: {
+      workAuthorization: {
+        authorizedUS: "",
+        requiresSponsorship: "",
+        startDate: "",
+        relocate: "",
+      },
+      phoneCountryCode: "",
+      voluntarySelfId: {
+        gender: "",
+        genderSelfDescribe: "",
+        hispanicLatino: "",
+        raceEthnicity: "",
+        raceEthnicitySelfDescribe: "",
+        veteranStatus: "",
+        disabilityStatus: "",
+      },
+    },
   });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const resumeInputRef = useRef<HTMLInputElement | null>(null);
   const personalDetailsCardRef = useRef<HTMLElement | null>(null);
   const professionalLinkLabelCacheRef = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    console.log("[VOLUNTARY_SELF_ID_OPTIONS_LOADED]", {
+      fields: [
+        "gender",
+        "hispanicLatino",
+        "raceEthnicity",
+        "veteranStatus",
+        "disabilityStatus",
+      ],
+    });
+  }, []);
   const [activeSection, setActiveSection] = useState<ProfileSectionId>("personal-info");
   const isEditingPersonal = editingPersonalSection === "personal-info";
   const isEditingProfessionalLinks =
@@ -810,6 +952,8 @@ export default function ProfileClient({
           state: data?.profile?.displayState ?? data?.profile?.state ?? null,
           postalCode:
             data?.profile?.displayPostalCode ?? data?.profile?.postalCode ?? null,
+          country: data?.profile?.country ?? null,
+          countryCode: data?.profile?.countryCode ?? null,
         });
       }
 
@@ -836,16 +980,31 @@ export default function ProfileClient({
   }, [editingPersonalSection, profile]);
 
   const displayPersonalDetails = useMemo(
-    () => ({
-      address: profile?.displayAddress ?? profile?.address ?? "Not provided in database",
-      city: profile?.displayCity ?? profile?.city ?? "Not provided in database",
-      state: profile?.displayState ?? profile?.state ?? "Not provided in database",
-      postalCode:
-        profile?.displayPostalCode ?? profile?.postalCode ?? "Not provided in database",
-    }),
+    () => {
+      const inferredCountry = inferCountryFromPersonalLocation({
+        city: profile?.displayCity ?? profile?.city,
+        state: profile?.displayState ?? profile?.state,
+        postalCode: profile?.displayPostalCode ?? profile?.postalCode,
+      });
+
+      return {
+        address: profile?.displayAddress ?? profile?.address ?? "Not provided in database",
+        city: profile?.displayCity ?? profile?.city ?? "Not provided in database",
+        state: profile?.displayState ?? profile?.state ?? "Not provided in database",
+        postalCode:
+          profile?.displayPostalCode ?? profile?.postalCode ?? "Not provided in database",
+        country:
+          (profile?.country ?? inferredCountry.country) || "Not provided in database",
+        countryCode:
+          (profile?.countryCode ?? inferredCountry.countryCode) ||
+          "Not provided in database",
+      };
+    },
     [
       profile?.address,
       profile?.city,
+      profile?.country,
+      profile?.countryCode,
       profile?.displayAddress,
       profile?.displayCity,
       profile?.displayPostalCode,
@@ -873,6 +1032,8 @@ export default function ProfileClient({
         city: displayPersonalDetails.city,
         state: displayPersonalDetails.state,
         postalCode: displayPersonalDetails.postalCode,
+        country: displayPersonalDetails.country,
+        countryCode: displayPersonalDetails.countryCode,
       });
     }
   }, [displayPersonalDetails, profile]);
@@ -942,6 +1103,7 @@ export default function ProfileClient({
       benefits: Array.isArray(existingBenefits?.benefits)
         ? existingBenefits.benefits.map((item) => String(item)).filter(Boolean)
         : [],
+      applicationAnswerPreferences: readApplicationAnswerPreferences(profile?.keyQuestions),
     });
   }, [profile]);
 
@@ -1069,6 +1231,8 @@ export default function ProfileClient({
           city: personalDetailsForm.city,
           state: personalDetailsForm.state,
           postalCode: personalDetailsForm.postalCode,
+          country: personalDetailsForm.country,
+          countryCode: personalDetailsForm.countryCode,
           professionalLinks: professionalLinksForSave,
         }),
       });
@@ -1116,6 +1280,23 @@ export default function ProfileClient({
             ? preferencesForm.workplaceLocations.map((label) => ({ label }))
             : null,
           benefits: preferencesForm.benefits,
+          applicationAnswerPreferences: {
+            targetRole: preferencesForm.roleFocus,
+            availability: preferencesForm.availability,
+            employmentType: preferencesForm.employmentType,
+            seniorityLevel: preferencesForm.seniorityLevel,
+            salaryType: preferencesForm.compensationType,
+            minimumSalary: preferencesForm.minCompensation,
+            fallbackLocation: preferencesForm.workplaceLocations[0] ?? "",
+            remote: preferencesForm.includeRemote,
+            benefits: preferencesForm.benefits,
+            phoneCountryCode:
+              preferencesForm.applicationAnswerPreferences.phoneCountryCode,
+            workAuthorization:
+              preferencesForm.applicationAnswerPreferences.workAuthorization,
+            voluntarySelfId:
+              preferencesForm.applicationAnswerPreferences.voluntarySelfId,
+          },
         }),
       });
 
@@ -1130,6 +1311,7 @@ export default function ProfileClient({
           employmentType?: string;
           seniorityLevel?: string;
           benefits?: string[];
+          applicationAnswerPreferences?: ApplicationAnswerPreferencesForm;
         };
       }>(res);
       if (!res.ok) {
@@ -1164,6 +1346,9 @@ export default function ProfileClient({
               data?.preferences?.employmentType ?? preferencesForm.employmentType,
             seniorityLevel:
               data?.preferences?.seniorityLevel ?? preferencesForm.seniorityLevel,
+            applicationAnswerPreferences:
+              data?.preferences?.applicationAnswerPreferences ??
+              preferencesForm.applicationAnswerPreferences,
           },
           benefitSelections: prev.benefitSelections?.length
             ? prev.benefitSelections.map((selection, index) =>
@@ -1191,6 +1376,9 @@ export default function ProfileClient({
         availability: data?.preferences?.availability ?? prev.availability,
         employmentType: data?.preferences?.employmentType ?? prev.employmentType,
         seniorityLevel: data?.preferences?.seniorityLevel ?? prev.seniorityLevel,
+        applicationAnswerPreferences:
+          data?.preferences?.applicationAnswerPreferences ??
+          prev.applicationAnswerPreferences,
       }));
     } catch (e) {
       setPreferencesError(e instanceof Error ? e.message : "Failed to save preferences.");
@@ -1205,6 +1393,22 @@ export default function ProfileClient({
       benefits: prev.benefits.includes(benefit)
         ? prev.benefits.filter((item) => item !== benefit)
         : [...prev.benefits, benefit],
+    }));
+  }
+
+  function updateVoluntarySelfIdField(
+    key: keyof ApplicationAnswerPreferencesForm["voluntarySelfId"],
+    value: string
+  ) {
+    setPreferencesForm((prev) => ({
+      ...prev,
+      applicationAnswerPreferences: {
+        ...prev.applicationAnswerPreferences,
+        voluntarySelfId: {
+          ...prev.applicationAnswerPreferences.voluntarySelfId,
+          [key]: value,
+        },
+      },
     }));
   }
 
@@ -1601,7 +1805,7 @@ function ToggleField({
     const previousState = personalDetailsForm.state;
 
     setPersonalLocationInput(selection.label);
-    setPersonalDetailsForm((prev) => ({
+    setPersonalDetailsForm((prev) => withInferredPersonalCountry({
       ...prev,
       city: selection.city,
       state: selection.state,
@@ -1722,6 +1926,11 @@ function ToggleField({
                     label="Postal code"
                     value={displayPersonalDetails.postalCode}
                   />
+                  <FieldRow label="Country" value={displayPersonalDetails.country} />
+                  <FieldRow
+                    label="Country code"
+                    value={displayPersonalDetails.countryCode}
+                  />
                 </div>
 
                 {loading ? (
@@ -1789,12 +1998,36 @@ function ToggleField({
                     label="Postal code"
                     value={personalDetailsForm.postalCode}
                     onChange={(value) =>
-                      setPersonalDetailsForm((prev) => ({
-                        ...prev,
-                        postalCode: value,
-                      }))
+                      setPersonalDetailsForm((prev) =>
+                        withInferredPersonalCountry({
+                          ...prev,
+                          postalCode: value,
+                        })
+                      )
                     }
                   />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <TextField
+                      label="Country"
+                      value={personalDetailsForm.country}
+                      onChange={(value) =>
+                        setPersonalDetailsForm((prev) => ({
+                          ...prev,
+                          country: value,
+                        }))
+                      }
+                    />
+                    <TextField
+                      label="Country code"
+                      value={personalDetailsForm.countryCode}
+                      onChange={(value) =>
+                        setPersonalDetailsForm((prev) => ({
+                          ...prev,
+                          countryCode: value.toUpperCase(),
+                        }))
+                      }
+                    />
+                  </div>
                 </div>
 
                 {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
@@ -2400,10 +2633,27 @@ function ToggleField({
                 label="Smart Matches default location"
                 value={savedSmartMatchesLocation}
               />
+              <FieldRow label="Availability" value={preferencesForm.availability || "Not provided"} />
+              <FieldRow label="Employment type" value={preferencesForm.employmentType || "Not provided"} />
+              <FieldRow label="Seniority level" value={preferencesForm.seniorityLevel || "Not provided"} />
+              <FieldRow label="Salary type" value={preferencesForm.compensationType} />
+              <FieldRow
+                label="Fallback location"
+                value={preferencesForm.workplaceLocations[0] || "Not provided"}
+              />
+              <FieldRow label="Remote" value={preferencesForm.includeRemote ? "On" : "Off"} />
             </div>
             <p className="mt-2 text-sm text-slate-600">
               Minimum salary:{" "}
               <span className="font-semibold">{formattedMinCompensation}</span>
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              Benefits selected:{" "}
+              <span className="font-semibold">
+                {preferencesForm.benefits.length
+                  ? preferencesForm.benefits.join(", ")
+                  : "None"}
+              </span>
             </p>
             <p className="mt-2 text-xs text-slate-500">
               Target role is saved in Job-matching signals. Smart Matches default
@@ -2541,6 +2791,141 @@ function ToggleField({
                         {benefit}
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Application form answers
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    Save answers Hirexa can reuse when job applications ask for preferences. Sensitive voluntary self-identification answers are never guessed and are only used if you save them.
+                  </p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <SelectField
+                      label="Work authorization in the U.S."
+                      value={preferencesForm.applicationAnswerPreferences.workAuthorization.authorizedUS}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          applicationAnswerPreferences: {
+                            ...prev.applicationAnswerPreferences,
+                            workAuthorization: {
+                              ...prev.applicationAnswerPreferences.workAuthorization,
+                              authorizedUS: value,
+                            },
+                          },
+                        }))
+                      }
+                      options={YES_NO_PREFER_OPTIONS}
+                    />
+                    <SelectField
+                      label="Requires sponsorship"
+                      value={preferencesForm.applicationAnswerPreferences.workAuthorization.requiresSponsorship}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          applicationAnswerPreferences: {
+                            ...prev.applicationAnswerPreferences,
+                            workAuthorization: {
+                              ...prev.applicationAnswerPreferences.workAuthorization,
+                              requiresSponsorship: value,
+                            },
+                          },
+                        }))
+                      }
+                      options={YES_NO_PREFER_OPTIONS}
+                    />
+                    <SelectField
+                      label="Willing to relocate"
+                      value={preferencesForm.applicationAnswerPreferences.workAuthorization.relocate}
+                      onChange={(value) =>
+                        setPreferencesForm((prev) => ({
+                          ...prev,
+                          applicationAnswerPreferences: {
+                            ...prev.applicationAnswerPreferences,
+                            workAuthorization: {
+                              ...prev.applicationAnswerPreferences.workAuthorization,
+                              relocate: value,
+                            },
+                          },
+                        }))
+                      }
+                      options={YES_NO_PREFER_OPTIONS}
+                    />
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="text-xs font-semibold text-slate-700">
+                      Voluntary self-identification
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      These questions are voluntary. Hirexa will not guess or generate these answers. If saved, they can be reused only when an application form asks for them.
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      These answers are not used to rank or match jobs.
+                    </p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <SelectField
+                        label="Gender"
+                        value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.gender}
+                        onChange={(value) => updateVoluntarySelfIdField("gender", value)}
+                        options={[...GENDER_OPTIONS]}
+                      />
+                      {preferencesForm.applicationAnswerPreferences.voluntarySelfId.gender === SELF_DESCRIBE_OPTION ? (
+                        <TextField
+                          label="Self-described gender"
+                          placeholder="Optional"
+                          value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.genderSelfDescribe}
+                          onChange={(value) =>
+                            updateVoluntarySelfIdField("genderSelfDescribe", value)
+                          }
+                        />
+                      ) : null}
+                      <SelectField
+                        label="Hispanic/Latino"
+                        value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.hispanicLatino}
+                        onChange={(value) =>
+                          updateVoluntarySelfIdField("hispanicLatino", value)
+                        }
+                        options={[...HISPANIC_LATINO_OPTIONS]}
+                      />
+                      {/* TODO: Support multi-select race/ethnicity answers when the shared field component supports it. */}
+                      <SelectField
+                        label="Race/Ethnicity"
+                        value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.raceEthnicity}
+                        onChange={(value) =>
+                          updateVoluntarySelfIdField("raceEthnicity", value)
+                        }
+                        options={[...RACE_ETHNICITY_OPTIONS]}
+                      />
+                      {preferencesForm.applicationAnswerPreferences.voluntarySelfId.raceEthnicity === SELF_DESCRIBE_OPTION ? (
+                        <TextField
+                          label="Self-described race/ethnicity"
+                          placeholder="Optional"
+                          value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.raceEthnicitySelfDescribe}
+                          onChange={(value) =>
+                            updateVoluntarySelfIdField("raceEthnicitySelfDescribe", value)
+                          }
+                        />
+                      ) : null}
+                      <SelectField
+                        label="Veteran Status"
+                        value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.veteranStatus}
+                        onChange={(value) =>
+                          updateVoluntarySelfIdField("veteranStatus", value)
+                        }
+                        options={[...VETERAN_STATUS_OPTIONS]}
+                      />
+                      <SelectField
+                        label="Disability Status"
+                        value={preferencesForm.applicationAnswerPreferences.voluntarySelfId.disabilityStatus}
+                        onChange={(value) =>
+                          updateVoluntarySelfIdField("disabilityStatus", value)
+                        }
+                        options={[...DISABILITY_STATUS_OPTIONS]}
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -2782,12 +3167,23 @@ function FieldRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs font-semibold text-slate-700">{label}</span>
       <input
         value={value}
+        placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
         className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
       />
@@ -3163,7 +3559,7 @@ function SelectField({
       >
         {options.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {optionLabel(option)}
           </option>
         ))}
       </select>

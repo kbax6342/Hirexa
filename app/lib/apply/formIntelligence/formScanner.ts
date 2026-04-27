@@ -21,7 +21,7 @@ function fallbackLabel(field: FormFieldDescriptor) {
   );
 }
 
-async function scanFormContext(
+export async function scanFormContext(
   context: Page | Frame,
   pageTitle: string | undefined,
   frameUrl?: string,
@@ -260,9 +260,12 @@ async function scanFormContext(
             control.getAttribute("aria-disabled") === "true",
           visible,
           placeholder: clean(control.getAttribute("placeholder")) || undefined,
+          tagName: control.tagName,
           name: name || undefined,
           ariaLabel: clean(control.getAttribute("aria-label")) || undefined,
+          roleAttribute: clean(control.getAttribute("role")) || undefined,
           idAttribute: clean(control.getAttribute("id")) || undefined,
+          inputMode: clean(control.getAttribute("inputmode")) || undefined,
           autocomplete: clean(control.getAttribute("autocomplete")) || undefined,
           options: optionsFor(control, selector),
           maxLength:

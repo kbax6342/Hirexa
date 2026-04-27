@@ -133,6 +133,8 @@ const profileSelect = Prisma.validator<Prisma.UserProfileSelect>()({
   lastName: true,
   email: true,
   phone: true,
+  country: true,
+  countryCode: true,
   registrationStatus: true,
   welcomeEmailSentAt: true,
   keyQuestions: true,

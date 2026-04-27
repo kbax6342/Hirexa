@@ -17,6 +17,11 @@ import {
   prefixErrorCodeInMessage,
 } from "@/app/lib/apply/errorCodes";
 import type { Job, JobDetail, JobPretty } from "@/app/lib/jobs/types";
+import {
+  buildJobIdentitySnapshot,
+  type JobIdentityMismatch,
+  type JobIdentitySnapshot,
+} from "@/app/lib/jobs/jobIdentity";
 import { prettyFromDescription } from "@/app/lib/jobs/pretty-from-text";
 import { isRemoteJob } from "@/app/lib/jobs/isRemoteJob";
 import JobDetailsPanel, { type FormattedJob } from "@/app/components/dashboard/JobDetailsPanel";
@@ -111,6 +116,7 @@ type SupportedAutoApplyJob = Pick<
 
 type AutoApplyStartResponse = {
   ok?: boolean;
+  code?: string;
   applicationId?: string;
   applySessionId?: string;
   status?: string;
@@ -132,6 +138,9 @@ type AutoApplyStartResponse = {
   stopReason?: string | null;
   stopClassification?: ApplyStopClassification | null;
   missingRequired?: string[];
+  expectedJob?: JobIdentitySnapshot;
+  actualJob?: JobIdentitySnapshot;
+  mismatches?: JobIdentityMismatch[];
 };
 
 type AutoApplyBannerState = {
@@ -297,6 +306,18 @@ function getAutoApplyStartFailureMessage(
     return "REAL_POSTING_NOT_FOUND: Could not resolve employer job page.";
   }
 
+  if (payload?.code === "JOB_IDENTITY_MISMATCH") {
+    const expected = payload.expectedJob;
+    const actual = payload.actualJob;
+    const selectedLabel = expected
+      ? `${expected.title || "Selected job"}${expected.sourceJobId ? ` (${expected.sourceJobId})` : ""}`
+      : "the selected job";
+    const actualLabel = actual
+      ? `${actual.title || "different job"}${actual.sourceJobId ? ` (${actual.sourceJobId})` : ""}`
+      : "a different job";
+    return `Auto Apply blocked because the selected job changed before apply started. You selected ${selectedLabel}, but Auto Apply was about to use ${actualLabel}. Refresh the job details and try again.`;
+  }
+
   return (
     formatAutoApplyErrorMessage({
       message: payload?.message ?? payload?.error ?? "Unable to start auto apply.",
@@ -336,6 +357,11 @@ function pickLatestAutoApplyStopUrl(item: {
 }
 
 function formatAutoApplyStatusLabel(status: string | null | undefined) {
+  const raw = String(status ?? "").trim().toUpperCase();
+  if (raw === "FILLING_FORM") return "Filling application...";
+  if (raw === "SUBMITTING_APPLICATION") return "Submitting application...";
+  if (raw === "SUBMITTED") return "Application submitted";
+  if (raw === "NEEDS_USER_ANSWERS") return "Answer questions to continue";
   const normalized = toApplySessionDisplayStatus(status) ?? status ?? "STARTING";
 
   switch (normalized) {
@@ -347,8 +373,16 @@ function formatAutoApplyStatusLabel(status: string | null | undefined) {
       return "Not available";
     case "UNCONFIRMED":
       return "Unconfirmed";
+    case "STALE_SESSION":
+    case "READY_TO_RETRY":
+      return "Auto Apply paused";
+    case "READY_FOR_USER_REVIEW":
+      return "Ready for review";
+    case "WAITING_CONFIRMATION":
+    case "WAITING_FOR_CONFIRMATION":
+      return "Submission status unclear";
     case "SUBMITTED":
-      return "Submitted";
+      return "Application submitted";
     default:
       return normalized
         .toLowerCase()
@@ -363,8 +397,48 @@ function isStoppedAutoApplyStatus(status: string | null | undefined) {
     status === "VERIFICATION_REQUIRED" ||
     status === "APPLY_NOT_STARTED" ||
     status === "WAITING_HUMAN" ||
+    status === "STALE_SESSION" ||
+    status === "READY_TO_RETRY" ||
+    status === "READY_FOR_USER_REVIEW" ||
+    status === "WAITING_CONFIRMATION" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "NEEDS_USER_ANSWERS" ||
     status === "FAILED"
   );
+}
+
+function autoApplyStatusCopy(status: string | null | undefined, message?: string | null) {
+  if (status === "STALE_SESSION" || status === "READY_TO_RETRY") {
+    return {
+      title: "Auto Apply paused",
+      message:
+        message ??
+        "The browser session stopped before Hirexa could finish this application.",
+      action: "Retry Auto Apply",
+    };
+  }
+  if (status === "READY_FOR_USER_REVIEW") {
+    return {
+      title: "Ready for review",
+      message: message ?? "Hirexa filled the application. Review the form before submitting.",
+      action: "Open review",
+    };
+  }
+  if (status === "WAITING_CONFIRMATION" || status === "WAITING_FOR_CONFIRMATION") {
+    return {
+      title: "Submission status unclear",
+      message: message ?? "Hirexa clicked submit but could not confirm the final result.",
+      action: "Check application page",
+    };
+  }
+  if (status === "NEEDS_USER_ANSWERS") {
+    return {
+      title: "Needs answers",
+      message: message ?? "Hirexa needs your input for fields it should not guess.",
+      action: "Answer questions to continue",
+    };
+  }
+  return { title: null, message, action: null };
 }
 
 function isDashboardStopPointStatus(status: string | null | undefined) {
@@ -568,6 +642,7 @@ export default function JobMatchesLayout({
   const activeFeedRequestRef = useRef<AbortController | null>(null);
   const inFlightFeedRequestRef = useRef<string | null>(null);
   const latestFeedRequestIdRef = useRef(0);
+  const latestJobDetailsRequestIdRef = useRef(0);
   const requestSourceRef = useRef<"initial-load" | "apply-filters" | "load-more">(
     "initial-load"
   );
@@ -914,6 +989,29 @@ export default function JobMatchesLayout({
       lastActivityAt: now,
     }));
   }, [updateAutoApplyPopupState]);
+
+  const retryAutoApply = useCallback(
+    async (item: AutoApplyPopupItem) => {
+      updateAutoApplyPopupState((current, now) => ({
+        ...current,
+        items: {
+          ...current.items,
+          [item.applicationId]: {
+            ...current.items[item.applicationId],
+            status: "STARTING",
+            message: "Retrying Auto Apply...",
+            updatedAt: now,
+          },
+        },
+      }));
+      await fetch(`/api/applications/${item.applicationId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ background: true }),
+      }).catch(() => null);
+    },
+    [updateAutoApplyPopupState],
+  );
 
   const dismissAutoApplyPopup = useCallback(() => {
     updateAutoApplyPopupState((current, now) => {
@@ -1664,17 +1762,29 @@ export default function JobMatchesLayout({
     if (!selectedId) return;
 
     let cancelled = false;
+    const requestId = latestJobDetailsRequestIdRef.current + 1;
+    latestJobDetailsRequestIdRef.current = requestId;
+    const requestedSelectedId = selectedId;
+    const isStaleDetailsRequest = () =>
+      cancelled ||
+      latestJobDetailsRequestIdRef.current !== requestId ||
+      requestedSelectedId !== selectedId;
 
     (async () => {
       const selected = visibleJobs.find((job) => job.id === selectedId) ?? null;
       if (!selected) {
-        if (!cancelled) {
+        if (!isStaleDetailsRequest()) {
           setSelectedDetails(null);
           setPretty({ sections: [], highlights: [] });
           setFormatted(null);
         }
         return;
       }
+      console.info("[JOB_DETAILS_STATE] request started", {
+        requestId,
+        sourceJobId: requestedSelectedId,
+        source: selected.source,
+      });
       const selectedSummaryJob = toJobDetailSummary(selected);
       const cachedDetail = detailCache.current.get(selectedId);
 
@@ -1738,12 +1848,32 @@ export default function JobMatchesLayout({
         if (!res.ok || !data?.job || !data.pretty) {
           throw new Error(data?.error ?? "Failed to load job details");
         }
-        if (cancelled) return;
+        if (isStaleDetailsRequest()) {
+          console.info("[JOB_DETAILS_STATE] stale response ignored", {
+            requestId,
+            requestedSourceJobId: requestedSelectedId,
+            responseSourceJobId: data.job?.id ?? null,
+          });
+          return;
+        }
 
         const resolved = data as JobDetailsResponse;
+        if (resolved.job.id && resolved.job.id !== requestedSelectedId) {
+          console.warn("[JOB_DETAILS_STATE] stale response ignored", {
+            requestId,
+            requestedSourceJobId: requestedSelectedId,
+            responseSourceJobId: resolved.job.id,
+          });
+          return;
+        }
         detailCache.current.set(selectedId, resolved);
         setSelectedDetails(resolved.job);
         setPretty(resolved.pretty);
+        console.info("[JOB_DETAILS_STATE] selected job committed", {
+          requestId,
+          sourceJobId: requestedSelectedId,
+          source: resolved.job.source,
+        });
         if (resolved.fullDetailsUnavailable) {
           console.warn("[JOB_DETAILS] rendering best available partial detail", {
             jobId: selectedId,
@@ -1770,7 +1900,7 @@ export default function JobMatchesLayout({
 
             if (fmtRes.ok) {
               const fmtData = await fmtRes.json();
-              if (!cancelled && fmtData?.formatted) {
+              if (!isStaleDetailsRequest() && fmtData?.formatted) {
                 setFormatted(fmtData.formatted as FormattedJob);
               }
             }
@@ -1779,7 +1909,7 @@ export default function JobMatchesLayout({
           }
         }
       } catch (e: unknown) {
-        if (!cancelled) {
+        if (!isStaleDetailsRequest()) {
           const message = e instanceof Error ? e.message : "Failed to load details";
           console.warn("[JOB_DETAILS] detail fetch failed, falling back silently", {
             jobId: selectedId,
@@ -1809,7 +1939,7 @@ export default function JobMatchesLayout({
           }
         }
       } finally {
-        if (!cancelled) {
+        if (!isStaleDetailsRequest()) {
           setDetailsLoading(false);
         }
       }
@@ -2072,18 +2202,41 @@ export default function JobMatchesLayout({
         job,
         preferredDetail,
       );
+      const selectedJobIdentity = buildJobIdentitySnapshot({
+        source: job.source,
+        sourceJobId: job.id,
+        rawSourceJobId: `${job.source}:${job.id}`,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        jobUrl: job.jobUrl,
+        resolvedApplyUrl: preferredDirectUrl,
+        applyProvider,
+      });
       const createRes = await fetch("/api/auto-apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...buildApplyProviderPayload(job),
           preferredDirectUrl,
+          selectedJobIdentity,
         }),
       });
 
       const createData = (await createRes.json()) as AutoApplyStartResponse;
       if (!createRes.ok || !createData?.applicationId) {
-        throw new Error(createData?.error ?? "Unable to start auto apply.");
+        const message = getAutoApplyStartFailureMessage(createData);
+        setAutoApplyBanner({
+          message,
+          ctaLabel: "Refresh jobs",
+          ctaHref: "/dashboard",
+        });
+        console.warn("[AUTO_APPLY_DASHBOARD] auto-apply creation blocked", {
+          sourceJobId: job.id,
+          code: createData?.code ?? null,
+          mismatches: createData?.mismatches ?? null,
+        });
+        return false;
       }
 
       const applicationId = createData.applicationId;
@@ -2111,7 +2264,7 @@ export default function JobMatchesLayout({
       const startRes = await fetch(`/api/applications/${applicationId}/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ background: true }),
+        body: JSON.stringify({ background: true, selectedJobIdentity }),
       });
 
       const startData = (await startRes.json()) as AutoApplyStartResponse;
@@ -2227,10 +2380,11 @@ export default function JobMatchesLayout({
   );
 
   const handleAiApplyFromDetails = async () => {
-    if (!right?.id) return;
+    const jobForApply = selectedSummary ?? right;
+    if (!jobForApply?.id) return;
     setAiApplyLoading(true);
     try {
-      await startDashboardAutoApply(right);
+      await startDashboardAutoApply(jobForApply);
     } finally {
       setAiApplyLoading(false);
     }
@@ -2731,6 +2885,7 @@ export default function JobMatchesLayout({
                   const statusLabel = formatAutoApplyStatusLabel(item.status);
                   const stoppedStatus = isStoppedAutoApplyStatus(item.status);
                   const stoppedUrl = pickLatestAutoApplyStopUrl(item);
+                  const statusCopy = autoApplyStatusCopy(item.status, item.message);
                   const canRenderStoppedPageUi =
                     stoppedStatus &&
                     Boolean(
@@ -2780,6 +2935,12 @@ export default function JobMatchesLayout({
                       {item.message ? (
                         canRenderStoppedPageUi ? (
                           <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                            {statusCopy.title ? (
+                              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                                <div className="font-semibold">{statusCopy.title}</div>
+                                <div className="mt-0.5">{statusCopy.message}</div>
+                              </div>
+                            ) : null}
                             {stoppedUrl ? (
                               <p>
                                 Stopped at:{" "}
@@ -2803,12 +2964,57 @@ export default function JobMatchesLayout({
                               compact
                               className="mt-2"
                             />
+                            {item.status === "STALE_SESSION" || item.status === "READY_TO_RETRY" ? (
+                              <button
+                                type="button"
+                                onClick={() => void retryAutoApply(item)}
+                                className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                              >
+                                Retry Auto Apply
+                              </button>
+                            ) : null}
+                            {item.status === "READY_FOR_USER_REVIEW" || item.status === "WAITING_CONFIRMATION" || item.status === "WAITING_FOR_CONFIRMATION" ? (
+                              stoppedUrl ? (
+                                <a
+                                  href={stoppedUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-2 inline-flex rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                                >
+                                  {statusCopy.action ?? "Open application"}
+                                </a>
+                              ) : null
+                            ) : null}
                           </div>
                         ) : (
-                          <p className="mt-2 text-[11px] text-gray-600">{item.message}</p>
+                          <div className="mt-2 text-[11px] text-gray-600">
+                            {statusCopy.title ? (
+                              <div className="font-semibold text-gray-800">{statusCopy.title}</div>
+                            ) : null}
+                            <p>{statusCopy.message ?? item.message}</p>
+                            {submitted && stoppedUrl ? (
+                              <p>
+                                Final URL:{" "}
+                                <a
+                                  className="break-all underline"
+                                  href={stoppedUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {stoppedUrl}
+                                </a>
+                              </p>
+                            ) : null}
+                          </div>
                         )
                       ) : canRenderStoppedPageUi ? (
                         <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                          {statusCopy.title ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-900">
+                              <div className="font-semibold">{statusCopy.title}</div>
+                              <div className="mt-0.5">{statusCopy.message}</div>
+                            </div>
+                          ) : null}
                           {stoppedUrl ? (
                             <p>
                               Stopped at:{" "}
@@ -2832,6 +3038,27 @@ export default function JobMatchesLayout({
                             compact
                             className="mt-2"
                           />
+                          {item.status === "STALE_SESSION" || item.status === "READY_TO_RETRY" ? (
+                            <button
+                              type="button"
+                              onClick={() => void retryAutoApply(item)}
+                              className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                            >
+                              Retry Auto Apply
+                            </button>
+                          ) : null}
+                          {item.status === "READY_FOR_USER_REVIEW" || item.status === "WAITING_CONFIRMATION" || item.status === "WAITING_FOR_CONFIRMATION" ? (
+                            stoppedUrl ? (
+                              <a
+                                href={stoppedUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-2 inline-flex rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white hover:bg-slate-800"
+                              >
+                                {statusCopy.action ?? "Open application"}
+                              </a>
+                            ) : null
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

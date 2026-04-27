@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { JobSearchFallbackCandidate } from "@/app/lib/apply/jobSearchFallback";
@@ -8,6 +8,11 @@ import type {
   VerificationEvidence,
 } from "@/app/lib/apply/stopClassification";
 import type { ApplySessionStatus } from "@/app/lib/apply/sessionStatus";
+import type { AtsJobUrlIdentity } from "@/app/lib/apply/atsUrlIdentity";
+import type {
+  JobIdentityMismatch,
+  JobIdentitySnapshot,
+} from "@/app/lib/jobs/jobIdentity";
 
 export type ApplySessionClickRecord = {
   hop: number;
@@ -34,6 +39,11 @@ export type ApplySessionCtaAttemptRecord = {
 };
 
 export type ApplySessionDebug = {
+  expectedJobIdentity?: JobIdentitySnapshot;
+  applicationJobIdentity?: JobIdentitySnapshot;
+  resolvedUrlIdentity?: AtsJobUrlIdentity;
+  identityMismatches?: JobIdentityMismatch[];
+  identityBlockedBeforeBrowserLaunch?: boolean;
   entryUrl?: string;
   initialLoadedUrl?: string;
   finalUrl?: string;
@@ -217,15 +227,47 @@ export type ApplySessionDebug = {
     label: string;
     reason: string;
     category: string;
+    answerDraft?: string | null;
+    options?: string[];
+    sensitive?: boolean;
   }>;
+  missingQuestions?: Array<{
+    fieldId: string;
+    label: string;
+    type?: string;
+    options?: string[];
+    classification?: string;
+    reason?: string;
+    aiDraft?: string | null;
+    sensitive?: boolean;
+  }>;
+  userProvidedAnswers?: Record<string, string>;
+  userProvidedAnswersReadyToResume?: boolean;
+  recoveredFromStaleSession?: boolean;
+  staleReason?: string;
   verificationOverriddenByVisibleForm?: boolean;
   needsHuman?: boolean;
   submitButtonFound?: boolean;
+  submitButtonEnabled?: boolean;
   submitButtonClicked?: boolean;
+  finalRequiredCheckPassed?: boolean;
+  allRequiredFieldsFilled?: boolean;
+  finalRecheckPassed?: boolean;
+  readyToSubmit?: boolean;
+  submitAttempted?: boolean;
+  lastFormRecheckAt?: number;
+  visibleValidationErrors?: string[];
+  fileUploadPending?: boolean;
+  verificationChallengeVisible?: boolean;
+  reviewBeforeSubmit?: boolean;
+  actionLabel?: string;
+  submittedAt?: string;
   confirmationDetected?: boolean;
   confirmationTextFound?: boolean;
   confirmationTextSnippet?: string | null;
   successUrlPatternMatched?: boolean;
+  confirmationMatchedBy?: "url" | "text" | "popup" | "context-page";
+  confirmationFinalUrl?: string;
   verificationDetected?: boolean;
   verificationEvidence?: VerificationEvidence;
   verificationSignals?: string[];
@@ -309,8 +351,23 @@ export type ApplySession = {
   id: string;
   applicationId: string;
   status: ApplySessionStatus;
+  createdAt?: number;
   startedAt: number;
   updatedAt: number;
+  lastHeartbeatAt?: number;
+  lastProgressAt?: number;
+  fillingFormStartedAt?: number;
+  lastRunnerHeartbeatAt?: number;
+  lastRunnerProgressAt?: number;
+  lastMeaningfulFormProgressAt?: number;
+  lastFormRecheckAt?: number;
+  lastStatusChangeAt?: number;
+  lastKnownUrl?: string;
+  lastKnownStatus?: ApplySessionStatus;
+  runnerActive?: boolean;
+  progressVersion?: number;
+  recoveredFromStaleSession?: boolean;
+  staleReason?: string;
   submissionStatus?: ApplySubmissionStatus;
   emailStatus?: ApplyEmailStatus;
   lastUrl?: string;
@@ -348,6 +405,17 @@ function getApplySessionStore() {
 }
 
 const sessions = getApplySessionStore();
+const SUPERSEDABLE_APPLY_SESSION_STATUSES = new Set<ApplySessionStatus>([
+  "STARTING",
+  "FINDING_APPLY",
+  "OPENING_FORM",
+  "FILLING_FORM",
+  "SUBMITTING",
+  "SUBMITTING_APPLICATION",
+  "WAITING_CONFIRMATION",
+  "WAITING_FOR_CONFIRMATION",
+  "RUNNING",
+]);
 
 function makeId() {
   return `apply_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -385,6 +453,17 @@ function persistSessionToDisk(session: ApplySession) {
   }
 }
 
+function pickKnownUrl(session: Partial<ApplySession>) {
+  return (
+    session.lastUrl ??
+    session.debug?.latestUrl ??
+    session.debug?.currentUrl ??
+    session.debug?.stoppedAtUrl ??
+    session.debug?.finalUrl ??
+    undefined
+  );
+}
+
 function readSessionFromDisk(id: string): ApplySession | undefined {
   try {
     const raw = readFileSync(getApplySessionFilePath(id), "utf8");
@@ -402,6 +481,72 @@ function readSessionFromDisk(id: string): ApplySession | undefined {
   }
 }
 
+function readPersistedSessionsForApplication(applicationId: string) {
+  const found: ApplySession[] = [];
+  try {
+    for (const entry of readdirSync(APPLY_SESSION_STORAGE_DIR)) {
+      if (!entry.endsWith(".json")) continue;
+      const id = entry.replace(/\.json$/i, "");
+      const session = sessions.get(id) ?? readSessionFromDisk(id);
+      if (session?.applicationId === applicationId) {
+        found.push(session);
+      }
+    }
+  } catch {
+    // The tmpdir store may not exist yet.
+  }
+  return found;
+}
+
+function supersedeOlderSessionsForApplication(args: {
+  applicationId: string;
+  newSessionId: string;
+}) {
+  const candidates = new Map<string, ApplySession>();
+  for (const session of sessions.values()) {
+    if (session.applicationId === args.applicationId) {
+      candidates.set(session.id, session);
+    }
+  }
+  for (const session of readPersistedSessionsForApplication(args.applicationId)) {
+    candidates.set(session.id, session);
+  }
+
+  const now = Date.now();
+  for (const session of candidates.values()) {
+    if (session.id === args.newSessionId) continue;
+    if (!SUPERSEDABLE_APPLY_SESSION_STATUSES.has(session.status)) continue;
+
+    const next: ApplySession = {
+      ...session,
+      status: "READY_TO_RETRY",
+      updatedAt: now,
+      lastStatusChangeAt: now,
+      lastKnownStatus: "READY_TO_RETRY",
+      runnerActive: false,
+      recoveredFromStaleSession: true,
+      staleReason: "A newer Auto Apply session was started for this application.",
+      message: "A newer Auto Apply session was started for this application.",
+      debug: {
+        ...(session.debug ?? {}),
+        recoveredFromStaleSession: true,
+        staleReason: "A newer Auto Apply session was started for this application.",
+        suggestedAction: "Follow the latest Auto Apply session.",
+        finalReason: "This apply session was superseded by a newer session.",
+      },
+    };
+    sessions.set(next.id, next);
+    persistSessionToDisk(next);
+    console.warn("[APPLY_SESSION_SUPERSEDED_BY_NEWER_SESSION]", {
+      oldSessionId: session.id,
+      newSessionId: args.newSessionId,
+      applicationId: args.applicationId,
+      oldStatus: session.status,
+      newStatus: next.status,
+    });
+  }
+}
+
 export function getApplySessionStorageBackend() {
   return APPLY_SESSION_STORAGE_BACKEND;
 }
@@ -416,8 +561,15 @@ export function createSession(
     id: makeId(),
     applicationId,
     status: "STARTING",
+    createdAt: now,
     startedAt: now,
     updatedAt: now,
+    lastHeartbeatAt: now,
+    lastProgressAt: now,
+    lastStatusChangeAt: now,
+    lastKnownStatus: "STARTING",
+    runnerActive: false,
+    progressVersion: 0,
     submissionStatus: "PENDING",
     emailStatus: "PENDING",
     ...initial,
@@ -430,6 +582,11 @@ export function createSession(
     found: false,
     storageBackendUsed: APPLY_SESSION_STORAGE_BACKEND,
     ...buildLogContext(context),
+  });
+
+  supersedeOlderSessionsForApplication({
+    applicationId: session.applicationId,
+    newSessionId: session.id,
   });
 
   sessions.set(session.id, session);
@@ -474,11 +631,125 @@ export function updateSession(
     ...buildLogContext(context),
   });
 
+  const now = Date.now();
+  const nextStatus = patch.status ?? current.status;
+  const nextKnownUrl = pickKnownUrl({ ...current, ...patch });
+  const statusChanged = nextStatus !== current.status;
+  const urlChanged = Boolean(nextKnownUrl && nextKnownUrl !== current.lastKnownUrl);
+  const runnerHeartbeatAt = patch.lastRunnerHeartbeatAt ?? patch.lastHeartbeatAt;
+  const formProgress =
+    context?.phase !== "poll" &&
+    (nextStatus === "FILLING_FORM" ||
+      patch.debug?.formDetected === true ||
+      patch.debug?.formFound === true ||
+      patch.debug?.formFillAttempted === true ||
+      patch.debug?.resumeUploadSucceeded === true ||
+      patch.debug?.aiFormAnswersGenerated === true ||
+      patch.debug?.aiFormAutofillCompleted === true ||
+      patch.debug?.finalRequiredCheckPassed !== undefined ||
+      patch.debug?.allRequiredFieldsFilled !== undefined ||
+      patch.debug?.finalRecheckPassed !== undefined ||
+      patch.debug?.readyToSubmit !== undefined ||
+      patch.debug?.submitAttempted === true ||
+      patch.debug?.submitButtonClicked === true ||
+      patch.debug?.submissionConfirmed === true);
+  const backgroundProgress =
+    context?.phase !== "poll" &&
+    (statusChanged ||
+      urlChanged ||
+      patch.submissionStatus !== undefined ||
+      patch.emailStatus !== undefined ||
+      patch.error !== undefined ||
+      patch.message !== undefined ||
+      (patch.debug?.formDetected === true && current.debug?.formDetected !== true) ||
+      (patch.debug?.formFound === true && current.debug?.formFound !== true) ||
+      patch.debug?.formFillAttempted === true ||
+      patch.debug?.finalRequiredCheckPassed === true ||
+      patch.debug?.allRequiredFieldsFilled === true ||
+      patch.debug?.finalRecheckPassed === true ||
+      patch.debug?.readyToSubmit === true ||
+      patch.debug?.submitAttempted === true ||
+      patch.debug?.submitButtonClicked === true ||
+      patch.debug?.submissionConfirmed === true);
+  const nextFillingFormStartedAt =
+    nextStatus === "FILLING_FORM"
+      ? current.fillingFormStartedAt ?? now
+      : patch.fillingFormStartedAt ?? current.fillingFormStartedAt;
+  const nextLastFormRecheckAt =
+    patch.lastFormRecheckAt ??
+    patch.debug?.lastFormRecheckAt ??
+    (patch.debug?.finalRecheckPassed !== undefined ? now : current.lastFormRecheckAt);
   const next = {
     ...current,
     ...patch,
-    updatedAt: Date.now(),
-  };
+    updatedAt: now,
+    createdAt: current.createdAt ?? current.startedAt,
+    fillingFormStartedAt: nextFillingFormStartedAt,
+    lastRunnerHeartbeatAt:
+      runnerHeartbeatAt ?? current.lastRunnerHeartbeatAt,
+    lastRunnerProgressAt: backgroundProgress
+      ? now
+      : patch.lastRunnerProgressAt ?? current.lastRunnerProgressAt,
+    lastMeaningfulFormProgressAt: formProgress
+      ? now
+      : patch.lastMeaningfulFormProgressAt ?? current.lastMeaningfulFormProgressAt,
+    lastFormRecheckAt: nextLastFormRecheckAt,
+    lastStatusChangeAt: statusChanged
+      ? now
+      : current.lastStatusChangeAt ?? current.updatedAt,
+    lastKnownStatus: nextStatus,
+    lastKnownUrl: nextKnownUrl ?? current.lastKnownUrl,
+    lastProgressAt: backgroundProgress
+      ? now
+      : current.lastProgressAt ?? current.updatedAt,
+    progressVersion: backgroundProgress
+      ? (current.progressVersion ?? 0) + 1
+      : current.progressVersion ?? 0,
+  } satisfies ApplySession;
+
+  if (patch.lastHeartbeatAt !== undefined) {
+    console.info("[APPLY_SESSION_HEARTBEAT]", {
+      sessionId: current.id,
+      applicationId: current.applicationId,
+      status: nextStatus,
+      lastHeartbeatAt: patch.lastHeartbeatAt,
+      runnerActive: patch.runnerActive ?? next.runnerActive ?? null,
+      ...buildLogContext(context),
+    });
+  }
+  if (runnerHeartbeatAt !== undefined && context?.phase !== "poll") {
+    console.info("[APPLY_SESSION_RUNNER_HEARTBEAT]", {
+      sessionId: current.id,
+      applicationId: current.applicationId,
+      status: nextStatus,
+      lastRunnerHeartbeatAt: runnerHeartbeatAt,
+      runnerActive: patch.runnerActive ?? next.runnerActive ?? null,
+      ...buildLogContext(context),
+    });
+  }
+  if (formProgress) {
+    console.info("[APPLY_SESSION_FORM_PROGRESS]", {
+      sessionId: current.id,
+      applicationId: current.applicationId,
+      status: nextStatus,
+      lastMeaningfulFormProgressAt: next.lastMeaningfulFormProgressAt ?? null,
+      lastFormRecheckAt: next.lastFormRecheckAt ?? null,
+      progressVersion: next.progressVersion,
+      ...buildLogContext(context),
+    });
+  }
+  if (backgroundProgress) {
+    console.info("[APPLY_SESSION_PROGRESS]", {
+      sessionId: current.id,
+      applicationId: current.applicationId,
+      status: nextStatus,
+      statusChanged,
+      urlChanged,
+      lastKnownUrl: next.lastKnownUrl ?? null,
+      progressVersion: next.progressVersion,
+      ...buildLogContext(context),
+    });
+  }
   sessions.set(id, next);
   persistSessionToDisk(next);
 

@@ -63,6 +63,94 @@ test("form scanner infers labels and options from a generic application form", a
   expect(fields.every((field) => field.label !== "Field")).toBe(true);
 });
 
+test("form scanner uses parent question text instead of generic select placeholders", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <form>
+      <div class="application-question">
+        <div class="question-label">How did you hear about this opportunity?*</div>
+        <div class="react-select">
+          <input id="source" role="combobox" placeholder="Select..." aria-required="true" />
+        </div>
+      </div>
+      <div class="application-question">
+        <div>Where are you located?*</div>
+        <input id="location" role="combobox" placeholder="Search" aria-required="true" />
+      </div>
+    </form>
+  `);
+
+  const fields = await scanCurrentForm(page);
+  const source = fields.find((field) => field.idAttribute === "source");
+  const location = fields.find((field) => field.idAttribute === "location");
+
+  expect(source?.label).toContain("How did you hear");
+  expect(source?.label).not.toBe("Select...");
+  expect(source?.labelSources).toContain("parent_group_text");
+  expect(location?.label).toContain("Where are you located");
+  expect(location?.label).not.toBe("Search");
+});
+
+test("custom select filler commits option selection instead of only typing text", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <form>
+      <div class="application-question">
+        <div>How did you hear about this opportunity?*</div>
+        <input id="source" role="combobox" placeholder="Select..." aria-required="true" />
+        <div role="listbox">
+          <div role="option" onclick="
+            const input = document.getElementById('source');
+            input.value = 'Job board';
+            input.setAttribute('data-selected-value', 'job-board');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          ">Job board</div>
+        </div>
+      </div>
+    </form>
+  `);
+
+  const fields = await scanCurrentForm(page);
+  const source = fields.find((field) => field.idAttribute === "source");
+  expect(source?.label).toContain("How did you hear");
+
+  const result = await fillGeneratedAnswers(page, [
+    {
+      fieldId: source?.id ?? "source",
+      label: source?.label ?? "How did you hear about this opportunity?",
+      value: "Job board",
+      confidence: "high",
+      sourceBasis: ["application_source"],
+      safeToAutofill: true,
+      requiresUserReview: false,
+      reason: "Safe source answer.",
+    },
+  ], { fields });
+
+  await expect(page.locator("#source")).toHaveValue("Job board");
+  expect(result.filledCount).toBe(1);
+  expect(result.remainingRequiredFields).toEqual([]);
+});
+
+test("hidden recaptcha token fields are not treated as missing required answers", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <form>
+      <textarea name="g-recaptcha-response" required style="display:none"></textarea>
+      <input name="recaptcha-token" type="hidden" required />
+    </form>
+  `);
+
+  const fields = await scanCurrentForm(page);
+  const result = await fillGeneratedAnswers(page, [], { fields });
+
+  expect(result.remainingRequiredFields).toEqual([]);
+});
+
 test("answer generator fills safe known answers and blocks unknown sensitive/legal fields", async () => {
   const result = await generateFormAnswers({
     userProfile: {

@@ -516,6 +516,59 @@ export async function sendVerificationCodeEmail(to: string, code: string) {
   });
 }
 
+export async function sendOnboardingConfirmationCodeEmail(
+  to: string,
+  code: string
+) {
+  const subject = "Your Hirexa AI confirmation code";
+  const { supportEmail } = getEmailConfig();
+  const officialSiteUrl = resolveAppUrl();
+  const greeting = "Hi there,";
+
+  const text = buildTextBody([
+    greeting,
+    "",
+    `Your Hirexa AI confirmation code is: ${code}. This code expires in 10 minutes.`,
+    "",
+    "Enter this code on Hirexa AI to finish setting up your account.",
+    "",
+    `Official Hirexa AI website: ${officialSiteUrl}`,
+    supportEmail ? `Support: ${supportEmail}` : null,
+    "",
+    "Hirexa AI Team",
+  ]);
+
+  const html = buildHirexaEmail({
+    greeting,
+    title: "Confirm your email to continue",
+    paragraphs: [
+      "Enter this 6-digit code on Hirexa AI to finish setting up your account. This code expires in 10 minutes.",
+    ],
+    customSections: [
+      `
+        <div style="margin-top:16px;border:1px solid #dbeafe;border-radius:16px;background:#eff6ff;padding:20px;text-align:center">
+          <div style="font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#1d4ed8">Confirmation code</div>
+          <div style="margin-top:10px;font-size:32px;font-weight:800;letter-spacing:0.28em;color:#0f172a">${escapeHtml(code)}</div>
+        </div>
+      `,
+    ],
+    footerLines: [
+      `Official Hirexa AI website: ${officialSiteUrl}`,
+      supportEmail ? `Support: ${supportEmail}` : null,
+      "Hirexa AI Team",
+    ],
+  });
+
+  await sendEmail({
+    to,
+    subject,
+    html,
+    text,
+    category: "transactional",
+    senderProfile: "security",
+  });
+}
+
 export async function sendPasswordChangedEmail(to: string, name?: string | null) {
   const { replyTo, supportEmail } = getEmailConfig();
   const appUrl = resolveAppUrl("/settings/account/password");

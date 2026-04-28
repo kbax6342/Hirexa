@@ -18,6 +18,11 @@ export type FillLocationDropdownFieldResult = {
   reason?: string;
 };
 
+export type FillGreenhouseReactSelectCountryResult = FillLocationDropdownFieldResult & {
+  selectedOption?: string | null;
+  validationCleared?: boolean;
+};
+
 function text(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -79,6 +84,16 @@ function countryAliases(answer: string) {
     return ["United States", "United States of America", "USA", "US"];
   }
   return [answer];
+}
+
+function isCountryField(field?: MappedApplicationField | null) {
+  if (!field) return false;
+  const all = fieldText(field);
+  return (
+    field.type === "greenhouse_react_select_country" ||
+    /\bcountry\b/i.test(`${field.label} ${field.sourceHints.id} ${field.sourceHints.name} ${field.sourceHints.ariaDescribedByText}`) ||
+    /select a country|country-error|react-select-country-placeholder/i.test(all)
+  );
 }
 
 function escapeRegex(value: string) {
@@ -213,6 +228,226 @@ async function clickMatchingOption(page: Page, aliases: string[]) {
   return null;
 }
 
+async function verifyGreenhouseReactSelectCountry(page: Page, aliases: string[]) {
+  return page
+    .evaluate((expectedAliases) => {
+      function clean(value: string | null | undefined) {
+        return String(value ?? "").replace(/\s+/g, " ").trim();
+      }
+      function normalize(value: string | null | undefined) {
+        return clean(value).toLowerCase();
+      }
+      function textFromIds(ids: string | null | undefined) {
+        return String(ids ?? "")
+          .split(/\s+/)
+          .map((id) => clean(document.getElementById(id)?.textContent))
+          .filter(Boolean)
+          .join(" ");
+      }
+      function visibleText(element: Element | null) {
+        if (!(element instanceof HTMLElement)) return "";
+        return clean(element.innerText || element.textContent || "");
+      }
+      const aliases = expectedAliases.map(normalize).filter(Boolean);
+      const input =
+        document.querySelector<HTMLInputElement>("input#country") ??
+        document.querySelector<HTMLInputElement>(
+          "input[aria-labelledby='country-label'], input[aria-describedby*='country-error'], input[aria-describedby*='react-select-country-placeholder'], [role='combobox'][aria-labelledby='country-label']",
+        );
+      if (!input) {
+        return {
+          found: false,
+          ariaInvalid: true,
+          describedByText: "",
+          selectedVisible: false,
+          hasBackingValue: false,
+        };
+      }
+
+      const ariaInvalid = input.getAttribute("aria-invalid") === "true";
+      const describedByText = textFromIds(input.getAttribute("aria-describedby"));
+      const containers: Element[] = [];
+      let current: Element | null = input;
+      for (let depth = 0; current && depth < 6; depth += 1) {
+        containers.push(current);
+        current = current.parentElement;
+      }
+      const selectedText = containers.map(visibleText).join(" ");
+      const selectedVisible = aliases.some((alias) => normalize(selectedText).includes(alias));
+      const hiddenValue = Array.from(
+        document.querySelectorAll<HTMLInputElement>("input[type='hidden'][name='country'], input[name='country'][type='hidden']"),
+      )
+        .map((element) => clean(element.value))
+        .filter(Boolean)
+        .join(" ");
+      const hasBackingValue =
+        Boolean(hiddenValue) ||
+        selectedVisible ||
+        (Boolean(clean(input.value)) && aliases.some((alias) => normalize(input.value).includes(alias)));
+      const countryErrorText = clean(document.getElementById("country-error")?.textContent);
+      return {
+        found: true,
+        ariaInvalid,
+        describedByText,
+        selectedVisible,
+        hasBackingValue,
+        countryErrorText,
+      };
+    }, aliases)
+    .catch(() => ({
+      found: false,
+      ariaInvalid: true,
+      describedByText: "",
+      selectedVisible: false,
+      hasBackingValue: false,
+      countryErrorText: "",
+    }));
+}
+
+export async function fillGreenhouseReactSelectCountry(args: {
+  page: Page;
+  field?: Partial<MappedApplicationField> | null;
+  countryAnswer: string;
+  applicationId?: string | null;
+  sessionId?: string | null;
+}): Promise<FillGreenhouseReactSelectCountryResult> {
+  const countryAnswer = text(args.countryAnswer) || "United States";
+  const aliases = countryAliases(countryAnswer);
+  const baseLog = {
+    applicationId: args.applicationId ?? null,
+    sessionId: args.sessionId ?? null,
+    label: args.field?.label ?? "Country",
+    countryKind: /\bunited states|usa|us\b/i.test(countryAnswer) ? "us_country" : "country",
+  };
+
+  const countryInput = args.page
+    .locator(
+      [
+        "input#country",
+        "input[aria-labelledby='country-label']",
+        "input[aria-describedby*='country-error']",
+        "input[aria-describedby*='react-select-country-placeholder']",
+        "[role='combobox'][aria-labelledby='country-label']",
+      ].join(", "),
+    )
+    .first();
+
+  if ((await countryInput.count().catch(() => 0)) === 0) {
+    return {
+      attempted: false,
+      filled: false,
+      selectedOption: null,
+      validationCleared: false,
+      reason: "Greenhouse Country React Select input was not found.",
+    };
+  }
+
+  console.log("[AUTO_APPLY_LOCATION] greenhouse country react-select detected", baseLog);
+  const control = countryInput.locator(
+    "xpath=ancestor::*[contains(@class,'select') or contains(@class,'field') or contains(@class,'question') or @data-testid or @data-qa or self::div][1]",
+  );
+  const clickable =
+    (await control.count().catch(() => 0)) > 0
+      ? control
+      : countryInput;
+
+  await clickable.scrollIntoViewIfNeeded().catch(() => undefined);
+  await clickable.click({ timeout: 3_000 }).catch(() => undefined);
+  await countryInput.focus().catch(() => undefined);
+  console.log("[AUTO_APPLY_LOCATION] dropdown opened", baseLog);
+
+  let selectedOption: string | null = null;
+  for (const alias of aliases) {
+    console.log("[AUTO_APPLY_LOCATION] option search attempted", {
+      ...baseLog,
+      searchKind: "country",
+    });
+    await countryInput.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+    await countryInput.press("Backspace").catch(() => undefined);
+    await countryInput.fill(alias, { timeout: 2_000 }).catch(async () => {
+      await countryInput.type(alias, { delay: 15 }).catch(() => undefined);
+    });
+    await args.page.waitForTimeout(350).catch(() => undefined);
+
+    selectedOption = await clickMatchingOption(args.page, [alias]);
+    if (selectedOption) break;
+
+    const reactOption = args.page
+      .locator(`[id*="react-select"][id*="option"]:has-text("${alias}")`)
+      .first();
+    if (
+      (await reactOption.count().catch(() => 0)) > 0 &&
+      (await reactOption.isVisible().catch(() => false))
+    ) {
+      await reactOption.click().catch(() => undefined);
+      selectedOption = alias;
+      break;
+    }
+
+    await countryInput.press("Enter").catch(() => undefined);
+    await args.page.waitForTimeout(300).catch(() => undefined);
+    const enterVerify = await verifyGreenhouseReactSelectCountry(args.page, [alias]);
+    if (
+      enterVerify.selectedVisible &&
+      !enterVerify.ariaInvalid &&
+      !/select a country/i.test(`${enterVerify.describedByText} ${enterVerify.countryErrorText ?? ""}`)
+    ) {
+      selectedOption = alias;
+      break;
+    }
+  }
+
+  if (selectedOption) {
+    console.log("[AUTO_APPLY_LOCATION] option selected", baseLog);
+  }
+
+  await countryInput.dispatchEvent("input").catch(() => undefined);
+  await countryInput.dispatchEvent("change").catch(() => undefined);
+  await countryInput.blur().catch(() => undefined);
+  await args.page.waitForTimeout(350).catch(() => undefined);
+  console.log("[AUTO_APPLY_LOCATION] value committed", {
+    ...baseLog,
+    method: "greenhouse_react_select_country",
+  });
+
+  const verification = await verifyGreenhouseReactSelectCountry(args.page, aliases);
+  const validationCleared =
+    verification.found &&
+    verification.selectedVisible &&
+    verification.hasBackingValue &&
+    !verification.ariaInvalid &&
+    !/select a country/i.test(`${verification.describedByText} ${verification.countryErrorText ?? ""}`);
+  if (validationCleared) {
+    console.log("[AUTO_APPLY_LOCATION] validation passed", {
+      ...baseLog,
+      selectedOption,
+    });
+    return {
+      attempted: true,
+      filled: true,
+      selectedOption,
+      validationCleared: true,
+    };
+  }
+
+  console.log("[AUTO_APPLY_LOCATION] validation still failing", {
+    ...baseLog,
+    selectedOption,
+    ariaInvalid: verification.ariaInvalid,
+    describedByText: verification.describedByText,
+    selectedVisible: verification.selectedVisible,
+    hasBackingValue: verification.hasBackingValue,
+    reason: "greenhouse_country_react_select_not_committed",
+  });
+  return {
+    attempted: true,
+    filled: false,
+    selectedOption,
+    validationCleared: false,
+    reason: "Profile country exists, but Greenhouse did not commit the React Select Country option.",
+  };
+}
+
 async function verifyGroupValue(page: Page, label: string, aliases: string[]) {
   const question = page.getByText(locationQuestionRegex(label)).first();
   const group = question.locator(
@@ -270,6 +505,21 @@ export async function fillLocationDropdownField(args: {
       label,
     });
     return { attempted: true, filled: false, reason: resolved.reason };
+  }
+
+  if (
+    country &&
+    /greenhouse\.io/i.test(args.page.url()) &&
+    (isCountryField(args.field) || /\bcountry\b/i.test(label))
+  ) {
+    const countryFill = await fillGreenhouseReactSelectCountry({
+      page: args.page,
+      field: args.field,
+      countryAnswer: country,
+      applicationId: args.applicationId ?? null,
+      sessionId: args.sessionId ?? null,
+    });
+    if (countryFill.attempted) return countryFill;
   }
 
   const question = args.page.getByText(locationQuestionRegex(label)).first();
@@ -542,7 +792,23 @@ export async function fillLocationFields(args: {
     if (field.currentValue && !/select|search/i.test(field.currentValue)) continue;
     const value = bestAnswerForControl(field, answer.answer);
     let filled = false;
-    if (field.type === "select") {
+    if (field.type === "greenhouse_react_select_country") {
+      console.log("[AUTO_APPLY_LOCATION] filling country dropdown", {
+        applicationId: args.applicationId ?? null,
+        sessionId: args.sessionId ?? null,
+        label: field.label,
+        answerKind: "country",
+        method: "greenhouse_react_select_country",
+      });
+      const countryFill = await fillGreenhouseReactSelectCountry({
+        page: args.page,
+        field,
+        countryAnswer: value,
+        applicationId: args.applicationId ?? null,
+        sessionId: args.sessionId ?? null,
+      });
+      filled = countryFill.filled;
+    } else if (field.type === "select") {
       console.log("[AUTO_APPLY_LOCATION] filling country dropdown", {
         applicationId: args.applicationId ?? null,
         sessionId: args.sessionId ?? null,

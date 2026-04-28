@@ -102,6 +102,8 @@ import {
   extractGreenhouseValidationErrors,
   type GreenhouseValidationExtractionResult,
 } from "@/app/lib/apply/greenhouseValidationErrors";
+import { fillGreenhouseReactSelectCountry } from "@/app/lib/apply/locationFieldFiller";
+import { resolveProfileLocationForApplicationField } from "@/app/lib/apply/locationAnswerResolver";
 import {
   detectGreenhouseSubmissionConfirmation,
   detectSubmissionConfirmationAcrossPages,
@@ -109,6 +111,7 @@ import {
   submitAndDetectGreenhouseConfirmation,
   type SubmissionConfirmationMatch,
 } from "@/app/lib/apply/confirmationDetector";
+import { withSpan } from "@/app/lib/telemetry/trace";
 
 export {
   detectSubmissionConfirmationAcrossPages,
@@ -2287,6 +2290,27 @@ function hasPostSubmitSecurityValidation(validation: GreenhouseValidationExtract
 
 function hasRepairablePostSubmitValidation(validation: GreenhouseValidationExtractionResult) {
   return validation.errors.some((error) => error.repairable);
+}
+
+function findCountryPostSubmitValidation(validation: GreenhouseValidationExtractionResult) {
+  return validation.errors.find((error) => {
+    const combined = [
+      error.text,
+      error.describedByText,
+      error.fieldLabel,
+      error.fieldName,
+      error.fieldId,
+      error.selectorHint,
+      error.closestFormGroupText,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return (
+      error.category === "invalid_location" &&
+      /\bcountry\b/i.test(combined) &&
+      /select a country|country-error|react-select-country-placeholder|^country$/i.test(combined)
+    );
+  });
 }
 
 async function runFinalRequiredFieldRecheck(args: {
@@ -12578,8 +12602,19 @@ export async function applyWithPlaywright(args: {
       finalChosenUrlKind,
       destinationResolvedViaEcosia,
     });
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-    await waitForDomAndSettle(page);
+    await withSpan(
+      "auto_apply.playwright.open_page",
+      {
+        applicationId: applicationId ?? undefined,
+        provider: applySource ?? undefined,
+        atsType: startingUrlKind,
+        resolvedHost: parseHostname(targetUrl) || undefined,
+      },
+      async () => {
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+        await waitForDomAndSettle(page);
+      },
+    );
     initialLoadedUrl = captureCurrentUrl(page);
     domain = parseHostname(initialLoadedUrl) || parseHostname(entryUrl);
 
@@ -13165,18 +13200,27 @@ export async function applyWithPlaywright(args: {
 
     chase =
       chase ??
-      (await chaseApplyPath({
-        page,
-        context,
-        onPageReady: args.onPageReady,
-        onStatus: args.onStatus,
-        viewerUrl: remoteSession?.viewerUrl,
-        remoteSessionId: remoteSession?.sessionId,
-        openUrl: page.url(),
-        applicationId: applicationId ?? null,
-        preferredTexts: strategyPreferredCtaTexts,
-        preferredSelectors: preferredCtaSelectors,
-      }));
+      (await withSpan(
+        "auto_apply.playwright.click_apply",
+        {
+          applicationId: applicationId ?? undefined,
+          provider: applySource ?? undefined,
+          resolvedHost: parseHostname(page.url()) || undefined,
+        },
+        () =>
+          chaseApplyPath({
+            page,
+            context: context!,
+            onPageReady: args.onPageReady,
+            onStatus: args.onStatus,
+            viewerUrl: remoteSession?.viewerUrl,
+            remoteSessionId: remoteSession?.sessionId,
+            openUrl: page.url(),
+            applicationId: applicationId ?? null,
+            preferredTexts: strategyPreferredCtaTexts,
+            preferredSelectors: preferredCtaSelectors,
+          }),
+      ));
 
     page = chase.page;
     captureCurrentUrl(page);
@@ -14273,11 +14317,20 @@ export async function applyWithPlaywright(args: {
 
     if (greenhouseProviderDetected) {
       formScanAttempted = true;
-      greenhouseFormState = await fillGreenhouseApplicationForm(page, {
-        values: args.values,
-        resumePath: args.resumePath,
-        attemptedSelectors,
-      });
+      greenhouseFormState = await withSpan(
+        "auto_apply.form.fill",
+        {
+          applicationId: applicationId ?? undefined,
+          provider: "greenhouse",
+          resolvedHost: parseHostname(page.url()) || undefined,
+        },
+        () =>
+          fillGreenhouseApplicationForm(page, {
+            values: args.values,
+            resumePath: args.resumePath,
+            attemptedSelectors,
+          }),
+      );
       formFound = greenhouseFormState.formDetected;
       formFillAttempted = greenhouseFormState.formDetected;
       resumeUploadAttempted = greenhouseFormState.resumeUploadAttempted;
@@ -14562,23 +14615,32 @@ export async function applyWithPlaywright(args: {
         existingAnswerCount: Object.keys(args.values).length,
       });
 
-      const aiGenerated = await generateFormAnswers({
-        userProfile: args.metadata?.userProfile ?? args.values,
-        resumeText: args.metadata?.resumeText ?? undefined,
-        resumeSummary: args.metadata?.resumeSummary ?? undefined,
-        jobTitle: searchJobTitle,
-        companyName: searchCompany,
-        jobDescription: args.metadata?.jobDescription ?? undefined,
-        pageText: await page.innerText("body").catch(() => ""),
-        source: applySource,
-        existingApplicationAnswers: Object.fromEntries(
-          Object.entries(args.values).map(([key, value]) => [
-            key,
-            Array.isArray(value) ? String(value[0] ?? "") : String(value ?? ""),
-          ]),
-        ),
-        fields: aiFormScannedFields,
-      });
+      const aiGenerated = await withSpan(
+        "auto_apply.form.generate_answer",
+        {
+          applicationId: applicationId ?? undefined,
+          provider: greenhouseProviderDetected ? "greenhouse" : applySource ?? undefined,
+          resolvedHost: parseHostname(page.url()) || undefined,
+        },
+        async () =>
+          generateFormAnswers({
+            userProfile: args.metadata?.userProfile ?? args.values,
+            resumeText: args.metadata?.resumeText ?? undefined,
+            resumeSummary: args.metadata?.resumeSummary ?? undefined,
+            jobTitle: searchJobTitle,
+            companyName: searchCompany,
+            jobDescription: args.metadata?.jobDescription ?? undefined,
+            pageText: await page.innerText("body").catch(() => ""),
+            source: applySource,
+            existingApplicationAnswers: Object.fromEntries(
+              Object.entries(args.values).map(([key, value]) => [
+                key,
+                Array.isArray(value) ? String(value[0] ?? "") : String(value ?? ""),
+              ]),
+            ),
+            fields: aiFormScannedFields,
+          }),
+      );
       aiFormGeneratedAnswers = aiGenerated.answers;
       aiFormBlockedFields = aiGenerated.blockedFields;
       aiFormAnswersGenerated = true;
@@ -14624,12 +14686,21 @@ export async function applyWithPlaywright(args: {
         });
       }
 
-      aiFormFillResult = await fillGeneratedAnswers(page, aiGenerated.answers, {
-        fields: aiFormScannedFields,
-        resumePath: args.resumePath,
-        applicationId: applicationId ?? null,
-        sessionId: applySessionId ?? remoteSession?.sessionId ?? applicationId ?? null,
-      });
+      aiFormFillResult = await withSpan(
+        "auto_apply.form.fill",
+        {
+          applicationId: applicationId ?? undefined,
+          provider: greenhouseProviderDetected ? "greenhouse" : applySource ?? undefined,
+          resolvedHost: parseHostname(page.url()) || undefined,
+        },
+        () =>
+          fillGeneratedAnswers(page, aiGenerated.answers, {
+            fields: aiFormScannedFields,
+            resumePath: args.resumePath,
+            applicationId: applicationId ?? null,
+            sessionId: applySessionId ?? remoteSession?.sessionId ?? applicationId ?? null,
+          }),
+      );
       aiFormAutofillCompleted = aiFormFillResult.failedCount === 0;
       resumeUploadAttempted =
         resumeUploadAttempted || aiFormFillResult.resumeUploadAttempted;
@@ -14724,29 +14795,38 @@ export async function applyWithPlaywright(args: {
       if (remainingAfterSinglePass.length > 0) {
         const sessionId =
           applySessionId ?? applicationId ?? `local-${Date.now().toString(36)}`;
-        const iterativeResult = await fillApplicationFormIteratively({
-          page,
-          applicationId: applicationId ?? "unknown_application",
-          sessionId,
-          jobContext: {
-            jobTitle: searchJobTitle,
-            companyName: searchCompany,
-            jobDescription: args.metadata?.jobDescription,
-            source: applySource,
+        const iterativeResult = await withSpan(
+          "auto_apply.form.fill",
+          {
+            applicationId: applicationId ?? undefined,
+            provider: greenhouseProviderDetected ? "greenhouse" : applySource ?? undefined,
+            resolvedHost: parseHostname(page.url()) || undefined,
           },
-          userProfile: args.metadata?.userProfile ?? args.values,
-          resumeContext: {
-            resumeText: args.metadata?.resumeText,
-            resumeSummary: args.metadata?.resumeSummary,
-          },
-          existingApplicationMaterials: {
-            values: args.values,
-            pageUrl: page.url(),
-          },
-          resumePath: args.resumePath,
-          maxPasses: 4,
-          autoSubmit: false,
-        });
+          () =>
+            fillApplicationFormIteratively({
+              page,
+              applicationId: applicationId ?? "unknown_application",
+              sessionId,
+              jobContext: {
+                jobTitle: searchJobTitle,
+                companyName: searchCompany,
+                jobDescription: args.metadata?.jobDescription,
+                source: applySource,
+              },
+              userProfile: args.metadata?.userProfile ?? args.values,
+              resumeContext: {
+                resumeText: args.metadata?.resumeText,
+                resumeSummary: args.metadata?.resumeSummary,
+              },
+              existingApplicationMaterials: {
+                values: args.values,
+                pageUrl: page.url(),
+              },
+              resumePath: args.resumePath,
+              maxPasses: 4,
+              autoSubmit: false,
+            }),
+        );
 
         aiFormFillResult = {
           ...aiFormFillResult,
@@ -15963,14 +16043,23 @@ export async function applyWithPlaywright(args: {
         selector: submitSelector,
       });
       console.log("[AUTO_APPLY_CRAWL] clicking submit", submitSelector);
-      const submitConfirmation = await submitAndDetectGreenhouseConfirmation({
-        page,
-        submitLocator: button,
-        provider: providerForFinalCheck,
-        applicationId: applicationId ?? null,
-        sessionId: sessionIdForFinalCheck,
-        targetUrl,
-      });
+      const submitConfirmation = await withSpan(
+        "auto_apply.submit",
+        {
+          applicationId: applicationId ?? undefined,
+          provider: providerForFinalCheck ?? undefined,
+          resolvedHost: parseHostname(page.url()) || undefined,
+        },
+        () =>
+          submitAndDetectGreenhouseConfirmation({
+            page,
+            submitLocator: button,
+            provider: providerForFinalCheck,
+            applicationId: applicationId ?? null,
+            sessionId: sessionIdForFinalCheck,
+            targetUrl,
+          }),
+      );
       submitButtonClicked = submitConfirmation.submitClicked;
       submitOrContinueClicked = submitConfirmation.submitClicked;
       submitConfirmationUrl = submitConfirmation.confirmationUrl;
@@ -16134,13 +16223,22 @@ export async function applyWithPlaywright(args: {
             pageTextSnippet: undefined,
             popupUrl: submitPopupUrl,
           } as const)
-        : await detectGreenhouseSubmissionConfirmation({
-            context: submissionContext,
-            page,
-            observedPages: [],
-            provider: providerForFinalCheck,
-            targetUrl,
-          })
+        : await withSpan(
+            "auto_apply.confirmation.detect",
+            {
+              applicationId: applicationId ?? undefined,
+              provider: providerForFinalCheck ?? undefined,
+              resolvedHost: parseHostname(page.url()) || undefined,
+            },
+            () =>
+              detectGreenhouseSubmissionConfirmation({
+                context: submissionContext,
+                page,
+                observedPages: [],
+                provider: providerForFinalCheck,
+                targetUrl,
+              }),
+          )
       : null;
     let confirmationMatch = greenhouseConfirmation?.confirmed
       ? ({
@@ -16161,11 +16259,20 @@ export async function applyWithPlaywright(args: {
                     : "context-page",
         } satisfies SubmissionConfirmationMatch)
       : submitButtonClicked
-        ? await detectSubmissionConfirmationAcrossPages(
-            submissionContext,
-            page,
-            targetUrl,
-            [],
+        ? await withSpan(
+            "auto_apply.confirmation.detect",
+            {
+              applicationId: applicationId ?? undefined,
+              provider: providerForFinalCheck ?? undefined,
+              resolvedHost: parseHostname(page.url()) || undefined,
+            },
+            () =>
+              detectSubmissionConfirmationAcrossPages(
+                submissionContext,
+                page,
+                targetUrl,
+                [],
+              ),
           )
         : ({
             confirmed: false,
@@ -16247,6 +16354,7 @@ export async function applyWithPlaywright(args: {
     );
     let postSubmitValidationRepairAttempted = false;
     let postSubmitValidationRepairSucceeded = false;
+    let countryReactSelectRepairResolvedAll = false;
     let validationErrorsAfterSubmit =
       !success && postSubmitValidation.validationErrorCount > 0;
     let securityValidationAfterSubmit =
@@ -16297,59 +16405,153 @@ export async function applyWithPlaywright(args: {
       }
     }
 
-    if (
-      validationErrorsAfterSubmit &&
-      !securityValidationAfterSubmit &&
-      hasRepairablePostSubmitValidation(postSubmitValidation)
-    ) {
-      postSubmitValidationRepairAttempted = true;
-      console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair attempted", {
-        applicationId: applicationId ?? null,
-        applySessionId: sessionIdForFinalCheck,
-        provider: providerForFinalCheck,
-        currentUrl: finalUrl,
-        repairableCount: postSubmitValidation.errors.filter((error) => error.repairable).length,
-      });
-      const repairResult = await fillApplicationFormIteratively({
-        page,
-        applicationId: applicationId ?? "unknown_application",
-        sessionId:
-          sessionIdForFinalCheck ??
-          applicationId ??
-          `post-submit-${Date.now().toString(36)}`,
-        jobContext: {
-          jobTitle: searchJobTitle,
-          companyName: searchCompany,
-          jobDescription: args.metadata?.jobDescription,
-          source: applySource,
-        },
-        userProfile: args.metadata?.userProfile ?? args.values,
-        resumeContext: {
-          resumeText: args.metadata?.resumeText,
-          resumeSummary: args.metadata?.resumeSummary,
-        },
-        existingApplicationMaterials: {
-          values: args.values,
-          pageUrl: page.url(),
-        },
-        resumePath: args.resumePath,
-        maxPasses: 1,
-        autoSubmit: false,
-      }).catch((error) => {
-        console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed", {
+    if (validationErrorsAfterSubmit && !securityValidationAfterSubmit) {
+      const countryValidationError = findCountryPostSubmitValidation(postSubmitValidation);
+      if (countryValidationError) {
+        postSubmitValidationRepairAttempted = true;
+        const locationAnswer = resolveProfileLocationForApplicationField({
+          userProfile: args.metadata?.userProfile ?? args.values,
+          fieldLabel: countryValidationError.fieldLabel ?? "Country",
+          fieldOptions: ["United States", "United States of America", "USA", "US"],
+          jobLocation: args.metadata?.location ?? null,
+        });
+        const countryAnswer = locationAnswer.countryAnswer ?? locationAnswer.answer ?? "United States";
+        console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair attempted", {
           applicationId: applicationId ?? null,
           applySessionId: sessionIdForFinalCheck,
           provider: providerForFinalCheck,
-          reason: error instanceof Error ? error.message : "repair_failed",
+          currentUrl: finalUrl,
+          fieldLabel: countryValidationError.fieldLabel,
+          fieldId: countryValidationError.fieldId,
+          category: countryValidationError.category,
+          method: "greenhouse_react_select_country",
         });
-        return null;
-      });
-      const validationAfterRepair = await extractGreenhouseValidationErrors({
-        page,
-        provider: providerForFinalCheck,
-      });
+        const countryRepair = await fillGreenhouseReactSelectCountry({
+          page,
+          field: {
+            label: countryValidationError.fieldLabel ?? "Country",
+            fieldId: countryValidationError.fieldId ?? "country",
+            type: "greenhouse_react_select_country",
+            fieldKind: "country_dropdown_field",
+          },
+          countryAnswer,
+          applicationId: applicationId ?? null,
+          sessionId: sessionIdForFinalCheck,
+        }).catch((error) => {
+          console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed", {
+            applicationId: applicationId ?? null,
+            applySessionId: sessionIdForFinalCheck,
+            provider: providerForFinalCheck,
+            fieldLabel: countryValidationError.fieldLabel,
+            fieldId: countryValidationError.fieldId,
+            method: "greenhouse_react_select_country",
+            reason: error instanceof Error ? error.message : "country_react_select_repair_failed",
+          });
+          return null;
+        });
+        const validationAfterCountryRepair = await extractGreenhouseValidationErrors({
+          page,
+          provider: providerForFinalCheck,
+        });
+        postSubmitValidationRepairSucceeded =
+          Boolean(countryRepair?.filled) && validationAfterCountryRepair.validationErrorCount === 0;
+        countryReactSelectRepairResolvedAll = postSubmitValidationRepairSucceeded;
+        postSubmitValidation = validationAfterCountryRepair;
+        postSubmitValidationErrors = postSubmitValidation.errors.map(
+          formatPostSubmitValidationError,
+        );
+        validationErrorsAfterSubmit = postSubmitValidation.validationErrorCount > 0;
+        securityValidationAfterSubmit =
+          validationErrorsAfterSubmit && hasPostSubmitSecurityValidation(postSubmitValidation);
+        console.log(
+          postSubmitValidationRepairSucceeded
+            ? "[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair succeeded"
+            : "[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed",
+          {
+            applicationId: applicationId ?? null,
+            applySessionId: sessionIdForFinalCheck,
+            provider: providerForFinalCheck,
+            fieldLabel: countryValidationError.fieldLabel,
+            fieldId: countryValidationError.fieldId,
+            method: "greenhouse_react_select_country",
+            countryOptionCommitted: Boolean(countryRepair?.filled),
+            remainingValidationErrorCount: postSubmitValidation.validationErrorCount,
+          },
+        );
+      }
+    }
+
+    if (
+      (validationErrorsAfterSubmit &&
+        !securityValidationAfterSubmit &&
+        hasRepairablePostSubmitValidation(postSubmitValidation)) ||
+      countryReactSelectRepairResolvedAll
+    ) {
+      let repairResult: { fieldsFilled?: number } | null = countryReactSelectRepairResolvedAll
+        ? { fieldsFilled: 1 }
+        : null;
+      if (!countryReactSelectRepairResolvedAll) {
+        postSubmitValidationRepairAttempted = true;
+        console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair attempted", {
+          applicationId: applicationId ?? null,
+          applySessionId: sessionIdForFinalCheck,
+          provider: providerForFinalCheck,
+          currentUrl: finalUrl,
+          repairableCount: postSubmitValidation.errors.filter((error) => error.repairable).length,
+        });
+        repairResult = await withSpan(
+          "auto_apply.form.fill",
+          {
+            applicationId: applicationId ?? undefined,
+            provider: providerForFinalCheck ?? undefined,
+            resolvedHost: parseHostname(page.url()) || undefined,
+          },
+          () =>
+            fillApplicationFormIteratively({
+              page,
+              applicationId: applicationId ?? "unknown_application",
+              sessionId:
+                sessionIdForFinalCheck ??
+                applicationId ??
+                `post-submit-${Date.now().toString(36)}`,
+              jobContext: {
+                jobTitle: searchJobTitle,
+                companyName: searchCompany,
+                jobDescription: args.metadata?.jobDescription,
+                source: applySource,
+              },
+              userProfile: args.metadata?.userProfile ?? args.values,
+              resumeContext: {
+                resumeText: args.metadata?.resumeText,
+                resumeSummary: args.metadata?.resumeSummary,
+              },
+              existingApplicationMaterials: {
+                values: args.values,
+                pageUrl: page.url(),
+              },
+              resumePath: args.resumePath,
+              maxPasses: 1,
+              autoSubmit: false,
+            }),
+        ).catch((error) => {
+          console.log("[AUTO_APPLY_SUBMIT_VALIDATION_REPAIR] repair failed", {
+            applicationId: applicationId ?? null,
+            applySessionId: sessionIdForFinalCheck,
+            provider: providerForFinalCheck,
+            reason: error instanceof Error ? error.message : "repair_failed",
+          });
+          return null;
+        });
+      }
+      const validationAfterRepair = countryReactSelectRepairResolvedAll
+        ? postSubmitValidation
+        : await extractGreenhouseValidationErrors({
+            page,
+            provider: providerForFinalCheck,
+          });
       postSubmitValidationRepairSucceeded =
-        Boolean(repairResult) && validationAfterRepair.validationErrorCount === 0;
+        postSubmitValidationRepairSucceeded ||
+        (Boolean(repairResult) && validationAfterRepair.validationErrorCount === 0);
       postSubmitValidation = validationAfterRepair;
       postSubmitValidationErrors = postSubmitValidation.errors.map(
         formatPostSubmitValidationError,
@@ -16385,14 +16587,23 @@ export async function applyWithPlaywright(args: {
             currentUrl: page.url(),
             selector: submitUsed,
           });
-          const repairSubmit = await submitAndDetectGreenhouseConfirmation({
-            page,
-            submitLocator: repairSubmitButton,
-            provider: providerForFinalCheck,
-            applicationId: applicationId ?? null,
-            sessionId: sessionIdForFinalCheck,
-            targetUrl,
-          });
+          const repairSubmit = await withSpan(
+            "auto_apply.submit",
+            {
+              applicationId: applicationId ?? undefined,
+              provider: providerForFinalCheck ?? undefined,
+              resolvedHost: parseHostname(page.url()) || undefined,
+            },
+            () =>
+              submitAndDetectGreenhouseConfirmation({
+                page,
+                submitLocator: repairSubmitButton,
+                provider: providerForFinalCheck,
+                applicationId: applicationId ?? null,
+                sessionId: sessionIdForFinalCheck,
+                targetUrl,
+              }),
+          );
           submitButtonClicked = submitButtonClicked || repairSubmit.submitClicked;
           submitConfirmationUrl = repairSubmit.confirmationUrl ?? submitConfirmationUrl;
           submitPopupUrl = repairSubmit.popupUrl ?? submitPopupUrl;

@@ -3,6 +3,7 @@ import "server-only";
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Apple from "next-auth/providers/apple";
+import LinkedIn from "next-auth/providers/linkedin";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/app/lib/prisma";
@@ -20,6 +21,8 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 const appleClientId = process.env.APPLE_CLIENT_ID?.trim();
 const appleClientSecret = process.env.APPLE_CLIENT_SECRET?.trim();
+const linkedInClientId = process.env.LINKEDIN_CLIENT_ID?.trim();
+const linkedInClientSecret = process.env.LINKEDIN_CLIENT_SECRET?.trim();
 const useSecureCookies = process.env.NODE_ENV === "production";
 
 validateSecurityEnvironment();
@@ -86,6 +89,34 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           }),
         ]
       : []),
+    ...(linkedInClientId && linkedInClientSecret
+      ? [
+          LinkedIn({
+            clientId: linkedInClientId,
+            clientSecret: linkedInClientSecret,
+            authorization: {
+              params: { scope: "openid profile email" },
+            },
+            profile(profile) {
+              const record = profile as Record<string, unknown>;
+              const givenName = String(record.given_name ?? "").trim();
+              const familyName = String(record.family_name ?? "").trim();
+              const fullName = String(record.name ?? [givenName, familyName].filter(Boolean).join(" ")).trim();
+              return {
+                id: String(record.sub ?? record.id ?? ""),
+                name: fullName || null,
+                email: typeof record.email === "string" ? record.email : null,
+                image:
+                  typeof record.picture === "string"
+                    ? record.picture
+                    : typeof record.profilePicture === "string"
+                      ? record.profilePicture
+                      : null,
+              };
+            },
+          }),
+        ]
+      : []),
   ],
 
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
@@ -93,7 +124,7 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   callbacks: {
     async signIn({ user, account }) {
       const provider = account?.provider;
-      if (provider !== "google" && provider !== "apple") {
+      if (provider !== "google" && provider !== "apple" && provider !== "linkedin") {
         return true;
       }
 

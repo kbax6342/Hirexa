@@ -13,6 +13,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = (await searchParams) ?? {};
   const mode = readFirstParam(params.mode) ?? null;
   const reason = readFirstParam(params.reason) ?? null;
+  const authError = readFirstParam(params.error) ?? null;
   const isRecruiterMode = mode === "recruiter";
   const callbackUrl = toSafeRelativeCallbackUrl(
     readFirstParam(params.callbackUrl),
@@ -24,6 +25,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       callbackUrl={callbackUrl}
       mode={mode}
       reason={reason}
+      authError={authError}
       showRecruiterAccessNotice={isRecruiterMode && reason === "not-recruiter"}
     />
   );

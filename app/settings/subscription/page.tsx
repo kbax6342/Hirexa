@@ -475,7 +475,7 @@ export default async function SubscriptionSettingsPage() {
 
               <div className="mt-6 flex flex-wrap gap-3">
                 <Link
-                  href="/hirepilot"
+                  href="/hirepilot/app"
                   className="inline-flex rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
                 >
                   Open HirePilot

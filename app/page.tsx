@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Hero } from "./components/hero"
 import { WhyHirexa } from "./components/why-hirexa"
 import { Features } from "./components/features"
+import { HiringEventsSection } from "./components/marketing/HiringEventsSection"
 import { HirePilotWorksEverywhere } from "./components/hirepilot-works-everywhere"
 import { ComingSoon } from "./components/coming-soon"
 import { Trust } from "./components/trust"
@@ -38,6 +39,7 @@ export default async function Home() {
         <div className="hidden md:block">
           <WhyHirexa />
           <Features />
+          <HiringEventsSection />
           <HirePilotWorksEverywhere />
           <ComingSoon />
           <Trust />

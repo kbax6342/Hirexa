@@ -3,9 +3,11 @@ import "server-only";
 import { prisma } from "@/app/lib/prisma";
 import {
   BENEFITS_ROUTE,
+  ONBOARDING_CONFIRMATION_ROUTE,
   ONBOARDING_PROFILE_ROUTE,
   QUESTIONS_CLIENTS_ROUTE,
 } from "@/app/lib/onboarding-flow";
+import { readOnboardingConfirmationState } from "@/app/lib/onboarding/confirmation";
 
 export const onboardingStatusSelect = {
   questionsCompleted: true,
@@ -60,8 +62,21 @@ export function hasCompletedBenefitsStep(profile: OnboardingStatusProfile) {
   );
 }
 
-export function isOnboardingComplete(profile: OnboardingStatusProfile) {
+export function isOnboardingFormComplete(profile: OnboardingStatusProfile) {
   return hasCompletedQuestionsStep(profile) && hasCompletedBenefitsStep(profile);
+}
+
+export function hasCompletedOnboardingEmailConfirmation(
+  profile: OnboardingStatusProfile
+) {
+  return readOnboardingConfirmationState(profile?.keyQuestions).emailVerified;
+}
+
+export function isOnboardingComplete(profile: OnboardingStatusProfile) {
+  return (
+    isOnboardingFormComplete(profile) &&
+    hasCompletedOnboardingEmailConfirmation(profile)
+  );
 }
 
 export function hasUploadedResume(profile: OnboardingStatusProfile) {
@@ -96,13 +111,15 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
     return BENEFITS_ROUTE;
   }
 
-  return QUESTIONS_CLIENTS_ROUTE;
+  return ONBOARDING_CONFIRMATION_ROUTE;
 }
 
 export async function getOnboardingStatusForUser(userId?: string | null) {
   const fallback = {
     profile: null,
     completed: false,
+    formCompleted: false,
+    onboardingEmailVerified: false,
     hasResume: false,
     hasProfileDetails: false,
     nextPath: QUESTIONS_CLIENTS_ROUTE,
@@ -121,6 +138,8 @@ export async function getOnboardingStatusForUser(userId?: string | null) {
     return {
       profile,
       completed: isOnboardingComplete(profile),
+      formCompleted: isOnboardingFormComplete(profile),
+      onboardingEmailVerified: hasCompletedOnboardingEmailConfirmation(profile),
       hasResume: hasUploadedResume(profile),
       hasProfileDetails: hasCompletedProfileStep(profile),
       nextPath: getNextOnboardingPath(profile),

@@ -9,6 +9,7 @@ import {
   isLikelyCompanyCareersUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
+import { withSpan } from "@/app/lib/telemetry/trace";
 
 export const REAL_POSTING_NOT_FOUND_CODE = "REAL_POSTING_NOT_FOUND" as const;
 
@@ -380,6 +381,12 @@ export async function resolveRealPostingViaEcosia(args: {
   location?: string | null;
   maxCandidateVisits?: number;
 }): Promise<EcosiaResolutionResult> {
+  return withSpan(
+    "auto_apply.resolve_source_url",
+    {
+      resolvedHost: "ecosia.org",
+    },
+    async () => {
   const query = buildEcosiaSearchQuery({
     jobTitle: args.title,
     company: args.company,
@@ -529,4 +536,6 @@ export async function resolveRealPostingViaEcosia(args: {
     attemptedCandidateCount: visitedUrls.length,
     visitedUrls,
   };
+    },
+  );
 }

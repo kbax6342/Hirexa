@@ -84,6 +84,44 @@
   }
 }
 
+@keyframes hirexa-logo-drift-diagonal {
+  0% {
+    transform: translate3d(18%, -18%, 0) rotate(-12deg);
+  }
+  100% {
+    transform: translate3d(-22%, 22%, 0) rotate(-12deg);
+  }
+}
+
+@keyframes hirexa-logo-drift-diagonal-slow {
+  0% {
+    transform: translate3d(22%, -22%, 0) rotate(-12deg);
+  }
+  100% {
+    transform: translate3d(-28%, 28%, 0) rotate(-12deg);
+  }
+}
+
+.hirexa-logo-drift-row {
+  animation: hirexa-logo-drift-diagonal 34s linear infinite alternate;
+  will-change: transform;
+}
+
+.hirexa-logo-drift-row-slow {
+  animation-name: hirexa-logo-drift-diagonal-slow;
+  animation-duration: 46s;
+}
+
+.hirexa-logo-drift-row-fast {
+  animation-duration: 28s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hirexa-logo-drift-row {
+    animation: none !important;
+  }
+}
+
 /* =========================
    Job details legacy styles
    (kept, but made dark-safe)

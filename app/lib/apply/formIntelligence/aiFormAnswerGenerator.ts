@@ -36,6 +36,67 @@ function normalizeBooleanAnswer(value: unknown) {
   return text(value);
 }
 
+const US_STATE_CODES = new Set([
+  "AL",
+  "AK",
+  "AZ",
+  "AR",
+  "CA",
+  "CO",
+  "CT",
+  "DE",
+  "FL",
+  "GA",
+  "HI",
+  "ID",
+  "IL",
+  "IN",
+  "IA",
+  "KS",
+  "KY",
+  "LA",
+  "ME",
+  "MD",
+  "MA",
+  "MI",
+  "MN",
+  "MS",
+  "MO",
+  "MT",
+  "NE",
+  "NV",
+  "NH",
+  "NJ",
+  "NM",
+  "NY",
+  "NC",
+  "ND",
+  "OH",
+  "OK",
+  "OR",
+  "PA",
+  "RI",
+  "SC",
+  "SD",
+  "TN",
+  "TX",
+  "UT",
+  "VT",
+  "VA",
+  "WA",
+  "WV",
+  "WI",
+  "WY",
+  "DC",
+]);
+
+function inferCountryFromProfile(city: string, state: string, country: string) {
+  if (country) return country;
+  const normalizedState = state.toUpperCase();
+  if (city && US_STATE_CODES.has(normalizedState)) return "United States";
+  return "";
+}
+
 function profileLookup(profile: unknown) {
   const data = getRecord(profile);
   const firstName = firstNonEmpty(data.firstName, data.givenName);
@@ -44,6 +105,7 @@ function profileLookup(profile: unknown) {
   const city = firstNonEmpty(data.city, data.citySearch);
   const state = firstNonEmpty(data.state, data.stateSearch);
   const location = firstNonEmpty(data.location, [city, state].filter(Boolean).join(", "));
+  const country = inferCountryFromProfile(city, state, firstNonEmpty(data.country, data.countryCode));
   const links = getRecord(data.professionalLinks);
 
   return {
@@ -56,7 +118,7 @@ function profileLookup(profile: unknown) {
     city,
     state,
     postalCode: firstNonEmpty(data.postalCode, data.zip),
-    country: firstNonEmpty(data.country, data.countryCode),
+    country,
     location,
     linkedin: firstNonEmpty(data.linkedinUrl, links.linkedin, links.linkedIn),
     portfolio: firstNonEmpty(data.portfolioUrl, links.portfolio, links.website),
@@ -194,9 +256,16 @@ function deterministicAnswer(args: {
   }
 
   if (classification.category === "source_direct") {
-    const value = input.source?.trim()
-      ? `I found this opportunity through ${input.source}.`
-      : "I found this opportunity through Hirexa AI while reviewing roles that matched my background.";
+    const isChoiceLike =
+      field.inputType === "select" ||
+      field.inputType === "radio" ||
+      field.roleAttribute === "combobox" ||
+      /select|search|choose/i.test(field.placeholder ?? "");
+    const value = isChoiceLike
+      ? input.source?.trim() || "Job board"
+      : input.source?.trim()
+        ? `I found this opportunity through ${input.source}.`
+        : "I found this opportunity through Hirexa AI while reviewing roles that matched my background.";
     return {
       fieldId: field.id,
       label,

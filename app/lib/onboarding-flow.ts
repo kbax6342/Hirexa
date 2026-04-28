@@ -15,6 +15,7 @@ export const HIREXA_SUPPORT_EXTRAS_ROUTE = "/onboarding/hirexa-support-extras";
 export const HIRING_SIGNAL_ROUTE = "/onboarding/hiring-signal";
 export const CREATE_ACCOUNT_ROUTE = "/onboarding/create-account";
 export const VERIFY_ACCOUNT_ROUTE = "/onboarding/verify-account";
+export const ONBOARDING_CONFIRMATION_ROUTE = "/onboarding/confirm";
 export const TIME_SAVED_ROUTE = "/onboarding/time-saved";
 export const MIN_SALARY_ROUTE = "/onboarding/min-salary";
 export const SKILLS_ROUTE = "/onboarding/skills";
@@ -44,6 +45,7 @@ export const ONBOARDING_FLOW_ROUTES = [
   JOB_ALERTS_ROUTE,
   CHOOSE_WORKPLACE_ROUTE,
   BENEFITS_ROUTE,
+  ONBOARDING_CONFIRMATION_ROUTE,
   ACCOUNT_ROUTE,
 ] as const;
 

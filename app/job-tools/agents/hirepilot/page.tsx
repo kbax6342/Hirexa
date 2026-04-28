@@ -31,6 +31,15 @@ function buildQueryString(
 export default async function HirePilotLegacyPage({
   searchParams,
 }: HirePilotLegacyPageProps) {
-  const queryString = buildQueryString(await searchParams);
-  redirect(`/hirepilot${queryString}`);
+  const params = await searchParams;
+  const queryString = buildQueryString(params);
+  const appIntent = String(
+    params?.app ?? params?.open ?? params?.launch ?? ""
+  ).toLowerCase();
+  const targetPath =
+    appIntent === "1" || appIntent === "true" || appIntent === "app"
+      ? "/hirepilot/app"
+      : "/hirepilot";
+
+  redirect(`${targetPath}${queryString}`);
 }

@@ -14,6 +14,11 @@ import {
   isPreferNotToAnswer,
 } from "@/app/lib/profile/voluntarySelfIdOptions";
 import { fillTextLikeField } from "@/app/lib/apply/textFieldFiller";
+import {
+  isDropdownLikeField,
+  readDropdownValueState,
+  selectDropdownValue,
+} from "@/app/lib/apply/dropdownSelect";
 
 function text(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -21,6 +26,16 @@ function text(value: unknown) {
 
 function normalize(value: unknown) {
   return text(value).toLowerCase();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isGenericChoicePlaceholder(value: string | null | undefined) {
+  return /^(select|select\.\.\.|search|type to search|choose|choose\.\.\.|please select|start typing)$/i.test(
+    text(value),
+  );
 }
 
 function isSecurityTokenField(field: FormFieldDescriptor) {
@@ -35,6 +50,39 @@ function isSecurityTokenField(field: FormFieldDescriptor) {
     ]
       .filter(Boolean)
       .join(" "),
+  );
+}
+
+function combinedFieldText(field: FormFieldDescriptor) {
+  return [
+    field.label,
+    field.inferredLabel,
+    field.name,
+    field.idAttribute,
+    field.ariaLabel,
+    field.ariaLabelledByText,
+    field.ariaDescribedByText,
+    field.placeholder,
+    field.parentGroupText,
+    field.nearbyText,
+    field.selector,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function isCustomSelectOrAutocompleteField(field: FormFieldDescriptor) {
+  if (field.inputType === "select") return false;
+  const textBlob = combinedFieldText(field);
+  return (
+    field.roleAttribute === "combobox" ||
+    isGenericChoicePlaceholder(field.placeholder) ||
+    /\b(react-select|listbox|combobox|aria-haspopup|select a country|country-error|country-placeholder)\b/i.test(
+      textBlob,
+    ) ||
+    (field.required &&
+      /\b(select|search|dropdown|country|location|located|hear about|source)\b/i.test(textBlob) &&
+      /select|search/i.test(field.placeholder ?? ""))
   );
 }
 
@@ -105,7 +153,25 @@ async function readFieldValue(page: Page, field: FormFieldDescriptor) {
     .catch(() => "");
 }
 
+async function readFieldContainerText(page: Page, field: FormFieldDescriptor) {
+  const locator = locatorForField(page, field);
+  return locator
+    .evaluate((element) => {
+      if (!(element instanceof HTMLElement)) return "";
+      const container = element.closest(
+        "li, fieldset, .field, .form-field, .question, .application-question, [class*='field' i], [class*='question' i], [data-qa], [data-testid], div",
+      );
+      return (container?.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+    })
+    .catch(() => "");
+}
+
 async function isFieldFilled(page: Page, field: FormFieldDescriptor) {
+  if (isDropdownLikeField(field)) {
+    const state = await readDropdownValueState(page, field);
+    return state.hasValue;
+  }
+
   const locator = locatorForField(page, field);
   return locator
     .evaluate((element) => {
@@ -129,6 +195,125 @@ async function isFieldFilled(page: Page, field: FormFieldDescriptor) {
       return false;
     })
     .catch(() => false);
+}
+
+function candidateAnswersForCustomSelect(field: FormFieldDescriptor, value: string) {
+  const candidates = [value];
+  const textBlob = combinedFieldText(field).toLowerCase();
+  if (/country/.test(textBlob)) {
+    candidates.unshift("United States");
+    candidates.push("United States of America", "USA", "US");
+  } else if (/location|located|city|state/.test(textBlob)) {
+    candidates.push("United States", value.replace(/,\s*United States$/i, ""));
+  } else if (/hear about|source|referr/.test(textBlob)) {
+    candidates.unshift("Job board");
+    candidates.push("Hirexa AI", "LinkedIn", "Other");
+  }
+  return Array.from(new Set(candidates.map(text).filter(Boolean)));
+}
+
+async function fillCustomSelectOrAutocompleteField(
+  page: Page,
+  field: FormFieldDescriptor,
+  answer: string,
+  options?: {
+    applicationId?: string | null;
+    sessionId?: string | null;
+  },
+) {
+  const locator = locatorForField(page, field);
+  const frame = field.frameUrl
+    ? page.frames().find((candidate) => candidate.url() === field.frameUrl)
+    : null;
+  const context = frame ?? page;
+  const candidates = candidateAnswersForCustomSelect(field, answer);
+
+  for (const candidate of candidates) {
+    const valueBefore = await readFieldValue(page, field);
+    let optionSelected = "";
+    let success = false;
+
+    try {
+      await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+      await locator.click({ timeout: 3000 }).catch(async () => {
+        await locator.focus();
+      });
+      await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+      await locator.press("Backspace").catch(() => undefined);
+      await locator.fill(candidate, { timeout: 3000 }).catch(async () => {
+        await locator.type(candidate, { delay: 20 });
+      });
+      await page.waitForTimeout(350);
+
+      const exactOption = context
+        .getByRole("option", { name: new RegExp(`^\\s*${escapeRegExp(candidate)}\\s*$`, "i") })
+        .first();
+      if ((await exactOption.count().catch(() => 0)) > 0 && (await exactOption.isVisible().catch(() => false))) {
+        optionSelected = text(await exactOption.textContent().catch(() => candidate)) || candidate;
+        await exactOption.click({ timeout: 3000 });
+      } else {
+        const partialOption = context
+          .locator("[role='option'], [id*='react-select'][id*='option'], li, [data-testid*='option']")
+          .filter({ hasText: new RegExp(escapeRegExp(candidate), "i") })
+          .first();
+        if (
+          (await partialOption.count().catch(() => 0)) > 0 &&
+          (await partialOption.isVisible().catch(() => false))
+        ) {
+          optionSelected = text(await partialOption.textContent().catch(() => candidate)) || candidate;
+          await partialOption.click({ timeout: 3000 });
+        } else {
+          await locator.press("ArrowDown").catch(() => undefined);
+          await locator.press("Enter").catch(() => undefined);
+          optionSelected = candidate;
+        }
+      }
+
+      await locator
+        .evaluate((element) => {
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          if (element instanceof HTMLElement) element.blur();
+        })
+        .catch(() => undefined);
+      await page.waitForTimeout(150);
+
+      const valueAfter = await readFieldValue(page, field);
+      const containerText = await readFieldContainerText(page, field);
+      success =
+        Boolean(valueAfter) ||
+        (Boolean(optionSelected) &&
+          new RegExp(escapeRegExp(optionSelected.split(/\s{2,}/)[0] ?? optionSelected), "i").test(containerText)) ||
+        new RegExp(escapeRegExp(candidate), "i").test(containerText);
+
+      console.log("[AI_FORM_CUSTOM_SELECT]", {
+        applicationId: options?.applicationId ?? null,
+        sessionId: options?.sessionId ?? null,
+        label: field.label,
+        attemptedAnswer: candidate,
+        optionSelected,
+        valueBeforeLength: valueBefore.length,
+        valueAfterLength: valueAfter.length,
+        success,
+      });
+
+      if (success) return { filled: true, method: "custom_select", optionSelected };
+    } catch (error) {
+      console.log("[AI_FORM_CUSTOM_SELECT]", {
+        applicationId: options?.applicationId ?? null,
+        sessionId: options?.sessionId ?? null,
+        label: field.label,
+        attemptedAnswer: candidate,
+        optionSelected,
+        valueBeforeLength: valueBefore.length,
+        valueAfterLength: 0,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { filled: false, method: "custom_select", optionSelected: "" };
 }
 
 export async function fillGeneratedAnswers(
@@ -205,25 +390,20 @@ export async function fillGeneratedAnswers(
         resumeUploadSucceeded = true;
         filled = true;
       } else if (field.inputType === "select") {
-        const optionValue = findOptionValue(field, value);
-        if (!optionValue) {
+        const selected = await selectDropdownValue(page, field, value, {
+          applicationId: options?.applicationId ?? null,
+          sessionId: options?.sessionId ?? null,
+        });
+        if (!selected.success) {
           skippedCount += 1;
           skippedFields.push({
             fieldId: field.id,
             label: field.label,
-            reason: "Generated answer did not match any select option.",
+            reason: selected.failureReason || "Generated answer did not match any select option.",
           });
           continue;
         }
-        const selected = await locator
-          .selectOption({ value: optionValue })
-          .catch(() => locator.selectOption({ label: optionValue }));
-        await locator.evaluate((element) => {
-          element.dispatchEvent(new Event("input", { bubbles: true }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          if (element instanceof HTMLElement) element.blur();
-        }).catch(() => undefined);
-        filled = selected.length > 0;
+        filled = true;
       } else if (field.inputType === "radio") {
         const optionValue = findOptionValue(field, value);
         const option = field.options?.find(
@@ -279,15 +459,24 @@ export async function fillGeneratedAnswers(
           });
           continue;
         }
-        const textFill = await fillTextLikeField({
-          locator,
-          answer: value,
-          label: field.label,
-          fieldType: field.inputType,
-          applicationId: options?.applicationId ?? null,
-          sessionId: options?.sessionId ?? null,
-        });
-        filled = textFill.filled;
+        if (isDropdownLikeField(field)) {
+          const dropdown = await selectDropdownValue(page, field, value, {
+            applicationId: options?.applicationId ?? null,
+            sessionId: options?.sessionId ?? null,
+          });
+          filled = dropdown.success;
+        }
+        if (!filled) {
+          const textFill = await fillTextLikeField({
+            locator,
+            answer: value,
+            label: field.label,
+            fieldType: field.inputType,
+            applicationId: options?.applicationId ?? null,
+            sessionId: options?.sessionId ?? null,
+          });
+          filled = textFill.filled;
+        }
       }
     } catch (error) {
       failedCount += 1;
@@ -313,6 +502,29 @@ export async function fillGeneratedAnswers(
     if (!(await isFieldFilled(page, field))) {
       remainingRequiredFields.push(field.label);
     }
+  }
+
+  if (remainingRequiredFields.length > 0) {
+    console.log("[AI_FORM_RECHECK_MISSING]", {
+      missingRequiredCount: remainingRequiredFields.length,
+      fields: postFillFields
+        .filter((field) => remainingRequiredFields.includes(field.label))
+        .map((field) => ({
+          label: field.label,
+          rawLabel: field.inferredLabel ?? null,
+          placeholder: field.placeholder ?? null,
+          fieldName: field.name ?? null,
+          fieldId: field.idAttribute ?? null,
+          ariaLabel: field.ariaLabel ?? null,
+          ariaLabelledByText: field.ariaLabelledByText ?? null,
+          ariaDescribedByText: field.ariaDescribedByText ?? null,
+          parentGroupText: field.parentGroupText ?? null,
+          nearbyText: field.nearbyText ?? null,
+          fieldType: field.inputType,
+          visible: field.visible,
+          disabled: field.disabled,
+        })),
+    });
   }
 
   return {

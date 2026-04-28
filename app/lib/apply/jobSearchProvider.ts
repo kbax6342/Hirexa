@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { normalizeJobUrl } from "@/app/lib/jobSources";
 import { searchGoogleWithSerpApi } from "@/app/lib/jobs/serpapiSearchProvider";
+import { withSpan } from "@/app/lib/telemetry/trace";
 
 export type JobSearchResult = {
   title: string;
@@ -330,19 +331,25 @@ async function searchDuckDuckGoLite(query: string, limit: number) {
 }
 
 async function searchDuckDuckGo(query: string, limit: number) {
-  try {
-    const htmlResults = await searchDuckDuckGoHtml(query, limit);
-    if (htmlResults.length > 0) {
-      return htmlResults;
-    }
-  } catch (error) {
-    console.warn("[JOB_SEARCH_PROVIDER] DuckDuckGo HTML search failed", {
-      query,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  return withSpan(
+    "auto_apply.search_fallback.duckduckgo_html",
+    { resolvedHost: "duckduckgo.com" },
+    async () => {
+      try {
+        const htmlResults = await searchDuckDuckGoHtml(query, limit);
+        if (htmlResults.length > 0) {
+          return htmlResults;
+        }
+      } catch (error) {
+        console.warn("[JOB_SEARCH_PROVIDER] DuckDuckGo HTML search failed", {
+          query,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
 
-  return searchDuckDuckGoLite(query, limit);
+      return searchDuckDuckGoLite(query, limit);
+    }
+  );
 }
 
 async function searchBrave(query: string, limit: number) {
@@ -394,19 +401,25 @@ async function searchSerpApi(
   limit: number,
   location?: string | null,
 ) {
-  const results = await searchGoogleWithSerpApi({
-    query,
-    location,
-    limit,
-  });
-  return results.map((result) => ({
-    title: result.title,
-    url: normalizeJobUrl(result.url),
-    snippet: result.snippet ?? undefined,
-    displayedUrl: result.displayedUrl ?? undefined,
-    position: result.position ?? null,
-    source: "serpapi_google",
-  }));
+  return withSpan(
+    "auto_apply.search_fallback.serpapi",
+    { resolvedHost: "serpapi.com" },
+    async () => {
+      const results = await searchGoogleWithSerpApi({
+        query,
+        location,
+        limit,
+      });
+      return results.map((result) => ({
+        title: result.title,
+        url: normalizeJobUrl(result.url),
+        snippet: result.snippet ?? undefined,
+        displayedUrl: result.displayedUrl ?? undefined,
+        position: result.position ?? null,
+        source: "serpapi_google",
+      }));
+    },
+  );
 }
 
 async function searchSingleQuery(

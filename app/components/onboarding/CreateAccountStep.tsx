@@ -11,6 +11,7 @@ import {
 
 import AppleButton from "@/app/components/loginForm/AppleButton";
 import GoogleButton from "@/app/components/loginForm/GoogleButton";
+import LinkedInButton from "@/app/components/loginForm/LinkedInButton";
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import {
@@ -100,6 +101,7 @@ export default function CreateAccountStep() {
   const progressPercent = useMemo(() => getCreateAccountProgressPercent(), []);
   const googleProviderEnabled = oauthProviderIds.includes("google");
   const appleProviderEnabled = oauthProviderIds.includes("apple");
+  const linkedInProviderEnabled = oauthProviderIds.includes("linkedin");
 
   useEffect(() => {
     let active = true;
@@ -367,6 +369,12 @@ export default function CreateAccountStep() {
                 disabled={loading || !appleProviderEnabled}
                 onBeforeSignIn={clearPendingOnboardingSignup}
                 className="h-12"
+              />
+              <LinkedInButton
+                callbackUrl="/dashboard"
+                disabled={loading || !linkedInProviderEnabled}
+                onBeforeSignIn={clearPendingOnboardingSignup}
+                className="h-12 sm:col-span-2"
               />
             </div>
 

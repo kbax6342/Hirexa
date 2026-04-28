@@ -115,15 +115,15 @@ export default function DeleteAccountModal() {
 
           {step === "confirm" ? (
             <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+              <div className="rounded-2xl border border-slate-600 bg-slate-900 p-4 text-sm text-white">
                 Type <strong>DELETE</strong> to confirm permanent account deletion.
               </div>
               <label className="flex flex-col gap-2">
-                <span className="text-sm font-semibold text-slate-900">Confirmation</span>
+                <span className="text-sm font-semibold text-white">Confirmation</span>
                 <input
                   value={confirmationText}
                   onChange={(event) => setConfirmationText(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                  className="rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white placeholder:text-white/70 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100"
                   placeholder="Type DELETE"
                 />
               </label>
@@ -145,7 +145,12 @@ export default function DeleteAccountModal() {
 
             {step === "confirm" ? (
               <>
-                <Button type="button" variant="outline" onClick={() => setStep("warning")}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="text-white hover:text-white"
+                  onClick={() => setStep("warning")}
+                >
                   Back
                 </Button>
                 <Button

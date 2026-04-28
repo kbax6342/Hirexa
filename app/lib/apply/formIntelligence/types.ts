@@ -25,6 +25,8 @@ export type FormFieldDescriptor = {
   stableSelector?: string;
   label: string;
   inferredLabel?: string;
+  labelConfidence?: "high" | "medium" | "low";
+  labelSources?: string[];
   inputType: FormInputType;
   required: boolean;
   disabled: boolean;
@@ -33,6 +35,8 @@ export type FormFieldDescriptor = {
   tagName?: string;
   name?: string;
   ariaLabel?: string;
+  ariaLabelledByText?: string;
+  ariaDescribedByText?: string;
   roleAttribute?: string;
   idAttribute?: string;
   inputMode?: string;
@@ -42,6 +46,7 @@ export type FormFieldDescriptor = {
   minLength?: number;
   validationText?: string;
   nearbyText?: string;
+  parentGroupText?: string;
   sectionHeading?: string;
   fieldsetLegend?: string;
   errorText?: string;

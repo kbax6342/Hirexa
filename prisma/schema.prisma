@@ -13,6 +13,11 @@ model User {
   name                  String?
   email                 String?                @unique
   password              String?
+  twoFactorEnabled      Boolean                @default(false)
+  twoFactorSecretEncrypted String?
+  twoFactorPendingSecretEncrypted String?
+  twoFactorConfirmedAt  DateTime?
+  twoFactorDisabledAt   DateTime?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
   isGuest               Boolean                @default(true)
@@ -23,8 +28,21 @@ model User {
   hirePilotCreditGrants HirePilotCreditGrant[]
   hirePilotCreditUsages HirePilotCreditUsage[]
   passwordResetTokens   PasswordResetToken[]
+  twoFactorBackupCodes  TwoFactorBackupCode[]
   recruiterAgency       RecruiterAgency?       @relation("RecruiterAgencyOwner")
   recruiterProfile      RecruiterProfile?
+}
+
+model TwoFactorBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model LinkedInAccount {

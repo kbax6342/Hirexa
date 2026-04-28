@@ -3,15 +3,21 @@ import { NextResponse } from "next/server";
 import { auth } from "./auth";
 import { getHirexaVerificationGateForUser } from "@/app/lib/auth/hirexaVerification";
 import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
-import { VERIFY_ACCOUNT_ROUTE } from "@/app/lib/onboarding-flow";
+import { getTwoFactorGateForUser } from "@/app/lib/security/twoFactorGate";
+import {
+  ONBOARDING_CONFIRMATION_ROUTE,
+  VERIFY_ACCOUNT_ROUTE,
+} from "@/app/lib/onboarding-flow";
 
 const AUTH_REQUIRED_PREFIXES = [
   "/dashboard",
   "/plans",
-  "/hirepilot",
+  "/billing",
+  "/hirepilot/app",
   "/settings",
   "/profile",
   "/applications",
+  "/saved-jobs",
   "/agency",
   "/recruiter",
 ];
@@ -29,17 +35,34 @@ const ONBOARDING_REDIRECT_PREFIXES = [
   "/onboarding/choose-workplace",
   "/onboarding/account",
   "/onboarding/profile",
+  ONBOARDING_CONFIRMATION_ROUTE,
 ];
 
 const INCOMPLETE_ONBOARDING_BLOCKED_PREFIXES = [
   "/dashboard",
   "/job-tools/generate",
-  "/hirepilot",
+  "/hirepilot/app",
   "/job-tools/ai-assistant",
   "/settings",
   "/profile",
   "/applications",
 ];
+
+const TWO_FACTOR_BLOCKED_PREFIXES = [
+  "/dashboard",
+  "/profile",
+  "/settings",
+  "/saved-jobs",
+  "/billing",
+  "/applications",
+  "/hirepilot/app",
+  "/job-tools",
+  "/plans",
+  "/agency",
+  "/recruiter",
+];
+
+const TWO_FACTOR_ROUTE = "/auth/2fa";
 
 export default auth(async (req) => {
   const { pathname, search, origin } = req.nextUrl;
@@ -55,6 +78,20 @@ export default auth(async (req) => {
       const verifyUrl = new URL(VERIFY_ACCOUNT_ROUTE, origin);
       verifyUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
       return NextResponse.redirect(verifyUrl);
+    }
+
+    const twoFactor = await getTwoFactorGateForUser(userId, req.cookies);
+    if (
+      twoFactor.requiresTwoFactor &&
+      TWO_FACTOR_BLOCKED_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+    ) {
+      const twoFactorUrl = new URL(TWO_FACTOR_ROUTE, origin);
+      twoFactorUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
+      console.info("[TWO_FACTOR_GATE] dashboard blocked pending 2FA", {
+        userId,
+        pathname,
+      });
+      return NextResponse.redirect(twoFactorUrl);
     }
 
     const onboarding = await getOnboardingStatusForUser(userId);
@@ -82,6 +119,12 @@ export default auth(async (req) => {
           pathname.startsWith(prefix)
         )
       ) {
+        if (nextPath === ONBOARDING_CONFIRMATION_ROUTE) {
+          console.info("[ONBOARDING_GATE] dashboard blocked pending confirmation", {
+            userId,
+            pathname,
+          });
+        }
         return NextResponse.redirect(new URL(nextPath, origin));
       }
     }
@@ -108,18 +151,20 @@ export const config = {
     "/resume",
     "/questions",
     "/dashboard/:path*",
-    "/hirepilot",
+    "/hirepilot/app/:path*",
     "/job-tools/:path*",
     "/job-tools/generate",
     "/job-tools/ai-assistant/:path*",
     "/benefits/:path*",
     "/plans/:path*",
+    "/billing/:path*",
     "/settings/:path*",
     "/profile",
     "/applications/:path*",
     "/agency/:path*",
     "/recruiter/:path*",
     "/saved-jobs",
+    "/auth/2fa",
     "/onboarding/profile/:path*",
     "/questions/step2Resume/:path*",
     "/onboarding/job-interest/:path*",
@@ -129,5 +174,6 @@ export const config = {
     "/onboarding/job-alerts/:path*",
     "/onboarding/choose-workplace/:path*",
     "/onboarding/account/:path*",
+    "/onboarding/confirm/:path*",
   ],
 };

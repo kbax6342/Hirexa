@@ -54,7 +54,7 @@ export type GreenhouseValidationExtractionResult = {
 };
 
 const ERROR_TEXT_PATTERN =
-  /\b(required|can't be blank|cannot be blank|is required|please complete|please select|please enter|enter a valid|invalid|upload|resume|captcha|recaptcha|verification|security check|security|verify)\b/i;
+  /\b(required|can't be blank|cannot be blank|is required|please complete|please select|select a country|please enter|enter a valid|invalid|upload|resume|captcha|recaptcha|verification|security check|security|verify)\b/i;
 
 export function redactValidationText(text: string | null | undefined, maxLength = 500) {
   const raw = String(text ?? "").replace(/\s+/g, " ").trim();
@@ -69,6 +69,23 @@ export function redactValidationText(text: string | null | undefined, maxLength 
 
 function normalizeValidationText(text: string | null | undefined) {
   return redactValidationText(text, 300).toLowerCase();
+}
+
+function isNonActionableValidationInstruction(text: string | null | undefined) {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return true;
+  if (/^required:?$/i.test(normalized)) return true;
+  if (/^\*?\s*indicates an? required field\.?$/i.test(normalized)) return true;
+  if (/^\*?\s*indicates a required field\.?$/i.test(normalized)) return true;
+  if (/^required:\s*\*?\s*indicates an? required field\.?$/i.test(normalized)) return true;
+  if (
+    /\b(public burden statement|omb|paperwork reduction act|office of management and budget)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function categorizeGreenhouseValidationError(
@@ -159,6 +176,20 @@ export async function extractGreenhouseValidationErrors(args: {
 
       function clean(text: string | null | undefined, max = 500) {
         return String(text ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+      }
+
+      function isNonActionableInstruction(text: string | null | undefined) {
+        const normalized = clean(text, 700).toLowerCase();
+        if (!normalized) return true;
+        if (/^required:?$/i.test(normalized)) return true;
+        if (/^\*?\s*indicates an? required field\.?$/i.test(normalized)) return true;
+        if (/^\*?\s*indicates a required field\.?$/i.test(normalized)) return true;
+        if (/^required:\s*\*?\s*indicates an? required field\.?$/i.test(normalized)) {
+          return true;
+        }
+        return /\b(public burden statement|omb|paperwork reduction act|office of management and budget)\b/i.test(
+          normalized,
+        );
       }
 
       function textFromIds(ids: string | null | undefined) {
@@ -306,6 +337,7 @@ export async function extractGreenhouseValidationErrors(args: {
                 : `${element.textContent ?? ""} ${describedByText ?? ""}`),
           500,
         );
+        if (isNonActionableInstruction(rawText)) return null;
         if (!rawText || !errorPattern.test(rawText)) return null;
         const closestFormGroupText = clean(container?.textContent, 500) || null;
         return {
@@ -386,6 +418,7 @@ export async function extractGreenhouseValidationErrors(args: {
         const children = Array.from(element.children).filter(isVisible);
         if (children.length > 0) continue;
         const text = clean(element.textContent, 300);
+        if (isNonActionableInstruction(text)) continue;
         if (text && errorPattern.test(text)) candidates.add(element);
       }
 
@@ -479,6 +512,19 @@ export async function extractGreenhouseValidationErrors(args: {
       repairable: mappedError.repairable,
     });
     return mappedError;
+  }).filter((error) => {
+    if (isNonActionableValidationInstruction(error.text)) return false;
+    const context = `${error.describedByText ?? ""} ${error.closestFormGroupText ?? ""}`.trim();
+    if (
+      context &&
+      isNonActionableValidationInstruction(context) &&
+      !error.ariaInvalid &&
+      !error.fieldId &&
+      !error.fieldName
+    ) {
+      return false;
+    }
+    return true;
   });
   const deduped = Array.from(
     mapped

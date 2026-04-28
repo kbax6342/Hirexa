@@ -1,3 +1,5 @@
+import { withSpanSync } from "@/app/lib/telemetry/trace";
+
 export type ApplyStopReason =
   | "no_apply_cta"
   | "apply_cta_click_failed"
@@ -361,7 +363,7 @@ export function isApplyStopReason(value: string): value is ApplyStopReason {
   return APPLY_STOP_REASONS.includes(value as ApplyStopReason);
 }
 
-export function deriveStopClassification(
+function deriveStopClassificationInner(
   args: StopClassificationInput,
 ): ApplyStopClassification {
   const targetHostname = parseHostname(args.targetUrl);
@@ -522,6 +524,14 @@ export function deriveStopClassification(
   }
 
   if (hasMissingRequiredFieldSignals) {
+    console.log("[AI_FORM_STOP_CLASSIFICATION]", {
+      stopStatus: "NEEDS_USER_ANSWERS",
+      pageType: "application_form",
+      visibleFormDetected: args.formDetected === true || args.formFound === true,
+      verificationSignals: args.verificationSignals ?? [],
+      missingRequiredFields:
+        args.aiFormRemainingRequiredFields ?? args.missingRequiredFields ?? [],
+    });
     return {
       reason: args.aiFormAnswerEngineRan
         ? "missing_required_answers_after_ai"
@@ -669,6 +679,20 @@ export function deriveStopClassification(
   };
 }
 
+export function deriveStopClassification(
+  args: StopClassificationInput,
+): ApplyStopClassification {
+  return withSpanSync(
+    "auto_apply.stop_classify",
+    {
+      status: args.status ?? undefined,
+      pageType: args.formDetected || args.formFound ? "application_form" : undefined,
+      stopReason: args.finalReason ?? args.lastAction ?? undefined,
+    },
+    () => deriveStopClassificationInner(args),
+  );
+}
+
 export function getStopReasonLabel(reason: ApplyStopReason) {
   switch (reason) {
     case "no_apply_cta":
@@ -692,7 +716,7 @@ export function getStopReasonLabel(reason: ApplyStopReason) {
     case "user_review_required_for_form_fields":
       return "User review required for form fields";
     case "missing_required_answers_after_ai":
-      return "Missing required answers after AI";
+      return "Required answer needed";
     case "missing_required_fields":
       return "Missing required fields";
     case "unsupported_required_field":
@@ -755,7 +779,7 @@ export function getStopPageTypeLabel(pageType: ApplyStopPageType) {
     case "aggregator":
     case "employer_site":
     case "application_form":
-      return "Job page";
+      return "Application form";
     case "auth_gate":
       return "Auth gate";
     case "unknown":
@@ -790,6 +814,6 @@ export function getStopSuggestedActionLabel(
       return "Review validation errors";
     case "review_and_retry":
     default:
-      return "Review and retry";
+      return "Review required field";
   }
 }

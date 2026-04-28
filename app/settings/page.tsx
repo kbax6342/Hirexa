@@ -5,6 +5,7 @@ import { auth } from "../../auth";
 import { prisma } from "../lib/prisma";
 import LoginFooter from "../components/loginFooter/LoginFooter";
 import DeleteAccountModal from "../components/settings/DeleteAccountModal";
+import TwoFactorSettings from "../components/settings/TwoFactorSettings";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -18,7 +19,12 @@ export default async function SettingsPage() {
     select: {
       id: true,
       email: true,
+      twoFactorEnabled: true,
       userProfile: { select: { id: true } },
+      twoFactorBackupCodes: {
+        where: { usedAt: null },
+        select: { id: true },
+      },
     },
   });
 
@@ -61,6 +67,11 @@ export default async function SettingsPage() {
                 actionHref="/settings/account/password"
               />
             </div>
+
+            <TwoFactorSettings
+              initialEnabled={user.twoFactorEnabled}
+              initialBackupCodeCount={user.twoFactorBackupCodes.length}
+            />
 
             <div className="mt-8 rounded-lg border border-red-200 bg-red-50/60 p-6">
               <p className="max-w-2xl text-sm leading-6 text-red-800">

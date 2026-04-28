@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import RecruiterAccessNotice from "@/app/components/login/RecruiterAccessNotice";
 import AppleButton from "@/app/components/loginForm/AppleButton";
 import { GoogleLogo } from "@/app/components/loginForm/GoogleButton";
+import { LinkedInLogo } from "@/app/components/loginForm/LinkedInButton";
 import LoginForm from "@/app/components/loginForm/LoginForm";
 import { Button } from "@/app/components/ui/button";
 import { CREATE_ACCOUNT_ROUTE } from "@/app/lib/onboarding-flow";
@@ -21,15 +22,77 @@ type LoginPageClientProps = {
   callbackUrl: string;
   mode?: string | null;
   reason?: string | null;
+  authError?: string | null;
   showRecruiterAccessNotice?: boolean;
 };
 
 const GOOGLE_CALLBACK_URL = "/auth/google/redirect";
 
+const loginBackgroundCompanies = [
+  { name: "Alphabet", mark: "G", accent: "bg-sky-500 text-white" },
+  { name: "Meta", mark: "M", accent: "bg-blue-600 text-white" },
+  { name: "Amazon", mark: "a", accent: "bg-amber-400 text-slate-950" },
+  { name: "Microsoft", mark: "MS", accent: "bg-emerald-500 text-white" },
+  { name: "Apple", mark: "A", accent: "bg-slate-900 text-white" },
+  { name: "Stripe", mark: "S", accent: "bg-violet-600 text-white" },
+  { name: "Netflix", mark: "N", accent: "bg-red-600 text-white" },
+  { name: "Spotify", mark: "S", accent: "bg-green-500 text-slate-950" },
+  { name: "Airbnb", mark: "A", accent: "bg-rose-500 text-white" },
+  { name: "Uber", mark: "U", accent: "bg-slate-950 text-white" },
+  { name: "Slack", mark: "#", accent: "bg-fuchsia-500 text-white" },
+  { name: "Figma", mark: "F", accent: "bg-orange-500 text-white" },
+  { name: "GitHub", mark: "GH", accent: "bg-slate-800 text-white" },
+  { name: "LinkedIn", mark: "in", accent: "bg-[#0A66C2] text-white" },
+  { name: "Discord", mark: "D", accent: "bg-indigo-500 text-white" },
+  { name: "Dropbox", mark: "DB", accent: "bg-blue-500 text-white" },
+];
+
+const loginBackgroundRows = [
+  {
+    top: "top-[4%]",
+    left: "left-[-34%]",
+    opacity: "opacity-[0.12]",
+    gap: "gap-8",
+    className: "hirexa-logo-drift-row-fast",
+    companies: [...loginBackgroundCompanies.slice(3), ...loginBackgroundCompanies.slice(0, 3)],
+  },
+  {
+    top: "top-[14%]",
+    left: "left-[-22%]",
+    opacity: "opacity-[0.14]",
+    gap: "gap-10",
+    companies: loginBackgroundCompanies,
+  },
+  {
+    top: "top-[26%]",
+    left: "left-[-38%]",
+    opacity: "opacity-[0.11]",
+    gap: "gap-9",
+    className: "hirexa-logo-drift-row-slow",
+    companies: [...loginBackgroundCompanies.slice(9), ...loginBackgroundCompanies.slice(0, 9)],
+  },
+  {
+    top: "top-[44%]",
+    left: "left-[-18%]",
+    opacity: "opacity-[0.12]",
+    gap: "gap-12",
+    className: "hirexa-logo-drift-row-slow",
+    companies: [...loginBackgroundCompanies.slice(6), ...loginBackgroundCompanies.slice(0, 6)],
+  },
+  {
+    top: "top-[74%]",
+    left: "left-[-18%]",
+    opacity: "opacity-[0.14]",
+    gap: "gap-10",
+    companies: [...loginBackgroundCompanies.slice(11), ...loginBackgroundCompanies.slice(0, 11)],
+  },
+];
+
 export default function LoginPageClient({
   callbackUrl,
   mode,
   reason,
+  authError,
   showRecruiterAccessNotice = false,
 }: LoginPageClientProps) {
   const router = useRouter();
@@ -54,10 +117,42 @@ export default function LoginPageClient({
   const visibleOauthProviders = oauthProviders.filter(
     (provider) => provider.id !== "apple"
   );
+  const authErrorMessage = getFriendlyAuthErrorMessage(authError);
 
   function handleStartSignup() {
     setIsStartingSignup(true);
     router.push(CREATE_ACCOUNT_ROUTE);
+  }
+
+  async function handleOAuthSignIn(providerId: string) {
+    const providerCallbackUrl =
+      providerId === "google" && !isRecruiterMode
+        ? GOOGLE_CALLBACK_URL
+        : safeCallbackUrl;
+
+    try {
+      if (providerId === "linkedin" && process.env.NODE_ENV !== "production") {
+        console.info("[AUTH_LINKEDIN] signIn started", {
+          callbackUrl: providerCallbackUrl,
+        });
+      }
+
+      await signIn(providerId, { callbackUrl: providerCallbackUrl });
+    } catch (error) {
+      if (providerId === "linkedin") {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[AUTH_LINKEDIN] signIn failed", {
+            message: readableClientError(error),
+          });
+        }
+        setSignInError(
+          "LinkedIn sign-in could not be completed. Please try again or use email sign-in.",
+        );
+        return;
+      }
+
+      setSignInError("Sign-in could not be completed. Please try again.");
+    }
   }
 
   useEffect(() => {
@@ -174,14 +269,15 @@ export default function LoginPageClient({
   }
 
   return (
-    <div className="relative min-h-screen bg-white">
-      <div className="absolute inset-0 -z-10">
+    <div className="relative min-h-screen overflow-hidden bg-white">
+      <div className="absolute inset-0 z-0">
         <div className="absolute inset-0 bg-gradient-to-b from-slate-50 via-white to-slate-50" />
         <div className="absolute left-1/2 top-[-120px] h-[420px] w-[420px] -translate-x-1/2 rounded-full bg-sky-200/30 blur-3xl" />
         <div className="absolute right-[-120px] bottom-[-140px] h-[420px] w-[420px] rounded-full bg-indigo-200/25 blur-3xl" />
       </div>
+      <LoginAnimatedCompanyBackground />
 
-      <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 py-14">
+      <main className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl items-center justify-center px-6 py-14">
         <div className="w-full max-w-md">
           <div className="mb-8 hidden text-center sm:block">
             <Link href="/" className="inline-flex items-center justify-center">
@@ -204,6 +300,14 @@ export default function LoginPageClient({
                 Welcome back! Please enter your details.
               </p>
             </div>
+            {authErrorMessage ? (
+              <div
+                role="alert"
+                className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
+                {authErrorMessage}
+              </div>
+            ) : null}
 
             <form className="mt-6" onSubmit={onSubmit}>
               <LoginForm isSigningIn={isSigningIn} signInError={signInError} />
@@ -257,26 +361,30 @@ export default function LoginPageClient({
             {visibleOauthProviders.length > 0 ? (
               <div
                 className={`mt-3 grid gap-3 ${
-                  visibleOauthProviders.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                  visibleOauthProviders.length > 1 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"
                 }`}
               >
                 {visibleOauthProviders.map((provider) => (
                   <button
                     key={provider.id}
                     type="button"
-                    onClick={() =>
-                      signIn(provider.id, {
-                        callbackUrl:
-                          provider.id === "google" && !isRecruiterMode
-                            ? GOOGLE_CALLBACK_URL
-                            : safeCallbackUrl,
-                      })
+                    aria-label={
+                      provider.id === "linkedin"
+                        ? "Continue with LinkedIn"
+                        : provider.id === "google"
+                          ? "Continue with Google"
+                          : `Continue with ${provider.name}`
                     }
+                    onClick={() => {
+                      void handleOAuthSignIn(provider.id);
+                    }}
                     className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                   >
                     <span className="flex h-[18px] w-[18px] items-center justify-center">
                       {provider.id === "google" ? (
                         <GoogleLogo className="h-[18px] w-[18px] shrink-0" />
+                      ) : provider.id === "linkedin" ? (
+                        <LinkedInLogo className="h-[18px] w-[18px] shrink-0" />
                       ) : (
                         <span className="text-base">
                           {provider.name.slice(0, 1).toUpperCase()}
@@ -286,6 +394,8 @@ export default function LoginPageClient({
                     <span>
                       {provider.id === "google"
                         ? "Continue with Google"
+                        : provider.id === "linkedin"
+                          ? "Continue with LinkedIn"
                         : `Continue with ${provider.name}`}
                     </span>
                   </button>
@@ -313,6 +423,39 @@ export default function LoginPageClient({
   );
 }
 
+function LoginAnimatedCompanyBackground() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-[1] hidden overflow-hidden md:block"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.42),transparent_34%)]" />
+      {loginBackgroundRows.map((row, rowIndex) => (
+        <div
+          key={rowIndex}
+          className={`hirexa-logo-drift-row absolute ${row.left} ${row.top} flex min-w-max items-center ${row.gap} ${row.opacity} ${row.className ?? ""}`}
+        >
+          {[...row.companies, ...row.companies].map((company, index) => (
+            <div
+              key={`${rowIndex}-${company.name}-${index}`}
+              className="inline-flex items-center gap-3 rounded-full border border-slate-300/60 bg-white/70 px-5 py-3 text-slate-700 shadow-sm ring-1 ring-white/70 backdrop-blur-sm"
+            >
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${company.accent}`}
+              >
+                {company.mark}
+              </span>
+              <span className="whitespace-nowrap text-lg font-semibold tracking-normal">
+                {company.name}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function normalizeClientCallbackUrl(value: string, fallback: string) {
   const normalized = value.trim();
   if (!normalized) return fallback;
@@ -336,4 +479,25 @@ function normalizeClientCallbackUrl(value: string, fallback: string) {
   } catch {
     return fallback;
   }
+}
+
+function getFriendlyAuthErrorMessage(error: string | null | undefined) {
+  if (!error) return null;
+  return "LinkedIn sign-in could not be completed. Please try again or use email sign-in.";
+}
+
+function readableClientError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (
+    error &&
+    typeof error === "object" &&
+    "status" in error &&
+    "statusText" in error
+  ) {
+    const status = String((error as { status?: unknown }).status ?? "");
+    const statusText = String((error as { statusText?: unknown }).statusText ?? "");
+    return [status, statusText].filter(Boolean).join(" ") || "Request failed";
+  }
+  if (typeof error === "string") return error;
+  return Object.prototype.toString.call(error);
 }

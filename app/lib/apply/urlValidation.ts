@@ -3,6 +3,7 @@ import {
   isSearchResultsUrl,
   normalizeJobUrl,
 } from "@/app/lib/jobSources";
+import { withSpanSync } from "@/app/lib/telemetry/trace";
 
 export type AutomationStartUrlInvalidReason =
   | "empty_url"
@@ -220,7 +221,7 @@ export function isSearchEngineChallengeUrl(rawUrl: string | null | undefined) {
   );
 }
 
-export function validateAutomationStartUrl(
+function validateAutomationStartUrlInner(
   rawUrl: string | null | undefined,
   options?: {
     rejectAggregator?: boolean;
@@ -297,6 +298,26 @@ export function validateAutomationStartUrl(
     isSearchEngineChallenge,
     likelyHtmlDocument,
   };
+}
+
+export function validateAutomationStartUrl(
+  rawUrl: string | null | undefined,
+  options?: {
+    rejectAggregator?: boolean;
+    rejectSearchEngine?: boolean;
+  },
+): AutomationStartUrlValidation {
+  let resolvedHost: string | undefined;
+  try {
+    resolvedHost = rawUrl ? new URL(String(rawUrl)).hostname : undefined;
+  } catch {
+    resolvedHost = undefined;
+  }
+  return withSpanSync(
+    "auto_apply.resolve_source_url",
+    { resolvedHost },
+    () => validateAutomationStartUrlInner(rawUrl, options),
+  );
 }
 
 export function isValidAutomationStartUrl(

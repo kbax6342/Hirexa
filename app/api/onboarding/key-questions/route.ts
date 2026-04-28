@@ -5,7 +5,6 @@ import { auth } from "@/auth";
 import {
   getOnboardingStatusForUser,
   onboardingStatusSelect,
-  isOnboardingComplete,
 } from "@/app/lib/onboarding/status";
 import {
   ONBOARDING_PROFILE_ROUTE,
@@ -77,10 +76,10 @@ export async function GET() {
       const onboarding = await getOnboardingStatusForUser(userId);
       const keyQuestions =
         (onboarding.profile?.keyQuestions as Record<string, unknown> | null) ?? null;
-      const completed = isOnboardingComplete(onboarding.profile);
+      const completed = onboarding.completed;
       const nextPath = completed
         ? "/dashboard"
-        : getKeyQuestionsNextPath(onboarding.profile);
+        : onboarding.nextPath ?? getKeyQuestionsNextPath(onboarding.profile);
 
       return NextResponse.json(
         { completed, data: keyQuestions, nextPath },

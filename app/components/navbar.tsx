@@ -42,6 +42,7 @@ type HirePilotNavStatus = {
 const guestNav: NavItem[] = [
   { label: "Features", href: "/#features" },
   { label: "How It Works", href: "/how-it-works" },
+  { label: "HirePilot", href: "/hirepilot" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
 ];
@@ -63,7 +64,7 @@ const authedNav: NavItem[] = [
       {
         label: "HirePilot",
         description: "Real-time interview answers powered by your Hirexa profile",
-        href: "/hirepilot",
+        href: "/hirepilot/app",
         badge: "NEW",
         icon: PaperAirplaneIcon,
       },

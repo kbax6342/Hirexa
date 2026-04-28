@@ -13,6 +13,7 @@ export type MappedApplicationFieldType =
   | "checkbox"
   | "file"
   | "contenteditable"
+  | "greenhouse_react_select_country"
   | "location_dropdown"
   | "location_group"
   | "unknown";
@@ -149,6 +150,35 @@ function directFieldText(field: FormFieldDescriptor, proposedLabel?: string) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+function isGreenhouseReactSelectCountry(field: FormFieldDescriptor, proposedLabel?: string) {
+  const direct = directFieldText(field, proposedLabel);
+  const all = [
+    combinedFieldText(field),
+    proposedLabel,
+    field.errorText,
+    field.validationText,
+  ]
+    .map(clean)
+    .join(" ")
+    .toLowerCase();
+  const idOrName = [field.idAttribute, field.name].map(clean).join(" ").toLowerCase();
+  const role = clean(field.roleAttribute).toLowerCase();
+  const selector = clean(field.selector).toLowerCase();
+  const countryIdentity =
+    idOrName === "country" ||
+    /\bcountry\b/.test(direct) ||
+    /\bcountry-label\b/.test(selector) ||
+    /\bcountry-error\b/.test(all) ||
+    /react-select-country-placeholder/.test(all) ||
+    /select a country/.test(all);
+  const reactSelectish =
+    role === "combobox" ||
+    /\bcombobox\b/.test(direct) ||
+    /react-select|country-placeholder|country-error/.test(all) ||
+    /react-select|country/.test(selector);
+  return countryIdentity && reactSelectish && !/(phone country|country code|calling code|dial code)/i.test(all);
 }
 
 function isSecurityTokenField(field: FormFieldDescriptor) {
@@ -309,7 +339,7 @@ function inferFieldKind(
     });
     return "phone_number_input";
   }
-  if (isCountryOrLocationDropdown(field, proposedLabel)) {
+  if (isGreenhouseReactSelectCountry(field, proposedLabel) || isCountryOrLocationDropdown(field, proposedLabel)) {
     return "country_dropdown_field";
   }
   if (
@@ -716,9 +746,11 @@ export async function mapApplicationFields(
           : "low";
 
     const mappedType =
-      fieldKind === "country_dropdown_field" || fieldKind === "location_search_internal"
-        ? "location_dropdown"
-        : mapType(descriptor);
+      fieldKind === "country_dropdown_field" && isGreenhouseReactSelectCountry(descriptor, label)
+        ? "greenhouse_react_select_country"
+        : fieldKind === "country_dropdown_field" || fieldKind === "location_search_internal"
+          ? "location_dropdown"
+          : mapType(descriptor);
     mapped.push({
       fieldId: descriptor.id,
       fingerprint: fingerprintFor(descriptor, label),

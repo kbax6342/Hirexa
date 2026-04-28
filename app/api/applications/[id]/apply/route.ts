@@ -19,6 +19,7 @@ import {
   applyWithPlaywright,
   toApplySessionDebug,
 } from "@/app/lib/apply/playwrightApply";
+import { withSpan } from "@/app/lib/telemetry/trace";
 import { isAdzunaUnresolvedHandoffUrl } from "@/app/lib/apply/adzunaHandoff";
 import {
   resolveDirectJobUrl,
@@ -3817,6 +3818,8 @@ export async function POST(
   req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await context.params;
+  return withSpan("auto_apply.start", { applicationId: id }, async () => {
   try {
     const session = await auth();
     const userId = session?.user?.id;
@@ -3829,7 +3832,6 @@ export async function POST(
       );
     }
 
-    const { id } = await context.params;
     const body = (await req.json()) as ApplyBody;
 
     console.log("[AUTO_APPLY_ROUTE] POST /api/applications/[id]/apply", {
@@ -3905,9 +3907,25 @@ export async function POST(
       );
     }
 
-    const directResolution = await resolveApplicationDirectJobUrl({
-      application,
-    });
+    const directResolution = await withSpan(
+      "auto_apply.resolve_source_url",
+      {
+        applicationId: application.id,
+        sourceJobId: application.sourceJobId ?? undefined,
+        provider: application.source ?? undefined,
+        resolvedHost: (() => {
+          try {
+            return application.jobUrl ? new URL(application.jobUrl).hostname : undefined;
+          } catch {
+            return undefined;
+          }
+        })(),
+      },
+      () =>
+        resolveApplicationDirectJobUrl({
+          application,
+        }),
+    );
     const urlResolution = directResolution.context;
     application = urlResolution.application;
     const resolvedUrlIdentity = extractAtsJobIdentityFromUrl(
@@ -6087,4 +6105,5 @@ export async function POST(
       { status: 500 },
     );
   }
+  });
 }

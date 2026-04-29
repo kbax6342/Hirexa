@@ -63,6 +63,12 @@ type GeneratedDocumentPayload = {
     beforeInterview?: string;
     afterInterview?: string;
   };
+  jobSkills?: {
+    technical?: string[];
+    tools?: string[];
+    softSkills?: string[];
+    keywords?: string[];
+  };
 };
 
 const generateProfileSelect = {
@@ -1030,6 +1036,12 @@ For customer service, barista, cashier, retail, and hospitality roles, emphasize
         beforeInterview: "string",
         afterInterview: "string",
       },
+      jobSkills: {
+        technical: ["string"],
+        tools: ["string"],
+        softSkills: ["string"],
+        keywords: ["string"],
+      },
     };
 
     const userPrompt = `
@@ -1111,6 +1123,12 @@ TASK:
 5) Write two final professional emails that reference the revised resume points where relevant:
    - before interview email must include: subject line, greeting, short body, 1-2 smart questions, and close
    - after interview email must include: subject line, greeting, thank-you body, reaffirmed interest, and close
+6) Extract skills and keywords directly from the JOB POSTING TEXT into jobSkills:
+   - technical: concrete technical skills, methodologies, frameworks, and role capabilities explicitly supported by the posting
+   - tools: named tools, platforms, software, systems, languages, libraries, cloud products, ATS-relevant technologies, and vendor products from the posting
+   - softSkills: collaboration, communication, leadership, ownership, customer-facing, problem-solving, or other interpersonal skills from the posting
+   - keywords: ATS keywords and phrases from the posting that a candidate should consider reflecting when truthful
+   Only use skills supported by the job posting. Do not invent skills. If a category has no clear items, return an empty array.
 If a candidate name is provided, make sure each document includes it. The cover letter and both emails must end with the candidate's name. The full resume must start with the candidate's name when provided.
 The full resume should be strong enough to use as the final exported resume document.
 Return JSON ONLY matching this schema shape:
@@ -1142,6 +1160,12 @@ ${JSON.stringify(schema, null, 2)}
     }
 
     const generated = (parsed ?? {}) as GeneratedDocumentPayload;
+    const jobSkills = {
+      technical: normalizeList(generated.jobSkills?.technical, 16),
+      tools: normalizeList(generated.jobSkills?.tools, 16),
+      softSkills: normalizeList(generated.jobSkills?.softSkills, 16),
+      keywords: normalizeList(generated.jobSkills?.keywords, 24),
+    };
     const inferredCompany = trimText(generated.job?.company) || null;
     const inferredRole = trimText(generated.job?.title) || null;
     const cleanedCoverLetter = cleanupDocumentPlaceholders({
@@ -1191,6 +1215,7 @@ ${JSON.stringify(schema, null, 2)}
         candidateLinkedinUrl: candidateContext.candidateProfile.linkedinUrl,
         candidatePortfolioUrl: candidateContext.candidateProfile.portfolioUrl,
         fullResumeText,
+        jobSkills,
         savedResume,
         profileSync,
         credits: creditStatus,

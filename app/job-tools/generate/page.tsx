@@ -70,11 +70,17 @@ type Result = {
     beforeInterview: string;
     afterInterview: string;
   };
+  jobSkills?: {
+    technical?: string[];
+    tools?: string[];
+    softSkills?: string[];
+    keywords?: string[];
+  };
 };
 
 type Tone = "professional" | "conversational" | "enthusiastic";
 type LlmProvider = "auto" | "openai" | "claude" | "gemini";
-type TabKey = "coverLetter" | "updatedResume" | "preInterview" | "postInterview";
+type TabKey = "coverLetter" | "updatedResume" | "preInterview" | "postInterview" | "skills";
 type DownloadFormat = "pdf" | "txt" | "docx";
 type PlanStatusResponse = {
   ok?: boolean;
@@ -127,8 +133,15 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "updatedResume", label: "Revised Resume" },
   { key: "preInterview", label: "Pre-Interview Email" },
   { key: "postInterview", label: "Post Interview Email" },
+  { key: "skills", label: "Skills" },
 ];
-const allDocTabs: TabKey[] = ["coverLetter", "updatedResume", "preInterview", "postInterview"];
+const allDocTabs: TabKey[] = [
+  "coverLetter",
+  "updatedResume",
+  "preInterview",
+  "postInterview",
+  "skills",
+];
 
 function createEmptyEditableDocs(): Record<TabKey, string | null> {
   return {
@@ -136,6 +149,7 @@ function createEmptyEditableDocs(): Record<TabKey, string | null> {
     updatedResume: null,
     preInterview: null,
     postInterview: null,
+    skills: null,
   };
 }
 
@@ -431,10 +445,59 @@ function JobToolsGeneratePageContent() {
     return items;
   }
 
+  function normalizeSkillItems(values?: string[]) {
+    return dedupeTextItems((values ?? []).map((value) => String(value ?? ""))).slice(0, 24);
+  }
+
+  function getSkillGroups(r: Result | null) {
+    return [
+      {
+        key: "technical",
+        label: "Technical Skills",
+        items: normalizeSkillItems(r?.jobSkills?.technical),
+      },
+      {
+        key: "tools",
+        label: "Tools & Platforms",
+        items: normalizeSkillItems(r?.jobSkills?.tools),
+      },
+      {
+        key: "softSkills",
+        label: "Soft Skills",
+        items: normalizeSkillItems(r?.jobSkills?.softSkills),
+      },
+      {
+        key: "keywords",
+        label: "ATS Keywords",
+        items: normalizeSkillItems(r?.jobSkills?.keywords),
+      },
+    ];
+  }
+
+  function formatSkillsDocument(r: Result | null) {
+    if (!r) return "";
+
+    const lines = ["SKILLS FROM THIS JOB DESCRIPTION", ""];
+    for (const group of getSkillGroups(r)) {
+      lines.push(group.label.toUpperCase());
+      if (group.items.length > 0) {
+        lines.push(...group.items.map((item) => `- ${item}`));
+      } else {
+        lines.push("- No clear skills found for this category.");
+      }
+      lines.push("");
+    }
+
+    return normalizeDocumentText(lines.join("\n"));
+  }
+
   function getRawDocumentText(r: Result | null, tab: TabKey) {
     if (!r) return "";
     const compatibility = r as Result & ResultCompatibilityFields;
 
+    if (tab === "skills") {
+      return formatSkillsDocument(r);
+    }
     if (tab === "coverLetter") {
       return pickFirstNonEmpty(r.coverLetter);
     }
@@ -746,6 +809,7 @@ function JobToolsGeneratePageContent() {
 
   function getFormattedDocumentText(r: Result | null, tab: TabKey) {
     if (!r) return "";
+    if (tab === "skills") return formatSkillsDocument(r);
     if (tab === "coverLetter") return formatCoverLetterDocument(r);
     if (tab === "updatedResume") return formatResumeDocument(r);
     if (tab === "preInterview") return formatPreInterviewEmail(r);
@@ -834,6 +898,7 @@ function JobToolsGeneratePageContent() {
     if (tab === "coverLetter") return { baseFilename: "cover-letter", title: "Cover Letter" };
     if (tab === "updatedResume") return { baseFilename: "revised-resume", title: "Revised Resume" };
     if (tab === "preInterview") return { baseFilename: "pre-interview-email", title: "Pre-Interview Email" };
+    if (tab === "skills") return { baseFilename: "job-description-skills", title: "Skills from Job Description" };
     return { baseFilename: "post-interview-email", title: "Post-Interview Email" };
   }
 
@@ -1409,6 +1474,7 @@ function JobToolsGeneratePageContent() {
         updatedResume: getFormattedDocumentText(data, "updatedResume"),
         preInterview: getFormattedDocumentText(data, "preInterview"),
         postInterview: getFormattedDocumentText(data, "postInterview"),
+        skills: getFormattedDocumentText(data, "skills"),
       });
       if (data?.credits) {
         setCreditStatus((current) => ({
@@ -1442,7 +1508,10 @@ function JobToolsGeneratePageContent() {
       ? "AI-Generated Revised Resume"
       : activeTab === "preInterview"
       ? "AI-Generated Pre-Interview Email"
+      : activeTab === "skills"
+      ? "Skills from Job Description"
       : "AI-Generated Post-Interview Email";
+  const skillGroups = activeTab === "skills" ? getSkillGroups(result) : [];
   const shouldShowStarterCredits =
     !accessStatusLoading &&
     planStatus?.active !== true &&
@@ -1615,8 +1684,15 @@ function JobToolsGeneratePageContent() {
           )}
         </div>
 
+        <div className="mt-6">
+          <h2 className="text-lg font-semibold text-white">Generated application package</h2>
+          <p className="mt-1 text-sm text-white/80">
+            Review, copy, or download each generated document before applying.
+          </p>
+        </div>
+
         {/* Tabs */}
-        <div className="mt-6 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {tabs.map((t) => {
             const active = activeTab === t.key;
             return (
@@ -1716,18 +1792,58 @@ function JobToolsGeneratePageContent() {
 
           <div className="px-5 py-5">
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
-              <textarea
-                value={activeText}
-                onChange={(e) =>
-                  setEditableDocs((prev) => ({
-                    ...prev,
-                    [activeTab]: e.target.value,
-                  }))
-                }
-                disabled={!result}
-                placeholder="Your generated document will appear here after processing the job URL."
-                className="h-56 w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
-              />
+              {activeTab === "skills" && result ? (
+                <div>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900">
+                      Skills from this job description
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Use these skills to improve your resume, cover letter, and interview prep.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    {skillGroups.map((group) => (
+                      <section
+                        key={group.key}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <h4 className="text-sm font-semibold text-slate-900">{group.label}</h4>
+                        <div className="mt-3 space-y-2">
+                          {group.items.length > 0 ? (
+                            group.items.map((item) => (
+                              <div
+                                key={item}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm"
+                              >
+                                {item}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2 text-sm text-slate-400">
+                              No clear skills found for this category.
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <textarea
+                  value={activeText}
+                  onChange={(e) =>
+                    setEditableDocs((prev) => ({
+                      ...prev,
+                      [activeTab]: e.target.value,
+                    }))
+                  }
+                  disabled={!result}
+                  placeholder="Your generated document will appear here after processing the job URL."
+                  className="h-56 w-full resize-none whitespace-pre-wrap bg-transparent text-sm leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+                />
+              )}
             </div>
 
             {/* Controls grid */}

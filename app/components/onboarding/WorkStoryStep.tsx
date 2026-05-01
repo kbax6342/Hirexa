@@ -5,15 +5,13 @@ import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, CheckIcon } from "@heroicons/react/24/outline";
 
 import { Button } from "@/app/components/ui/button";
-import { useIsMobile } from "@/app/components/ui/use-mobile";
 import { cn } from "@/app/lib/utils";
 import {
-  JOB_PRIORITIES_ROUTE,
   JOB_LOCATION_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
   RESUME_IMPORT_ROUTE,
   WORK_STORY_ROUTE,
-  getPreviousOnboardingRoute,
+  getPreviousPrimaryOnboardingRoute,
 } from "@/app/lib/onboarding-flow";
 import { getWorkStoryOptionsForRole } from "@/app/lib/onboarding/workStoryOptions";
 
@@ -39,7 +37,6 @@ function normalizeText(value: string) {
 
 export default function WorkStoryStep() {
   const router = useRouter();
-  const isMobile = useIsMobile();
   const [role, setRole] = useState("");
   const [options, setOptions] = useState<string[]>(
     getWorkStoryOptionsForRole(null)
@@ -58,12 +55,12 @@ export default function WorkStoryStep() {
       .slice(0, MAX_VISIBLE_WORK_STORY_OPTIONS);
   }, [role]);
   const canContinue = selectedTags.length > 0;
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(WORK_STORY_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(WORK_STORY_ROUTE) + 1;
   const progressPercent = useMemo(
     () =>
       Math.max(
         8,
-        Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+        Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
       ),
     [currentStep]
   );
@@ -226,15 +223,8 @@ export default function WorkStoryStep() {
   }
 
   function handleBack() {
-    const cameFromResumeImport =
-      typeof window !== "undefined"
-        ? window.matchMedia("(max-width: 767px)").matches
-        : isMobile;
-
     router.push(
-      cameFromResumeImport
-        ? getPreviousOnboardingRoute(WORK_STORY_ROUTE) ?? RESUME_IMPORT_ROUTE
-        : JOB_PRIORITIES_ROUTE
+      getPreviousPrimaryOnboardingRoute(WORK_STORY_ROUTE) ?? RESUME_IMPORT_ROUTE
     );
   }
 

@@ -24,6 +24,8 @@ import {
   toApplySessionDisplayStatus,
 } from "@/app/lib/apply/sessionStatus";
 import { isSearchResultsUrl } from "@/app/lib/jobSources";
+import { shouldSuppressShareSafeFloatingUi } from "@/app/lib/shareSafe";
+import { useShareSafe } from "@/app/components/ShareSafeProvider";
 
 type ApplySessionPollResponse = {
   ok?: boolean;
@@ -201,6 +203,7 @@ export default function AppliedJobsPopout({
 }: {
   buttonId?: string;
 }) {
+  const { shareSafeMode } = useShareSafe();
   const [autoApplyPopupState, setAutoApplyPopupState] = useState<AutoApplyPopupState>(
     () => createEmptyAutoApplyPopupState()
   );
@@ -530,6 +533,10 @@ export default function AppliedJobsPopout({
   }, [autoApplyItems, updateAutoApplyPopupState]);
 
   if (autoApplyItems.length === 0) {
+    return null;
+  }
+
+  if (shouldSuppressShareSafeFloatingUi(shareSafeMode)) {
     return null;
   }
 

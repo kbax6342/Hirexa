@@ -294,7 +294,7 @@ export function Navbar() {
 
         <DesktopNav items={navLinks} />
 
-        <div className="hidden items-center lg:flex">
+        <div className="hidden items-center gap-3 lg:flex">
           {status === "loading" ? (
             <div className="h-9 w-28 animate-pulse rounded-full bg-secondary" />
           ) : !isAuthed ? (

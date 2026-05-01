@@ -11,7 +11,10 @@ import { GoogleLogo } from "@/app/components/loginForm/GoogleButton";
 import { LinkedInLogo } from "@/app/components/loginForm/LinkedInButton";
 import LoginForm from "@/app/components/loginForm/LoginForm";
 import { Button } from "@/app/components/ui/button";
-import { CREATE_ACCOUNT_ROUTE } from "@/app/lib/onboarding-flow";
+import {
+  DASHBOARD_ROUTE,
+  JOB_INTEREST_ROUTE,
+} from "@/app/lib/onboarding-flow";
 
 type OAuthProvider = {
   id: string;
@@ -108,7 +111,7 @@ export default function LoginPageClient({
   const safeCallbackUrl = useMemo(
     () => normalizeClientCallbackUrl(
       callbackUrl,
-      isRecruiterMode ? "/agency/dashboard" : "/resume"
+      isRecruiterMode ? "/agency/dashboard" : DASHBOARD_ROUTE
     ),
     [callbackUrl, isRecruiterMode]
   );
@@ -121,7 +124,7 @@ export default function LoginPageClient({
 
   function handleStartSignup() {
     setIsStartingSignup(true);
-    router.push(CREATE_ACCOUNT_ROUTE);
+    router.push(JOB_INTEREST_ROUTE);
   }
 
   async function handleOAuthSignIn(providerId: string) {
@@ -252,19 +255,7 @@ export default function LoginPageClient({
       return;
     }
 
-    try {
-      const onboardingRes = await fetch("/api/onboarding/key-questions", {
-        cache: "no-store",
-      });
-      const onboardingData = await onboardingRes.json();
-      router.push(
-        onboardingData?.completed
-          ? "/dashboard"
-          : onboardingData?.nextPath || "/questions"
-      );
-    } catch {
-      router.push("/questions");
-    }
+    router.push(DASHBOARD_ROUTE);
     router.refresh();
   }
 

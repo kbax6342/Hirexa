@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/app/lib/prisma";
+import { auth } from "@/auth";
 import { verifyRecaptchaV3 } from "@/app/lib/security/recaptcha";
-import { hashOtp } from "@/app/lib/security/otp";
 import { sendRegistrationConfirmedEmailIfNeeded } from "@/app/lib/email/lifecycle";
 import { syncLoopsContact } from "@/app/lib/email/loops";
 import { cleanupExpiredPendingVerifications } from "@/app/lib/auth/cleanupPendingVerification";
@@ -15,6 +15,13 @@ import {
   markOnboardingDraftStatus,
 } from "@/app/lib/onboarding/draft-session";
 import {
+  resolveVerificationContext,
+} from "@/app/lib/verification/context";
+import {
+  verifyVerificationCode,
+} from "@/app/lib/verification/service";
+import { VERIFICATION_CHANNEL_SMS } from "@/app/lib/verification/types";
+import {
   grantStarterHirePilotCredits,
   STARTER_FEATURE_CREDITS,
 } from "@/app/lib/hirepilot/credits";
@@ -24,15 +31,12 @@ export async function POST(req: Request) {
     const cookieStore = await cookies();
     const guestId = cookieStore.get("guest_user_id")?.value ?? null;
     const draft = await getActiveOnboardingDraftForCookies(cookieStore);
+    const session = await auth();
+    const sessionUserId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
     const body = await req.json();
-    const email = String(body.email ?? "").trim().toLowerCase();
     const code = String(body.code ?? "").trim();
     const recaptchaToken = body.recaptchaToken ?? null;
-
-    if (!email.includes("@") || code.length !== 6) {
-      return NextResponse.json({ error: "Invalid email or code" }, { status: 400 });
-    }
 
     const rc = await verifyRecaptchaV3(recaptchaToken, "signup_verify");
     if (!rc.ok) {
@@ -45,45 +49,96 @@ export async function POST(req: Request) {
       console.warn("pending verification cleanup failed before signup verify:", cleanupError);
     }
 
-    const otp = await prisma.emailOtp.findUnique({
-      where: { email },
-      select: { codeHash: true, expiresAt: true, attempts: true },
+    const context = await resolveVerificationContext({
+      userId: sessionUserId,
+      sessionEmail: session?.user?.email ? String(session.user.email) : null,
+      cookieStore,
+      requestedChannel: body.verificationChannel,
+      requestedEmail: body.email,
+      requestedPhone: body.phone,
+    });
+    const email = context.email;
+
+    if (context.preferredChannel === VERIFICATION_CHANNEL_SMS && !context.normalizedPhone) {
+      return NextResponse.json(
+        { error: "Please enter a valid phone number." },
+        { status: 400 }
+      );
+    }
+
+    if (!email || !context.destination) {
+      return NextResponse.json(
+        { error: "The verification code has expired. Send a new code." },
+        { status: 400 }
+      );
+    }
+
+    const verification = await verifyVerificationCode({
+      channel: context.resolvedChannel,
+      destination: context.destination,
+      code,
+      maxAttempts: 6,
     });
 
-    if (!otp) {
-      return NextResponse.json({ error: "Code expired" }, { status: 400 });
-    }
-
-    if (otp.expiresAt.getTime() < Date.now()) {
-      await prisma.emailOtp.deleteMany({ where: { email } });
-      await prisma.emailVerificationCode.deleteMany({ where: { email } });
-      return NextResponse.json({ error: "Code expired" }, { status: 400 });
-    }
-
-    if (otp.attempts >= 6) {
-      return NextResponse.json({ error: "Too many attempts" }, { status: 429 });
-    }
-
-    const validCode = hashOtp(code) === otp.codeHash;
-    if (!validCode) {
-      await prisma.emailOtp.update({
-        where: { email },
-        data: { attempts: { increment: 1 } },
-      });
-      return NextResponse.json({ error: "Invalid code" }, { status: 400 });
+    if (!verification.ok) {
+      const status =
+        verification.code === "too_many_attempts"
+          ? 429
+          : verification.code === "unavailable"
+            ? 503
+            : 400;
+      return NextResponse.json({ error: verification.message }, { status });
     }
 
     const { userId } = await prisma.$transaction(async (tx) => {
       const verifiedAt = new Date();
 
-      const user = await tx.user.update({
-        where: { email },
-        data: {
-          emailVerifiedAt: verifiedAt,
-          isGuest: false,
+      const user = sessionUserId
+        ? await tx.user.update({
+            where: { id: sessionUserId },
+            data: {
+              emailVerifiedAt: verifiedAt,
+              isGuest: false,
+            },
+            select: { id: true, name: true, email: true },
+          })
+        : await tx.user.update({
+            where: { email },
+            data: {
+              emailVerifiedAt: verifiedAt,
+              isGuest: false,
+            },
+            select: { id: true, name: true, email: true },
+          });
+
+      const verifiedEmail = String(user.email ?? email).trim().toLowerCase();
+
+      const destinationsToDelete = Array.from(
+        new Set(
+          [verifiedEmail, context.normalizedPhone].filter(
+            (value): value is string => Boolean(value)
+          )
+        )
+      );
+      const emailDestinations = destinationsToDelete.filter((value) => value.includes("@"));
+
+      await tx.emailOtp.deleteMany({
+        where: {
+          email: {
+            in: destinationsToDelete,
+          },
         },
-        select: { id: true, name: true },
       });
+
+      if (emailDestinations.length > 0) {
+        await tx.emailVerificationCode.deleteMany({
+          where: {
+            email: {
+              in: emailDestinations,
+            },
+          },
+        });
+      }
 
       const [firstNameFromUser, ...remainingNameParts] = String(user.name ?? "")
         .trim()
@@ -95,7 +150,7 @@ export async function POST(req: Request) {
         ? await mergeGuestProfileIntoUserProfile(tx, {
             userId: user.id,
             guestId,
-            email,
+            email: verifiedEmail,
           })
         : null;
 
@@ -103,8 +158,8 @@ export async function POST(req: Request) {
         await tx.userProfile.update({
           where: { id: mergeResult.profileId },
           data: {
-            email,
-            subscriptionEmail: email,
+            email: verifiedEmail,
+            subscriptionEmail: verifiedEmail,
             emailVerifiedAt: verifiedAt,
           },
           select: { id: true },
@@ -114,16 +169,16 @@ export async function POST(req: Request) {
           where: { userId: user.id },
           create: {
             userId: user.id,
-            email,
-            subscriptionEmail: email,
+            email: verifiedEmail,
+            subscriptionEmail: verifiedEmail,
             emailVerifiedAt: verifiedAt,
             registrationStatus: "registered",
             firstName: firstNameFromUser || undefined,
             lastName: lastNameFromUser ?? undefined,
           },
           update: {
-            email,
-            subscriptionEmail: email,
+            email: verifiedEmail,
+            subscriptionEmail: verifiedEmail,
             emailVerifiedAt: verifiedAt,
             registrationStatus: "registered",
             ...(firstNameFromUser
@@ -141,9 +196,6 @@ export async function POST(req: Request) {
           guestId,
         });
       }
-
-      await tx.emailOtp.deleteMany({ where: { email } });
-      await tx.emailVerificationCode.deleteMany({ where: { email } });
 
       return { userId: user.id };
     });

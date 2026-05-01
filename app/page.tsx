@@ -27,7 +27,7 @@ export default async function Home() {
     redirect("/dashboard");
   }
 
-  const href = session?.user ? "/dashboard" : "/onboarding/profile";
+  const href = session?.user ? "/dashboard" : "/login";
 
   return (
     <>

@@ -25,6 +25,16 @@ export const BENEFITS_ROUTE = "/benefits";
 export const ACCOUNT_ROUTE = "/onboarding/account";
 export const DASHBOARD_ROUTE = "/dashboard";
 
+export const PRIMARY_ONBOARDING_FLOW_ROUTES = [
+  JOB_INTEREST_ROUTE,
+  JOB_GOAL_ROUTE,
+  JOB_PRIORITIES_ROUTE,
+  RESUME_IMPORT_ROUTE,
+  WORK_STORY_ROUTE,
+  JOB_LOCATION_ROUTE,
+  HIRING_SIGNAL_ROUTE,
+] as const;
+
 export const ONBOARDING_FLOW_ROUTES = [
   ONBOARDING_PROFILE_ROUTE,
   QUESTIONS_CLIENTS_ROUTE,
@@ -61,24 +71,38 @@ function normalizeRoute(path: string) {
   return path;
 }
 
-export function getNextOnboardingRoute(path: string) {
+function getFlowRouteIndex(flow: readonly string[], path: string) {
   const current = normalizeRoute(path);
-  const currentIndex = ONBOARDING_FLOW_ROUTES.indexOf(
-    current as (typeof ONBOARDING_FLOW_ROUTES)[number]
-  );
+
+  return flow.indexOf(current);
+}
+
+export function getNextOnboardingRoute(path: string) {
+  const currentIndex = getFlowRouteIndex(ONBOARDING_FLOW_ROUTES, path);
 
   if (currentIndex < 0) return null;
   return ONBOARDING_FLOW_ROUTES[currentIndex + 1] ?? null;
 }
 
 export function getPreviousOnboardingRoute(path: string) {
-  const current = normalizeRoute(path);
-  const currentIndex = ONBOARDING_FLOW_ROUTES.indexOf(
-    current as (typeof ONBOARDING_FLOW_ROUTES)[number]
-  );
+  const currentIndex = getFlowRouteIndex(ONBOARDING_FLOW_ROUTES, path);
 
   if (currentIndex <= 0) return null;
   return ONBOARDING_FLOW_ROUTES[currentIndex - 1] ?? null;
+}
+
+export function getNextPrimaryOnboardingRoute(path: string) {
+  const currentIndex = getFlowRouteIndex(PRIMARY_ONBOARDING_FLOW_ROUTES, path);
+
+  if (currentIndex < 0) return null;
+  return PRIMARY_ONBOARDING_FLOW_ROUTES[currentIndex + 1] ?? null;
+}
+
+export function getPreviousPrimaryOnboardingRoute(path: string) {
+  const currentIndex = getFlowRouteIndex(PRIMARY_ONBOARDING_FLOW_ROUTES, path);
+
+  if (currentIndex <= 0) return null;
+  return PRIMARY_ONBOARDING_FLOW_ROUTES[currentIndex - 1] ?? null;
 }
 
 export function isCurrentOnboardingRoute(path: string, route: string) {

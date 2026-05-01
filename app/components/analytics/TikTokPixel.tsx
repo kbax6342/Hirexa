@@ -10,6 +10,8 @@ import {
 } from "@/app/lib/cookies/consent";
 
 const TIKTOK_PIXEL_ID = "D79E6M3C77UA3HU6E7GG";
+const TIKTOK_PIXEL_ENABLED =
+  process.env.NEXT_PUBLIC_ENABLE_TIKTOK_PIXEL === "true";
 
 function getTikTokPixelInitScript(pixelId: string) {
   const safePixelId = JSON.stringify(pixelId);
@@ -62,7 +64,7 @@ export default function TikTokPixel() {
     () => null
   );
 
-  if (!hasAnalyticsConsent(consent)) {
+  if (!TIKTOK_PIXEL_ENABLED || !hasAnalyticsConsent(consent)) {
     return null;
   }
 

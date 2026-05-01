@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import SensitiveContent from "@/app/components/SensitiveContent";
 import RecruiterSidebar from "@/app/components/recruiter/RecruiterSidebar";
 
 export default function RecruiterShell({
@@ -19,7 +20,7 @@ export default function RecruiterShell({
           <div className="mb-5 lg:hidden">
             <RecruiterSidebar agencyName={agencyName} compact />
           </div>
-          {children}
+          <SensitiveContent mode="replace">{children}</SensitiveContent>
         </div>
       </main>
     </div>

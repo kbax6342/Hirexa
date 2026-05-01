@@ -14,5 +14,5 @@ export async function startOnboarding() {
     responseCookies: cookieStore,
   });
 
-  redirect("/onboarding/profile");
+  redirect("/login");
 }

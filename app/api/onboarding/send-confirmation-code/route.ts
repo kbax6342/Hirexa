@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-import { sendOnboardingConfirmationCodeEmail } from "@/app/lib/email/sendgrid";
-import { generateOtp6, hashOtp } from "@/app/lib/security/otp";
 import {
   ONBOARDING_CONFIRMATION_CODE_TTL_MS,
   ONBOARDING_CONFIRMATION_RESEND_COOLDOWN_MS,
   readOnboardingConfirmationState,
 } from "@/app/lib/onboarding/confirmation";
+import { resolveVerificationContext } from "@/app/lib/verification/context";
+import {
+  clearVerificationCodesForDestinations,
+  sendVerificationCode,
+} from "@/app/lib/verification/service";
+import { VERIFICATION_CHANNEL_SMS } from "@/app/lib/verification/types";
 
 export const runtime = "nodejs";
 
@@ -33,7 +37,7 @@ export async function POST() {
 
   const profile = await prisma.userProfile.findUnique({
     where: { userId },
-    select: { id: true, keyQuestions: true },
+    select: { id: true, keyQuestions: true, phone: true },
   });
 
   if (!profile) {
@@ -47,60 +51,74 @@ export async function POST() {
     return NextResponse.json({ ok: true, message: "Onboarding is already confirmed." });
   }
 
-  const existingOtp = await prisma.emailOtp.findUnique({
-    where: { email },
-    select: { resendAfter: true },
+  const context = await resolveVerificationContext({
+    userId,
+    sessionEmail: email,
   });
-  const now = Date.now();
 
-  if (existingOtp?.resendAfter && existingOtp.resendAfter.getTime() > now) {
-    const retryAfterSeconds = Math.max(
-      1,
-      Math.ceil((existingOtp.resendAfter.getTime() - now) / 1000)
+  if (context.preferredChannel === VERIFICATION_CHANNEL_SMS && !context.normalizedPhone) {
+    return NextResponse.json(
+      { ok: false, error: "Please enter a valid phone number." },
+      { status: 400 }
     );
+  }
 
-    console.info("[ONBOARDING_CONFIRMATION] resend cooldown active", {
-      userId,
-      retryAfterSeconds,
-    });
+  if (!context.destination) {
+    return NextResponse.json(
+      { ok: false, error: "We couldn't send the code. Please try again." },
+      { status: 400 }
+    );
+  }
+
+  await clearVerificationCodesForDestinations(
+    [context.email, context.normalizedPhone].filter(
+      (candidate): candidate is string =>
+        Boolean(candidate) && candidate !== context.destination
+    )
+  );
+
+  const result = await sendVerificationCode({
+    channel: context.resolvedChannel,
+    destination: context.destination,
+    purpose: "onboarding_confirmation",
+    ttlMs: ONBOARDING_CONFIRMATION_CODE_TTL_MS,
+    resendCooldownMs: ONBOARDING_CONFIRMATION_RESEND_COOLDOWN_MS,
+  });
+
+  if (!result.ok) {
+    const status =
+      result.code === "invalid_destination"
+        ? 400
+        : result.code === "cooldown"
+          ? 429
+          : result.code === "misconfigured"
+            ? 503
+            : 500;
 
     return NextResponse.json(
       {
         ok: false,
-        error: `Please wait ${retryAfterSeconds} seconds before requesting another code.`,
-        retryAfterSeconds,
+        error: result.message,
+        retryAfterSeconds: result.retryAfterSeconds,
       },
-      { status: 429 }
+      { status }
     );
   }
 
-  const code = generateOtp6();
-  const expiresAt = new Date(now + ONBOARDING_CONFIRMATION_CODE_TTL_MS);
-  const resendAfter = new Date(now + ONBOARDING_CONFIRMATION_RESEND_COOLDOWN_MS);
-
-  await prisma.emailOtp.upsert({
-    where: { email },
-    create: {
-      email,
-      codeHash: hashOtp(code),
-      expiresAt,
-      resendAfter,
-    },
-    update: {
-      codeHash: hashOtp(code),
-      expiresAt,
-      resendAfter,
-      attempts: 0,
-    },
-  });
-
-  await sendOnboardingConfirmationCodeEmail(email, code);
-
   console.info("[ONBOARDING_CONFIRMATION] code sent", {
     userId,
-    emailDomain: email.split("@")[1] ?? null,
-    expiresAt: expiresAt.toISOString(),
+    channel: context.resolvedChannel,
+    destinationHint:
+      context.resolvedChannel === "sms"
+        ? context.destination.slice(-4)
+        : email.split("@")[1] ?? null,
   });
 
-  return NextResponse.json({ ok: true, message: "Confirmation code sent." });
+  return NextResponse.json({
+    ok: true,
+    channel: context.resolvedChannel,
+    destinationLabel: context.destinationLabel,
+    retryAfterSeconds: result.retryAfterSeconds,
+    message: "Verification code sent.",
+  });
 }

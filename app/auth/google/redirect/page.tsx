@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 
+import { DASHBOARD_ROUTE } from "@/app/lib/onboarding-flow";
+
 type SessionUserWithFlags = {
   isExistingUser?: boolean;
   requiresVerification?: boolean;
@@ -24,8 +26,7 @@ export default function GoogleRedirectPage() {
     }
 
     const sessionUser = session?.user as SessionUserWithFlags | undefined;
-    const nextPath =
-      sessionUser?.isExistingUser === true ? "/dashboard" : "/questions";
+    const nextPath = DASHBOARD_ROUTE;
 
     if (sessionUser?.requiresVerification) {
       router.replace(

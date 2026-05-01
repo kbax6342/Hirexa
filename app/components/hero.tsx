@@ -65,7 +65,7 @@ export function Hero({ href }: { href: string }) {
   const router = useRouter();
   const isAuthed = href === "/dashboard";
   const mobilePrimaryHref = isAuthed ? "/dashboard" : "/onboarding/job-interest";
-  const desktopPrimaryHref = isAuthed ? "/dashboard" : "/onboarding/profile";
+  const desktopPrimaryHref = isAuthed ? "/dashboard" : href;
   const mobilePrimaryLabel = isAuthed ? "Open Dashboard" : "Get Started Free";
   const desktopPrimaryLabel = isAuthed ? "Go to Dashboard" : "Get Started Free";
   const mobileLoginHref = "/login";

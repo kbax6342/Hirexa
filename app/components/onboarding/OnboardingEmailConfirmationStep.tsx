@@ -16,6 +16,8 @@ type ApiResponse = {
   error?: string;
   nextUrl?: string;
   retryAfterSeconds?: number;
+  channel?: "email" | "sms";
+  destinationLabel?: string | null;
 };
 
 export default function OnboardingEmailConfirmationStep({
@@ -24,12 +26,14 @@ export default function OnboardingEmailConfirmationStep({
   const router = useRouter();
   const [code, setCode] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [messageType, setMessageType] = useState<"success" | "error" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [sentOnLoad, setSentOnLoad] = useState(false);
+  const [destinationLabel, setDestinationLabel] = useState<string | null>(email);
 
   const cooldownSeconds = useMemo(
     () => Math.max(0, Math.ceil((cooldownUntil - now) / 1000)),
@@ -48,6 +52,7 @@ export default function OnboardingEmailConfirmationStep({
 
     setSending(true);
     setError(null);
+    setMessageType(null);
 
     try {
       const response = await fetch("/api/onboarding/send-confirmation-code", {
@@ -63,18 +68,22 @@ export default function OnboardingEmailConfirmationStep({
         throw new Error(data?.error ?? "Could not send the confirmation code.");
       }
 
-      setMessage("We sent a confirmation code to your email.");
-      setCooldownUntil(Date.now() + 60 * 1000);
+      setDestinationLabel(data?.destinationLabel ?? destinationLabel);
+      setMessage(data?.message ?? "Verification code sent.");
+      setMessageType("success");
+      setCooldownUntil(Date.now() + Math.max(1, data?.retryAfterSeconds ?? 60) * 1000);
+      setNow(Date.now());
     } catch (sendError) {
       setError(
         sendError instanceof Error
           ? sendError.message
           : "Could not send the confirmation code."
       );
+      setMessageType("error");
     } finally {
       setSending(false);
     }
-  }, [cooldownSeconds, sending]);
+  }, [cooldownSeconds, destinationLabel, sending]);
 
   useEffect(() => {
     if (sentOnLoad) return;
@@ -89,6 +98,7 @@ export default function OnboardingEmailConfirmationStep({
     setCode(normalizedCode);
     setError(null);
     setMessage(null);
+    setMessageType(null);
 
     if (normalizedCode.length !== 6) {
       setError("Enter the 6-digit confirmation code.");
@@ -110,7 +120,8 @@ export default function OnboardingEmailConfirmationStep({
         throw new Error(data?.error ?? "Could not verify the confirmation code.");
       }
 
-      setMessage("Email confirmed. Redirecting to your dashboard...");
+      setMessage("Verification complete. Redirecting to your dashboard...");
+      setMessageType("success");
       router.replace(data.nextUrl ?? "/dashboard");
       router.refresh();
     } catch (verifyError) {
@@ -119,6 +130,7 @@ export default function OnboardingEmailConfirmationStep({
           ? verifyError.message
           : "Could not verify the confirmation code."
       );
+      setMessageType("error");
     } finally {
       setVerifying(false);
     }
@@ -133,15 +145,15 @@ export default function OnboardingEmailConfirmationStep({
               Final Step
             </p>
             <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-950">
-              Confirm your email to continue
+              Confirm your account to continue
             </h1>
             <p className="mt-3 text-sm leading-6 text-slate-600">
-              Enter the 6-digit code we sent to your email so we can finish
-              setting up your Hirexa AI account.
+              Enter the 6-digit code we sent so we can finish setting up your
+              Hirexa AI account.
             </p>
-            {email ? (
+            {destinationLabel ? (
               <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
-                Code sent to {email}
+                Code sent to {destinationLabel}
               </p>
             ) : null}
           </div>
@@ -169,7 +181,13 @@ export default function OnboardingEmailConfirmationStep({
             </div>
 
             {message ? (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+              <div
+                className={
+                  messageType === "error"
+                    ? "rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800"
+                    : "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"
+                }
+              >
                 {message}
               </div>
             ) : null}

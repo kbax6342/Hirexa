@@ -80,7 +80,7 @@ export const marketingPages = {
       description:
         "Hirexa helps you move from discovery to application support without bouncing between disconnected tools.",
       ctas: [
-        { href: "/resume", label: "Get started" },
+        { href: "/login", label: "Get started" },
         { href: "/how-it-works", label: "See how it works", variant: "secondary" },
       ],
       stats: [
@@ -204,7 +204,7 @@ export const marketingPages = {
       description:
         "Start with your profile, explore better-fit opportunities, and use Hirexa tools to act with more consistency.",
       ctas: [
-        { href: "/resume", label: "Start with Hirexa" },
+        { href: "/login", label: "Start with Hirexa" },
         { href: "/jobs", label: "Browse jobs", variant: "secondary" },
       ],
     },
@@ -335,7 +335,7 @@ export const marketingPages = {
       description:
         "Hirexa is focused on helping job seekers move with more structure, less repetitive work, and better support across the hiring process.",
       ctas: [
-        { href: "/resume", label: "Start your profile" },
+        { href: "/login", label: "Start your profile" },
         { href: "/how-it-works", label: "Explore the workflow", variant: "secondary" },
       ],
       stats: [

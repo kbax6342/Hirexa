@@ -30,6 +30,7 @@ import HirePilotPaywall from "@/app/components/hirepilot/HirePilotPaywall";
 import { Textarea } from "@/app/components/ui/textarea";
 import {
   getSupportedDisplayAudioMimeType,
+  type DisplayAudioCaptureDiagnostics,
   type DisplayAudioCaptureSession,
 } from "@/app/lib/hirepilot/displayAudioCapture";
 import {
@@ -50,6 +51,7 @@ type PracticeMode = "live" | "practice" | "mock";
 type MockInterviewTrack = "behavioral" | "technical" | "leadership";
 type DetectionStatus = "idle" | "found" | "none";
 type ListeningSource = "microphone" | "computer";
+type DetectedQuestionSource = "mic" | "shared-audio";
 
 type HirePilotResponse = {
   ok: boolean;
@@ -277,6 +279,19 @@ function debugHirePilot(message: string, data?: Record<string, unknown>) {
   console.log(`[hirepilot] ${message}`);
 }
 
+function debugHirePilotAudio(message: string, data?: Record<string, unknown>) {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+
+  if (data) {
+    console.info(`[HIREPILOT_AUDIO] ${message}`, data);
+    return;
+  }
+
+  console.info(`[HIREPILOT_AUDIO] ${message}`);
+}
+
 function formatRecognitionError(error: string) {
   if (error === "not-allowed" || error === "service-not-allowed") {
     return "Microphone permission was denied.";
@@ -330,8 +345,10 @@ export default function HirePilotClient() {
   const keepListeningRef = useRef(false);
   const transcriptRef = useRef("");
   const combinedTranscriptRef = useRef("");
+  const liveTranscriptSourceRef = useRef<DetectedQuestionSource | null>(null);
   const stopHandledRef = useRef(false);
   const lastQuestionKeyRef = useRef("");
+  const lastGeneratedQuestionKeyRef = useRef("");
   const sessionInputSourceRef = useRef<HirePilotSessionInputSource | null>(null);
   const reportEligibleRef = useRef(false);
   const completingSessionRef = useRef(false);
@@ -341,6 +358,14 @@ export default function HirePilotClient() {
   const displayRecorderStoppedPromiseRef = useRef<Promise<void> | null>(null);
   const displayRecorderStoppedResolveRef = useRef<(() => void) | null>(null);
   const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const answerGenerationPromiseRef = useRef<Promise<void> | null>(null);
+  const liveQuestionDetectionTimeoutRef = useRef<number | null>(null);
+  const sharedAudioPendingTranscriptionsRef = useRef(0);
+  const isGeneratingRef = useRef(false);
+  const pendingGeneratedQuestionRef = useRef<{
+    question: string;
+    questionKey: string;
+  } | null>(null);
 
   const [activeMode, setActiveMode] = useState<PracticeMode>("live");
   const [isSupported, setIsSupported] = useState(false);
@@ -351,7 +376,13 @@ export default function HirePilotClient() {
   const [statusMessage, setStatusMessage] = useState("Microphone idle");
   const [micError, setMicError] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
+  const [sharedAudioListening, setSharedAudioListening] = useState(false);
+  const [sharedAudioTranscribing, setSharedAudioTranscribing] = useState(false);
+  const [sharedAudioError, setSharedAudioError] = useState<string | null>(null);
+  const [sharedAudioTranscript, setSharedAudioTranscript] = useState("");
   const [detectedQuestion, setDetectedQuestion] = useState("");
+  const [lastQuestionSource, setLastQuestionSource] =
+    useState<DetectedQuestionSource | null>(null);
   const [detectionStatus, setDetectionStatus] = useState<DetectionStatus>("idle");
   const [answer, setAnswer] = useState("");
   const [tips, setTips] = useState<string[]>(defaultTips);
@@ -391,6 +422,8 @@ export default function HirePilotClient() {
   const [reportLoading, setReportLoading] = useState(false);
   const [completedSessionSource, setCompletedSessionSource] =
     useState<HirePilotSessionInputSource | null>(null);
+  const [displayAudioDiagnostics, setDisplayAudioDiagnostics] =
+    useState<DisplayAudioCaptureDiagnostics | null>(null);
 
   const activeMockInterviewSet = mockInterviewQuestionSets[mockInterviewTrack];
   const activeMockQuestions = activeMockInterviewSet.questions;
@@ -404,6 +437,7 @@ export default function HirePilotClient() {
     "Tell me about yourself.";
   const isComputerAudioListening = activeListeningSource === "computer";
   const isAnyListening = isListening || isComputerAudioListening;
+  const micListening = isListening;
 
   const answerActionsDisabled = !answer.trim() || isGenerating;
   const detectedQuestionText =
@@ -425,12 +459,64 @@ export default function HirePilotClient() {
     ? "0 Credits Available"
     : "Practice Questions Free";
   const liveListeningLabel = isComputerAudioListening
-    ? "Listening to shared tab/app audio"
+    ? statusMessage
     : isListening
       ? "Listening to microphone"
       : accessBadgeLabel;
   const monthlyCreditBucket =
     Number(billingStatus.monthlyCredits ?? 0) + Number(billingStatus.rolloverCredits ?? 0);
+  const transcriptReceived = Boolean(normalizeSpace(liveTranscript));
+  const displayAudioTrackLabel = displayAudioDiagnostics?.audioTracks[0]?.label ?? null;
+  const captureSourceStatus =
+    activeListeningSource === "computer"
+      ? displayAudioTrackLabel
+        ? `Shared tab/app audio (${displayAudioTrackLabel})`
+        : "Shared tab/app audio"
+      : activeListeningSource === "microphone"
+        ? "Microphone"
+        : "Idle";
+  const answerGenerationStatus =
+    isGenerating ? "Generating" : normalizeSpace(answer) ? "Ready" : "Idle";
+  const liveQuestionStatus = detectedQuestion || "Waiting";
+  const currentQuestionSource: DetectedQuestionSource | null =
+    lastQuestionSource ??
+    (sharedAudioListening
+      ? "shared-audio"
+      : micListening
+        ? "mic"
+        : null);
+  const currentQuestionSourceLabel =
+    currentQuestionSource === "shared-audio"
+      ? "Shared tab/app audio"
+      : currentQuestionSource === "mic"
+        ? "Microphone"
+        : null;
+  const shouldShowSharedAudioTranscript =
+    activeMode === "live" && Boolean(normalizeSpace(sharedAudioTranscript));
+  const detectedQuestionCardTitle =
+    sharedAudioListening && !detectedQuestion
+      ? sharedAudioTranscribing
+        ? "Transcribing shared tab/app audio..."
+        : "Listening to shared tab/app audio..."
+      : micListening && !detectedQuestion
+        ? "Listening to microphone..."
+        : statusMessage === "Shared tab/app audio disconnected." && !detectedQuestion
+          ? "Shared tab/app audio stopped."
+          : detectedQuestion
+            ? "Question detected."
+          : detectedQuestionText;
+  const detectedQuestionCardHint =
+    sharedAudioListening && !detectedQuestion
+      ? sharedAudioTranscribing
+        ? "Listening to shared tab/app audio while HirePilot processes the latest chunk."
+        : "Waiting for a question..."
+      : micListening && !detectedQuestion
+        ? "Waiting for a question..."
+      : statusMessage === "Shared tab/app audio disconnected." && !detectedQuestion
+          ? "Reconnect and choose the Meet tab again if you want HirePilot to keep listening."
+        : detectedQuestion
+          ? "HirePilot will keep listening and update this card when it hears a new question."
+          : null;
 
   function resetInterviewReportState() {
     sessionInputSourceRef.current = null;
@@ -492,6 +578,16 @@ export default function HirePilotClient() {
     const nextAnswers = [...suggestedAnswersRef.current];
     nextAnswers[existingIndex] = nextEntry;
     suggestedAnswersRef.current = nextAnswers;
+  }
+
+  async function waitForAnswerGenerationToSettle() {
+    while (answerGenerationPromiseRef.current) {
+      try {
+        await answerGenerationPromiseRef.current;
+      } catch {
+        break;
+      }
+    }
   }
 
   const updateInterviewSession = useCallback(
@@ -566,6 +662,7 @@ export default function HirePilotClient() {
       }
 
       completingSessionRef.current = true;
+      await waitForAnswerGenerationToSettle();
 
       const transcript = normalizeSpace(combinedTranscriptRef.current || transcriptRef.current);
       const detectedQuestions = detectedQuestionsRef.current;
@@ -678,14 +775,12 @@ export default function HirePilotClient() {
         }
       }
 
-      transcriptRef.current = updatedTranscript;
       const combinedTranscript = normalizeSpace(`${updatedTranscript} ${interimTranscript}`);
-      combinedTranscriptRef.current = combinedTranscript;
-      setLiveTranscript(combinedTranscript);
       debugHirePilot("transcript updated", {
         length: combinedTranscript.length,
         preview: combinedTranscript.slice(0, 120),
       });
+      syncLiveTranscriptState(updatedTranscript, combinedTranscript, "mic");
     };
 
     recognition.onerror = (event) => {
@@ -725,6 +820,28 @@ export default function HirePilotClient() {
   }, []);
 
   useEffect(() => {
+    isGeneratingRef.current = isGenerating;
+
+    if (isGenerating) {
+      return;
+    }
+
+    const pendingQuestion = pendingGeneratedQuestionRef.current;
+    if (!pendingQuestion || !canAutoGenerateLiveAnswers()) {
+      return;
+    }
+
+    if (pendingQuestion.questionKey === lastGeneratedQuestionKeyRef.current) {
+      pendingGeneratedQuestionRef.current = null;
+      return;
+    }
+
+    pendingGeneratedQuestionRef.current = null;
+    lastGeneratedQuestionKeyRef.current = pendingQuestion.questionKey;
+    void generateAnswer(pendingQuestion.question, "default");
+  }, [activeMode, interviewSessionStarted, isGenerating, showPaywall]);
+
+  useEffect(() => {
     if (!copied) return;
 
     const timeout = window.setTimeout(() => {
@@ -738,6 +855,7 @@ export default function HirePilotClient() {
     return () => {
       keepListeningRef.current = false;
       recognitionRef.current?.abort();
+      clearLiveQuestionDetectionTimer();
 
       const recorder = displayRecorderRef.current;
       if (recorder && recorder.state !== "inactive") {
@@ -747,29 +865,159 @@ export default function HirePilotClient() {
   }, []);
 
   function resetLiveListeningState(nextStatusMessage: string) {
+    clearLiveQuestionDetectionTimer();
     transcriptRef.current = "";
     combinedTranscriptRef.current = "";
+    liveTranscriptSourceRef.current = null;
     stopHandledRef.current = false;
     lastQuestionKeyRef.current = "";
+    lastGeneratedQuestionKeyRef.current = "";
+    pendingGeneratedQuestionRef.current = null;
+    sharedAudioPendingTranscriptionsRef.current = 0;
     setLiveTranscript("");
+    setSharedAudioListening(false);
+    setSharedAudioTranscribing(false);
+    setSharedAudioError(null);
+    setSharedAudioTranscript("");
     setDetectedQuestion("");
+    setLastQuestionSource(null);
     setDetectionStatus("idle");
     setRequestError(null);
     setMicError(null);
+    setDisplayAudioDiagnostics(null);
     setStatusMessage(nextStatusMessage);
+  }
+
+  function clearLiveQuestionDetectionTimer() {
+    if (liveQuestionDetectionTimeoutRef.current == null || typeof window === "undefined") {
+      return;
+    }
+
+    window.clearTimeout(liveQuestionDetectionTimeoutRef.current);
+    liveQuestionDetectionTimeoutRef.current = null;
+  }
+
+  function canAutoGenerateLiveAnswers() {
+    return activeMode === "live" && interviewSessionStarted && !showPaywall;
+  }
+
+  function queueDetectedQuestionAnswer(question: string, questionKey: string) {
+    if (!canAutoGenerateLiveAnswers()) {
+      return;
+    }
+
+    if (lastGeneratedQuestionKeyRef.current === questionKey) {
+      return;
+    }
+
+    if (isGeneratingRef.current) {
+      pendingGeneratedQuestionRef.current = { question, questionKey };
+      return;
+    }
+
+    lastGeneratedQuestionKeyRef.current = questionKey;
+    void generateAnswer(question, "default");
+  }
+
+  function syncLiveTranscriptState(
+    finalTranscript: string,
+    combinedTranscript: string,
+    source: DetectedQuestionSource
+  ) {
+    transcriptRef.current = normalizeSpace(finalTranscript);
+    combinedTranscriptRef.current = normalizeSpace(combinedTranscript);
+    liveTranscriptSourceRef.current = source;
+    setLiveTranscript(combinedTranscriptRef.current);
+    if (source === "shared-audio") {
+      setSharedAudioTranscript(combinedTranscriptRef.current);
+    }
+    scheduleLiveQuestionDetection();
+  }
+
+  function handleLiveDetectedQuestion(
+    question: string,
+    questionKey: string,
+    source: DetectedQuestionSource | null = liveTranscriptSourceRef.current
+  ) {
+    const normalizedQuestion = normalizeSpace(question);
+    if (!normalizedQuestion || !questionKey) {
+      return false;
+    }
+
+    rememberDetectedQuestion(normalizedQuestion);
+    setDetectedQuestion(normalizedQuestion);
+    setLastQuestionSource(source);
+    setDetectionStatus("found");
+
+    const isNewQuestion = lastQuestionKeyRef.current !== questionKey;
+    lastQuestionKeyRef.current = questionKey;
+
+    if (isNewQuestion) {
+      debugHirePilotAudio("question extracted", {
+        source: source ?? "unknown",
+        questionPreview: normalizedQuestion.slice(0, 120),
+      });
+      queueDetectedQuestionAnswer(normalizedQuestion, questionKey);
+    }
+
+    return true;
+  }
+
+  function detectLiveQuestion() {
+    const transcript = combinedTranscriptRef.current;
+    if (!transcript || activeMode !== "live") {
+      return;
+    }
+
+    const detected = applyDetectedQuestion(transcript);
+    if (!detected.cleanedQuestion || !detected.questionKey) {
+      if (!lastQuestionKeyRef.current) {
+        setDetectionStatus(transcript.length >= 32 ? "none" : "idle");
+      }
+      return;
+    }
+
+    handleLiveDetectedQuestion(
+      detected.cleanedQuestion,
+      detected.questionKey,
+      liveTranscriptSourceRef.current
+    );
+  }
+
+  function scheduleLiveQuestionDetection() {
+    if (activeMode !== "live") {
+      return;
+    }
+
+    clearLiveQuestionDetectionTimer();
+
+    if (typeof window === "undefined") {
+      detectLiveQuestion();
+      return;
+    }
+
+    liveQuestionDetectionTimeoutRef.current = window.setTimeout(() => {
+      liveQuestionDetectionTimeoutRef.current = null;
+      detectLiveQuestion();
+    }, 900);
   }
 
   function appendTranscribedText(text: string) {
     const chunk = normalizeSpace(text);
     if (!chunk) return;
 
-    transcriptRef.current = normalizeSpace(`${transcriptRef.current} ${chunk}`);
-    combinedTranscriptRef.current = transcriptRef.current;
-    setLiveTranscript(transcriptRef.current);
+    const nextTranscript = normalizeSpace(`${transcriptRef.current} ${chunk}`);
+    setRequestError(null);
+    setSharedAudioError(null);
     debugHirePilot("display audio transcript updated", {
-      length: transcriptRef.current.length,
-      preview: transcriptRef.current.slice(0, 120),
+      length: nextTranscript.length,
+      preview: nextTranscript.slice(0, 120),
     });
+    debugHirePilotAudio("transcript received", {
+      length: chunk.length,
+      preview: chunk.slice(0, 120),
+    });
+    syncLiveTranscriptState(nextTranscript, nextTranscript, "shared-audio");
   }
 
   async function transcribeDisplayAudioChunk(blob: Blob) {
@@ -804,15 +1052,31 @@ export default function HirePilotClient() {
   }
 
   function queueDisplayAudioTranscription(blob: Blob) {
+    sharedAudioPendingTranscriptionsRef.current += 1;
+    setSharedAudioTranscribing(true);
+    debugHirePilotAudio("media recorder chunk sent", {
+      mimeType: blob.type || "audio/webm",
+      size: blob.size,
+    });
     transcriptionQueueRef.current = transcriptionQueueRef.current
       .catch(() => undefined)
       .then(async () => {
         try {
           await transcribeDisplayAudioChunk(blob);
         } catch (error) {
-          setRequestError(
-            error instanceof Error ? error.message : "Unable to transcribe shared audio."
+          const message =
+            error instanceof Error ? error.message : "Unable to transcribe shared audio.";
+          setRequestError(message);
+          setSharedAudioError(message);
+          debugHirePilotAudio("error", { message });
+        } finally {
+          sharedAudioPendingTranscriptionsRef.current = Math.max(
+            0,
+            sharedAudioPendingTranscriptionsRef.current - 1
           );
+          if (sharedAudioPendingTranscriptionsRef.current === 0) {
+            setSharedAudioTranscribing(false);
+          }
         }
       });
   }
@@ -835,6 +1099,12 @@ export default function HirePilotClient() {
 
     recorder.onerror = () => {
       setRequestError("Unable to capture shared tab or app audio.");
+      setSharedAudioError("Unable to capture shared tab or app audio.");
+      setSharedAudioTranscribing(false);
+      setStatusMessage("Shared tab/app audio capture encountered an error.");
+      debugHirePilotAudio("error", {
+        message: "Shared tab/app audio capture encountered an error.",
+      });
     };
 
     recorder.onstop = () => {
@@ -844,7 +1114,11 @@ export default function HirePilotClient() {
     };
 
     displayRecorderRef.current = recorder;
-    recorder.start(4000);
+    debugHirePilotAudio("shared audio recorder started", {
+      audioTrackCount: session.diagnostics.audioTrackCount,
+      sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
+    });
+    recorder.start(2500);
   }
 
   async function stopDisplayAudioRecorder() {
@@ -852,6 +1126,13 @@ export default function HirePilotClient() {
     const stoppedPromise = displayRecorderStoppedPromiseRef.current;
 
     if (recorder && recorder.state !== "inactive") {
+      if (typeof recorder.requestData === "function") {
+        try {
+          recorder.requestData();
+        } catch {
+          debugHirePilot("display audio recorder requestData failed before stop");
+        }
+      }
       recorder.stop();
     }
 
@@ -860,12 +1141,18 @@ export default function HirePilotClient() {
     }
 
     await transcriptionQueueRef.current.catch(() => undefined);
+    sharedAudioPendingTranscriptionsRef.current = 0;
+    setSharedAudioTranscribing(false);
     displayRecorderStoppedPromiseRef.current = null;
+  }
+
+  function extractLikelyQuestion(transcript: string) {
+    return extractInterviewQuestion(transcript);
   }
 
   function applyDetectedQuestion(transcript: string) {
     const rawCandidate = extractInterviewQuestionCandidate(transcript);
-    const cleanedQuestion = rawCandidate ? extractInterviewQuestion(rawCandidate) : null;
+    const cleanedQuestion = rawCandidate ? extractLikelyQuestion(rawCandidate) : null;
     const questionKey = normalizeQuestionKey(cleanedQuestion ?? "");
 
     return cleanedQuestion && questionKey
@@ -879,6 +1166,7 @@ export default function HirePilotClient() {
     }
 
     stopHandledRef.current = true;
+    clearLiveQuestionDetectionTimer();
     const finalTranscript = combinedTranscriptRef.current;
 
     debugHirePilot("stop listening clicked");
@@ -898,11 +1186,13 @@ export default function HirePilotClient() {
     });
 
     if (!detected.cleanedQuestion || !detected.questionKey) {
-      setDetectedQuestion("");
-      setDetectionStatus("none");
-      setAnswer("");
-      setResponseSource(null);
-      setRequestError(null);
+      if (!lastQuestionKeyRef.current && detectedQuestionsRef.current.length === 0) {
+        setDetectedQuestion("");
+        setDetectionStatus(finalTranscript ? "none" : "idle");
+        setAnswer("");
+        setResponseSource(null);
+        setRequestError(null);
+      }
       debugHirePilot("detected question state updated", {
         status: "none",
         question: null,
@@ -910,15 +1200,15 @@ export default function HirePilotClient() {
       return;
     }
 
-    lastQuestionKeyRef.current = detected.questionKey;
-    rememberDetectedQuestion(detected.cleanedQuestion);
-    setDetectedQuestion(detected.cleanedQuestion);
-    setDetectionStatus("found");
+    handleLiveDetectedQuestion(
+      detected.cleanedQuestion,
+      detected.questionKey,
+      liveTranscriptSourceRef.current
+    );
     debugHirePilot("detected question state updated", {
       status: "found",
       question: detected.cleanedQuestion,
     });
-    await generateAnswer(detected.cleanedQuestion, "default");
   }
 
   async function generateAnswer(
@@ -930,71 +1220,81 @@ export default function HirePilotClient() {
     const normalizedQuestion = normalizeSpace(question);
     if (!normalizedQuestion) return;
     const practiceMode = options?.practiceMode ?? (activeMode === "practice" || activeMode === "mock");
-
-    debugHirePilot("answer generation started", {
-      mode,
-      question: normalizedQuestion,
-      practiceMode,
-    });
-
-    if (!practiceMode) {
-      const accessAllowed = await ensureInterviewSession();
-      if (!accessAllowed) return;
-    }
-
-    setDetectedQuestion(normalizedQuestion);
-    setRequestError(null);
-    setIsGenerating(true);
-    setActiveRewrite(mode === "default" ? null : mode);
-
-    try {
-      const res = await fetch("/api/job-tools/agents/hirepilot", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: normalizedQuestion,
-          mode,
-          currentAnswer: answerOverride ?? answer,
-          practiceMode,
-        }),
+    const generationPromise = (async () => {
+      debugHirePilot("answer generation started", {
+        mode,
+        question: normalizedQuestion,
+        practiceMode,
       });
 
-      const data = await readJsonSafely<HirePilotResponse>(res, {
-        ok: false,
-        error: "Invalid server response.",
-      });
-      if (!res.ok || !data.ok) {
-        if (res.status === 403) {
-          setBillingStatus(toBillingStatus(data));
-          setShowPaywall(true);
+      if (!practiceMode) {
+        const accessAllowed = await ensureInterviewSession();
+        if (!accessAllowed) return;
+      }
+
+      setDetectedQuestion(normalizedQuestion);
+      setRequestError(null);
+      setIsGenerating(true);
+      setActiveRewrite(mode === "default" ? null : mode);
+
+      try {
+        const res = await fetch("/api/job-tools/agents/hirepilot", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            question: normalizedQuestion,
+            mode,
+            currentAnswer: answerOverride ?? answer,
+            practiceMode,
+          }),
+        });
+
+        const data = await readJsonSafely<HirePilotResponse>(res, {
+          ok: false,
+          error: "Invalid server response.",
+        });
+        if (!res.ok || !data.ok) {
+          if (res.status === 403) {
+            setBillingStatus(toBillingStatus(data));
+            setShowPaywall(true);
+          }
+          throw new Error(data.error || "Failed to generate an interview answer.");
         }
-        throw new Error(data.error || "Failed to generate an interview answer.");
-      }
 
-      setAnswer(data.answer ?? "");
-      setTips(Array.isArray(data.tips) && data.tips.length > 0 ? data.tips : defaultTips);
-      setResponseSource(data.source ?? null);
-      if (!practiceMode && data.answer) {
-        rememberSuggestedAnswer(normalizedQuestion, data.answer, data.source ?? null);
+        setAnswer(data.answer ?? "");
+        setTips(Array.isArray(data.tips) && data.tips.length > 0 ? data.tips : defaultTips);
+        setResponseSource(data.source ?? null);
+        if (!practiceMode && data.answer) {
+          rememberSuggestedAnswer(normalizedQuestion, data.answer, data.source ?? null);
+        }
+        debugHirePilot("answer generation completed", {
+          success: true,
+          source: data.source ?? null,
+        });
+      } catch (error) {
+        setRequestError(
+          error instanceof Error ? error.message : "Failed to generate an interview answer."
+        );
+        debugHirePilot("answer generation completed", {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      } finally {
+        setIsGenerating(false);
+        setActiveRewrite(null);
       }
-      debugHirePilot("answer generation completed", {
-        success: true,
-        source: data.source ?? null,
-      });
-    } catch (error) {
-      setRequestError(
-        error instanceof Error ? error.message : "Failed to generate an interview answer."
-      );
-      debugHirePilot("answer generation completed", {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-    } finally {
-      setIsGenerating(false);
-      setActiveRewrite(null);
-    }
+    })();
+
+    const trackedGenerationPromise = generationPromise.finally(() => {
+      if (answerGenerationPromiseRef.current === trackedGenerationPromise) {
+        answerGenerationPromiseRef.current = null;
+      }
+    });
+    answerGenerationPromiseRef.current = trackedGenerationPromise;
+
+    await answerGenerationPromiseRef.current;
   }
 
   const loadHirePilotStatus = useCallback(async () => {
@@ -1121,6 +1421,7 @@ export default function HirePilotClient() {
 
     resetLiveListeningState("Listening to microphone");
     keepListeningRef.current = true;
+    setDisplayAudioDiagnostics(null);
     debugHirePilot("start listening");
 
     try {
@@ -1154,24 +1455,43 @@ export default function HirePilotClient() {
   }
 
   async function handleComputerAudioConnected(session: DisplayAudioCaptureSession) {
-    resetLiveListeningState("Listening to shared tab/app audio");
+    resetLiveListeningState(
+      "Listening to shared tab/app audio — keep the Google Meet tab audio shared."
+    );
     setActiveListeningSource("computer");
+    setSharedAudioListening(true);
+    setSharedAudioError(null);
+    setDisplayAudioDiagnostics(session.diagnostics);
     setIsInfoPanelCollapsed(true);
+    debugHirePilotAudio("shared audio capture started", {
+      audioTrackCount: session.diagnostics.audioTrackCount,
+      sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
+    });
 
     try {
       startDisplayAudioRecorder(session);
       await markInterviewSessionSource("tab_audio", true);
     } catch {
       setActiveListeningSource(null);
+      setSharedAudioListening(false);
+      setSharedAudioTranscribing(false);
+      setSharedAudioError("Unable to capture shared tab or app audio.");
       setRequestError("Unable to capture shared tab or app audio.");
       session.stop();
+      debugHirePilotAudio("error", {
+        message: "Unable to capture shared tab or app audio.",
+      });
     }
   }
 
   async function handleComputerAudioDisconnected() {
     setActiveListeningSource((current) => (current === "computer" ? null : current));
+    setSharedAudioListening(false);
+    setSharedAudioTranscribing(false);
     await stopDisplayAudioRecorder();
-    setStatusMessage("Microphone idle");
+    setStatusMessage("Shared tab/app audio disconnected.");
+    setDisplayAudioDiagnostics(null);
+    debugHirePilotAudio("shared audio capture stopped");
     await finalizeTranscriptDetection();
     await completeInterviewSession();
   }
@@ -1205,10 +1525,14 @@ export default function HirePilotClient() {
       extractInterviewQuestion(question) ?? `${normalizeSpace(question).replace(/[?!.]+$/, "")}?`;
     lastQuestionKeyRef.current = normalizeQuestionKey(normalizedQuestion);
     setDetectedQuestion(normalizedQuestion);
+    setLastQuestionSource(null);
     setDetectionStatus("found");
     setLiveTranscript("");
     transcriptRef.current = "";
     combinedTranscriptRef.current = "";
+    liveTranscriptSourceRef.current = null;
+    setSharedAudioTranscript("");
+    setSharedAudioError(null);
     setRequestError(null);
     setAnswer("");
     setResponseSource(null);
@@ -1249,10 +1573,14 @@ export default function HirePilotClient() {
       extractInterviewQuestion(question) ?? `${normalizeSpace(question).replace(/[?!.]+$/, "")}?`;
     lastQuestionKeyRef.current = normalizeQuestionKey(normalizedQuestion);
     setDetectedQuestion(normalizedQuestion);
+    setLastQuestionSource(null);
     setDetectionStatus("found");
     setLiveTranscript("");
     transcriptRef.current = "";
     combinedTranscriptRef.current = "";
+    liveTranscriptSourceRef.current = null;
+    setSharedAudioTranscript("");
+    setSharedAudioError(null);
     setRequestError(null);
     setAnswer("");
     setResponseSource(null);
@@ -1890,11 +2218,52 @@ export default function HirePilotClient() {
                       </div>
                     ) : null}
 
+                    {isAnyListening ? (
+                      <div className="rounded-2xl border border-sky-300/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                        {statusMessage}
+                      </div>
+                    ) : null}
+
                     <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                       <div className="text-sm font-semibold text-white">Live Transcript</div>
                       <p className="mt-2 min-h-20 text-sm leading-6 text-slate-300">
                         {liveTranscript || "HirePilot will show captured speech here while you are listening."}
                       </p>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Capture Source
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {captureSourceStatus}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Transcript Received
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {transcriptReceived ? "Yes" : "No"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Last Detected Question
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {liveQuestionStatus}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Answer Generation
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {answerGenerationStatus}
+                        </div>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -2099,10 +2468,76 @@ export default function HirePilotClient() {
                   When HirePilot hears a likely interview question, it will appear here.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 text-lg font-medium text-white">
-                  {detectedQuestionText}
+              <CardContent className="space-y-4">
+                {activeMode === "live" ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium",
+                        sharedAudioListening || sharedAudioTranscribing || micListening
+                          ? "bg-sky-500/10 text-sky-100"
+                          : "bg-white/10 text-slate-300"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          sharedAudioListening || sharedAudioTranscribing || micListening
+                            ? "animate-pulse bg-emerald-300"
+                            : "bg-slate-500"
+                        )}
+                      />
+                      {detectedQuestionCardTitle}
+                    </span>
+
+                    {currentQuestionSourceLabel ? (
+                      <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200">
+                        Source: {currentQuestionSourceLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                  {detectedQuestion ? (
+                    <div className="space-y-3">
+                      <div className="text-lg font-medium text-white">{detectedQuestion}</div>
+                      {currentQuestionSourceLabel ? (
+                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                          Source: {currentQuestionSourceLabel}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-lg font-medium text-white">
+                        {detectedQuestionCardTitle}
+                      </div>
+                      {detectedQuestionCardHint ? (
+                        <div className="text-sm leading-6 text-slate-300">
+                          {detectedQuestionCardHint}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
+
+                {sharedAudioError && activeMode === "live" ? (
+                  <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                    {sharedAudioError}
+                  </div>
+                ) : null}
+
+                {shouldShowSharedAudioTranscript ? (
+                  <details className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                    <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                      View heard text
+                    </summary>
+                    <p className="mt-3 text-sm leading-6 text-slate-300">
+                      {sharedAudioTranscript}
+                    </p>
+                  </details>
+                ) : null}
               </CardContent>
             </Card>
 

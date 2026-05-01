@@ -1,6 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/app/lib/prisma";
+import { readOnboardingConfirmationState } from "@/app/lib/onboarding/confirmation";
+import { normalizePhoneForSms } from "@/app/lib/verification/phone";
 
 const PENDING_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -40,6 +42,8 @@ export async function cleanupExpiredPendingVerifications(
     select: {
       id: true,
       email: true,
+      phone: true,
+      keyQuestions: true,
       userId: true,
       user: {
         select: {
@@ -61,16 +65,33 @@ export async function cleanupExpiredPendingVerifications(
 
   for (const profile of expiredProfiles) {
     const email = normalizeEmail(profile.email) ?? normalizeEmail(profile.user?.email);
+    const confirmationState = readOnboardingConfirmationState(profile.keyQuestions);
+    const phone =
+      normalizePhoneForSms(confirmationState.phone) ??
+      normalizePhoneForSms(profile.phone) ??
+      null;
+    const destinations = [email, phone].filter(
+      (value): value is string => Boolean(value)
+    );
+    const emailDestinations = email ? [email] : [];
 
     const result = await prisma.$transaction(async (tx) => {
       let deletedOtps = 0;
 
-      if (email) {
+      if (destinations.length > 0) {
         const deletedEmailOtp = await tx.emailOtp.deleteMany({
-          where: { email },
+          where: {
+            email: {
+              in: destinations,
+            },
+          },
         });
         const deletedLegacyOtp = await tx.emailVerificationCode.deleteMany({
-          where: { email },
+          where: {
+            email: {
+              in: emailDestinations,
+            },
+          },
         });
         deletedOtps = deletedEmailOtp.count + deletedLegacyOtp.count;
       }

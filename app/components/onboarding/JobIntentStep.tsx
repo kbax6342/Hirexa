@@ -12,10 +12,9 @@ import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import {
   JOB_INTEREST_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
-  RESUME_ROUTE,
-  getNextOnboardingRoute,
-  getPreviousOnboardingRoute,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
+  getNextPrimaryOnboardingRoute,
+  getPreviousPrimaryOnboardingRoute,
 } from "@/app/lib/onboarding-flow";
 
 type SavedIntentResponse = {
@@ -50,10 +49,10 @@ export default function JobIntentStep() {
   const normalizedRole = useMemo(() => normalizeText(role), [role]);
   const canContinue = Boolean(normalizedRole);
 
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(JOB_INTEREST_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(JOB_INTEREST_ROUTE) + 1;
   const progressPercent = Math.max(
     8,
-    Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+    Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
   );
 
   useEffect(() => {
@@ -152,7 +151,7 @@ export default function JobIntentStep() {
       }
 
       router.push(
-        getNextOnboardingRoute(JOB_INTEREST_ROUTE) ?? "/onboarding/job-goal"
+        getNextPrimaryOnboardingRoute(JOB_INTEREST_ROUTE) ?? "/onboarding/job-goal"
       );
     } catch (submitError) {
       setError(
@@ -166,7 +165,7 @@ export default function JobIntentStep() {
   }
 
   function handleBack() {
-    router.push(getPreviousOnboardingRoute(JOB_INTEREST_ROUTE) ?? RESUME_ROUTE);
+    router.push(getPreviousPrimaryOnboardingRoute(JOB_INTEREST_ROUTE) ?? "/login");
   }
 
   return (

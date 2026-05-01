@@ -11,7 +11,8 @@ import {
 } from "@/app/lib/locationOptions";
 import {
   HIRING_SIGNAL_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  JOB_LOCATION_ROUTE,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
   WORK_STORY_ROUTE,
 } from "@/app/lib/onboarding-flow";
 import { cn } from "@/app/lib/utils";
@@ -68,12 +69,13 @@ function isValidPostalCode(value: string) {
 }
 
 function getLocationProgressPercent() {
-  const hiringSignalStep = ONBOARDING_FLOW_ROUTES.indexOf(HIRING_SIGNAL_ROUTE) + 1;
-  const locationStep = Math.max(1, hiringSignalStep - 1);
-
   return Math.max(
     8,
-    Math.round((locationStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+    Math.round(
+      ((PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(JOB_LOCATION_ROUTE) + 1) /
+        PRIMARY_ONBOARDING_FLOW_ROUTES.length) *
+        100
+    )
   );
 }
 

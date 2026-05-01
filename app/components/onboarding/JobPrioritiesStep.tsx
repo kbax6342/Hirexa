@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { ArrowLeftIcon, CheckIcon } from "@heroicons/react/24/outline";
 
 import { Button } from "@/app/components/ui/button";
-import { useIsMobile } from "@/app/components/ui/use-mobile";
 import {
   ALL_JOB_PRIORITY_OPTIONS,
   getJobPriorityOptionsForRole,
@@ -15,11 +14,10 @@ import {
   JOB_GOAL_ROUTE,
   JOB_INTEREST_ROUTE,
   JOB_PRIORITIES_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
   RESUME_IMPORT_ROUTE,
-  WORK_STORY_ROUTE,
-  getNextOnboardingRoute,
-  getPreviousOnboardingRoute,
+  getNextPrimaryOnboardingRoute,
+  getPreviousPrimaryOnboardingRoute,
 } from "@/app/lib/onboarding-flow";
 
 type SavedPrioritiesResponse = {
@@ -62,7 +60,6 @@ function normalizeSavedPriorities(value: string[] | null | undefined) {
 
 export default function JobPrioritiesStep() {
   const router = useRouter();
-  const isMobile = useIsMobile();
 
   const [role, setRole] = useState("");
   const [jobSearchGoal, setJobSearchGoal] = useState("");
@@ -76,12 +73,12 @@ export default function JobPrioritiesStep() {
     () => getJobPriorityOptionsForRole(role, selectedPriorities, 4),
     [role, selectedPriorities]
   );
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(JOB_PRIORITIES_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(JOB_PRIORITIES_ROUTE) + 1;
   const progressPercent = useMemo(
     () =>
       Math.max(
         8,
-        Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+        Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
       ),
     [currentStep]
   );
@@ -190,15 +187,8 @@ export default function JobPrioritiesStep() {
         );
       }
 
-      const shouldSkipResumeImport =
-        typeof window !== "undefined"
-          ? window.matchMedia("(min-width: 768px)").matches
-          : !isMobile;
-
       router.push(
-        shouldSkipResumeImport
-          ? WORK_STORY_ROUTE
-          : getNextOnboardingRoute(JOB_PRIORITIES_ROUTE) ?? RESUME_IMPORT_ROUTE
+        getNextPrimaryOnboardingRoute(JOB_PRIORITIES_ROUTE) ?? RESUME_IMPORT_ROUTE
       );
     } catch (submitError) {
       setError(
@@ -212,9 +202,7 @@ export default function JobPrioritiesStep() {
   }
 
   function handleBack() {
-    router.push(
-      getPreviousOnboardingRoute(JOB_PRIORITIES_ROUTE) ?? JOB_GOAL_ROUTE
-    );
+    router.push(getPreviousPrimaryOnboardingRoute(JOB_PRIORITIES_ROUTE) ?? JOB_GOAL_ROUTE);
   }
 
   return (

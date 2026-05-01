@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const isProduction = process.env.NODE_ENV === "production";
+const enableVercelLiveFeedback =
+  !isProduction || process.env.NEXT_PUBLIC_ENABLE_VERCEL_LIVE_FEEDBACK === "true";
+const enableTikTokPixel = process.env.NEXT_PUBLIC_ENABLE_TIKTOK_PIXEL === "true";
 
 const contentSecurityPolicyDirectives = [
   "default-src 'self'",
@@ -18,7 +21,8 @@ const contentSecurityPolicyDirectives = [
     "https://www.gstatic.com",
     "https://www.recaptcha.net",
     "https://www.dropbox.com",
-    "https://analytics.tiktok.com",
+    enableVercelLiveFeedback ? "https://vercel.live" : null,
+    enableTikTokPixel ? "https://analytics.tiktok.com" : null,
     // TODO(security): Expand script-src only when additional client-side providers
     // are verified in production. Keep Google OAuth / Drive Picker in sync here.
   ]
@@ -26,7 +30,18 @@ const contentSecurityPolicyDirectives = [
     .join(" "),
   "style-src 'self' 'unsafe-inline'",
   // Meta Pixel uses a noscript image beacon against www.facebook.com/tr.
-  "img-src 'self' data: blob: https: https://www.facebook.com https://analytics.tiktok.com https://ads.tiktok.com",
+  [
+    "img-src",
+    "'self'",
+    "data:",
+    "blob:",
+    "https:",
+    "https://www.facebook.com",
+    enableTikTokPixel ? "https://analytics.tiktok.com" : null,
+    enableTikTokPixel ? "https://ads.tiktok.com" : null,
+  ]
+    .filter(Boolean)
+    .join(" "),
   "font-src 'self' data:",
   [
     "connect-src",
@@ -47,11 +62,15 @@ const contentSecurityPolicyDirectives = [
     "https://www.linkedin.com",
     "https://www.dropbox.com",
     "https://content.dropboxapi.com",
-    "https://analytics.tiktok.com",
-    "https://ads.tiktok.com",
+    enableVercelLiveFeedback ? "https://vercel.live" : null,
+    enableTikTokPixel ? "https://analytics.tiktok.com" : null,
+    enableTikTokPixel ? "https://ads.tiktok.com" : null,
+    enableTikTokPixel ? "https://analytics-ipv6.tiktokw.us" : null,
     // TODO(security): Expand connect-src if new browser-side SaaS integrations
     // are added. Prefer explicit domains over broad wildcards.
-  ].join(" "),
+  ]
+    .filter(Boolean)
+    .join(" "),
   [
     "frame-src",
     "'self'",
@@ -66,7 +85,10 @@ const contentSecurityPolicyDirectives = [
     "https://recaptcha.google.com",
     "https://www.recaptcha.net",
     "https://www.facebook.com",
-  ].join(" "),
+    enableVercelLiveFeedback ? "https://vercel.live" : null,
+  ]
+    .filter(Boolean)
+    .join(" "),
   "worker-src 'self' blob:",
   "child-src 'self' blob: https://docs.google.com https://drive.google.com https://content.googleapis.com https://checkout.stripe.com https://js.stripe.com",
   "media-src 'self' blob: data:",
@@ -87,6 +109,8 @@ const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   {
     key: "Permissions-Policy",
+    // HirePilot uses microphone + display capture only. Keep camera blocked until
+    // a first-party camera feature actually ships.
     value:
       "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), payment=(self), usb=(), microphone=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)",
   },

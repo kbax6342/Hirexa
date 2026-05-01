@@ -9,7 +9,7 @@ import {
 import { Button } from "@/app/components/ui/button";
 import {
   DISPLAY_AUDIO_NO_AUDIO_ERROR,
-  DISPLAY_AUDIO_PERMISSION_NOTICE,
+  type DisplayAudioCaptureDiagnostics,
   type DisplayAudioCaptureSession,
   type DisplayAudioCaptureStatus,
   DisplayAudioCaptureError,
@@ -42,6 +42,13 @@ function getStatusLabel(status: DisplayAudioCaptureStatus) {
   }
 }
 
+const displayAudioSetupSteps = [
+  "Open HirePilot in one tab.",
+  "Start or keep Google Meet in another tab.",
+  "Click \"Share tab or app audio\" in HirePilot.",
+  "In Chrome's picker, select the Google Meet tab and enable \"Share tab audio\".",
+];
+
 export default function ComputerAudioCaptureCard({
   disabled = false,
   onBeforeConnect,
@@ -52,6 +59,8 @@ export default function ComputerAudioCaptureCard({
   const [status, setStatus] = useState<DisplayAudioCaptureStatus>(() =>
     isDisplayAudioCaptureSupported() ? "idle" : "unsupported"
   );
+  const [captureDiagnostics, setCaptureDiagnostics] =
+    useState<DisplayAudioCaptureDiagnostics | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const cleanupSession = useCallback(async (notifyParent: boolean) => {
@@ -69,6 +78,7 @@ export default function ComputerAudioCaptureCard({
   async function handleDisconnect() {
     await cleanupSession(true);
     setStatus(isDisplayAudioCaptureSupported() ? "idle" : "unsupported");
+    setCaptureDiagnostics(null);
     setErrorMessage(null);
   }
 
@@ -96,6 +106,7 @@ export default function ComputerAudioCaptureCard({
       });
 
       sessionRef.current = session;
+      setCaptureDiagnostics(session.diagnostics);
       setStatus("connected");
       await onConnected?.(session);
     } catch (error) {
@@ -103,6 +114,8 @@ export default function ComputerAudioCaptureCard({
         sessionRef.current.stop();
         sessionRef.current = null;
       }
+
+      setCaptureDiagnostics(null);
 
       if (error instanceof DisplayAudioCaptureError) {
         setStatus(
@@ -149,8 +162,15 @@ export default function ComputerAudioCaptureCard({
         </div>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-500/10 px-4 py-3 text-sm leading-6 text-sky-100">
-        {DISPLAY_AUDIO_PERMISSION_NOTICE}
+      <div className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+        <ol className="space-y-2 leading-6">
+          {displayAudioSetupSteps.map((step, index) => (
+            <li key={step} className="flex gap-3">
+              <span className="font-semibold text-sky-50">{index + 1}.</span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ol>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -203,6 +223,27 @@ export default function ComputerAudioCaptureCard({
           )}
         >
           {errorMessage}
+        </div>
+      ) : null}
+
+      {status === "connected" ? (
+        <div className="mt-4 space-y-3">
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            If the transcript stays empty, reconnect and choose the Meet tab, not
+            the HirePilot tab.
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs leading-6 text-slate-300">
+            <div>Audio tracks detected: {captureDiagnostics?.audioTrackCount ?? 0}</div>
+            <div>
+              Shared audio source:{" "}
+              {captureDiagnostics?.audioTracks[0]?.label ?? "Shared tab/app audio"}
+            </div>
+            <div>
+              Track enabled: {captureDiagnostics?.audioTracks[0]?.enabled ? "Yes" : "No"}{" "}
+              • muted: {captureDiagnostics?.audioTracks[0]?.muted ? "Yes" : "No"}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

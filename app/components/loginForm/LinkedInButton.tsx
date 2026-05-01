@@ -3,6 +3,8 @@
 import { signIn } from "next-auth/react";
 import { useState } from "react";
 import type { SVGProps } from "react";
+
+import { DASHBOARD_ROUTE } from "@/app/lib/onboarding-flow";
 import { cn } from "@/app/lib/utils";
 
 type LinkedInButtonProps = {
@@ -24,7 +26,7 @@ export function LinkedInLogo(props: SVGProps<SVGSVGElement>) {
 }
 
 export default function LinkedInButton({
-  callbackUrl = "/resume",
+  callbackUrl = DASHBOARD_ROUTE,
   className,
   disabled = false,
   onBeforeSignIn,

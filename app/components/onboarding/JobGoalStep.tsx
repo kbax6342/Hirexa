@@ -11,9 +11,9 @@ import {
   JOB_GOAL_ROUTE,
   JOB_INTEREST_ROUTE,
   JOB_PRIORITIES_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
-  getNextOnboardingRoute,
-  getPreviousOnboardingRoute,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
+  getNextPrimaryOnboardingRoute,
+  getPreviousPrimaryOnboardingRoute,
 } from "@/app/lib/onboarding-flow";
 
 type SavedIntentResponse = {
@@ -41,12 +41,12 @@ export default function JobGoalStep() {
     () => getJobGoalOptionsForRole(role, [], 4),
     [role]
   );
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(JOB_GOAL_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(JOB_GOAL_ROUTE) + 1;
   const progressPercent = useMemo(
     () =>
       Math.max(
         8,
-        Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+        Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
       ),
     [currentStep]
   );
@@ -131,7 +131,7 @@ export default function JobGoalStep() {
       }
 
       router.push(
-        getNextOnboardingRoute(JOB_GOAL_ROUTE) ?? JOB_PRIORITIES_ROUTE
+        getNextPrimaryOnboardingRoute(JOB_GOAL_ROUTE) ?? JOB_PRIORITIES_ROUTE
       );
     } catch (submitError) {
       setError(
@@ -145,9 +145,7 @@ export default function JobGoalStep() {
   }
 
   function handleBack() {
-    router.push(
-      getPreviousOnboardingRoute(JOB_GOAL_ROUTE) ?? JOB_INTEREST_ROUTE
-    );
+    router.push(getPreviousPrimaryOnboardingRoute(JOB_GOAL_ROUTE) ?? JOB_INTEREST_ROUTE);
   }
 
   return (

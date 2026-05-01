@@ -4,7 +4,9 @@ export type PendingOnboardingSignup = {
   firstName: string;
   lastName: string;
   email: string;
+  phone: string;
   password: string;
+  verificationChannel: "email" | "sms";
 };
 
 export function readPendingOnboardingSignup(): PendingOnboardingSignup | null {
@@ -18,13 +20,23 @@ export function readPendingOnboardingSignup(): PendingOnboardingSignup | null {
     const firstName = String(parsed?.firstName ?? "").trim();
     const lastName = String(parsed?.lastName ?? "").trim();
     const email = String(parsed?.email ?? "").trim();
+    const phone = String(parsed?.phone ?? "").trim();
     const password = String(parsed?.password ?? "");
+    const verificationChannel =
+      parsed?.verificationChannel === "sms" ? "sms" : "email";
 
     if (!firstName || !lastName || !email || !password) {
       return null;
     }
 
-    return { firstName, lastName, email, password };
+    return {
+      firstName,
+      lastName,
+      email,
+      phone,
+      password,
+      verificationChannel,
+    };
   } catch {
     return null;
   }

@@ -61,7 +61,7 @@
     scroll-behavior: smooth;
   }
 
-  body {
+body {
     /* ✅ replaces @apply bg-background text-foreground */
     background:
       radial-gradient(900px 500px at 12% 18%, rgba(16, 80, 240, 0.25), transparent 60%),
@@ -75,6 +75,19 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+}
+
+html[data-share-safe-mode="on"] [data-sonner-toast] [data-title],
+html[data-share-safe-mode="on"] [data-sonner-toast] [data-description] {
+  display: none !important;
+}
+
+html[data-share-safe-mode="on"] [data-sonner-toast]::after {
+  content: "Hirexa notification hidden";
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
 }
 
 /* Utilities */

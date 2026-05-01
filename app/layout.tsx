@@ -13,12 +13,21 @@ import {
   getMetaPixelNoscriptUrl,
   META_PIXEL_ID,
 } from "./lib/meta-pixel";
+import { SHARE_SAFE_MODE_STORAGE_KEY } from "./lib/shareSafe";
 import Providers from "./providers";
 import StyledJsxRegistry from "./registry";
 
 export const dynamic = "force-dynamic";
 
 const socialPreviewImage = `${getSiteUrl()}/opengraph-image.png`;
+const shareSafeBootstrapScript = `
+  try {
+    var shareSafeMode = window.localStorage.getItem(${JSON.stringify(SHARE_SAFE_MODE_STORAGE_KEY)});
+    if (shareSafeMode === "true") {
+      document.documentElement.dataset.shareSafeMode = "on";
+    }
+  } catch (error) {}
+`;
 
 export const metadata: Metadata = {
   title: "Hirexa AI",
@@ -71,6 +80,9 @@ export default function RootLayout({
       <body className="font-sans antialiased">
         <Script id="meta-pixel" strategy="beforeInteractive">
           {getMetaPixelInitScript(META_PIXEL_ID)}
+        </Script>
+        <Script id="share-safe-bootstrap" strategy="beforeInteractive">
+          {shareSafeBootstrapScript}
         </Script>
         <noscript>
           {/* eslint-disable-next-line @next/next/no-img-element */}

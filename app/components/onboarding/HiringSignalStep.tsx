@@ -10,7 +10,7 @@ import {
   CREATE_ACCOUNT_ROUTE,
   HIRING_SIGNAL_ROUTE,
   JOB_LOCATION_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
 } from "@/app/lib/onboarding-flow";
 
 const HIRING_SIGNAL_OPTIONS = [
@@ -201,12 +201,12 @@ export default function HiringSignalStep() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(HIRING_SIGNAL_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(HIRING_SIGNAL_ROUTE) + 1;
   const progressPercent = useMemo(
     () =>
       Math.max(
         8,
-        Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+        Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
       ),
     [currentStep]
   );

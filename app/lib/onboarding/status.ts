@@ -2,20 +2,25 @@ import "server-only";
 
 import { prisma } from "@/app/lib/prisma";
 import {
-  BENEFITS_ROUTE,
+  HIRING_SIGNAL_ROUTE,
+  JOB_GOAL_ROUTE,
+  JOB_INTEREST_ROUTE,
+  JOB_LOCATION_ROUTE,
+  JOB_PRIORITIES_ROUTE,
   ONBOARDING_CONFIRMATION_ROUTE,
-  ONBOARDING_PROFILE_ROUTE,
-  QUESTIONS_CLIENTS_ROUTE,
+  RESUME_IMPORT_ROUTE,
+  WORK_STORY_ROUTE,
 } from "@/app/lib/onboarding-flow";
 import { readOnboardingConfirmationState } from "@/app/lib/onboarding/confirmation";
 
 export const onboardingStatusSelect = {
-  questionsCompleted: true,
   keyQuestions: true,
+  questionsCompleted: true,
   registrationStatus: true,
-  firstName: true,
-  lastName: true,
-  email: true,
+  emailVerifiedAt: true,
+  city: true,
+  state: true,
+  postalCode: true,
   benefitSelections: {
     select: { id: true },
     take: 1,
@@ -23,24 +28,88 @@ export const onboardingStatusSelect = {
   resume: {
     select: { id: true },
   },
+  jobInterests: {
+    select: { title: true },
+    take: 1,
+    orderBy: { id: "asc" },
+  },
 } as const;
 
 export type OnboardingStatusProfile = {
-  questionsCompleted?: boolean | null;
   keyQuestions?: unknown;
+  questionsCompleted?: boolean | null;
   registrationStatus?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
-  email?: string | null;
+  emailVerifiedAt?: Date | string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
   benefitSelections?: Array<{ id: string }> | null;
   resume?: { id: string } | null;
+  jobInterests?: Array<{ title?: string | null }> | null;
 } | null;
 
-function registrationStatus(profile: OnboardingStatusProfile) {
-  return profile?.registrationStatus?.trim() ?? null;
+function normalizeText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-export function hasCompletedQuestionsStep(profile: OnboardingStatusProfile) {
+function registrationStatus(profile: OnboardingStatusProfile) {
+  return normalizeText(profile?.registrationStatus);
+}
+
+function readKeyQuestions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => normalizeText(item))
+    .filter(Boolean);
+}
+
+function getKeyQuestionValue(profile: OnboardingStatusProfile, key: string) {
+  return readKeyQuestions(profile?.keyQuestions)[key];
+}
+
+function hasRoleFocus(profile: OnboardingStatusProfile) {
+  const keyQuestionRoleFocus = normalizeText(getKeyQuestionValue(profile, "roleFocus"));
+  if (keyQuestionRoleFocus) {
+    return true;
+  }
+
+  return Boolean(profile?.jobInterests?.some((job) => normalizeText(job?.title)));
+}
+
+function hasJobGoal(profile: OnboardingStatusProfile) {
+  return Boolean(normalizeText(getKeyQuestionValue(profile, "jobSearchGoal")));
+}
+
+function hasJobPriorities(profile: OnboardingStatusProfile) {
+  return readStringArray(getKeyQuestionValue(profile, "jobPriorities")).length > 0;
+}
+
+function hasLocationData(profile: OnboardingStatusProfile) {
+  return Boolean(
+    normalizeText(profile?.city) &&
+      normalizeText(profile?.state) &&
+      normalizeText(profile?.postalCode)
+  );
+}
+
+function hasHiringSignal(profile: OnboardingStatusProfile) {
+  return readStringArray(getKeyQuestionValue(profile, "hiringSignalTraits")).length > 0;
+}
+
+function hasWorkStory(profile: OnboardingStatusProfile) {
+  return readStringArray(getKeyQuestionValue(profile, "workStoryTags")).length > 0;
+}
+
+function hasCompletedLegacyQuestionsStep(profile: OnboardingStatusProfile) {
   const status = registrationStatus(profile);
 
   return Boolean(
@@ -52,7 +121,7 @@ export function hasCompletedQuestionsStep(profile: OnboardingStatusProfile) {
   );
 }
 
-export function hasCompletedBenefitsStep(profile: OnboardingStatusProfile) {
+function hasCompletedLegacyBenefitsStep(profile: OnboardingStatusProfile) {
   const status = registrationStatus(profile);
 
   return Boolean(
@@ -62,14 +131,45 @@ export function hasCompletedBenefitsStep(profile: OnboardingStatusProfile) {
   );
 }
 
+function hasCompletedLegacyOnboarding(profile: OnboardingStatusProfile) {
+  return (
+    hasCompletedLegacyQuestionsStep(profile) &&
+    hasCompletedLegacyBenefitsStep(profile)
+  );
+}
+
+export function hasCompletedQuestionsStep(profile: OnboardingStatusProfile) {
+  return (
+    hasCompletedLegacyQuestionsStep(profile) ||
+    (hasRoleFocus(profile) && hasJobGoal(profile) && hasJobPriorities(profile))
+  );
+}
+
+export function hasCompletedBenefitsStep(profile: OnboardingStatusProfile) {
+  return hasCompletedLegacyBenefitsStep(profile) || hasHiringSignal(profile);
+}
+
 export function isOnboardingFormComplete(profile: OnboardingStatusProfile) {
-  return hasCompletedQuestionsStep(profile) && hasCompletedBenefitsStep(profile);
+  if (hasCompletedLegacyOnboarding(profile)) {
+    return true;
+  }
+
+  return (
+    hasRoleFocus(profile) &&
+    hasJobGoal(profile) &&
+    hasJobPriorities(profile) &&
+    hasCompletedResumeImportStep(profile) &&
+    hasCompletedWorkStoryStep(profile) &&
+    hasCompletedLocationStep(profile) &&
+    hasHiringSignal(profile)
+  );
 }
 
 export function hasCompletedOnboardingEmailConfirmation(
   profile: OnboardingStatusProfile
 ) {
-  return readOnboardingConfirmationState(profile?.keyQuestions).emailVerified;
+  return Boolean(profile?.emailVerifiedAt) ||
+    readOnboardingConfirmationState(profile?.keyQuestions).emailVerified;
 }
 
 export function isOnboardingComplete(profile: OnboardingStatusProfile) {
@@ -84,14 +184,21 @@ export function hasUploadedResume(profile: OnboardingStatusProfile) {
 }
 
 export function hasCompletedProfileStep(profile: OnboardingStatusProfile) {
-  const status = registrationStatus(profile);
+  return hasRoleFocus(profile);
+}
 
+export function hasCompletedResumeImportStep(profile: OnboardingStatusProfile) {
   return Boolean(
-    status === "PROFILE_COMPLETE" ||
-      status === "QUESTIONS_COMPLETE_PENDING_BENEFITS" ||
-      status === "KEY_QUESTIONS_COMPLETE" ||
-      status === "BENEFITS_COMPLETE"
+    hasUploadedResume(profile) || hasWorkStory(profile) || hasLocationData(profile) || hasHiringSignal(profile)
   );
+}
+
+export function hasCompletedWorkStoryStep(profile: OnboardingStatusProfile) {
+  return Boolean(hasWorkStory(profile) || hasLocationData(profile) || hasHiringSignal(profile));
+}
+
+export function hasCompletedLocationStep(profile: OnboardingStatusProfile) {
+  return Boolean(hasLocationData(profile) || hasHiringSignal(profile));
 }
 
 export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
@@ -99,16 +206,36 @@ export function getNextOnboardingPath(profile: OnboardingStatusProfile) {
     return null;
   }
 
-  if (!hasCompletedProfileStep(profile)) {
-    return ONBOARDING_PROFILE_ROUTE;
+  if (hasCompletedLegacyOnboarding(profile)) {
+    return ONBOARDING_CONFIRMATION_ROUTE;
   }
 
-  if (!hasCompletedQuestionsStep(profile)) {
-    return QUESTIONS_CLIENTS_ROUTE;
+  if (!hasRoleFocus(profile)) {
+    return JOB_INTEREST_ROUTE;
   }
 
-  if (!hasCompletedBenefitsStep(profile)) {
-    return BENEFITS_ROUTE;
+  if (!hasJobGoal(profile)) {
+    return JOB_GOAL_ROUTE;
+  }
+
+  if (!hasJobPriorities(profile)) {
+    return JOB_PRIORITIES_ROUTE;
+  }
+
+  if (!hasCompletedResumeImportStep(profile)) {
+    return RESUME_IMPORT_ROUTE;
+  }
+
+  if (!hasCompletedWorkStoryStep(profile)) {
+    return WORK_STORY_ROUTE;
+  }
+
+  if (!hasCompletedLocationStep(profile)) {
+    return JOB_LOCATION_ROUTE;
+  }
+
+  if (!hasHiringSignal(profile)) {
+    return HIRING_SIGNAL_ROUTE;
   }
 
   return ONBOARDING_CONFIRMATION_ROUTE;
@@ -122,7 +249,7 @@ export async function getOnboardingStatusForUser(userId?: string | null) {
     onboardingEmailVerified: false,
     hasResume: false,
     hasProfileDetails: false,
-    nextPath: QUESTIONS_CLIENTS_ROUTE,
+    nextPath: JOB_INTEREST_ROUTE,
   };
 
   if (!userId) {

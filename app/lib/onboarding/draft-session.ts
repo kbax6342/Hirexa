@@ -10,6 +10,7 @@ import {
   getGuestUserCookieOptions,
   getOrCreateGuestOnboardingId,
 } from "@/app/lib/onboarding/start";
+import type { VerificationChannel } from "@/app/lib/verification/types";
 
 export const ONBOARDING_DRAFT_COOKIE = "hirexa_onboarding_draft";
 export const ONBOARDING_DRAFT_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -100,6 +101,8 @@ export type DraftSignupPayload = {
   firstName?: string;
   lastName?: string;
   email?: string;
+  phone?: string;
+  verificationChannel?: VerificationChannel;
 };
 
 export type OnboardingDraftPayload = {

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import SensitiveContent from "@/app/components/SensitiveContent";
+
 export const metadata: Metadata = {
   robots: {
     index: false,
@@ -13,5 +15,5 @@ type JobToolsLayoutProps = {
 };
 
 export default function JobToolsLayout({ children }: JobToolsLayoutProps) {
-  return children;
+  return <SensitiveContent mode="replace">{children}</SensitiveContent>;
 }

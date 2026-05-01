@@ -2,6 +2,14 @@
 export {};
 
 declare global {
+  interface HirexaDesktopBridge {
+    getShareSafeContentProtectionState?: () => Promise<boolean> | boolean;
+    minimizeWindow?: () => Promise<void> | void;
+    setShareSafeContentProtection?: (
+      enabled: boolean
+    ) => Promise<boolean | void> | boolean | void;
+  }
+
   interface Window {
     Dropbox?: {
       choose: (options: {
@@ -17,5 +25,7 @@ declare global {
         extensions?: string[];
       }) => void;
     };
+    electronAPI?: HirexaDesktopBridge;
+    hirexaDesktop?: HirexaDesktopBridge;
   }
 }

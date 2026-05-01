@@ -3,12 +3,12 @@ import { cookies } from "next/headers";
 
 import { auth } from "@/auth";
 import {
+  getNextOnboardingPath,
   getOnboardingStatusForUser,
   onboardingStatusSelect,
 } from "@/app/lib/onboarding/status";
 import {
-  ONBOARDING_PROFILE_ROUTE,
-  QUESTIONS_CLIENTS_ROUTE,
+  JOB_INTEREST_ROUTE,
   RESUME_ROUTE,
 } from "@/app/lib/onboarding-flow";
 import { prisma } from "@/app/lib/prisma";
@@ -26,18 +26,6 @@ async function getUserId() {
   return userId ?? null;
 }
 
-function hasSavedKeyQuestions(
-  profile:
-    | {
-        questionsCompleted?: boolean | null;
-        keyQuestions?: unknown;
-      }
-    | null
-    | undefined
-) {
-  return Boolean(profile?.questionsCompleted || profile?.keyQuestions);
-}
-
 function getKeyQuestionsNextPath(
   profile:
     | {
@@ -48,15 +36,7 @@ function getKeyQuestionsNextPath(
     | null
     | undefined
 ) {
-  if (!profile?.registrationStatus || profile.registrationStatus === "pending_verification") {
-    return ONBOARDING_PROFILE_ROUTE;
-  }
-
-  if (!hasSavedKeyQuestions(profile)) {
-    return QUESTIONS_CLIENTS_ROUTE;
-  }
-
-  return RESUME_ROUTE;
+  return getNextOnboardingPath(profile ?? null) ?? RESUME_ROUTE;
 }
 
 export async function GET() {
@@ -67,7 +47,7 @@ export async function GET() {
 
     if (!userId && !guestId) {
       return NextResponse.json(
-        { completed: false, data: null, nextPath: ONBOARDING_PROFILE_ROUTE },
+        { completed: false, data: null, nextPath: JOB_INTEREST_ROUTE },
         { status: 200 }
       );
     }

@@ -1,6 +1,8 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+
+import { DASHBOARD_ROUTE } from "@/app/lib/onboarding-flow";
 import { cn } from "@/app/lib/utils";
 
 type AppleButtonProps = {
@@ -11,7 +13,7 @@ type AppleButtonProps = {
 };
 
 export default function AppleButton({
-  callbackUrl = "/resume",
+  callbackUrl = DASHBOARD_ROUTE,
   className,
   disabled = false,
   onBeforeSignIn,

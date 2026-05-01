@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/app/lib/auth";
+import SensitiveContent from "@/app/components/SensitiveContent";
 import { getCurrentViewerProfile } from "@/app/lib/profile-server";
 import ProfileClient, { type ProfileApiResponse } from "./ProfileClient";
 
@@ -28,5 +29,9 @@ export default async function ProfilePage() {
     ? (JSON.parse(JSON.stringify(responseData.profile)) as ProfileApiResponse["profile"])
     : null;
 
-  return <ProfileClient initialProfile={initialProfile} />;
+  return (
+    <SensitiveContent mode="replace">
+      <ProfileClient initialProfile={initialProfile} />
+    </SensitiveContent>
+  );
 }

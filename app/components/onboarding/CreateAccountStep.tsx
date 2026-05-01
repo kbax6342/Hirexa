@@ -17,7 +17,7 @@ import { cn } from "@/app/lib/utils";
 import {
   CREATE_ACCOUNT_ROUTE,
   HIRING_SIGNAL_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
   VERIFY_ACCOUNT_ROUTE,
 } from "@/app/lib/onboarding-flow";
 import {
@@ -25,6 +25,7 @@ import {
   readPendingOnboardingSignup,
   writePendingOnboardingSignup,
 } from "@/app/lib/auth/onboardingPendingSignup";
+import { normalizePhoneForSms } from "@/app/lib/verification/phone";
 
 type DraftResponse = {
   draft?: {
@@ -33,6 +34,11 @@ type DraftResponse = {
         firstName?: string | null;
         lastName?: string | null;
         email?: string | null;
+        phone?: string | null;
+      } | null;
+      signup?: {
+        phone?: string | null;
+        verificationChannel?: "email" | "sms" | null;
       } | null;
     } | null;
   } | null;
@@ -42,6 +48,7 @@ type FieldErrors = {
   firstName?: string;
   lastName?: string;
   email?: string;
+  phone?: string;
   password?: string;
   confirmPassword?: string;
 };
@@ -73,8 +80,8 @@ function isValidEmail(value: string) {
 }
 
 function getCreateAccountProgressPercent() {
-  const totalSteps = ONBOARDING_FLOW_ROUTES.length + 2;
-  const createStep = ONBOARDING_FLOW_ROUTES.indexOf(HIRING_SIGNAL_ROUTE) + 2;
+  const totalSteps = PRIMARY_ONBOARDING_FLOW_ROUTES.length + 2;
+  const createStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(HIRING_SIGNAL_ROUTE) + 2;
 
   return Math.max(8, Math.round((createStep / totalSteps) * 100));
 }
@@ -85,8 +92,12 @@ export default function CreateAccountStep() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [verificationChannel, setVerificationChannel] = useState<"email" | "sms">(
+    "email"
+  );
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showPasswordHelp, setShowPasswordHelp] = useState(false);
@@ -111,8 +122,10 @@ export default function CreateAccountStep() {
       setFirstName(pending.firstName);
       setLastName(pending.lastName);
       setEmail(pending.email);
+      setPhone(pending.phone);
       setPassword(pending.password);
       setConfirmPassword(pending.password);
+      setVerificationChannel(pending.verificationChannel);
       setLoadingDefaults(false);
       setDraftHydrated(true);
       return () => {
@@ -140,6 +153,17 @@ export default function CreateAccountStep() {
         );
         setEmail((current) =>
           current || String(data.draft?.payload?.profile?.email ?? "").trim()
+        );
+        setPhone((current) => {
+          const nextPhone =
+            String(data.draft?.payload?.signup?.phone ?? "").trim() ||
+            String(data.draft?.payload?.profile?.phone ?? "").trim();
+          return current || nextPhone;
+        });
+        setVerificationChannel(
+          data.draft?.payload?.signup?.verificationChannel === "sms"
+            ? "sms"
+            : "email"
         );
       } finally {
         if (active) {
@@ -197,11 +221,14 @@ export default function CreateAccountStep() {
               firstName: firstName.trim(),
               lastName: lastName.trim(),
               email: email.trim(),
+              phone: phone.trim(),
             },
             signup: {
               firstName: firstName.trim(),
               lastName: lastName.trim(),
               email: email.trim().toLowerCase(),
+              phone: phone.trim(),
+              verificationChannel,
             },
           },
         }),
@@ -211,7 +238,7 @@ export default function CreateAccountStep() {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [draftHydrated, email, firstName, lastName]);
+  }, [draftHydrated, email, firstName, lastName, phone, verificationChannel]);
 
   function handleBack() {
     router.push(HIRING_SIGNAL_ROUTE);
@@ -230,6 +257,14 @@ export default function CreateAccountStep() {
 
     if (!isValidEmail(email)) {
       nextErrors.email = "Enter a valid email address.";
+    }
+
+    if (phone.trim() && !normalizePhoneForSms(phone)) {
+      nextErrors.phone = "Please enter a valid phone number.";
+    }
+
+    if (verificationChannel === "sms" && !normalizePhoneForSms(phone)) {
+      nextErrors.phone = "Please enter a valid phone number.";
     }
 
     if (!password) {
@@ -268,7 +303,9 @@ export default function CreateAccountStep() {
           firstName,
           lastName,
           email,
+          phone,
           password,
+          verificationChannel,
           recaptchaToken,
         }),
       });
@@ -284,7 +321,9 @@ export default function CreateAccountStep() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: email.trim().toLowerCase(),
+        phone: phone.trim(),
         password,
+        verificationChannel,
       });
 
       router.push(VERIFY_ACCOUNT_ROUTE);
@@ -439,6 +478,64 @@ export default function CreateAccountStep() {
               {fieldErrors.email ? (
                 <p className="mt-2 text-sm text-red-600">{fieldErrors.email}</p>
               ) : null}
+            </div>
+
+            <div className="mt-4 sm:mt-5">
+              <label
+                htmlFor="create-account-phone"
+                className="text-sm font-medium text-slate-700"
+              >
+                Phone number
+              </label>
+              <input
+                id="create-account-phone"
+                autoComplete="tel"
+                inputMode="tel"
+                type="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="(555) 123-4567"
+                className="mt-2 h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+              />
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                By adding your phone number, you agree to receive verification
+                text messages from Hirexa AI. Message and data rates may apply.
+              </p>
+              {fieldErrors.phone ? (
+                <p className="mt-2 text-sm text-red-600">{fieldErrors.phone}</p>
+              ) : null}
+            </div>
+
+            <div className="mt-4 sm:mt-5">
+              <p className="text-sm font-medium text-slate-700">
+                Send my verification code by
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setVerificationChannel("email")}
+                  className={cn(
+                    "h-12 rounded-2xl border px-4 text-sm font-semibold transition",
+                    verificationChannel === "email"
+                      ? "border-sky-500 bg-sky-50 text-sky-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  )}
+                >
+                  Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVerificationChannel("sms")}
+                  className={cn(
+                    "h-12 rounded-2xl border px-4 text-sm font-semibold transition",
+                    verificationChannel === "sms"
+                      ? "border-sky-500 bg-sky-50 text-sky-700"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  )}
+                >
+                  SMS
+                </button>
+              </div>
             </div>
 
             <div className="mt-4 sm:mt-5">

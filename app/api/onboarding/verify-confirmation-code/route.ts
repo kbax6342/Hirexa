@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
-import { hashOtp } from "@/app/lib/security/otp";
 import {
   ONBOARDING_CONFIRMATION_MAX_ATTEMPTS,
   mergeOnboardingConfirmationState,
   readOnboardingConfirmationState,
 } from "@/app/lib/onboarding/confirmation";
 import { isOnboardingFormComplete } from "@/app/lib/onboarding/status";
+import { resolveVerificationContext } from "@/app/lib/verification/context";
+import { verifyVerificationCode } from "@/app/lib/verification/service";
+import { VERIFICATION_CHANNEL_SMS } from "@/app/lib/verification/types";
 
 export const runtime = "nodejs";
 
@@ -42,6 +44,8 @@ export async function POST(req: Request) {
     where: { userId },
     select: {
       id: true,
+      email: true,
+      phone: true,
       questionsCompleted: true,
       keyQuestions: true,
       registrationStatus: true,
@@ -68,63 +72,63 @@ export async function POST(req: Request) {
     );
   }
 
-  const otp = await prisma.emailOtp.findUnique({
-    where: { email },
-    select: { codeHash: true, expiresAt: true, attempts: true },
+  const context = await resolveVerificationContext({
+    userId,
+    sessionEmail: email,
   });
 
-  if (!otp) {
-    console.info("[ONBOARDING_CONFIRMATION] verify failed", {
-      userId,
-      reason: "missing_code",
-    });
+  if (context.preferredChannel === VERIFICATION_CHANNEL_SMS && !context.normalizedPhone) {
     return NextResponse.json(
-      { ok: false, error: "The confirmation code has expired. Send a new code." },
+      { ok: false, error: "Please enter a valid phone number." },
       { status: 400 }
     );
   }
 
-  if (otp.expiresAt.getTime() < Date.now()) {
-    await prisma.emailOtp.deleteMany({ where: { email } });
+  if (!context.destination) {
     console.info("[ONBOARDING_CONFIRMATION] verify failed", {
       userId,
-      reason: "expired_code",
+      reason: "missing_destination",
     });
     return NextResponse.json(
-      { ok: false, error: "The confirmation code has expired. Send a new code." },
+      { ok: false, error: "The verification code has expired. Send a new code." },
       { status: 400 }
     );
   }
 
-  if (otp.attempts >= ONBOARDING_CONFIRMATION_MAX_ATTEMPTS) {
+  const verification = await verifyVerificationCode({
+    channel: context.resolvedChannel,
+    destination: context.destination,
+    code,
+    maxAttempts: ONBOARDING_CONFIRMATION_MAX_ATTEMPTS,
+  });
+
+  if (!verification.ok) {
     console.info("[ONBOARDING_CONFIRMATION] verify failed", {
       userId,
-      reason: "too_many_attempts",
+      reason: verification.code,
     });
     return NextResponse.json(
-      { ok: false, error: "Too many attempts. Send a new code and try again." },
-      { status: 429 }
-    );
-  }
-
-  if (hashOtp(code) !== otp.codeHash) {
-    await prisma.emailOtp.update({
-      where: { email },
-      data: { attempts: { increment: 1 } },
-    });
-
-    console.info("[ONBOARDING_CONFIRMATION] verify failed", {
-      userId,
-      reason: "invalid_code",
-    });
-
-    return NextResponse.json(
-      { ok: false, error: "That code is not correct. Check the email and try again." },
-      { status: 400 }
+      { ok: false, error: verification.message },
+      {
+        status:
+          verification.code === "too_many_attempts"
+            ? 429
+            : verification.code === "unavailable"
+              ? 503
+              : 400,
+      }
     );
   }
 
   const verifiedAt = new Date();
+  const destinationsToDelete = Array.from(
+    new Set(
+      [context.email, context.normalizedPhone].filter(
+        (value): value is string => Boolean(value)
+      )
+    )
+  );
+  const emailDestinations = destinationsToDelete.filter((value) => value.includes("@"));
 
   await prisma.$transaction([
     prisma.userProfile.update({
@@ -133,11 +137,27 @@ export async function POST(req: Request) {
         keyQuestions: mergeOnboardingConfirmationState(profile.keyQuestions, {
           emailVerified: true,
           emailVerifiedAt: verifiedAt.toISOString(),
+          preferredChannel: context.preferredChannel,
+          phone: context.phone,
+          verifiedChannel: context.resolvedChannel,
         }),
       },
       select: { id: true },
     }),
-    prisma.emailOtp.deleteMany({ where: { email } }),
+    prisma.emailOtp.deleteMany({
+      where: {
+        email: {
+          in: destinationsToDelete,
+        },
+      },
+    }),
+    prisma.emailVerificationCode.deleteMany({
+      where: {
+        email: {
+          in: emailDestinations,
+        },
+      },
+    }),
   ]);
 
   console.info("[ONBOARDING_CONFIRMATION] verify success", {

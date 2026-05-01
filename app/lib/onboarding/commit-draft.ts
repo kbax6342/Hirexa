@@ -14,6 +14,7 @@ import {
   type DraftProfilePayload,
   type DraftSignupPayload,
 } from "@/app/lib/onboarding/draft-session";
+import { mergeOnboardingConfirmationState } from "@/app/lib/onboarding/confirmation";
 import {
   sanitizePrivateProfileFields,
 } from "@/app/lib/profile/privateProfileFields";
@@ -22,6 +23,7 @@ import {
   parseSalaryInputToNumber,
   type CompensationType,
 } from "@/app/lib/salary";
+import { normalizeVerificationChannel } from "@/app/lib/verification/types";
 
 type PrismaTransactionClient = Omit<
   typeof prisma,
@@ -191,6 +193,11 @@ export async function commitOnboardingDraftToUserProfile(params: {
     normalizeEmail(draftSignup.email) ??
     normalizeEmail(draftOnboardingEmail.email) ??
     normalizeEmail(draftProfile.email);
+  const verificationChannel = normalizeVerificationChannel(
+    draftSignup.verificationChannel
+  );
+  const draftPhone =
+    normalizeText(draftSignup.phone) || normalizeText(draftProfile.phone) || null;
   const hasCompensationDraft =
     draftMinSalary.minCompensation !== undefined ||
     draftPreferences.minCompensation !== undefined ||
@@ -266,6 +273,10 @@ export async function commitOnboardingDraftToUserProfile(params: {
     ...(hiringSignalEmphasis !== null ? { hiringSignalEmphasis } : {}),
     ...(highlightSkillsConfidence ? { highlightSkillsConfidence } : {}),
   };
+  const nextConfirmationState = mergeOnboardingConfirmationState(nextKeyQuestions, {
+    preferredChannel: verificationChannel,
+    phone: draftPhone,
+  });
 
   const profile = await params.tx.userProfile.upsert({
     where: { userId: params.userId },
@@ -277,8 +288,8 @@ export async function commitOnboardingDraftToUserProfile(params: {
       ...(normalizedEmail
         ? { email: normalizedEmail, subscriptionEmail: normalizedEmail }
         : {}),
-      ...(normalizeText(draftProfile.phone)
-        ? { phone: normalizeText(draftProfile.phone) }
+      ...(draftPhone
+        ? { phone: draftPhone }
         : {}),
       ...(normalizeText(draftProfile.linkedinUrl)
         ? { linkedinUrl: normalizeText(draftProfile.linkedinUrl) }
@@ -292,7 +303,7 @@ export async function commitOnboardingDraftToUserProfile(params: {
         typeof draftPreferences.includeRemote === "boolean"
           ? draftPreferences.includeRemote
           : true,
-      keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+      keyQuestions: nextConfirmationState,
       registrationStatus: "registered",
       ...(skills.length ? { skills } : {}),
       ...(workplaceLocations
@@ -330,8 +341,8 @@ export async function commitOnboardingDraftToUserProfile(params: {
       ...(normalizedEmail
         ? { email: normalizedEmail, subscriptionEmail: normalizedEmail }
         : {}),
-      ...(normalizeText(draftProfile.phone)
-        ? { phone: normalizeText(draftProfile.phone) }
+      ...(draftPhone
+        ? { phone: draftPhone }
         : {}),
       ...(normalizeText(draftProfile.linkedinUrl)
         ? { linkedinUrl: normalizeText(draftProfile.linkedinUrl) }
@@ -344,7 +355,7 @@ export async function commitOnboardingDraftToUserProfile(params: {
       ...(typeof draftPreferences.includeRemote === "boolean"
         ? { includeRemote: draftPreferences.includeRemote }
         : {}),
-      keyQuestions: nextKeyQuestions as Prisma.InputJsonValue,
+      keyQuestions: nextConfirmationState,
       registrationStatus: "registered",
       ...(skills.length ? { skills } : {}),
       ...(workplaceLocations

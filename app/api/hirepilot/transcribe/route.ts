@@ -90,7 +90,7 @@ export async function POST(req: Request) {
       model: "gpt-4o-mini-transcribe",
       response_format: "json",
       prompt:
-        "Transcribe the interviewer's spoken question only when speech is audible. Return concise plain text.",
+        "Transcribe audible interview conversation from shared meeting audio. Preserve interviewer questions clearly, keep the text concise, and return plain text only.",
     });
 
     return NextResponse.json({

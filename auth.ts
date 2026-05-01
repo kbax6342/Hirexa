@@ -9,13 +9,13 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/app/lib/prisma";
 import {
   getHirexaVerificationGateForUser,
-  issueHirexaVerificationCode,
   normalizeAuthEmail,
   upsertLocalUserAndProfileForSocialAuth,
 } from "@/app/lib/auth/hirexaVerification";
-import { sendVerificationCodeEmail } from "@/app/lib/email/sendgrid";
 import { getOnboardingStatusForUser } from "@/app/lib/onboarding/status";
 import { validateSecurityEnvironment } from "@/lib/security/env";
+import { resolveVerificationContext } from "@/app/lib/verification/context";
+import { sendVerificationCode } from "@/app/lib/verification/service";
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
@@ -24,6 +24,8 @@ const appleClientSecret = process.env.APPLE_CLIENT_SECRET?.trim();
 const linkedInClientId = process.env.LINKEDIN_CLIENT_ID?.trim();
 const linkedInClientSecret = process.env.LINKEDIN_CLIENT_SECRET?.trim();
 const useSecureCookies = process.env.NODE_ENV === "production";
+const ACCOUNT_VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000;
+const ACCOUNT_VERIFICATION_RESEND_COOLDOWN_MS = 30 * 1000;
 
 validateSecurityEnvironment();
 
@@ -144,8 +146,23 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
 
       if (!socialAccount.alreadyVerified) {
         try {
-          const code = await issueHirexaVerificationCode(email);
-          await sendVerificationCodeEmail(email, code);
+          const context = await resolveVerificationContext({
+            userId: socialAccount.localUser.id,
+            sessionEmail: email,
+          });
+          const destination = context.destination ?? email;
+          const sendResult = await sendVerificationCode({
+            channel: context.resolvedChannel,
+            destination,
+            purpose: "account_setup",
+            ttlMs: ACCOUNT_VERIFICATION_CODE_TTL_MS,
+            resendCooldownMs: ACCOUNT_VERIFICATION_RESEND_COOLDOWN_MS,
+            skipCooldown: true,
+          });
+
+          if (!sendResult.ok) {
+            throw new Error(sendResult.message);
+          }
         } catch (error) {
           console.error("[auth] failed to send verification code for social sign-in", {
             provider,

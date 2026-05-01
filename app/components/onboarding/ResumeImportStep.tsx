@@ -12,11 +12,11 @@ import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import {
   JOB_PRIORITIES_ROUTE,
-  ONBOARDING_FLOW_ROUTES,
+  PRIMARY_ONBOARDING_FLOW_ROUTES,
   RESUME_IMPORT_ROUTE,
   WORK_STORY_ROUTE,
-  getNextOnboardingRoute,
-  getPreviousOnboardingRoute,
+  getNextPrimaryOnboardingRoute,
+  getPreviousPrimaryOnboardingRoute,
 } from "@/app/lib/onboarding-flow";
 
 const ONBOARDING_RESUME_SKIPPED_COOKIE = "onboarding_resume_skipped";
@@ -54,26 +54,26 @@ export default function ResumeImportStep() {
   } | null>(null);
 
   const accept = useMemo(() => SUPPORTED_EXTENSIONS.join(","), []);
-  const currentStep = ONBOARDING_FLOW_ROUTES.indexOf(RESUME_IMPORT_ROUTE) + 1;
+  const currentStep = PRIMARY_ONBOARDING_FLOW_ROUTES.indexOf(RESUME_IMPORT_ROUTE) + 1;
   const progressPercent = useMemo(
     () =>
       Math.max(
         8,
-        Math.round((currentStep / ONBOARDING_FLOW_ROUTES.length) * 100)
+        Math.round((currentStep / PRIMARY_ONBOARDING_FLOW_ROUTES.length) * 100)
       ),
     [currentStep]
   );
 
   function handleBack() {
     router.push(
-      getPreviousOnboardingRoute(RESUME_IMPORT_ROUTE) ?? JOB_PRIORITIES_ROUTE
+      getPreviousPrimaryOnboardingRoute(RESUME_IMPORT_ROUTE) ?? JOB_PRIORITIES_ROUTE
     );
   }
 
   function handleSkip() {
     setResumeSkippedCookie();
     router.push(
-      getNextOnboardingRoute(RESUME_IMPORT_ROUTE) ?? WORK_STORY_ROUTE
+      getNextPrimaryOnboardingRoute(RESUME_IMPORT_ROUTE) ?? WORK_STORY_ROUTE
     );
   }
 
@@ -142,7 +142,7 @@ export default function ResumeImportStep() {
 
   function handleKeepGoing() {
     router.push(
-      getNextOnboardingRoute(RESUME_IMPORT_ROUTE) ?? WORK_STORY_ROUTE
+      getNextPrimaryOnboardingRoute(RESUME_IMPORT_ROUTE) ?? WORK_STORY_ROUTE
     );
   }
 

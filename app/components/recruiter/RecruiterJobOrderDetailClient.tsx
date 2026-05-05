@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { SparklesIcon } from "@heroicons/react/24/outline";
+import { SparklesIcon, UsersIcon } from "@heroicons/react/24/outline";
 
 import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
@@ -78,6 +78,13 @@ export default function RecruiterJobOrderDetailClient({
             <SparklesIcon className="h-4 w-4" />
             {loadingMatch ? "Running match..." : "Run AI match"}
           </Button>
+          <Link
+            href={`/recruiter/jobs/${jobOrder.id}/candidates`}
+            className="inline-flex items-center rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100"
+          >
+            <UsersIcon className="h-4 w-4" />
+            Resume fit evaluator
+          </Link>
           <Link
             href="/agency/job-orders"
             className="inline-flex items-center rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"

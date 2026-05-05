@@ -175,6 +175,8 @@ type BrowserSpeechRecognition = {
   abort: () => void;
 };
 
+type SharedAudioRecorderState = "inactive" | "recording" | "paused";
+
 declare global {
   interface Window {
     SpeechRecognition?: BrowserSpeechRecognitionConstructor;
@@ -292,6 +294,38 @@ function debugHirePilotAudio(message: string, data?: Record<string, unknown>) {
   console.info(`[HIREPILOT_AUDIO] ${message}`);
 }
 
+function formatSharedAudioTimestamp(value: number | null) {
+  if (!value) {
+    return "—";
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function getSharedAudioTranscriptionErrorMessage(
+  status: number,
+  serverMessage?: string | null
+) {
+  switch (status) {
+    case 400:
+      return "Audio chunk was empty or invalid.";
+    case 401:
+      return "Sign in again to use HirePilot transcription.";
+    case 403:
+      return "Start or unlock a HirePilot live session before shared audio transcription.";
+    case 500:
+      return "Shared audio transcription failed.";
+    case 503:
+      return "OpenAI audio transcription is unavailable or not configured.";
+    default:
+      return serverMessage?.trim() || "Unable to transcribe shared audio.";
+  }
+}
+
 function formatRecognitionError(error: string) {
   if (error === "not-allowed" || error === "service-not-allowed") {
     return "Microphone permission was denied.";
@@ -357,6 +391,13 @@ export default function HirePilotClient() {
   const displayRecorderRef = useRef<MediaRecorder | null>(null);
   const displayRecorderStoppedPromiseRef = useRef<Promise<void> | null>(null);
   const displayRecorderStoppedResolveRef = useRef<(() => void) | null>(null);
+  const sharedAudioConnectedRef = useRef(false);
+  const sharedAudioAnalyserRef = useRef<AnalyserNode | null>(null);
+  const sharedAudioAudioContextRef = useRef<AudioContext | null>(null);
+  const sharedAudioAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const sharedAudioLevelAnimationFrameRef = useRef<number | null>(null);
+  const sharedAudioConnectedAtRef = useRef(0);
+  const sharedAudioLastDetectedLevelAtRef = useRef(0);
   const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const answerGenerationPromiseRef = useRef<Promise<void> | null>(null);
   const liveQuestionDetectionTimeoutRef = useRef<number | null>(null);
@@ -380,6 +421,25 @@ export default function HirePilotClient() {
   const [sharedAudioTranscribing, setSharedAudioTranscribing] = useState(false);
   const [sharedAudioError, setSharedAudioError] = useState<string | null>(null);
   const [sharedAudioTranscript, setSharedAudioTranscript] = useState("");
+  const [sharedAudioRecorderState, setSharedAudioRecorderState] =
+    useState<SharedAudioRecorderState>("inactive");
+  const [sharedAudioChunksReceived, setSharedAudioChunksReceived] = useState(0);
+  const [sharedAudioChunksUploaded, setSharedAudioChunksUploaded] = useState(0);
+  const [sharedAudioLastChunkBytes, setSharedAudioLastChunkBytes] = useState<number | null>(
+    null
+  );
+  const [sharedAudioLastHttpStatus, setSharedAudioLastHttpStatus] = useState<number | null>(
+    null
+  );
+  const [sharedAudioLastError, setSharedAudioLastError] = useState<string | null>(null);
+  const [sharedAudioLastTranscriptAt, setSharedAudioLastTranscriptAt] =
+    useState<number | null>(null);
+  const [sharedAudioLastTranscriptPreview, setSharedAudioLastTranscriptPreview] =
+    useState("");
+  const [sharedAudioLevelDetected, setSharedAudioLevelDetected] = useState(false);
+  const [sharedAudioLevelWarning, setSharedAudioLevelWarning] = useState<string | null>(
+    null
+  );
   const [detectedQuestion, setDetectedQuestion] = useState("");
   const [lastQuestionSource, setLastQuestionSource] =
     useState<DetectedQuestionSource | null>(null);
@@ -436,7 +496,8 @@ export default function HirePilotClient() {
     activeMockQuestions[0] ??
     "Tell me about yourself.";
   const isComputerAudioListening = activeListeningSource === "computer";
-  const isAnyListening = isListening || isComputerAudioListening;
+  const isAnyListening =
+    isListening || isComputerAudioListening || sharedAudioListening || sharedAudioTranscribing;
   const micListening = isListening;
 
   const answerActionsDisabled = !answer.trim() || isGenerating;
@@ -458,7 +519,8 @@ export default function HirePilotClient() {
     : billingStatus.productKey === "hirepilot_monthly" && billingStatus.status === "active"
     ? "0 Credits Available"
     : "Practice Questions Free";
-  const liveListeningLabel = isComputerAudioListening
+  const liveListeningLabel =
+    isComputerAudioListening || sharedAudioListening || sharedAudioTranscribing
     ? statusMessage
     : isListening
       ? "Listening to microphone"
@@ -468,7 +530,7 @@ export default function HirePilotClient() {
   const transcriptReceived = Boolean(normalizeSpace(liveTranscript));
   const displayAudioTrackLabel = displayAudioDiagnostics?.audioTracks[0]?.label ?? null;
   const captureSourceStatus =
-    activeListeningSource === "computer"
+    activeListeningSource === "computer" || sharedAudioListening || sharedAudioTranscribing
       ? displayAudioTrackLabel
         ? `Shared tab/app audio (${displayAudioTrackLabel})`
         : "Shared tab/app audio"
@@ -480,7 +542,7 @@ export default function HirePilotClient() {
   const liveQuestionStatus = detectedQuestion || "Waiting";
   const currentQuestionSource: DetectedQuestionSource | null =
     lastQuestionSource ??
-    (sharedAudioListening
+    (sharedAudioListening || sharedAudioTranscribing
       ? "shared-audio"
       : micListening
         ? "mic"
@@ -493,6 +555,28 @@ export default function HirePilotClient() {
         : null;
   const shouldShowSharedAudioTranscript =
     activeMode === "live" && Boolean(normalizeSpace(sharedAudioTranscript));
+  const sharedAudioLastTranscriptTimeLabel = formatSharedAudioTimestamp(
+    sharedAudioLastTranscriptAt
+  );
+  const sharedAudioStatusLabel =
+    sharedAudioLastHttpStatus == null ? "idle" : `HTTP ${sharedAudioLastHttpStatus}`;
+  const sharedAudioRecorderStatusLabel =
+    sharedAudioRecorderState === "recording"
+      ? "recording"
+      : sharedAudioRecorderState === "paused"
+        ? "paused"
+        : "inactive";
+  const sharedAudioLevelStatusLabel =
+    sharedAudioListening || sharedAudioTranscribing
+      ? sharedAudioLevelDetected
+        ? "Detected"
+        : "Not detected yet"
+      : "Idle";
+  const sharedAudioTranscriptPreviewLabel = normalizeSpace(sharedAudioLastTranscriptPreview)
+    ? sharedAudioLastTranscriptPreview
+    : sharedAudioChunksReceived > 0
+      ? "No clear speech transcribed yet."
+      : "Waiting for transcript.";
   const detectedQuestionCardTitle =
     sharedAudioListening && !detectedQuestion
       ? sharedAudioTranscribing
@@ -856,6 +940,7 @@ export default function HirePilotClient() {
       keepListeningRef.current = false;
       recognitionRef.current?.abort();
       clearLiveQuestionDetectionTimer();
+      stopSharedAudioLevelMonitor();
 
       const recorder = displayRecorderRef.current;
       if (recorder && recorder.state !== "inactive") {
@@ -864,8 +949,177 @@ export default function HirePilotClient() {
     };
   }, []);
 
+  function resetSharedAudioDiagnostics() {
+    sharedAudioPendingTranscriptionsRef.current = 0;
+    setSharedAudioRecorderState("inactive");
+    setSharedAudioChunksReceived(0);
+    setSharedAudioChunksUploaded(0);
+    setSharedAudioLastChunkBytes(null);
+    setSharedAudioLastHttpStatus(null);
+    setSharedAudioLastError(null);
+    setSharedAudioLastTranscriptAt(null);
+    setSharedAudioLastTranscriptPreview("");
+    setSharedAudioLevelDetected(false);
+    setSharedAudioLevelWarning(null);
+  }
+
+  function setSharedAudioPipelineError(message: string) {
+    setRequestError(message);
+    setSharedAudioError(message);
+    setSharedAudioLastError(message);
+  }
+
+  function stopSharedAudioLevelMonitor() {
+    if (
+      sharedAudioLevelAnimationFrameRef.current != null &&
+      typeof window !== "undefined"
+    ) {
+      window.cancelAnimationFrame(sharedAudioLevelAnimationFrameRef.current);
+      sharedAudioLevelAnimationFrameRef.current = null;
+    }
+
+    try {
+      sharedAudioAudioSourceRef.current?.disconnect();
+    } catch {
+      debugHirePilotAudio("error", {
+        message: "Unable to disconnect shared audio source node cleanly.",
+      });
+    }
+
+    try {
+      sharedAudioAnalyserRef.current?.disconnect();
+    } catch {
+      debugHirePilotAudio("error", {
+        message: "Unable to disconnect shared audio analyser cleanly.",
+      });
+    }
+
+    const audioContext = sharedAudioAudioContextRef.current;
+    sharedAudioAudioSourceRef.current = null;
+    sharedAudioAnalyserRef.current = null;
+    sharedAudioAudioContextRef.current = null;
+    sharedAudioConnectedAtRef.current = 0;
+    sharedAudioLastDetectedLevelAtRef.current = 0;
+    setSharedAudioLevelDetected(false);
+    setSharedAudioLevelWarning(null);
+
+    if (audioContext) {
+      void audioContext.close().catch(() => {
+        debugHirePilotAudio("error", {
+          message: "Unable to close shared audio level monitor cleanly.",
+        });
+      });
+    }
+  }
+
+  function getSharedAudioLevelWarning(sourceLabel: string | null) {
+    const baseWarning =
+      "HirePilot is connected, but no audible shared audio is detected yet. Play audio in the selected tab/app, or reconnect and choose the Google Meet/Teams tab with Share tab audio enabled.";
+
+    if (!sourceLabel || !/system audio/i.test(sourceLabel)) {
+      return baseWarning;
+    }
+
+    return `${baseWarning} Chrome tab sharing is more reliable than generic System Audio for interview transcription.`;
+  }
+
+  function startSharedAudioLevelMonitor(session: DisplayAudioCaptureSession) {
+    stopSharedAudioLevelMonitor();
+    setSharedAudioLevelDetected(false);
+    setSharedAudioLevelWarning(null);
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+
+    if (!AudioContextCtor) {
+      return;
+    }
+
+    try {
+      const audioContext = new AudioContextCtor();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.82;
+      const source = audioContext.createMediaStreamSource(session.audioStream);
+      source.connect(analyser);
+
+      sharedAudioAudioContextRef.current = audioContext;
+      sharedAudioAnalyserRef.current = analyser;
+      sharedAudioAudioSourceRef.current = source;
+      sharedAudioConnectedAtRef.current = Date.now();
+      sharedAudioLastDetectedLevelAtRef.current = 0;
+
+      if (audioContext.state === "suspended") {
+        void audioContext.resume().catch(() => {
+          debugHirePilotAudio("error", {
+            message: "Shared audio level monitor could not resume the audio context.",
+          });
+        });
+      }
+
+      const levelData = new Uint8Array(analyser.fftSize);
+      const sourceLabel = session.diagnostics.audioTracks[0]?.label ?? null;
+
+      const tick = () => {
+        const nextAnalyser = sharedAudioAnalyserRef.current;
+        if (!sharedAudioConnectedRef.current || !nextAnalyser) {
+          sharedAudioLevelAnimationFrameRef.current = null;
+          return;
+        }
+
+        nextAnalyser.getByteTimeDomainData(levelData);
+
+        let sumSquares = 0;
+        for (const sample of levelData) {
+          const normalized = (sample - 128) / 128;
+          sumSquares += normalized * normalized;
+        }
+
+        const rms = Math.sqrt(sumSquares / levelData.length);
+        const now = Date.now();
+        const levelDetected = rms > 0.02;
+
+        if (levelDetected) {
+          sharedAudioLastDetectedLevelAtRef.current = now;
+          setSharedAudioLevelDetected(true);
+          setSharedAudioLevelWarning(null);
+        } else {
+          const recentlyDetected = now - sharedAudioLastDetectedLevelAtRef.current < 1800;
+          setSharedAudioLevelDetected(recentlyDetected);
+
+          if (
+            !recentlyDetected &&
+            now - sharedAudioConnectedAtRef.current >= 9000 &&
+            sharedAudioConnectedRef.current
+          ) {
+            setSharedAudioLevelWarning(getSharedAudioLevelWarning(sourceLabel));
+          }
+        }
+
+        sharedAudioLevelAnimationFrameRef.current = window.requestAnimationFrame(tick);
+      };
+
+      sharedAudioLevelAnimationFrameRef.current = window.requestAnimationFrame(tick);
+    } catch (error) {
+      debugHirePilotAudio("error", {
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to start the shared audio level monitor.",
+      });
+    }
+  }
+
   function resetLiveListeningState(nextStatusMessage: string) {
     clearLiveQuestionDetectionTimer();
+    sharedAudioConnectedRef.current = false;
+    stopSharedAudioLevelMonitor();
     transcriptRef.current = "";
     combinedTranscriptRef.current = "";
     liveTranscriptSourceRef.current = null;
@@ -873,12 +1127,12 @@ export default function HirePilotClient() {
     lastQuestionKeyRef.current = "";
     lastGeneratedQuestionKeyRef.current = "";
     pendingGeneratedQuestionRef.current = null;
-    sharedAudioPendingTranscriptionsRef.current = 0;
     setLiveTranscript("");
     setSharedAudioListening(false);
     setSharedAudioTranscribing(false);
     setSharedAudioError(null);
     setSharedAudioTranscript("");
+    resetSharedAudioDiagnostics();
     setDetectedQuestion("");
     setLastQuestionSource(null);
     setDetectionStatus("idle");
@@ -1004,11 +1258,25 @@ export default function HirePilotClient() {
 
   function appendTranscribedText(text: string) {
     const chunk = normalizeSpace(text);
-    if (!chunk) return;
+    if (!chunk) {
+      setSharedAudioLastError(null);
+      if (sharedAudioConnectedRef.current) {
+        setActiveListeningSource("computer");
+        setStatusMessage("Audio captured, waiting for clear speech...");
+      }
+      return;
+    }
 
     const nextTranscript = normalizeSpace(`${transcriptRef.current} ${chunk}`);
     setRequestError(null);
     setSharedAudioError(null);
+    setSharedAudioLastError(null);
+    setSharedAudioLastTranscriptAt(Date.now());
+    setSharedAudioLastTranscriptPreview(chunk.slice(0, 240));
+    if (sharedAudioConnectedRef.current) {
+      setActiveListeningSource("computer");
+      setStatusMessage("Shared audio transcript updated.");
+    }
     debugHirePilot("display audio transcript updated", {
       length: nextTranscript.length,
       preview: nextTranscript.slice(0, 120),
@@ -1028,11 +1296,15 @@ export default function HirePilotClient() {
     });
     const formData = new FormData();
     formData.set("audio", audioFile);
+    setSharedAudioChunksUploaded((count) => count + 1);
+    setSharedAudioLastHttpStatus(null);
+    setSharedAudioLastError(null);
 
     const res = await fetch("/api/hirepilot/transcribe", {
       method: "POST",
       body: formData,
     });
+    setSharedAudioLastHttpStatus(res.status);
 
     const data = await readJsonSafely<HirePilotTranscriptionResponse>(res, {
       ok: false,
@@ -1045,10 +1317,37 @@ export default function HirePilotClient() {
         setShowPaywall(true);
       }
 
-      throw new Error(data.error || "Unable to transcribe shared audio.");
+      const message = getSharedAudioTranscriptionErrorMessage(
+        res.status,
+        data.error ?? null
+      );
+      setSharedAudioPipelineError(message);
+      if (process.env.NODE_ENV !== "production" && data.error) {
+        debugHirePilotAudio("error", {
+          message: data.error,
+          status: res.status,
+        });
+      }
+      throw new Error(message);
     }
 
-    appendTranscribedText(data.transcript ?? "");
+    const transcript = normalizeSpace(data.transcript ?? "");
+    if (!transcript) {
+      setRequestError(null);
+      setSharedAudioError(null);
+      setSharedAudioLastError(null);
+      if (sharedAudioConnectedRef.current) {
+        setActiveListeningSource("computer");
+        setStatusMessage("Audio captured, waiting for clear speech...");
+      }
+      debugHirePilotAudio("transcript received", {
+        length: 0,
+        preview: "",
+      });
+      return;
+    }
+
+    appendTranscribedText(transcript);
   }
 
   function queueDisplayAudioTranscription(blob: Blob) {
@@ -1066,9 +1365,11 @@ export default function HirePilotClient() {
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "Unable to transcribe shared audio.";
-          setRequestError(message);
-          setSharedAudioError(message);
-          debugHirePilotAudio("error", { message });
+          setSharedAudioPipelineError(message);
+          debugHirePilotAudio("error", {
+            message,
+            lastHttpStatus: sharedAudioLastHttpStatus,
+          });
         } finally {
           sharedAudioPendingTranscriptionsRef.current = Math.max(
             0,
@@ -1083,23 +1384,51 @@ export default function HirePilotClient() {
 
   function startDisplayAudioRecorder(session: DisplayAudioCaptureSession) {
     const mimeType = getSupportedDisplayAudioMimeType();
-    const recorder = mimeType
-      ? new MediaRecorder(session.audioStream, { mimeType })
-      : new MediaRecorder(session.audioStream);
+    let recorder: MediaRecorder;
+    try {
+      recorder = mimeType
+        ? new MediaRecorder(session.audioStream, { mimeType })
+        : new MediaRecorder(session.audioStream);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to start shared tab/app audio recording.";
+      setSharedAudioPipelineError(message);
+      setSharedAudioRecorderState("inactive");
+      setStatusMessage("Unable to start shared tab/app audio recording.");
+      debugHirePilotAudio("error", { message });
+      throw error;
+    }
 
     displayRecorderStoppedPromiseRef.current = new Promise<void>((resolve) => {
       displayRecorderStoppedResolveRef.current = resolve;
     });
 
+    recorder.onstart = () => {
+      setSharedAudioRecorderState(recorder.state);
+    };
+
+    recorder.onpause = () => {
+      setSharedAudioRecorderState(recorder.state);
+    };
+
+    recorder.onresume = () => {
+      setSharedAudioRecorderState(recorder.state);
+    };
+
     recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        queueDisplayAudioTranscription(event.data);
+      setSharedAudioChunksReceived((count) => count + 1);
+      setSharedAudioLastChunkBytes(event.data.size);
+      if (event.data.size <= 0) {
+        return;
       }
+      queueDisplayAudioTranscription(event.data);
     };
 
     recorder.onerror = () => {
-      setRequestError("Unable to capture shared tab or app audio.");
-      setSharedAudioError("Unable to capture shared tab or app audio.");
+      setSharedAudioPipelineError("Unable to capture shared tab or app audio.");
+      setSharedAudioRecorderState(recorder.state);
       setSharedAudioTranscribing(false);
       setStatusMessage("Shared tab/app audio capture encountered an error.");
       debugHirePilotAudio("error", {
@@ -1108,6 +1437,7 @@ export default function HirePilotClient() {
     };
 
     recorder.onstop = () => {
+      setSharedAudioRecorderState("inactive");
       displayRecorderStoppedResolveRef.current?.();
       displayRecorderStoppedResolveRef.current = null;
       displayRecorderRef.current = null;
@@ -1118,7 +1448,24 @@ export default function HirePilotClient() {
       audioTrackCount: session.diagnostics.audioTrackCount,
       sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
     });
-    recorder.start(2500);
+    try {
+      recorder.start(2000);
+      setSharedAudioRecorderState(recorder.state);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to start shared tab/app audio recording.";
+      setSharedAudioPipelineError(message);
+      setSharedAudioRecorderState("inactive");
+      setStatusMessage("Unable to start shared tab/app audio recording.");
+      debugHirePilotAudio("error", { message });
+      displayRecorderRef.current = null;
+      displayRecorderStoppedResolveRef.current?.();
+      displayRecorderStoppedResolveRef.current = null;
+      displayRecorderStoppedPromiseRef.current = null;
+      throw error;
+    }
   }
 
   async function stopDisplayAudioRecorder() {
@@ -1143,6 +1490,7 @@ export default function HirePilotClient() {
     await transcriptionQueueRef.current.catch(() => undefined);
     sharedAudioPendingTranscriptionsRef.current = 0;
     setSharedAudioTranscribing(false);
+    setSharedAudioRecorderState("inactive");
     displayRecorderStoppedPromiseRef.current = null;
   }
 
@@ -1455,12 +1803,14 @@ export default function HirePilotClient() {
   }
 
   async function handleComputerAudioConnected(session: DisplayAudioCaptureSession) {
-    resetLiveListeningState(
-      "Listening to shared tab/app audio — keep the Google Meet tab audio shared."
-    );
+    resetLiveListeningState("Listening to shared tab/app audio");
+    sharedAudioConnectedRef.current = true;
     setActiveListeningSource("computer");
+    setStatusMessage("Listening to shared tab/app audio");
     setSharedAudioListening(true);
+    setSharedAudioTranscribing(false);
     setSharedAudioError(null);
+    setSharedAudioLastError(null);
     setDisplayAudioDiagnostics(session.diagnostics);
     setIsInfoPanelCollapsed(true);
     debugHirePilotAudio("shared audio capture started", {
@@ -1470,13 +1820,17 @@ export default function HirePilotClient() {
 
     try {
       startDisplayAudioRecorder(session);
+      startSharedAudioLevelMonitor(session);
       await markInterviewSessionSource("tab_audio", true);
     } catch {
+      sharedAudioConnectedRef.current = false;
+      stopSharedAudioLevelMonitor();
       setActiveListeningSource(null);
       setSharedAudioListening(false);
       setSharedAudioTranscribing(false);
-      setSharedAudioError("Unable to capture shared tab or app audio.");
-      setRequestError("Unable to capture shared tab or app audio.");
+      setSharedAudioRecorderState("inactive");
+      setSharedAudioPipelineError("Unable to capture shared tab or app audio.");
+      setStatusMessage("Unable to capture shared tab or app audio.");
       session.stop();
       debugHirePilotAudio("error", {
         message: "Unable to capture shared tab or app audio.",
@@ -1485,11 +1839,14 @@ export default function HirePilotClient() {
   }
 
   async function handleComputerAudioDisconnected() {
+    sharedAudioConnectedRef.current = false;
+    stopSharedAudioLevelMonitor();
     setActiveListeningSource((current) => (current === "computer" ? null : current));
     setSharedAudioListening(false);
     setSharedAudioTranscribing(false);
     await stopDisplayAudioRecorder();
     setStatusMessage("Shared tab/app audio disconnected.");
+    setSharedAudioRecorderState("inactive");
     setDisplayAudioDiagnostics(null);
     debugHirePilotAudio("shared audio capture stopped");
     await finalizeTranscriptDetection();
@@ -2227,7 +2584,10 @@ export default function HirePilotClient() {
                     <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                       <div className="text-sm font-semibold text-white">Live Transcript</div>
                       <p className="mt-2 min-h-20 text-sm leading-6 text-slate-300">
-                        {liveTranscript || "HirePilot will show captured speech here while you are listening."}
+                        {liveTranscript ||
+                          (sharedAudioListening || sharedAudioTranscribing
+                            ? "Audio captured, waiting for clear speech..."
+                            : "HirePilot will show captured speech here while you are listening.")}
                       </p>
                     </div>
 
@@ -2242,10 +2602,68 @@ export default function HirePilotClient() {
                       </div>
                       <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Audio Chunks Received
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioChunksReceived}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
                           Transcript Received
                         </div>
                         <div className="mt-2 text-sm font-medium text-white">
                           {transcriptReceived ? "Yes" : "No"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Recorder
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioRecorderStatusLabel}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Last Chunk
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioLastChunkBytes == null
+                            ? "—"
+                            : `${sharedAudioLastChunkBytes.toLocaleString()} bytes`}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Chunks Uploaded
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioChunksUploaded}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Audio Level
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioLevelStatusLabel}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Last Transcribe Status
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioStatusLabel}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                          Last Transcript At
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-white">
+                          {sharedAudioLastTranscriptTimeLabel}
                         </div>
                       </div>
                       <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
@@ -2263,6 +2681,30 @@ export default function HirePilotClient() {
                         <div className="mt-2 text-sm font-medium text-white">
                           {answerGenerationStatus}
                         </div>
+                      </div>
+                    </div>
+
+                    {sharedAudioLevelWarning ? (
+                      <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                        {sharedAudioLevelWarning}
+                      </div>
+                    ) : null}
+
+                    {sharedAudioLastError ? (
+                      <div className="rounded-2xl border border-red-300/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-100/80">
+                          Last Error
+                        </div>
+                        <div className="mt-2">{sharedAudioLastError}</div>
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        Last Transcript Preview
+                      </div>
+                      <div className="mt-2 text-sm leading-6 text-slate-300">
+                        {sharedAudioTranscriptPreviewLabel}
                       </div>
                     </div>
                   </CardContent>

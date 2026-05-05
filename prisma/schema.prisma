@@ -8,29 +8,46 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum ResumeSubmissionStatus {
+  UPLOADED
+  PARSED
+  EVALUATED
+  NEEDS_REVIEW
+  FAILED
+}
+
+enum ResumeFitRecommendation {
+  STRONG_REVIEW
+  REVIEW
+  POSSIBLE_FIT
+  WEAK_FIT
+  INSUFFICIENT_INFO
+}
+
 model User {
-  id                    String                 @id @default(cuid())
-  name                  String?
-  email                 String?                @unique
-  password              String?
-  twoFactorEnabled      Boolean                @default(false)
-  twoFactorSecretEncrypted String?
+  id                              String                     @id @default(cuid())
+  name                            String?
+  email                           String?                    @unique
+  password                        String?
+  twoFactorEnabled                Boolean                    @default(false)
+  twoFactorSecretEncrypted        String?
   twoFactorPendingSecretEncrypted String?
-  twoFactorConfirmedAt  DateTime?
-  twoFactorDisabledAt   DateTime?
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
-  isGuest               Boolean                @default(true)
-  emailVerifiedAt       DateTime?
-  userProfile           UserProfile?
-  billings              UserBilling[]
-  savedJobs             SavedJob[]
-  hirePilotCreditGrants HirePilotCreditGrant[]
-  hirePilotCreditUsages HirePilotCreditUsage[]
-  passwordResetTokens   PasswordResetToken[]
-  twoFactorBackupCodes  TwoFactorBackupCode[]
-  recruiterAgency       RecruiterAgency?       @relation("RecruiterAgencyOwner")
-  recruiterProfile      RecruiterProfile?
+  twoFactorConfirmedAt            DateTime?
+  twoFactorDisabledAt             DateTime?
+  createdAt                       DateTime                   @default(now())
+  updatedAt                       DateTime                   @updatedAt
+  isGuest                         Boolean                    @default(true)
+  emailVerifiedAt                 DateTime?
+  userProfile                     UserProfile?
+  billings                        UserBilling[]
+  savedJobs                       SavedJob[]
+  hirePilotCreditGrants           HirePilotCreditGrant[]
+  hirePilotCreditUsages           HirePilotCreditUsage[]
+  passwordResetTokens             PasswordResetToken[]
+  twoFactorBackupCodes            TwoFactorBackupCode[]
+  recruiterAgency                 RecruiterAgency?           @relation("RecruiterAgencyOwner")
+  recruiterProfile                RecruiterProfile?
+  resumeEvaluationAuditLogs       ResumeEvaluationAuditLog[]
 }
 
 model TwoFactorBackupCode {
@@ -244,28 +261,28 @@ model ApplySiteStrategy {
   userProfileId String
   userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
 
-  strategyKey String
-  hostname       String
-  sourceHost     String?
-  destinationHost String?
-  strategyType   String      @default("generic_navigation")
-  pageType       String      @default("unknown")
-  finalUrl       String?
-  lastAction     String?
-  stopReason     String?
-  supportedReasons String[]  @default([])
-  instructions   String?
-  selectors      String?
-  stepsJson      Json?
-  rawStepsJson   Json?
+  strategyKey        String
+  hostname           String
+  sourceHost         String?
+  destinationHost    String?
+  strategyType       String   @default("generic_navigation")
+  pageType           String   @default("unknown")
+  finalUrl           String?
+  lastAction         String?
+  stopReason         String?
+  supportedReasons   String[] @default([])
+  instructions       String?
+  selectors          String?
+  stepsJson          Json?
+  rawStepsJson       Json?
   sanitizedStepsJson Json?
-  jobTitle       String?
-  company        String?
-  location       String?
+  jobTitle           String?
+  company            String?
+  location           String?
   derivedInstruction String?
-  automationPrompt String?
-  trainingSource String?
-  lastTrainedUrl String?
+  automationPrompt   String?
+  trainingSource     String?
+  lastTrainedUrl     String?
 
   status              String    @default("draft")
   successCount        Int       @default(0)
@@ -677,15 +694,17 @@ model UserBilling {
 }
 
 model RecruiterAgency {
-  id          String               @id @default(cuid())
-  ownerUserId String               @unique
-  name        String
-  slug        String               @unique
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  ownerUser   User                 @relation("RecruiterAgencyOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
-  jobOrders   RecruiterJobOrder[]
-  candidates  RecruiterCandidate[]
+  id                String               @id @default(cuid())
+  ownerUserId       String               @unique
+  name              String
+  slug              String               @unique
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  ownerUser         User                 @relation("RecruiterAgencyOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  jobOrders         RecruiterJobOrder[]
+  candidates        RecruiterCandidate[]
+  jobRequisitions   JobRequisition[]
+  candidateProfiles CandidateProfile[]
 
   @@index([slug])
 }
@@ -743,6 +762,7 @@ model RecruiterJobOrder {
   agency                  RecruiterAgency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   matches                 RecruiterMatch[]
   submissions             RecruiterSubmission[]
+  jobRequisition          JobRequisition?
 
   @@index([agencyId])
   @@index([agencyId, status])
@@ -836,4 +856,126 @@ model RecruiterStageEvent {
 
   @@index([submissionId])
   @@index([createdAt])
+}
+
+model JobRequisition {
+  id                  String                     @id @default(cuid())
+  agencyId            String
+  recruiterJobOrderId String?                    @unique
+  title               String
+  companyName         String
+  jobDescription      String                     @db.Text
+  requiredSkills      String[]                   @default([])
+  preferredSkills     String[]                   @default([])
+  experienceLevel     String?
+  location            String?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  agency              RecruiterAgency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  recruiterJobOrder   RecruiterJobOrder?         @relation(fields: [recruiterJobOrderId], references: [id], onDelete: SetNull)
+  resumeSubmissions   ResumeSubmission[]
+  evaluations         ResumeEvaluation[]
+  auditLogs           ResumeEvaluationAuditLog[]
+
+  @@index([agencyId])
+  @@index([agencyId, updatedAt])
+}
+
+model CandidateProfile {
+  id                String             @id @default(cuid())
+  agencyId          String
+  name              String?
+  email             String?
+  phone             String?
+  currentTitle      String?
+  location          String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  agency            RecruiterAgency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  resumeSubmissions ResumeSubmission[]
+
+  @@unique([agencyId, email])
+  @@index([agencyId])
+  @@index([agencyId, createdAt])
+}
+
+model ResumeSubmission {
+  id               String                     @id @default(cuid())
+  candidateId      String
+  jobRequisitionId String
+  originalFileName String
+  fileUrl          String?
+  storageKey       String?
+  mimeType         String
+  parsedText       String?                    @db.Text
+  parsedJson       Json?
+  status           ResumeSubmissionStatus     @default(UPLOADED)
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  candidate        CandidateProfile           @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobRequisition   JobRequisition             @relation(fields: [jobRequisitionId], references: [id], onDelete: Cascade)
+  evaluations      ResumeEvaluation[]
+  auditLogs        ResumeEvaluationAuditLog[]
+
+  @@index([candidateId])
+  @@index([jobRequisitionId])
+  @@index([jobRequisitionId, status])
+  @@index([createdAt])
+}
+
+model ResumeEvaluation {
+  id                  String                      @id @default(cuid())
+  resumeSubmissionId  String
+  jobRequisitionId    String
+  overallScore        Int
+  confidence          String
+  recommendation      ResumeFitRecommendation
+  summary             String                      @db.Text
+  strengths           Json
+  gaps                Json
+  evidence            Json
+  interviewQuestions  Json
+  missingInformation  Json
+  humanReviewNote     String?                     @db.Text
+  humanReviewRequired Boolean                     @default(true)
+  modelName           String?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  resumeSubmission    ResumeSubmission            @relation(fields: [resumeSubmissionId], references: [id], onDelete: Cascade)
+  jobRequisition      JobRequisition              @relation(fields: [jobRequisitionId], references: [id], onDelete: Cascade)
+  criteria            ResumeEvaluationCriterion[]
+
+  @@index([resumeSubmissionId])
+  @@index([resumeSubmissionId, createdAt])
+  @@index([jobRequisitionId, overallScore])
+}
+
+model ResumeEvaluationCriterion {
+  id           String           @id @default(cuid())
+  evaluationId String
+  label        String
+  weight       Int
+  score        Int
+  rationale    String           @db.Text
+  evidence     Json
+  evaluation   ResumeEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+
+  @@index([evaluationId])
+}
+
+model ResumeEvaluationAuditLog {
+  id                 String           @id @default(cuid())
+  resumeSubmissionId String
+  jobRequisitionId   String
+  action             String
+  actorId            String?
+  metadata           Json
+  createdAt          DateTime         @default(now())
+  resumeSubmission   ResumeSubmission @relation(fields: [resumeSubmissionId], references: [id], onDelete: Cascade)
+  jobRequisition     JobRequisition   @relation(fields: [jobRequisitionId], references: [id], onDelete: Cascade)
+  actor              User?            @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([resumeSubmissionId])
+  @@index([resumeSubmissionId, createdAt])
+  @@index([jobRequisitionId])
 }

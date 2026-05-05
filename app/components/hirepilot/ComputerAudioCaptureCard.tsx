@@ -62,6 +62,8 @@ export default function ComputerAudioCaptureCard({
   const [captureDiagnostics, setCaptureDiagnostics] =
     useState<DisplayAudioCaptureDiagnostics | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const selectedSourceLabel = captureDiagnostics?.audioTracks[0]?.label ?? null;
+  const isSystemAudioSource = /system audio/i.test(selectedSourceLabel ?? "");
 
   const cleanupSession = useCallback(async (notifyParent: boolean) => {
     const session = sessionRef.current;
@@ -229,19 +231,32 @@ export default function ComputerAudioCaptureCard({
       {status === "connected" ? (
         <div className="mt-4 space-y-3">
           <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            If the transcript stays empty, reconnect and choose the Meet tab, not
-            the HirePilot tab.
+            Connection confirms the browser shared an audio track, but HirePilot still
+            needs audible speech from the correct tab or app to transcribe anything.
+            If the transcript stays empty, reconnect and choose the Meet or Teams tab,
+            not the HirePilot tab.
           </div>
+
+          {isSystemAudioSource ? (
+            <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              Chrome tab audio is usually more reliable than generic System Audio for
+              interview transcription. Reconnect and choose the actual Meet, Teams, or
+              interview tab with Share tab audio enabled when possible.
+            </div>
+          ) : null}
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs leading-6 text-slate-300">
             <div>Audio tracks detected: {captureDiagnostics?.audioTrackCount ?? 0}</div>
             <div>
-              Shared audio source:{" "}
-              {captureDiagnostics?.audioTracks[0]?.label ?? "Shared tab/app audio"}
+              Shared audio source: {selectedSourceLabel ?? "Shared tab/app audio"}
             </div>
             <div>
               Track enabled: {captureDiagnostics?.audioTracks[0]?.enabled ? "Yes" : "No"}{" "}
               • muted: {captureDiagnostics?.audioTracks[0]?.muted ? "Yes" : "No"}
+            </div>
+            <div>
+              Track ready state:{" "}
+              {captureDiagnostics?.audioTracks[0]?.readyState ?? "unknown"}
             </div>
           </div>
         </div>

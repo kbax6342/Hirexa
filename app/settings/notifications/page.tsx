@@ -2,7 +2,7 @@
 "use client"
 import {useState} from "react"
 import Link from "next/link";
-import { ChevronDownIcon, UserCircleIcon } from "@heroicons/react/24/outline";
+import DesktopNotificationSettingsCard from "@/app/components/notifications/DesktopNotificationSettingsCard";
 import LoginFooter from "../../components/loginFooter/LoginFooter"
 
 type ToggleProps = {
@@ -53,9 +53,6 @@ export default function NotificationsPage() {
   const [emailNotifs, setEmailNotifs] = useState(true);
   // const [smsNotifs, setSmsNotifs] = useState(false);
   const [marketing, setMarketing] = useState(true);
-  // TODO: replace these with real values from your DB/session
-  const accountId = "732604371";
-  const email = "k3vin.baxt3r@gmail.com";
 
   return (
     <div className="min-h-[calc(100vh-64px)] bg-white">
@@ -122,6 +119,10 @@ export default function NotificationsPage() {
             checked={marketing}
             onChange={setMarketing}
           />
+        </div>
+
+        <div className="mt-10">
+          <DesktopNotificationSettingsCard />
         </div>
       </div>
     </section>

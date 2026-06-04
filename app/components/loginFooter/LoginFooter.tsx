@@ -53,6 +53,22 @@ export default function LoginFooter() {
               faster with smarter tools for resumes, applications, and career
               support.
             </p>
+
+            <a
+              href="https://saasbrowser.com/en/saas/1494186/hirexa"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View Hirexa on SaaS Browser"
+              className="mt-5 inline-flex items-center"
+            >
+              <img
+                src="https://static-files.saasbrowser.com/saas-browser-badge-16.svg"
+                alt="Hirexa - SaaS companies database"
+                width={200}
+                loading="lazy"
+                className="h-auto w-[200px] max-w-full"
+              />
+            </a>
           </div>
 
           {/* Navigation */}

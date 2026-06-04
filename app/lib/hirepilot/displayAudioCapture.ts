@@ -75,14 +75,25 @@ export function getSupportedDisplayAudioMimeType() {
     return "";
   }
 
-  const candidates = [
+  const audioCandidates = [
     "audio/webm;codecs=opus",
     "audio/webm",
+  ];
+  const supportedAudioMimeType = audioCandidates.find((type) =>
+    MediaRecorder.isTypeSupported(type)
+  );
+  if (supportedAudioMimeType) {
+    return supportedAudioMimeType;
+  }
+
+  const fallbackVideoCandidates = [
     "video/webm;codecs=opus",
     "video/webm",
   ];
 
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+  return (
+    fallbackVideoCandidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? ""
+  );
 }
 
 function isPermissionDeniedError(error: unknown) {

@@ -106,6 +106,14 @@ type HirePilotTranscriptionResponse = {
   ok?: boolean;
   transcript?: string;
   error?: string;
+  debugCode?: string;
+  debug?: {
+    fileType?: string;
+    fileSize?: number;
+    modelUsed?: string;
+    fallbackUsed?: boolean;
+    reason?: string | null;
+  };
   hasHirePilotAccess?: boolean;
   hirePilotUnlimited?: boolean;
   hirePilotCredits?: number;
@@ -176,6 +184,9 @@ type BrowserSpeechRecognition = {
 };
 
 type SharedAudioRecorderState = "inactive" | "recording" | "paused";
+
+const DISPLAY_AUDIO_RECORDER_WINDOW_MS = 10000;
+const SHARED_AUDIO_MIN_COMPLETE_WINDOW_BYTES = 4096;
 
 declare global {
   interface Window {
@@ -294,6 +305,24 @@ function debugHirePilotAudio(message: string, data?: Record<string, unknown>) {
   console.info(`[HIREPILOT_AUDIO] ${message}`);
 }
 
+function auditHirePilot(
+  event: string,
+  details?: Record<string, unknown>,
+  level: "info" | "error" = "info"
+) {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+
+  const logger = level === "error" ? console.error : console.info;
+  if (details) {
+    logger(`[hirepilot_audit] ${event}`, details);
+    return;
+  }
+
+  logger(`[hirepilot_audit] ${event}`);
+}
+
 function formatSharedAudioTimestamp(value: number | null) {
   if (!value) {
     return "—";
@@ -310,6 +339,11 @@ function getSharedAudioTranscriptionErrorMessage(
   status: number,
   serverMessage?: string | null
 ) {
+  const normalizedServerMessage = serverMessage?.trim();
+  if (normalizedServerMessage) {
+    return normalizedServerMessage;
+  }
+
   switch (status) {
     case 400:
       return "Audio chunk was empty or invalid.";
@@ -322,7 +356,7 @@ function getSharedAudioTranscriptionErrorMessage(
     case 503:
       return "OpenAI audio transcription is unavailable or not configured.";
     default:
-      return serverMessage?.trim() || "Unable to transcribe shared audio.";
+      return "Unable to transcribe shared audio.";
   }
 }
 
@@ -379,6 +413,7 @@ export default function HirePilotClient() {
   const keepListeningRef = useRef(false);
   const transcriptRef = useRef("");
   const combinedTranscriptRef = useRef("");
+  const liveTranscriptContainerRef = useRef<HTMLDivElement | null>(null);
   const liveTranscriptSourceRef = useRef<DetectedQuestionSource | null>(null);
   const stopHandledRef = useRef(false);
   const lastQuestionKeyRef = useRef("");
@@ -388,9 +423,15 @@ export default function HirePilotClient() {
   const completingSessionRef = useRef(false);
   const detectedQuestionsRef = useRef<HirePilotDetectedQuestion[]>([]);
   const suggestedAnswersRef = useRef<HirePilotSuggestedAnswer[]>([]);
+  const displayAudioSessionRef = useRef<DisplayAudioCaptureSession | null>(null);
   const displayRecorderRef = useRef<MediaRecorder | null>(null);
   const displayRecorderStoppedPromiseRef = useRef<Promise<void> | null>(null);
   const displayRecorderStoppedResolveRef = useRef<(() => void) | null>(null);
+  const displayRecorderChunksRef = useRef<Blob[]>([]);
+  const displayRecorderWindowTimerRef = useRef<number | null>(null);
+  const displayAudioShouldContinueRef = useRef(false);
+  const displayAudioUploadInFlightRef = useRef(false);
+  const displayAudioWindowIndexRef = useRef(0);
   const sharedAudioConnectedRef = useRef(false);
   const sharedAudioAnalyserRef = useRef<AnalyserNode | null>(null);
   const sharedAudioAudioContextRef = useRef<AudioContext | null>(null);
@@ -399,7 +440,7 @@ export default function HirePilotClient() {
   const sharedAudioConnectedAtRef = useRef(0);
   const sharedAudioLastDetectedLevelAtRef = useRef(0);
   const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const answerGenerationPromiseRef = useRef<Promise<void> | null>(null);
+  const answerGenerationPromiseRef = useRef<Promise<boolean> | null>(null);
   const liveQuestionDetectionTimeoutRef = useRef<number | null>(null);
   const sharedAudioPendingTranscriptionsRef = useRef(0);
   const isGeneratingRef = useRef(false);
@@ -662,6 +703,34 @@ export default function HirePilotClient() {
     const nextAnswers = [...suggestedAnswersRef.current];
     nextAnswers[existingIndex] = nextEntry;
     suggestedAnswersRef.current = nextAnswers;
+  }
+
+  function getSuggestedAnswerForQuestion(questionKey: string) {
+    if (!questionKey) {
+      return null;
+    }
+
+    return (
+      suggestedAnswersRef.current.find(
+        (item) => normalizeQuestionKey(item.question) === questionKey
+      ) ?? null
+    );
+  }
+
+  function getLatestDetectedQuestionSnapshot() {
+    const latestRememberedQuestion =
+      detectedQuestionsRef.current[detectedQuestionsRef.current.length - 1]?.question ?? "";
+    const latestQuestion = normalizeSpace(detectedQuestion || latestRememberedQuestion);
+    const latestQuestionKey = normalizeQuestionKey(latestQuestion);
+
+    if (!latestQuestion || !latestQuestionKey) {
+      return null;
+    }
+
+    return {
+      question: latestQuestion,
+      questionKey: latestQuestionKey,
+    };
   }
 
   async function waitForAnswerGenerationToSettle() {
@@ -936,10 +1005,21 @@ export default function HirePilotClient() {
   }, [copied]);
 
   useEffect(() => {
+    const container = liveTranscriptContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [liveTranscript]);
+
+  useEffect(() => {
     return () => {
       keepListeningRef.current = false;
       recognitionRef.current?.abort();
       clearLiveQuestionDetectionTimer();
+      clearDisplayAudioWindowTimer();
+      displayAudioShouldContinueRef.current = false;
       stopSharedAudioLevelMonitor();
 
       const recorder = displayRecorderRef.current;
@@ -949,7 +1029,27 @@ export default function HirePilotClient() {
     };
   }, []);
 
+  function clearDisplayAudioWindowTimer() {
+    if (
+      displayRecorderWindowTimerRef.current != null &&
+      typeof window !== "undefined"
+    ) {
+      window.clearTimeout(displayRecorderWindowTimerRef.current);
+      displayRecorderWindowTimerRef.current = null;
+    }
+  }
+
+  function resetDisplayAudioRecorderWindow() {
+    displayRecorderChunksRef.current = [];
+  }
+
   function resetSharedAudioDiagnostics() {
+    clearDisplayAudioWindowTimer();
+    resetDisplayAudioRecorderWindow();
+    displayAudioSessionRef.current = null;
+    displayAudioShouldContinueRef.current = false;
+    displayAudioUploadInFlightRef.current = false;
+    displayAudioWindowIndexRef.current = 0;
     sharedAudioPendingTranscriptionsRef.current = 0;
     setSharedAudioRecorderState("inactive");
     setSharedAudioChunksReceived(0);
@@ -1160,7 +1260,19 @@ export default function HirePilotClient() {
       return;
     }
 
-    if (lastGeneratedQuestionKeyRef.current === questionKey) {
+    const existingSuggestedAnswer = getSuggestedAnswerForQuestion(questionKey);
+    if (existingSuggestedAnswer) {
+      if (
+        !normalizeSpace(answer) ||
+        normalizeQuestionKey(detectedQuestion) !== questionKey
+      ) {
+        setAnswer(existingSuggestedAnswer.answer);
+        setResponseSource(existingSuggestedAnswer.source ?? null);
+      }
+      return;
+    }
+
+    if (lastGeneratedQuestionKeyRef.current === questionKey && isGeneratingRef.current) {
       return;
     }
 
@@ -1256,6 +1368,25 @@ export default function HirePilotClient() {
     }, 900);
   }
 
+  function updateDetectedQuestionFromTranscript(
+    transcript: string,
+    source: DetectedQuestionSource
+  ) {
+    if (activeMode !== "live") {
+      return;
+    }
+
+    const detected = applyDetectedQuestion(transcript);
+    if (detected.cleanedQuestion && detected.questionKey) {
+      handleLiveDetectedQuestion(detected.cleanedQuestion, detected.questionKey, source);
+      return;
+    }
+
+    if (!lastQuestionKeyRef.current) {
+      setDetectionStatus(transcript.length >= 32 ? "none" : "idle");
+    }
+  }
+
   function appendTranscribedText(text: string) {
     const chunk = normalizeSpace(text);
     if (!chunk) {
@@ -1286,19 +1417,34 @@ export default function HirePilotClient() {
       preview: chunk.slice(0, 120),
     });
     syncLiveTranscriptState(nextTranscript, nextTranscript, "shared-audio");
+    updateDetectedQuestionFromTranscript(nextTranscript, "shared-audio");
   }
 
-  async function transcribeDisplayAudioChunk(blob: Blob) {
+  async function transcribeDisplayAudioChunk(
+    blob: Blob,
+    options: {
+      chunkCount: number;
+      windowIndex: number;
+    }
+  ) {
     if (!blob.size) return;
 
+    const fileType = blob.type || "audio/webm";
     const audioFile = new File([blob], `hirepilot-display-audio-${Date.now()}.webm`, {
-      type: blob.type || "audio/webm",
+      type: fileType,
     });
     const formData = new FormData();
     formData.set("audio", audioFile);
     setSharedAudioChunksUploaded((count) => count + 1);
+    setSharedAudioLastChunkBytes(blob.size);
     setSharedAudioLastHttpStatus(null);
     setSharedAudioLastError(null);
+    debugHirePilotAudio("shared audio upload started", {
+      windowIndex: options.windowIndex,
+      chunkCount: options.chunkCount,
+      fileSize: blob.size,
+      fileType,
+    });
 
     const res = await fetch("/api/hirepilot/transcribe", {
       method: "POST",
@@ -1321,13 +1467,28 @@ export default function HirePilotClient() {
         res.status,
         data.error ?? null
       );
+      setRequestError(message);
+      setSharedAudioLastError(message);
       setSharedAudioPipelineError(message);
-      if (process.env.NODE_ENV !== "production" && data.error) {
-        debugHirePilotAudio("error", {
-          message: data.error,
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[HIREPILOT_AUDIO] shared audio transcription failed", {
+          windowIndex: options.windowIndex,
+          chunkCount: options.chunkCount,
           status: res.status,
+          error: data.error ?? null,
+          debugCode: data.debugCode ?? null,
+          response: data,
         });
       }
+      debugHirePilotAudio("shared audio upload failed", {
+        windowIndex: options.windowIndex,
+        chunkCount: options.chunkCount,
+        fileSize: blob.size,
+        fileType,
+        status: res.status,
+        error: message,
+        debugCode: data.debugCode ?? null,
+      });
       throw new Error(message);
     }
 
@@ -1341,19 +1502,46 @@ export default function HirePilotClient() {
         setStatusMessage("Audio captured, waiting for clear speech...");
       }
       debugHirePilotAudio("transcript received", {
+        windowIndex: options.windowIndex,
         length: 0,
         preview: "",
+        reason: data.debug?.reason ?? null,
+      });
+      debugHirePilotAudio("shared audio upload completed", {
+        windowIndex: options.windowIndex,
+        chunkCount: options.chunkCount,
+        fileSize: blob.size,
+        fileType,
+        transcriptLength: 0,
+        transcriptPreview: "",
       });
       return;
     }
 
+    debugHirePilotAudio("shared audio upload completed", {
+      windowIndex: options.windowIndex,
+      chunkCount: options.chunkCount,
+      fileSize: blob.size,
+      fileType,
+      transcriptLength: transcript.length,
+      transcriptPreview: transcript.slice(0, 120),
+    });
     appendTranscribedText(transcript);
   }
 
-  function queueDisplayAudioTranscription(blob: Blob) {
+  function queueDisplayAudioTranscription(
+    blob: Blob,
+    options: {
+      chunkCount: number;
+      windowIndex: number;
+    }
+  ) {
     sharedAudioPendingTranscriptionsRef.current += 1;
+    displayAudioUploadInFlightRef.current = true;
     setSharedAudioTranscribing(true);
-    debugHirePilotAudio("media recorder chunk sent", {
+    debugHirePilotAudio("shared audio upload queued", {
+      windowIndex: options.windowIndex,
+      chunkCount: options.chunkCount,
       mimeType: blob.type || "audio/webm",
       size: blob.size,
     });
@@ -1361,12 +1549,13 @@ export default function HirePilotClient() {
       .catch(() => undefined)
       .then(async () => {
         try {
-          await transcribeDisplayAudioChunk(blob);
+          await transcribeDisplayAudioChunk(blob, options);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "Unable to transcribe shared audio.";
           setSharedAudioPipelineError(message);
           debugHirePilotAudio("error", {
+            windowIndex: options.windowIndex,
             message,
             lastHttpStatus: sharedAudioLastHttpStatus,
           });
@@ -1375,6 +1564,8 @@ export default function HirePilotClient() {
             0,
             sharedAudioPendingTranscriptionsRef.current - 1
           );
+          displayAudioUploadInFlightRef.current =
+            sharedAudioPendingTranscriptionsRef.current > 0;
           if (sharedAudioPendingTranscriptionsRef.current === 0) {
             setSharedAudioTranscribing(false);
           }
@@ -1382,7 +1573,35 @@ export default function HirePilotClient() {
       });
   }
 
+  function scheduleDisplayAudioRecorderStop(recorder: MediaRecorder, windowIndex: number) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    clearDisplayAudioWindowTimer();
+    displayRecorderWindowTimerRef.current = window.setTimeout(() => {
+      if (displayRecorderRef.current !== recorder || recorder.state === "inactive") {
+        return;
+      }
+
+      debugHirePilotAudio("recorder window stopping", {
+        windowIndex,
+        reason: "timer",
+      });
+      recorder.stop();
+    }, DISPLAY_AUDIO_RECORDER_WINDOW_MS);
+  }
+
   function startDisplayAudioRecorder(session: DisplayAudioCaptureSession) {
+    const activeRecorder = displayRecorderRef.current;
+    if (activeRecorder && activeRecorder.state !== "inactive") {
+      debugHirePilotAudio("recorder window start skipped", {
+        windowIndex: displayAudioWindowIndexRef.current,
+        recorderState: activeRecorder.state,
+      });
+      return;
+    }
+
     const mimeType = getSupportedDisplayAudioMimeType();
     let recorder: MediaRecorder;
     try {
@@ -1401,12 +1620,21 @@ export default function HirePilotClient() {
       throw error;
     }
 
+    const windowIndex = displayAudioWindowIndexRef.current + 1;
+    displayAudioWindowIndexRef.current = windowIndex;
+    resetDisplayAudioRecorderWindow();
     displayRecorderStoppedPromiseRef.current = new Promise<void>((resolve) => {
       displayRecorderStoppedResolveRef.current = resolve;
     });
 
     recorder.onstart = () => {
       setSharedAudioRecorderState(recorder.state);
+      debugHirePilotAudio("recorder window started", {
+        windowIndex,
+        mimeType: recorder.mimeType || mimeType || "audio/webm",
+        sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
+      });
+      scheduleDisplayAudioRecorderStop(recorder, windowIndex);
     };
 
     recorder.onpause = () => {
@@ -1419,37 +1647,93 @@ export default function HirePilotClient() {
 
     recorder.ondataavailable = (event) => {
       setSharedAudioChunksReceived((count) => count + 1);
-      setSharedAudioLastChunkBytes(event.data.size);
       if (event.data.size <= 0) {
         return;
       }
-      queueDisplayAudioTranscription(event.data);
+
+      displayRecorderChunksRef.current = [
+        ...displayRecorderChunksRef.current,
+        event.data,
+      ];
+      debugHirePilotAudio("recorder window chunk collected", {
+        windowIndex,
+        mimeType: event.data.type || recorder.mimeType || "audio/webm",
+        chunkSize: event.data.size,
+        chunkCount: displayRecorderChunksRef.current.length,
+      });
     };
 
     recorder.onerror = () => {
+      clearDisplayAudioWindowTimer();
       setSharedAudioPipelineError("Unable to capture shared tab or app audio.");
       setSharedAudioRecorderState(recorder.state);
       setSharedAudioTranscribing(false);
       setStatusMessage("Shared tab/app audio capture encountered an error.");
       debugHirePilotAudio("error", {
+        windowIndex,
         message: "Shared tab/app audio capture encountered an error.",
       });
     };
 
     recorder.onstop = () => {
+      clearDisplayAudioWindowTimer();
+      const collectedChunks = displayRecorderChunksRef.current;
+      const chunkCount = collectedChunks.length;
+      const combinedBlob = new Blob(collectedChunks, {
+        type: recorder.mimeType || mimeType || "audio/webm",
+      });
+      resetDisplayAudioRecorderWindow();
+
+      debugHirePilotAudio("recorder window stopped", {
+        windowIndex,
+        chunkCount,
+        combinedBlobSize: combinedBlob.size,
+        combinedBlobType: combinedBlob.type || "audio/webm",
+      });
+
+      if (combinedBlob.size >= SHARED_AUDIO_MIN_COMPLETE_WINDOW_BYTES) {
+        queueDisplayAudioTranscription(combinedBlob, {
+          chunkCount,
+          windowIndex,
+        });
+      } else if (combinedBlob.size > 0 || chunkCount > 0) {
+        debugHirePilotAudio("recorder window upload skipped", {
+          windowIndex,
+          chunkCount,
+          combinedBlobSize: combinedBlob.size,
+          combinedBlobType: combinedBlob.type || "audio/webm",
+          reason: "chunk_too_small",
+        });
+        setRequestError(null);
+        setSharedAudioError(null);
+        setSharedAudioLastError(null);
+        if (sharedAudioConnectedRef.current) {
+          setActiveListeningSource("computer");
+          setStatusMessage("Audio captured, waiting for clear speech...");
+        }
+      }
+
       setSharedAudioRecorderState("inactive");
+      displayRecorderRef.current = null;
       displayRecorderStoppedResolveRef.current?.();
       displayRecorderStoppedResolveRef.current = null;
-      displayRecorderRef.current = null;
+
+      const nextSession = displayAudioSessionRef.current;
+      if (
+        displayAudioShouldContinueRef.current &&
+        sharedAudioConnectedRef.current &&
+        nextSession
+      ) {
+        debugHirePilotAudio("recorder window restarting", {
+          nextWindowIndex: displayAudioWindowIndexRef.current + 1,
+        });
+        startDisplayAudioRecorder(nextSession);
+      }
     };
 
     displayRecorderRef.current = recorder;
-    debugHirePilotAudio("shared audio recorder started", {
-      audioTrackCount: session.diagnostics.audioTrackCount,
-      sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
-    });
     try {
-      recorder.start(2000);
+      recorder.start();
       setSharedAudioRecorderState(recorder.state);
     } catch (error) {
       const message =
@@ -1461,6 +1745,8 @@ export default function HirePilotClient() {
       setStatusMessage("Unable to start shared tab/app audio recording.");
       debugHirePilotAudio("error", { message });
       displayRecorderRef.current = null;
+      resetDisplayAudioRecorderWindow();
+      clearDisplayAudioWindowTimer();
       displayRecorderStoppedResolveRef.current?.();
       displayRecorderStoppedResolveRef.current = null;
       displayRecorderStoppedPromiseRef.current = null;
@@ -1469,17 +1755,16 @@ export default function HirePilotClient() {
   }
 
   async function stopDisplayAudioRecorder() {
+    displayAudioShouldContinueRef.current = false;
+    clearDisplayAudioWindowTimer();
     const recorder = displayRecorderRef.current;
     const stoppedPromise = displayRecorderStoppedPromiseRef.current;
 
     if (recorder && recorder.state !== "inactive") {
-      if (typeof recorder.requestData === "function") {
-        try {
-          recorder.requestData();
-        } catch {
-          debugHirePilot("display audio recorder requestData failed before stop");
-        }
-      }
+      debugHirePilotAudio("recorder window stopping", {
+        windowIndex: displayAudioWindowIndexRef.current,
+        reason: "disconnect",
+      });
       recorder.stop();
     }
 
@@ -1488,10 +1773,14 @@ export default function HirePilotClient() {
     }
 
     await transcriptionQueueRef.current.catch(() => undefined);
+    displayAudioUploadInFlightRef.current = false;
     sharedAudioPendingTranscriptionsRef.current = 0;
     setSharedAudioTranscribing(false);
     setSharedAudioRecorderState("inactive");
+    resetDisplayAudioRecorderWindow();
     displayRecorderStoppedPromiseRef.current = null;
+    displayRecorderStoppedResolveRef.current = null;
+    displayRecorderRef.current = null;
   }
 
   function extractLikelyQuestion(transcript: string) {
@@ -1510,14 +1799,14 @@ export default function HirePilotClient() {
 
   async function finalizeTranscriptDetection() {
     if (stopHandledRef.current) {
-      return;
+      return getLatestDetectedQuestionSnapshot();
     }
 
     stopHandledRef.current = true;
     clearLiveQuestionDetectionTimer();
     const finalTranscript = combinedTranscriptRef.current;
 
-    debugHirePilot("stop listening clicked");
+    debugHirePilot("finalizing transcript detection");
     debugHirePilot("final transcript captured", {
       length: finalTranscript.length,
       preview: finalTranscript.slice(0, 160),
@@ -1534,6 +1823,7 @@ export default function HirePilotClient() {
     });
 
     if (!detected.cleanedQuestion || !detected.questionKey) {
+      const latestDetectedQuestion = getLatestDetectedQuestionSnapshot();
       if (!lastQuestionKeyRef.current && detectedQuestionsRef.current.length === 0) {
         setDetectedQuestion("");
         setDetectionStatus(finalTranscript ? "none" : "idle");
@@ -1545,7 +1835,7 @@ export default function HirePilotClient() {
         status: "none",
         question: null,
       });
-      return;
+      return latestDetectedQuestion;
     }
 
     handleLiveDetectedQuestion(
@@ -1557,6 +1847,11 @@ export default function HirePilotClient() {
       status: "found",
       question: detected.cleanedQuestion,
     });
+
+    return {
+      question: detected.cleanedQuestion,
+      questionKey: detected.questionKey,
+    };
   }
 
   async function generateAnswer(
@@ -1566,7 +1861,7 @@ export default function HirePilotClient() {
     options?: { practiceMode?: boolean }
   ) {
     const normalizedQuestion = normalizeSpace(question);
-    if (!normalizedQuestion) return;
+    if (!normalizedQuestion) return false;
     const practiceMode = options?.practiceMode ?? (activeMode === "practice" || activeMode === "mock");
     const generationPromise = (async () => {
       debugHirePilot("answer generation started", {
@@ -1574,10 +1869,23 @@ export default function HirePilotClient() {
         question: normalizedQuestion,
         practiceMode,
       });
+      auditHirePilot("hirepilot_answer_generation_started", {
+        mode,
+        question: normalizedQuestion,
+        practiceMode,
+      });
 
       if (!practiceMode) {
         const accessAllowed = await ensureInterviewSession();
-        if (!accessAllowed) return;
+        if (!accessAllowed) {
+          auditHirePilot("hirepilot_answer_generation_failed", {
+            mode,
+            question: normalizedQuestion,
+            practiceMode,
+            error: "HirePilot access was not available.",
+          }, "error");
+          return false;
+        }
       }
 
       setDetectedQuestion(normalizedQuestion);
@@ -1621,14 +1929,29 @@ export default function HirePilotClient() {
           success: true,
           source: data.source ?? null,
         });
+        auditHirePilot("hirepilot_answer_generation_completed", {
+          mode,
+          question: normalizedQuestion,
+          practiceMode,
+          source: data.source ?? null,
+          answerLength: normalizeSpace(data.answer ?? "").length,
+        });
+        return true;
       } catch (error) {
-        setRequestError(
-          error instanceof Error ? error.message : "Failed to generate an interview answer."
-        );
+        const errorMessage =
+          error instanceof Error ? error.message : "Failed to generate an interview answer.";
+        setRequestError(errorMessage);
         debugHirePilot("answer generation completed", {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
         });
+        auditHirePilot("hirepilot_answer_generation_failed", {
+          mode,
+          question: normalizedQuestion,
+          practiceMode,
+          error: errorMessage,
+        }, "error");
+        return false;
       } finally {
         setIsGenerating(false);
         setActiveRewrite(null);
@@ -1642,7 +1965,52 @@ export default function HirePilotClient() {
     });
     answerGenerationPromiseRef.current = trackedGenerationPromise;
 
-    await answerGenerationPromiseRef.current;
+    return await answerGenerationPromiseRef.current;
+  }
+
+  async function ensureSuggestedAnswerForQuestion(question: string, questionKey: string) {
+    const normalizedQuestion = normalizeSpace(question);
+    if (!normalizedQuestion || !questionKey) {
+      return false;
+    }
+
+    const existingSuggestedAnswer = getSuggestedAnswerForQuestion(questionKey);
+    if (existingSuggestedAnswer) {
+      if (
+        !normalizeSpace(answer) ||
+        normalizeQuestionKey(detectedQuestion) !== questionKey
+      ) {
+        setAnswer(existingSuggestedAnswer.answer);
+        setResponseSource(existingSuggestedAnswer.source ?? null);
+      }
+      return true;
+    }
+
+    if (isGeneratingRef.current) {
+      if (lastGeneratedQuestionKeyRef.current !== questionKey) {
+        pendingGeneratedQuestionRef.current = {
+          question: normalizedQuestion,
+          questionKey,
+        };
+      }
+
+      await waitForAnswerGenerationToSettle();
+
+      const settledSuggestedAnswer = getSuggestedAnswerForQuestion(questionKey);
+      if (settledSuggestedAnswer) {
+        if (
+          !normalizeSpace(answer) ||
+          normalizeQuestionKey(detectedQuestion) !== questionKey
+        ) {
+          setAnswer(settledSuggestedAnswer.answer);
+          setResponseSource(settledSuggestedAnswer.source ?? null);
+        }
+        return true;
+      }
+    }
+
+    lastGeneratedQuestionKeyRef.current = questionKey;
+    return await generateAnswer(normalizedQuestion, "default");
   }
 
   const loadHirePilotStatus = useCallback(async () => {
@@ -1785,65 +2153,117 @@ export default function HirePilotClient() {
   }
 
   async function stopListening() {
+    debugHirePilot("stop listening clicked", {
+      source: "microphone",
+    });
+    auditHirePilot("hirepilot_stop_listening_clicked", {
+      source: "microphone",
+      transcriptLength: combinedTranscriptRef.current.length,
+      detectedQuestion: normalizeSpace(detectedQuestion) || null,
+    });
     keepListeningRef.current = false;
     recognitionRef.current?.stop();
     setActiveListeningSource((current) => (current === "microphone" ? null : current));
     setStatusMessage("Microphone idle");
-    await finalizeTranscriptDetection();
+    const finalizedQuestion = await finalizeTranscriptDetection();
+    const fallbackQuestion = getLatestDetectedQuestionSnapshot();
+    const latestQuestion = finalizedQuestion ?? fallbackQuestion;
+
+    if (latestQuestion?.question && latestQuestion.questionKey) {
+      auditHirePilot("hirepilot_final_question_detected", {
+        source: "microphone",
+        question: latestQuestion.question,
+        questionKey: latestQuestion.questionKey,
+      });
+
+      const generated = await ensureSuggestedAnswerForQuestion(
+        latestQuestion.question,
+        latestQuestion.questionKey
+      );
+
+      if (!generated && !getSuggestedAnswerForQuestion(latestQuestion.questionKey)) {
+        setRequestError(
+          "HirePilot detected the final question, but could not generate a suggested answer."
+        );
+      }
+    } else if (normalizeSpace(combinedTranscriptRef.current)) {
+      setRequestError(
+        "HirePilot captured the microphone transcript, but could not turn the final transcript into a clear question."
+      );
+    }
+
     await completeInterviewSession();
   }
 
-  async function handleComputerAudioBeforeConnect() {
+  const handleComputerAudioBeforeConnect = useCallback(async () => {
     if (isAnyListening) {
       return false;
     }
 
     const accessAllowed = await ensureInterviewSession();
     return accessAllowed;
-  }
+  }, [ensureInterviewSession, isAnyListening]);
 
-  async function handleComputerAudioConnected(session: DisplayAudioCaptureSession) {
-    resetLiveListeningState("Listening to shared tab/app audio");
-    sharedAudioConnectedRef.current = true;
-    setActiveListeningSource("computer");
-    setStatusMessage("Listening to shared tab/app audio");
-    setSharedAudioListening(true);
-    setSharedAudioTranscribing(false);
-    setSharedAudioError(null);
-    setSharedAudioLastError(null);
-    setDisplayAudioDiagnostics(session.diagnostics);
-    setIsInfoPanelCollapsed(true);
-    debugHirePilotAudio("shared audio capture started", {
-      audioTrackCount: session.diagnostics.audioTrackCount,
-      sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
-    });
-
-    try {
-      startDisplayAudioRecorder(session);
-      startSharedAudioLevelMonitor(session);
-      await markInterviewSessionSource("tab_audio", true);
-    } catch {
-      sharedAudioConnectedRef.current = false;
-      stopSharedAudioLevelMonitor();
-      setActiveListeningSource(null);
-      setSharedAudioListening(false);
+  const handleComputerAudioConnected = useCallback(
+    async (session: DisplayAudioCaptureSession) => {
+      resetLiveListeningState("Listening to shared tab/app audio");
+      displayAudioSessionRef.current = session;
+      displayAudioShouldContinueRef.current = true;
+      sharedAudioConnectedRef.current = true;
+      setActiveListeningSource("computer");
+      setStatusMessage("Listening to shared tab/app audio");
+      setSharedAudioListening(true);
       setSharedAudioTranscribing(false);
-      setSharedAudioRecorderState("inactive");
-      setSharedAudioPipelineError("Unable to capture shared tab or app audio.");
-      setStatusMessage("Unable to capture shared tab or app audio.");
-      session.stop();
-      debugHirePilotAudio("error", {
-        message: "Unable to capture shared tab or app audio.",
+      setSharedAudioError(null);
+      setSharedAudioLastError(null);
+      setDisplayAudioDiagnostics(session.diagnostics);
+      setIsInfoPanelCollapsed(true);
+      debugHirePilotAudio("shared audio capture started", {
+        audioTrackCount: session.diagnostics.audioTrackCount,
+        sourceLabel: session.diagnostics.audioTracks[0]?.label ?? "Shared tab/app audio",
       });
-    }
-  }
 
-  async function handleComputerAudioDisconnected() {
+      try {
+        startDisplayAudioRecorder(session);
+        startSharedAudioLevelMonitor(session);
+        await markInterviewSessionSource("tab_audio", true);
+      } catch {
+        displayAudioSessionRef.current = null;
+        displayAudioShouldContinueRef.current = false;
+        clearDisplayAudioWindowTimer();
+        sharedAudioConnectedRef.current = false;
+        stopSharedAudioLevelMonitor();
+        setActiveListeningSource(null);
+        setSharedAudioListening(false);
+        setSharedAudioTranscribing(false);
+        setSharedAudioRecorderState("inactive");
+        setSharedAudioPipelineError("Unable to capture shared tab or app audio.");
+        setStatusMessage("Unable to capture shared tab or app audio.");
+        session.stop();
+        debugHirePilotAudio("error", {
+          message: "Unable to capture shared tab or app audio.",
+        });
+      }
+    },
+    [
+      clearDisplayAudioWindowTimer,
+      markInterviewSessionSource,
+      resetLiveListeningState,
+      setSharedAudioPipelineError,
+      startDisplayAudioRecorder,
+      startSharedAudioLevelMonitor,
+      stopSharedAudioLevelMonitor,
+    ]
+  );
+
+  const handleComputerAudioDisconnected = useCallback(async () => {
+    displayAudioShouldContinueRef.current = false;
+    clearDisplayAudioWindowTimer();
+    displayAudioSessionRef.current = null;
     sharedAudioConnectedRef.current = false;
     stopSharedAudioLevelMonitor();
     setActiveListeningSource((current) => (current === "computer" ? null : current));
     setSharedAudioListening(false);
-    setSharedAudioTranscribing(false);
     await stopDisplayAudioRecorder();
     setStatusMessage("Shared tab/app audio disconnected.");
     setSharedAudioRecorderState("inactive");
@@ -1851,7 +2271,13 @@ export default function HirePilotClient() {
     debugHirePilotAudio("shared audio capture stopped");
     await finalizeTranscriptDetection();
     await completeInterviewSession();
-  }
+  }, [
+    clearDisplayAudioWindowTimer,
+    completeInterviewSession,
+    finalizeTranscriptDetection,
+    stopDisplayAudioRecorder,
+    stopSharedAudioLevelMonitor,
+  ]);
 
   async function handleCopy() {
     if (!answer.trim()) return;
@@ -2583,12 +3009,15 @@ export default function HirePilotClient() {
 
                     <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
                       <div className="text-sm font-semibold text-white">Live Transcript</div>
-                      <p className="mt-2 min-h-20 text-sm leading-6 text-slate-300">
+                      <div
+                        ref={liveTranscriptContainerRef}
+                        className="mt-3 max-h-64 min-h-20 overflow-y-auto rounded-xl border border-white/10 bg-slate-950/50 p-3 pr-2 text-sm leading-6 text-slate-200 whitespace-pre-wrap break-words"
+                      >
                         {liveTranscript ||
                           (sharedAudioListening || sharedAudioTranscribing
                             ? "Audio captured, waiting for clear speech..."
                             : "HirePilot will show captured speech here while you are listening.")}
-                      </p>
+                      </div>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

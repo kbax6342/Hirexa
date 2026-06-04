@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CalendarDays,
   ClipboardCheck,
+  Clock3,
   MapPin,
   MessageSquareText,
   Sparkles,
@@ -34,6 +35,14 @@ const featureCards = [
 
 // Placeholder event previews until real hiring event data is connected.
 const featuredEvents = [
+  {
+    name: "District 1 Job Fair",
+    match: "100%",
+    focus: "Community hiring, employer meetups, and neighborhood job opportunities",
+    date: "June 1st, 2026",
+    time: "11 a.m. to 2 p.m.",
+    location: "Detroit, Michigan",
+  },
   {
     name: "Detroit Tech Hiring Mixer",
     match: "91%",
@@ -115,9 +124,23 @@ export function HiringEventsSection() {
                       <h4 className="font-heading text-base font-semibold text-foreground">
                         {event.name}
                       </h4>
-                      <div className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-                        <MapPin className="h-4 w-4 text-primary" />
-                        {event.location}
+                      <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                        {event.date ? (
+                          <div className="flex items-center gap-2">
+                            <CalendarDays className="h-4 w-4 text-primary" />
+                            {event.date}
+                          </div>
+                        ) : null}
+                        {event.time ? (
+                          <div className="flex items-center gap-2">
+                            <Clock3 className="h-4 w-4 text-primary" />
+                            {event.time}
+                          </div>
+                        ) : null}
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-primary" />
+                          {event.location}
+                        </div>
                       </div>
                     </div>
                     <div className="w-fit rounded-full bg-emerald-500/10 px-3 py-1 text-sm font-semibold text-emerald-700">
@@ -132,7 +155,7 @@ export function HiringEventsSection() {
                     href="/job-tools/career-coach"
                     className="mt-4 inline-flex items-center text-sm font-semibold text-primary hover:underline"
                   >
-                    View Event Prep
+                    View Event
                     <ArrowRight className="ml-1.5 h-4 w-4" />
                   </Link>
                 </article>

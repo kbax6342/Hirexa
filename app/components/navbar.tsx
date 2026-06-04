@@ -42,6 +42,7 @@ type HirePilotNavStatus = {
 const guestNav: NavItem[] = [
   { label: "Features", href: "/#features" },
   { label: "How It Works", href: "/how-it-works" },
+  { label: "AI Chat Demo", href: "/demo/minutemen-ai-chat" },
   { label: "HirePilot", href: "/hirepilot" },
   { label: "Find Jobs", href: "/jobs" },
   { label: "Job Locations", href: "/locations" },
@@ -50,6 +51,7 @@ const guestNav: NavItem[] = [
 const authedNav: NavItem[] = [
   { label: "Smart Matches", href: "/dashboard" },
   { label: "AI Application Assistant", href: "/job-tools/generate" },
+  { label: "AI Chat Demo", href: "/demo/minutemen-ai-chat" },
   {
     label: "Agents",
     href: "#",

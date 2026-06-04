@@ -56,6 +56,11 @@ export default function ComputerAudioCaptureCard({
   onDisconnected,
 }: ComputerAudioCaptureCardProps) {
   const sessionRef = useRef<DisplayAudioCaptureSession | null>(null);
+  const isMountedRef = useRef(true);
+  const onBeforeConnectRef = useRef(onBeforeConnect);
+  const onConnectedRef = useRef(onConnected);
+  const onDisconnectedRef = useRef(onDisconnected);
+  const trackEndedHandlerRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState<DisplayAudioCaptureStatus>(() =>
     isDisplayAudioCaptureSupported() ? "idle" : "unsupported"
   );
@@ -65,31 +70,63 @@ export default function ComputerAudioCaptureCard({
   const selectedSourceLabel = captureDiagnostics?.audioTracks[0]?.label ?? null;
   const isSystemAudioSource = /system audio/i.test(selectedSourceLabel ?? "");
 
-  const cleanupSession = useCallback(async (notifyParent: boolean) => {
-    const session = sessionRef.current;
-    if (session) {
+  useEffect(() => {
+    onBeforeConnectRef.current = onBeforeConnect;
+    onConnectedRef.current = onConnected;
+    onDisconnectedRef.current = onDisconnected;
+  }, [onBeforeConnect, onConnected, onDisconnected]);
+
+  const cleanupSession = useCallback(
+    async (options?: {
+      notifyParent?: boolean;
+      nextStatus?: DisplayAudioCaptureStatus;
+      nextErrorMessage?: string | null;
+    }) => {
+      const notifyParent = Boolean(options?.notifyParent);
+      const handleTrackEnded = trackEndedHandlerRef.current;
+      trackEndedHandlerRef.current = null;
+
+      const session = sessionRef.current;
       sessionRef.current = null;
-      session.stop();
+      if (session && handleTrackEnded) {
+        session.stream.getTracks().forEach((track) => {
+          track.removeEventListener("ended", handleTrackEnded);
+        });
+      }
+
+      if (session) {
+        session.stop();
+      }
+
+      if (isMountedRef.current) {
+        setStatus(options?.nextStatus ?? (isDisplayAudioCaptureSupported() ? "idle" : "unsupported"));
+        setCaptureDiagnostics(null);
+        setErrorMessage(options?.nextErrorMessage ?? null);
+      }
+
+      if (notifyParent && session) {
+        await onDisconnectedRef.current?.();
+      }
+    },
+    []
+  );
+
+  const handleDisconnect = useCallback(async () => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[hirepilot] stop listening clicked", {
+        source: "shared-audio",
+      });
     }
 
-    if (notifyParent && session) {
-      await onDisconnected?.();
-    }
-  }, [onDisconnected]);
+    await cleanupSession({ notifyParent: true });
+  }, [cleanupSession]);
 
-  async function handleDisconnect() {
-    await cleanupSession(true);
-    setStatus(isDisplayAudioCaptureSupported() ? "idle" : "unsupported");
-    setCaptureDiagnostics(null);
-    setErrorMessage(null);
-  }
-
-  async function handleStart() {
+  const handleStart = useCallback(async () => {
     if (disabled || status === "requesting-permission" || status === "connected") {
       return;
     }
 
-    const allowConnection = (await onBeforeConnect?.()) ?? true;
+    const allowConnection = (await onBeforeConnectRef.current?.()) ?? true;
     if (!allowConnection) {
       return;
     }
@@ -100,9 +137,10 @@ export default function ComputerAudioCaptureCard({
     try {
       const session = await startDisplayAudioCapture();
       const handleTrackEnded = () => {
-        void handleDisconnect();
+        void cleanupSession({ notifyParent: true });
       };
 
+      trackEndedHandlerRef.current = handleTrackEnded;
       session.stream.getTracks().forEach((track) => {
         track.addEventListener("ended", handleTrackEnded, { once: true });
       });
@@ -110,14 +148,9 @@ export default function ComputerAudioCaptureCard({
       sessionRef.current = session;
       setCaptureDiagnostics(session.diagnostics);
       setStatus("connected");
-      await onConnected?.(session);
+      await onConnectedRef.current?.(session);
     } catch (error) {
-      if (sessionRef.current) {
-        sessionRef.current.stop();
-        sessionRef.current = null;
-      }
-
-      setCaptureDiagnostics(null);
+      await cleanupSession({ notifyParent: false });
 
       if (error instanceof DisplayAudioCaptureError) {
         setStatus(
@@ -138,11 +171,12 @@ export default function ComputerAudioCaptureCard({
       setStatus("idle");
       setErrorMessage("Unable to start shared tab or app audio capture.");
     }
-  }
+  }, [cleanupSession, disabled, status]);
 
   useEffect(() => {
     return () => {
-      void cleanupSession(true);
+      isMountedRef.current = false;
+      void cleanupSession({ notifyParent: false });
     };
   }, [cleanupSession]);
 

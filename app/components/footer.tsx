@@ -31,6 +31,21 @@ export function Footer() {
             <p className="mt-2 text-sm text-slate-400">
               Smarter job matching, applications, and career support in one place.
             </p>
+            <a
+              href="https://saasbrowser.com/en/saas/1494186/hirexa"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View Hirexa on SaaS Browser"
+              className="mt-4 inline-flex items-center"
+            >
+              <img
+                src="https://static-files.saasbrowser.com/saas-browser-badge-16.svg"
+                alt="Hirexa - SaaS companies database"
+                width={200}
+                loading="lazy"
+                className="h-auto w-[200px] max-w-full"
+              />
+            </a>
           </div>
 
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-center sm:flex sm:flex-wrap sm:items-center sm:justify-center md:justify-end">

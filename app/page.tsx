@@ -10,7 +10,9 @@ import { Trust } from "./components/trust"
 import { Audience } from "./components/audience"
 import { CTA } from "./components/cta"
 import { Footer } from "./components/footer"
+import HomepageAiChatWidget from "./components/home/HomepageAiChatWidget";
 import { getOnboardingStatusForUser } from "./lib/onboarding/status";
+import { getHomepageAiChatCompanySettings } from "@/lib/chatbot/homepageChatbotSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,7 @@ export default async function Home() {
   }
 
   const href = session?.user ? "/dashboard" : "/login";
+  const homepageChatSettings = getHomepageAiChatCompanySettings();
 
   return (
     <>
@@ -50,6 +53,7 @@ export default async function Home() {
       <div className="hidden md:block">
         <Footer />
       </div>
+      <HomepageAiChatWidget companySettings={homepageChatSettings} />
     </>
   );
 }

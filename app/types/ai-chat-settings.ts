@@ -44,6 +44,8 @@ export type AiChatCompanySettings = {
   leadDeliveryMethod?: "dashboard" | "email" | "webhook" | "mock";
   leadPriorityRules?: string[];
   chatDisplayName: string;
+  chatTitle?: string;
+  chatSubtitle?: string;
   welcomeMessage?: string;
   assistantTone?: "friendly" | "professional" | "high-energy" | "formal" | "casual";
   customInstructions?: string;
@@ -98,6 +100,8 @@ export const aiChatCompanySettingsSchema = z
     leadDeliveryMethod: z.enum(AI_CHAT_LEAD_DELIVERY_METHODS).optional(),
     leadPriorityRules: z.array(z.string().trim()).optional(),
     chatDisplayName: z.string().trim().min(1),
+    chatTitle: optionalTrimmedString,
+    chatSubtitle: optionalTrimmedString,
     welcomeMessage: optionalTrimmedString,
     assistantTone: z.enum(AI_CHAT_ASSISTANT_TONES).optional(),
     customInstructions: optionalTrimmedString,

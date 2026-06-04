@@ -64,10 +64,18 @@ const TWO_FACTOR_BLOCKED_PREFIXES = [
 
 const TWO_FACTOR_ROUTE = "/auth/2fa";
 
+function isPublicChatbotSettingsPath(pathname: string) {
+  return /^\/dashboard\/chatbots\/[^/]+\/settings\/?$/.test(pathname);
+}
+
 export default auth(async (req) => {
   const { pathname, search, origin } = req.nextUrl;
   const isAuthenticated = !!req.auth;
   const userId = (req.auth?.user as { id?: string } | undefined)?.id ?? null;
+
+  if (isPublicChatbotSettingsPath(pathname)) {
+    return NextResponse.next();
+  }
 
   if (
     isAuthenticated &&

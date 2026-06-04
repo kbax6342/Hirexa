@@ -3,7 +3,10 @@ import OpenAI from "openai";
 import { z } from "zod";
 
 import { buildCompanyChatSystemPrompt } from "@/app/lib/ai-chat/buildCompanyChatSystemPrompt";
-import { getCompanyChatSettingsBySlug, getCurrentCompanyChatSettings } from "@/app/lib/ai-chat/companyChatSettingsStore";
+import {
+  getCompanyChatSettingsBySlug,
+  getCurrentCompanyChatSettings,
+} from "@/app/lib/ai-chat/companyChatSettingsStore";
 import { normalizeCompanyChatSettings } from "@/app/lib/ai-chat/validateCompanyChatSettings";
 import {
   getMissingStaffingFields,
@@ -32,6 +35,7 @@ import {
   staffingLeadDraftSchema,
 } from "@/app/types/staffing-screening";
 import { aiChatCompanySettingsSchema } from "@/app/types/ai-chat-settings";
+import { getCompanyChatbotSettingsBySlug } from "@/lib/chatbot/getCompanyChatbot";
 
 export const runtime = "nodejs";
 
@@ -443,12 +447,17 @@ function getEffectiveRequiredFields(settings: AiChatCompanySettings) {
     : requiredFields.filter((field) => field !== "transportationStatus");
 }
 
-function resolveCompanySettings(body: StaffingAiChatRequest) {
+async function resolveCompanySettings(body: StaffingAiChatRequest) {
   if (body.companySettings) {
     return normalizeCompanyChatSettings(body.companySettings);
   }
 
   if (body.companySlug) {
+    const companyChatbot = await getCompanyChatbotSettingsBySlug(body.companySlug);
+    if (companyChatbot) {
+      return normalizeCompanyChatSettings(companyChatbot.aiChatSettings);
+    }
+
     return getCompanyChatSettingsBySlug(body.companySlug);
   }
 
@@ -657,7 +666,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const settings = resolveCompanySettings(parsedBody.data);
+    const settings = await resolveCompanySettings(parsedBody.data);
     const requiredFields = getEffectiveRequiredFields(settings);
     const currentDraft = mergeStaffingLeadDraft({}, parsedBody.data.leadDraft);
     const heuristicDraft = inferLeadDraftHeuristically({
@@ -699,7 +708,7 @@ export async function POST(request: Request) {
             companyLocation: settings.companyLocation,
             companyIndustry: settings.companyIndustry,
             recruiterEmail: settings.recruiterEmail,
-            sourcePage: `/demo/minutemen-ai-chat?companySlug=${settings.companySlug}`,
+            sourcePage: `/demo/${settings.companySlug}`,
           })
         : null;
       assistantMessage = isComplete
@@ -726,7 +735,7 @@ export async function POST(request: Request) {
       companyLocation: settings.companyLocation,
       companyIndustry: settings.companyIndustry,
       recruiterEmail: settings.recruiterEmail,
-      sourcePage: `/demo/minutemen-ai-chat?companySlug=${settings.companySlug}`,
+      sourcePage: `/demo/${settings.companySlug}`,
     });
 
     return NextResponse.json({

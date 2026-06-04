@@ -693,6 +693,185 @@ model UserBilling {
   @@index([stripeSubscriptionId])
 }
 
+model CompanyChatbot {
+  id                        String                     @id @default(cuid())
+  companyName               String
+  companySlug               String                     @unique
+  websiteUrl                String?
+  industry                  String?
+  companyDescription        String?                    @db.Text
+  mainContactEmail          String?
+  recruiterEmail            String?
+  companyPhone              String?
+  locationsServed           String[]                   @default([])
+  logoUrl                   String?
+  brandColor                String?
+  chatTitle                 String?
+  chatSubtitle              String?
+  welcomeMessage            String?                    @db.Text
+  fallbackMessage           String?                    @db.Text
+  tone                      String                     @default("professional")
+  greetingStyle             String?
+  showAiDisclosure          Boolean                    @default(true)
+  useEmojis                 Boolean                    @default(false)
+  answerLength              String                     @default("concise")
+  fallbackBehavior          String?
+  requiredCandidateFields   String[]                   @default([])
+  optionalCandidateFields   String[]                   @default([])
+  requiredTransportation    String?
+  requiredWorkAuthorization String?
+  requiredShiftAvailability String[]                   @default([])
+  minimumYearsExperience    Int?
+  requiredCertifications    String[]                   @default([])
+  disqualifyingAnswers      Json?
+  candidateScoreThreshold   Int?
+  saveLeadToDashboard       Boolean                    @default(true)
+  sendEmailNotification     Boolean                    @default(false)
+  webhookUrl                String?
+  redirectUrl               String?
+  completionMessage         String?                    @db.Text
+  isActive                  Boolean                    @default(true)
+  isDemoMode                Boolean                    @default(false)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  leads                     ChatbotCandidateLead[]
+  messages                  ChatbotMessage[]
+  jobs                      ChatbotJobOpening[]
+  questions                 ChatbotScreeningQuestion[]
+
+  @@index([isActive])
+  @@index([isDemoMode])
+  @@index([createdAt])
+}
+
+model ChatbotJobOpening {
+  id               String         @id @default(cuid())
+  companyChatbotId String
+  title            String
+  location         String?
+  payRange         String?
+  shift            String?
+  employmentType   String?
+  requirements     String?        @db.Text
+  applicationUrl   String?
+  description      String?        @db.Text
+  status           String         @default("OPEN")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  companyChatbot   CompanyChatbot @relation(fields: [companyChatbotId], references: [id], onDelete: Cascade)
+
+  @@index([companyChatbotId])
+  @@index([companyChatbotId, status])
+  @@index([createdAt])
+}
+
+model ChatbotCandidateLead {
+  id                    String                   @id @default(cuid())
+  companyChatbotId      String
+  firstName             String?
+  lastName              String?
+  email                 String?
+  phone                 String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  desiredJobType        String?
+  employmentType        String?
+  preferredShift        String?
+  availability          Json?
+  workExperienceSummary String?                  @db.Text
+  yearsExperience       Int?
+  transportationStatus  String?
+  workAuthorization     String?
+  sponsorshipRequired   Boolean?
+  resumeUrl             String?
+  linkedinUrl           String?
+  certifications        String[]                 @default([])
+  desiredPay            String?
+  startDate             String?
+  previousEmployer      String?
+  educationLevel        String?
+  languagesSpoken       String[]                 @default([])
+  veteranStatus         String?
+  referralSource        String?
+  qualificationStatus   String?
+  candidateScore        Int?
+  aiSummary             String?                  @db.Text
+  missingFields         String[]                 @default([])
+  structuredAnswersJson Json?
+  sourcePageUrl         String?
+  utmSource             String?
+  utmCampaign           String?
+  consentAcceptedAt     DateTime?
+  aiDisclosureShownAt   DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  companyChatbot        CompanyChatbot           @relation(fields: [companyChatbotId], references: [id], onDelete: Cascade)
+  messages              ChatbotMessage[]
+  answers               ChatbotCandidateAnswer[]
+
+  @@index([companyChatbotId])
+  @@index([companyChatbotId, createdAt])
+  @@index([email])
+  @@index([phone])
+  @@index([qualificationStatus])
+  @@index([createdAt])
+}
+
+model ChatbotMessage {
+  id               String                @id @default(cuid())
+  companyChatbotId String
+  leadId           String?
+  role             String
+  content          String                @db.Text
+  metadata         Json?
+  createdAt        DateTime              @default(now())
+  companyChatbot   CompanyChatbot        @relation(fields: [companyChatbotId], references: [id], onDelete: Cascade)
+  lead             ChatbotCandidateLead? @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([companyChatbotId])
+  @@index([leadId])
+  @@index([createdAt])
+}
+
+model ChatbotScreeningQuestion {
+  id               String                   @id @default(cuid())
+  companyChatbotId String
+  questionText     String                   @db.Text
+  questionType     String                   @default("text")
+  isRequired       Boolean                  @default(false)
+  isOptional       Boolean                  @default(false)
+  isKnockout       Boolean                  @default(false)
+  options          Json?
+  order            Int                      @default(0)
+  expectedAnswer   String?                  @db.Text
+  conditionalLogic Json?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  companyChatbot   CompanyChatbot           @relation(fields: [companyChatbotId], references: [id], onDelete: Cascade)
+  answers          ChatbotCandidateAnswer[]
+
+  @@index([companyChatbotId])
+  @@index([companyChatbotId, order])
+  @@index([questionType])
+}
+
+model ChatbotCandidateAnswer {
+  id         String                   @id @default(cuid())
+  leadId     String
+  questionId String
+  answerText String?                  @db.Text
+  answerJson Json?
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+  lead       ChatbotCandidateLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  question   ChatbotScreeningQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, questionId])
+  @@index([leadId])
+  @@index([questionId])
+}
+
 model RecruiterAgency {
   id                String               @id @default(cuid())
   ownerUserId       String               @unique

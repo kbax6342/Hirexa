@@ -132,6 +132,7 @@ export const staffingLeadSubmissionSchema = staffingLeadDraftSchema
     score: z.number().int().min(0).max(100).optional(),
     tier: z.string().trim().min(1).optional(),
     recommendedAction: z.string().trim().min(1).optional(),
+    chatMessages: z.array(staffingChatMessageSchema).optional(),
   })
   .strict();
 

@@ -7,16 +7,15 @@ import {
   CheckCircleIcon,
   Cog6ToothIcon,
   PaperAirplaneIcon,
-  SparklesIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 
+import DemoQuickControls from "@/app/components/chatbot/DemoQuickControls";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
-import { Progress } from "@/app/components/ui/progress";
 import { Textarea } from "@/app/components/ui/textarea";
-import { getDefaultCompanyChatSettings } from "@/app/lib/ai-chat/defaultCompanyChatSettings";
+import { getSafeDefaultCompanyChatSettings } from "@/app/lib/ai-chat/defaultCompanyChatSettings";
 import {
   getCompletedStaffingFieldCount,
   getMissingStaffingFields,
@@ -50,7 +49,7 @@ type DisplayChatMessage = StaffingChatMessage & {
   id: string;
 };
 
-const DEFAULT_SETTINGS = getDefaultCompanyChatSettings();
+const DEFAULT_SETTINGS = getSafeDefaultCompanyChatSettings();
 
 const INITIAL_DRAFT: StaffingLeadDraft = {
   desiredWorkTypes: [],
@@ -154,9 +153,6 @@ export default function StaffingAiChatDemo({
     () => getCompletedStaffingFieldCount(draftLead, requiredFields),
     [draftLead, requiredFields]
   );
-  const progressValue = Math.round(
-    (completedFieldCount / Math.max(requiredFields.length, 1)) * 100
-  );
   const collectedEntries = useMemo(
     () =>
       requiredFields
@@ -184,16 +180,17 @@ export default function StaffingAiChatDemo({
     resolvedSettings.chatDisplayName?.trim() || DEFAULT_SETTINGS.chatDisplayName;
   const companyName =
     resolvedSettings.companyName?.trim() || DEFAULT_SETTINGS.companyName;
-  const companyLocation =
-    resolvedSettings.companyLocation?.trim() || DEFAULT_SETTINGS.companyLocation;
-
-  const chatStatusLabel = leadSubmissionResult
-    ? `${leadSubmissionResult.tier} • ${leadSubmissionResult.score}/100`
-    : isSubmittingLead
-      ? "Finalizing lead"
-      : isSendingMessage
-        ? `${assistantName} is responding`
-        : `Screening progress: ${completedFieldCount} of ${requiredFields.length} fields complete`;
+  const chatTitle =
+    resolvedSettings.chatTitle?.trim() ||
+    resolvedSettings.chatDisplayName?.trim() ||
+    DEFAULT_SETTINGS.chatDisplayName;
+  const chatSubtitle =
+    resolvedSettings.chatSubtitle?.trim() ||
+    resolvedSettings.companyLocation?.trim() ||
+    "Candidate screening assistant";
+  const companyLogoUrl =
+    resolvedSettings.companyLogoUrl?.trim() ||
+    "/branding/staffing-chat-avatar.png";
 
   useEffect(() => {
     onDraftChange?.(draftLead);
@@ -228,14 +225,14 @@ export default function StaffingAiChatDemo({
 
       try {
         const slug = companySlug?.trim() || DEFAULT_SETTINGS.companySlug;
-        const response = await fetch(
-          `/api/ai-chat/settings/${encodeURIComponent(slug)}`,
-          {
-            cache: "no-store",
-          }
-        );
+        const response = await fetch(`/api/chatbots/${encodeURIComponent(slug)}`, {
+          cache: "no-store",
+        });
         const payload = (await response.json().catch(() => null)) as
-          | { ok: true; settings: AiChatCompanySettings }
+          | {
+              ok: true;
+              chatbot: { aiChatSettings: AiChatCompanySettings };
+            }
           | { ok: false; error?: string }
           | null;
 
@@ -247,9 +244,11 @@ export default function StaffingAiChatDemo({
           );
         }
 
+        const nextSettings = payload.chatbot.aiChatSettings;
+
         if (!isMounted) return;
-        setResolvedSettings(payload.settings);
-        setMessages(buildInitialMessages(payload.settings));
+        setResolvedSettings(nextSettings);
+        setMessages(buildInitialMessages(nextSettings));
         setDraftLead(resetDraft());
         setCompletionSummary(null);
         setLeadSubmissionResult(null);
@@ -303,7 +302,10 @@ export default function StaffingAiChatDemo({
     onOpenChange(false);
   }
 
-  async function submitCompletedLead(summary: StaffingLeadSummary) {
+  async function submitCompletedLead(
+    summary: StaffingLeadSummary,
+    transcript: StaffingChatMessage[]
+  ) {
     if (leadSubmissionResult || isSubmittingLead) {
       return;
     }
@@ -332,12 +334,11 @@ export default function StaffingAiChatDemo({
         recruiterEmail: summary.recruiterEmail ?? resolvedSettings.recruiterEmail,
         sourcePage:
           summary.sourcePage ??
-          `/demo/minutemen-ai-chat?companySlug=${encodeURIComponent(
-            resolvedSettings.companySlug
-          )}`,
+          `/demo/${encodeURIComponent(resolvedSettings.companySlug)}`,
         score: summary.score,
         tier: summary.tier,
         recommendedAction: summary.recommendedAction,
+        chatMessages: transcript,
       };
 
       const response = await fetch("/api/demo/screening-leads", {
@@ -423,19 +424,23 @@ export default function StaffingAiChatDemo({
       }
 
       applyDraftUpdate(payload.leadDraft);
+      const assistantChatMessage: DisplayChatMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content: payload.assistantMessage,
+      };
 
-      setMessages((current) => [
-        ...current,
-        {
-          id: createMessageId(),
-          role: "assistant",
-          content: payload.assistantMessage,
-        },
-      ]);
+      setMessages((current) => [...current, assistantChatMessage]);
 
       if (payload.isComplete && payload.completionSummary) {
         setCompletionSummary(payload.completionSummary);
-        void submitCompletedLead(payload.completionSummary);
+        void submitCompletedLead(payload.completionSummary, [
+          ...nextMessages,
+          {
+            role: "assistant",
+            content: payload.assistantMessage,
+          },
+        ]);
       }
     } catch (chatError) {
       setError(
@@ -469,48 +474,52 @@ export default function StaffingAiChatDemo({
       ) : (
         <Card
           id="hirexa-staffing-chat-window"
-          className="w-[calc(100vw-1rem)] max-w-[430px] overflow-hidden rounded-[2rem] border-slate-800 bg-[#071120] text-white shadow-[0_30px_90px_-40px_rgba(2,8,23,0.9)]"
+          className="w-[calc(100vw-1rem)] max-w-[430px] overflow-hidden rounded-[2rem] border-slate-200 bg-white text-black shadow-[0_30px_90px_-40px_rgba(2,8,23,0.9)]"
         >
           <div
             id="hirexa-staffing-chat-header"
-            className="border-b border-white/10 bg-[linear-gradient(145deg,rgba(8,23,49,0.98),rgba(2,8,23,0.94))] px-4 py-4 sm:px-5"
+            className="border-b border-slate-200 bg-white px-4 py-4 sm:px-5"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
                   <div
                     id="hirexa-staffing-chat-company-icon"
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl text-sky-100"
-                    style={{ backgroundColor: accentColor }}
+                    className="h-10 w-10 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-white"
+                    style={{ borderColor: accentColor }}
                   >
-                    <SparklesIcon className="h-5 w-5" />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={companyLogoUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
                   </div>
                   <div>
                     <p
-                      id="hirexa-staffing-chat-assistant-name"
-                      className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200/80"
-                    >
-                      {assistantName}
-                    </p>
-                    <h3
                       id="hirexa-staffing-chat-company-name"
-                      className="text-lg font-semibold text-white"
+                      className="text-xs font-semibold uppercase tracking-[0.2em] text-black"
                     >
                       {companyName}
+                    </p>
+                    <h3
+                      id="hirexa-staffing-chat-assistant-name"
+                      className="mt-0.5 text-base font-semibold leading-tight text-black"
+                    >
+                      {chatTitle}
                     </h3>
+                    <p
+                      id="hirexa-staffing-chat-subtitle"
+                      className="mt-0.5 text-xs leading-5 text-black"
+                    >
+                      {chatSubtitle}
+                    </p>
                   </div>
                 </div>
-                <p
-                  id="hirexa-staffing-chat-company-context"
-                  className="mt-3 text-sm leading-6 text-slate-300"
-                >
-                  Candidate screening demo for {companyLocation || companyName} hiring
-                  roles.
-                </p>
                 {settingsWarning ? (
                   <p
                     id="hirexa-staffing-chat-settings-warning"
-                    className="mt-2 text-xs leading-5 text-amber-200"
+                    className="mt-2 text-xs leading-5 text-amber-700"
                   >
                     {settingsWarning}
                   </p>
@@ -524,38 +533,23 @@ export default function StaffingAiChatDemo({
                 {isSettingsOpen ? (
                   <div
                     id="hirexa-staffing-chat-settings-menu"
-                    className="absolute right-0 top-12 z-10 w-56 rounded-[1.25rem] border border-white/10 bg-[#081524] p-3 shadow-[0_20px_60px_-30px_rgba(2,8,23,0.95)]"
+                    className="absolute right-0 top-12 z-10 w-56 rounded-[1.25rem] border border-slate-200 bg-white p-3 shadow-[0_20px_60px_-30px_rgba(15,23,42,0.25)]"
                   >
                     <div className="px-1">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black">
                         Demo settings
                       </div>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
+                      <p className="mt-1 text-xs leading-5 text-black">
                         Quick controls for this company chat demo.
                       </p>
                     </div>
 
                     <div className="mt-3 space-y-2">
-                      <Button
-                        id="hirexa-staffing-chat-settings-reset-button"
-                        type="button"
-                        variant="outline"
-                        onClick={() => resetDemo()}
-                        className="w-full justify-start rounded-full border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08] hover:text-white"
-                      >
-                        <ArrowPathIcon className="h-4 w-4" />
-                        Reset demo
-                      </Button>
-                      <Button
-                        id="hirexa-staffing-chat-settings-close-button"
-                        type="button"
-                        variant="outline"
-                        onClick={handleCloseChat}
-                        className="w-full justify-start rounded-full border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08] hover:text-white"
-                      >
-                        <XMarkIcon className="h-4 w-4" />
-                        Close chat
-                      </Button>
+                      <DemoQuickControls
+                        companySlug={resolvedSettings.companySlug}
+                        onReset={() => resetDemo()}
+                        onClose={handleCloseChat}
+                      />
                     </div>
                   </div>
                 ) : null}
@@ -564,7 +558,7 @@ export default function StaffingAiChatDemo({
                   id="hirexa-staffing-chat-settings-toggle"
                   type="button"
                   onClick={() => setIsSettingsOpen((current) => !current)}
-                  className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+                  className="rounded-full border border-slate-200 bg-white p-2 text-black transition hover:bg-slate-50 hover:text-black"
                   aria-label="Open AI chat demo settings"
                   aria-expanded={isSettingsOpen}
                 >
@@ -575,7 +569,7 @@ export default function StaffingAiChatDemo({
                   id="hirexa-staffing-chat-close-button"
                   type="button"
                   onClick={handleCloseChat}
-                  className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+                  className="rounded-full border border-slate-200 bg-white p-2 text-black transition hover:bg-slate-50 hover:text-black"
                   aria-label="Close AI chat demo"
                 >
                   <XMarkIcon className="h-5 w-5" />
@@ -583,29 +577,19 @@ export default function StaffingAiChatDemo({
               </div>
             </div>
 
-            <div
-              id="hirexa-staffing-chat-progress-section"
-              className="mt-4"
-            >
-              <Progress value={progressValue} className="h-2 bg-white/10" />
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                <span>Screening progress</span>
-                <span id="hirexa-staffing-chat-progress-label">{chatStatusLabel}</span>
-              </div>
-            </div>
           </div>
 
           <div id="hirexa-staffing-chat-body">
             <div
               id="hirexa-staffing-chat-collected-info-panel"
-              className="border-b border-white/10 bg-[#091522] px-4 py-3 sm:px-5"
+              className="border-b border-slate-200 bg-white px-4 py-3 sm:px-5"
             >
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black">
                     Candidate info collected
                   </div>
-                  <div className="mt-1 text-sm text-slate-300">
+                  <div className="mt-1 text-sm text-black">
                     {completedFieldCount} of {requiredFields.length} screening fields
                     captured
                   </div>
@@ -615,7 +599,7 @@ export default function StaffingAiChatDemo({
                   type="button"
                   variant="outline"
                   onClick={() => resetDemo()}
-                  className="rounded-full border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08] hover:text-white"
+                  className="rounded-full border-slate-200 bg-white text-black hover:bg-slate-50 hover:text-black"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
                   Reset Demo
@@ -630,14 +614,14 @@ export default function StaffingAiChatDemo({
                       id={`hirexa-staffing-chat-collected-field-${entry.label
                         .toLowerCase()
                         .replace(/\s+/g, "-")}`}
-                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-slate-100"
+                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-black"
                     >
-                      <span className="font-semibold text-white">{entry.label}:</span>{" "}
+                      <span className="font-semibold text-black">{entry.label}:</span>{" "}
                       {entry.value}
                     </div>
                   ))
                 ) : (
-                  <div className="text-xs text-slate-400">
+                  <div className="text-xs text-black">
                     Nothing captured yet. The assistant will fill this in as the
                     candidate chats.
                   </div>
@@ -647,7 +631,7 @@ export default function StaffingAiChatDemo({
 
             <div
               id="hirexa-staffing-chat-missing-fields-panel"
-              className="border-b border-white/10 bg-[#091522] px-4 py-3 text-xs text-slate-400 sm:px-5"
+              className="border-b border-slate-200 bg-white px-4 py-3 text-xs text-black sm:px-5"
             >
               {missingFields.length > 0 ? (
                 <>
@@ -680,12 +664,12 @@ export default function StaffingAiChatDemo({
                     className={cn(
                       "max-w-[88%] rounded-[1.35rem] px-4 py-3 text-sm leading-6",
                       message.role === "candidate"
-                        ? "text-white shadow-[0_18px_40px_-24px_rgba(14,165,233,0.8)]"
-                        : "border border-white/10 bg-white/[0.05] text-slate-100"
+                        ? "border border-slate-200 bg-slate-100 text-black shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)]"
+                        : "border border-slate-200 bg-white text-black"
                     )}
                     style={
                       message.role === "candidate"
-                        ? { backgroundColor: accentColor }
+                        ? { borderColor: accentColor }
                         : undefined
                     }
                   >
@@ -699,7 +683,7 @@ export default function StaffingAiChatDemo({
                   id="hirexa-staffing-chat-loading-message"
                   className="flex justify-start"
                 >
-                  <div className="max-w-[88%] rounded-[1.35rem] border border-white/10 bg-white/[0.05] px-4 py-3 text-sm leading-6 text-slate-100">
+                  <div className="max-w-[88%] rounded-[1.35rem] border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-black">
                     {assistantName} is reviewing the message and checking which
                     screening fields are still missing...
                   </div>
@@ -709,7 +693,7 @@ export default function StaffingAiChatDemo({
               {error ? (
                 <div
                   id="hirexa-staffing-chat-error-message"
-                  className="rounded-[1.35rem] border border-red-300/20 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+                  className="rounded-[1.35rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-black"
                 >
                   {error}
                 </div>
@@ -718,18 +702,18 @@ export default function StaffingAiChatDemo({
               {finalSummary ? (
                 <div
                   id="hirexa-staffing-chat-final-summary-section"
-                  className="rounded-[1.5rem] border border-emerald-300/20 bg-emerald-500/10 p-4 text-sm text-emerald-50"
+                  className="rounded-[1.5rem] border border-emerald-200 bg-emerald-50 p-4 text-sm text-black"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100/80">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black">
                         Candidate Lead Summary
                       </p>
-                      <h4 className="mt-1 text-lg font-semibold text-white">
+                      <h4 className="mt-1 text-lg font-semibold text-black">
                         {formatValue(finalSummary.candidateName)}
                       </h4>
                     </div>
-                    <Badge className="border-emerald-300/25 bg-emerald-500/10 text-emerald-50">
+                    <Badge className="border-emerald-200 bg-white text-black">
                       {(leadSubmissionResult?.score ?? finalSummary.score)}/100 •{" "}
                       {leadSubmissionResult?.tier ?? finalSummary.tier}
                     </Badge>
@@ -737,86 +721,86 @@ export default function StaffingAiChatDemo({
 
                   <dl className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div>
-                      <dt className="text-emerald-100/75">Company</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Company</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.companyName)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Company location</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Company location</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.companyLocation)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Phone</dt>
-                      <dd className="mt-1 text-white">{formatValue(finalSummary.phone)}</dd>
+                      <dt className="text-black">Phone</dt>
+                      <dd className="mt-1 text-black">{formatValue(finalSummary.phone)}</dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Email</dt>
-                      <dd className="mt-1 break-all text-white">
+                      <dt className="text-black">Email</dt>
+                      <dd className="mt-1 break-all text-black">
                         {formatValue(finalSummary.email)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Preferred contact</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Preferred contact</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.preferredContactMethod)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Desired work type</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Desired work type</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.desiredWorkTypes)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Desired job type</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Desired job type</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.desiredJobType)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Shift availability</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Shift availability</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.shiftAvailability)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Start availability</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Start availability</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.startAvailability)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Transportation</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Transportation</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.transportationStatus)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Experience</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Experience</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.experience)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Desired pay</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Desired pay</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.desiredPayRange)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-emerald-100/75">Consent</dt>
-                      <dd className="mt-1 text-white">
+                      <dt className="text-black">Consent</dt>
+                      <dd className="mt-1 text-black">
                         {formatValue(finalSummary.consentToContact)}
                       </dd>
                     </div>
                   </dl>
 
-                  <div className="mt-4 rounded-[1.25rem] border border-white/10 bg-[#04101f]/55 p-3 text-white">
+                  <div className="mt-4 rounded-[1.25rem] border border-emerald-200 bg-white p-3 text-black">
                     <div className="flex items-center gap-2 text-sm font-semibold">
-                      <CheckCircleIcon className="h-5 w-5 text-emerald-200" />
+                      <CheckCircleIcon className="h-5 w-5 text-emerald-700" />
                       Recommended recruiter action
                     </div>
                     <p className="mt-2 text-sm leading-6">
@@ -825,7 +809,7 @@ export default function StaffingAiChatDemo({
                     </p>
                     <p
                       id="hirexa-staffing-chat-disclaimer"
-                      className="mt-2 text-xs leading-5 text-emerald-100/80"
+                      className="mt-2 text-xs leading-5 text-black"
                     >
                       {resolvedSettings.completionMessage ||
                         "Thanks — a recruiter can review this information and follow up. This AI chat does not make hiring decisions."}
@@ -833,7 +817,7 @@ export default function StaffingAiChatDemo({
                   </div>
 
                   {isSubmittingLead ? (
-                    <div className="mt-3 text-xs text-emerald-100/80">
+                    <div className="mt-3 text-xs text-black">
                       Submitting the completed lead to the mocked recruiter API...
                     </div>
                   ) : null}
@@ -846,15 +830,15 @@ export default function StaffingAiChatDemo({
 
           <div
             id="hirexa-staffing-chat-input-section"
-            className="border-t border-white/10 bg-[#050d19] px-4 py-4 sm:px-5"
+            className="border-t border-slate-200 bg-white px-4 py-4 sm:px-5"
           >
             {finalSummary ? (
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Button
                   type="button"
                   onClick={() => resetDemo()}
-                  style={{ backgroundColor: accentColor }}
-                  className="rounded-full text-white hover:opacity-95"
+                  style={{ borderColor: accentColor }}
+                  className="rounded-full border bg-white text-black hover:bg-slate-50 hover:text-black"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
                   Reset Demo
@@ -863,7 +847,7 @@ export default function StaffingAiChatDemo({
                   type="button"
                   variant="outline"
                   onClick={handleCloseChat}
-                  className="rounded-full border-white/10 bg-white/[0.04] text-white hover:bg-white/[0.08] hover:text-white"
+                  className="rounded-full border-slate-200 bg-white text-black hover:bg-slate-50 hover:text-black"
                 >
                   Close Demo
                 </Button>
@@ -877,31 +861,26 @@ export default function StaffingAiChatDemo({
                 }}
                 className="space-y-3"
               >
-                <Textarea
-                  id="hirexa-staffing-chat-textarea"
-                  value={textInput}
-                  onChange={(event) => setTextInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void handleSendMessage();
-                    }
-                  }}
-                  placeholder={`Tell ${assistantName} what kind of work you're looking for...`}
-                  className="min-h-[84px] rounded-2xl border-white/10 bg-white/[0.04] text-white placeholder:text-slate-400"
-                />
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-xs leading-5 text-slate-400">
-                    Use natural language. {assistantName} will collect the required
-                    screening fields behind the scenes.
-                  </div>
+                <div className="relative">
+                  <Textarea
+                    id="hirexa-staffing-chat-textarea"
+                    value={textInput}
+                    onChange={(event) => setTextInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSendMessage();
+                      }
+                    }}
+                    placeholder={`Tell ${assistantName} what kind of work you're looking for...`}
+                    className="min-h-[104px] resize-none rounded-2xl border-slate-300 bg-white pb-14 text-black placeholder:text-slate-500"
+                  />
                   <Button
                     id="hirexa-staffing-chat-send-button"
                     type="submit"
                     disabled={!textInput.trim() || isSendingMessage || isSubmittingLead}
-                    style={{ backgroundColor: accentColor }}
-                    className="rounded-full text-white hover:opacity-95"
+                    style={{ borderColor: accentColor }}
+                    className="absolute bottom-3 right-3 h-9 rounded-full border bg-white px-3 text-sm text-black hover:bg-slate-50 hover:text-black"
                   >
                     Send
                     <PaperAirplaneIcon className="h-4 w-4" />

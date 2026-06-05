@@ -21,7 +21,7 @@ export default function ChatbotBrandingSection({
   update,
 }: ChatbotBrandingSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="logoUrl">Logo URL</Label>
         <Input
@@ -68,7 +68,7 @@ export default function ChatbotBrandingSection({
           placeholder="Candidate screening assistant"
         />
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="welcomeMessage">Welcome message</Label>
         <Textarea
           id="welcomeMessage"
@@ -78,7 +78,7 @@ export default function ChatbotBrandingSection({
         />
         <FieldError message={fieldErrors?.welcomeMessage} />
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="fallbackMessage">Fallback message</Label>
         <Textarea
           id="fallbackMessage"

@@ -21,7 +21,7 @@ export default function CompanyProfileSection({
   update,
 }: CompanyProfileSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="companyName">Company name</Label>
         <Input
@@ -105,13 +105,14 @@ export default function CompanyProfileSection({
           placeholder={"Dearborn\nDetroit\nLivonia"}
         />
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="companyDescription">Company description</Label>
         <Textarea
           id="companyDescription"
           value={form.companyDescription ?? ""}
           onChange={(event) => update({ companyDescription: event.target.value })}
           placeholder="Describe the hiring company and the type of candidates this chatbot should screen."
+          className="bg-white text-black placeholder:text-slate-500"
         />
       </div>
     </div>

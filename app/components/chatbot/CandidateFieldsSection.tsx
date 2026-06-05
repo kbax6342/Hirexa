@@ -31,7 +31,7 @@ export default function CandidateFieldsSection({
   update,
 }: CandidateFieldsSectionProps) {
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid gap-6">
       <div>
         <h3 className="text-sm font-semibold text-slate-950">
           Required candidate fields
@@ -41,7 +41,7 @@ export default function CandidateFieldsSection({
             {fieldErrors.requiredCandidateFields}
           </p>
         ) : null}
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2">
           {REQUIRED_CANDIDATE_FIELD_OPTIONS.map((field) => (
             <label
               key={field}
@@ -69,7 +69,7 @@ export default function CandidateFieldsSection({
         <h3 className="text-sm font-semibold text-slate-950">
           Optional candidate fields
         </h3>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2">
           {OPTIONAL_CANDIDATE_FIELD_OPTIONS.map((field) => (
             <label
               key={field}

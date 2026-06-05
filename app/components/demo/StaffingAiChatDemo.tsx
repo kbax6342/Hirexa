@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowPathIcon,
   ChatBubbleLeftRightIcon,
@@ -16,12 +16,6 @@ import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
 import { Textarea } from "@/app/components/ui/textarea";
 import { getSafeDefaultCompanyChatSettings } from "@/app/lib/ai-chat/defaultCompanyChatSettings";
-import {
-  getCompletedStaffingFieldCount,
-  getMissingStaffingFields,
-  normalizeRequiredStaffingFields,
-  STAFFING_FIELD_LABELS,
-} from "@/app/lib/staffing/getMissingStaffingFields";
 import { cn } from "@/app/lib/utils";
 import type { AiChatCompanySettings } from "@/app/types/ai-chat-settings";
 import type {
@@ -82,34 +76,15 @@ function resetDraft() {
   } satisfies StaffingLeadDraft;
 }
 
-function getRequiredFields(settings: AiChatCompanySettings) {
-  const requiredFields = normalizeRequiredStaffingFields(
-    settings.requiredScreeningFields
-  );
-
-  return settings.transportationQuestionEnabled
-    ? requiredFields
-    : requiredFields.filter((field) => field !== "transportationStatus");
-}
-
 function buildInitialMessages(settings: AiChatCompanySettings): DisplayChatMessage[] {
   const welcomeMessage =
     settings.welcomeMessage?.trim() || DEFAULT_SETTINGS.welcomeMessage || "";
-  const complianceMessage =
-    settings.complianceDisclaimer?.trim() ||
-    DEFAULT_SETTINGS.complianceDisclaimer ||
-    "";
 
   return [
     {
       id: "welcome",
       role: "assistant" as const,
       content: welcomeMessage,
-    },
-    {
-      id: "compliance",
-      role: "assistant" as const,
-      content: complianceMessage,
     },
   ].filter((message) => message.content.trim().length > 0);
 }
@@ -141,53 +116,13 @@ export default function StaffingAiChatDemo({
   const [settingsWarning, setSettingsWarning] = useState<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
 
-  const requiredFields = useMemo(
-    () => getRequiredFields(resolvedSettings),
-    [resolvedSettings]
-  );
-  const missingFields = useMemo(
-    () => getMissingStaffingFields(draftLead, requiredFields),
-    [draftLead, requiredFields]
-  );
-  const completedFieldCount = useMemo(
-    () => getCompletedStaffingFieldCount(draftLead, requiredFields),
-    [draftLead, requiredFields]
-  );
-  const collectedEntries = useMemo(
-    () =>
-      requiredFields
-        .filter((field) => {
-          const value = draftLead[field];
-          if (Array.isArray(value)) {
-            return value.length > 0;
-          }
-
-          if (typeof value === "boolean") {
-            return true;
-          }
-
-          return typeof value === "string" && value.trim().length > 0;
-        })
-        .map((field) => ({
-          label: STAFFING_FIELD_LABELS[field],
-          value: formatValue(draftLead[field]),
-        })),
-    [draftLead, requiredFields]
-  );
-
   const accentColor = resolvedSettings.brandPrimaryColor?.trim() || "#0284c7";
   const assistantName =
     resolvedSettings.chatDisplayName?.trim() || DEFAULT_SETTINGS.chatDisplayName;
-  const companyName =
-    resolvedSettings.companyName?.trim() || DEFAULT_SETTINGS.companyName;
   const chatTitle =
     resolvedSettings.chatTitle?.trim() ||
     resolvedSettings.chatDisplayName?.trim() ||
     DEFAULT_SETTINGS.chatDisplayName;
-  const chatSubtitle =
-    resolvedSettings.chatSubtitle?.trim() ||
-    resolvedSettings.companyLocation?.trim() ||
-    "Candidate screening assistant";
   const companyLogoUrl =
     resolvedSettings.companyLogoUrl?.trim() ||
     "/branding/staffing-chat-avatar.png";
@@ -474,11 +409,11 @@ export default function StaffingAiChatDemo({
       ) : (
         <Card
           id="hirexa-staffing-chat-window"
-          className="w-[calc(100vw-1rem)] max-w-[430px] overflow-hidden rounded-[2rem] border-slate-200 bg-white text-black shadow-[0_30px_90px_-40px_rgba(2,8,23,0.9)]"
+          className="flex h-[75vh] w-[calc(100vw-1rem)] max-w-[430px] flex-col overflow-hidden rounded-[2rem] border-slate-200 bg-white text-black shadow-[0_30px_90px_-40px_rgba(2,8,23,0.9)]"
         >
           <div
             id="hirexa-staffing-chat-header"
-            className="border-b border-slate-200 bg-white px-4 py-4 sm:px-5"
+            className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-5"
           >
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -496,24 +431,12 @@ export default function StaffingAiChatDemo({
                     />
                   </div>
                   <div>
-                    <p
-                      id="hirexa-staffing-chat-company-name"
-                      className="text-xs font-semibold uppercase tracking-[0.2em] text-black"
-                    >
-                      {companyName}
-                    </p>
                     <h3
                       id="hirexa-staffing-chat-assistant-name"
-                      className="mt-0.5 text-base font-semibold leading-tight text-black"
+                      className="text-base font-semibold leading-tight text-black"
                     >
                       {chatTitle}
                     </h3>
-                    <p
-                      id="hirexa-staffing-chat-subtitle"
-                      className="mt-0.5 text-xs leading-5 text-black"
-                    >
-                      {chatSubtitle}
-                    </p>
                   </div>
                 </div>
                 {settingsWarning ? (
@@ -579,77 +502,10 @@ export default function StaffingAiChatDemo({
 
           </div>
 
-          <div id="hirexa-staffing-chat-body">
-            <div
-              id="hirexa-staffing-chat-collected-info-panel"
-              className="border-b border-slate-200 bg-white px-4 py-3 sm:px-5"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black">
-                    Candidate info collected
-                  </div>
-                  <div className="mt-1 text-sm text-black">
-                    {completedFieldCount} of {requiredFields.length} screening fields
-                    captured
-                  </div>
-                </div>
-                <Button
-                  id="hirexa-staffing-chat-reset-button"
-                  type="button"
-                  variant="outline"
-                  onClick={() => resetDemo()}
-                  className="rounded-full border-slate-200 bg-white text-black hover:bg-slate-50 hover:text-black"
-                >
-                  <ArrowPathIcon className="h-4 w-4" />
-                  Reset Demo
-                </Button>
-              </div>
-
-              <div className="mt-3 flex max-h-24 flex-wrap gap-2 overflow-y-auto">
-                {collectedEntries.length > 0 ? (
-                  collectedEntries.map((entry) => (
-                    <div
-                      key={entry.label}
-                      id={`hirexa-staffing-chat-collected-field-${entry.label
-                        .toLowerCase()
-                        .replace(/\s+/g, "-")}`}
-                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-black"
-                    >
-                      <span className="font-semibold text-black">{entry.label}:</span>{" "}
-                      {entry.value}
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-xs text-black">
-                    Nothing captured yet. The assistant will fill this in as the
-                    candidate chats.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div
-              id="hirexa-staffing-chat-missing-fields-panel"
-              className="border-b border-slate-200 bg-white px-4 py-3 text-xs text-black sm:px-5"
-            >
-              {missingFields.length > 0 ? (
-                <>
-                  Still needed:{" "}
-                  {missingFields
-                    .slice(0, 4)
-                    .map((field) => STAFFING_FIELD_LABELS[field])
-                    .join(", ")}
-                  {missingFields.length > 4 ? ", and more" : ""}
-                </>
-              ) : (
-                "All required screening fields have been collected."
-              )}
-            </div>
-
+          <div id="hirexa-staffing-chat-body" className="min-h-0 flex-1">
             <div
               id="hirexa-staffing-chat-messages"
-              className="max-h-[360px] space-y-3 overflow-y-auto px-4 py-4 sm:px-5"
+              className="h-full space-y-3 overflow-y-auto px-4 py-4 sm:px-5"
             >
               {messages.map((message) => (
                 <div
@@ -830,7 +686,7 @@ export default function StaffingAiChatDemo({
 
           <div
             id="hirexa-staffing-chat-input-section"
-            className="border-t border-slate-200 bg-white px-4 py-4 sm:px-5"
+            className="shrink-0 border-t border-slate-200 bg-white px-4 py-4 sm:px-5"
           >
             {finalSummary ? (
               <div className="flex flex-col gap-3 sm:flex-row">
@@ -872,7 +728,7 @@ export default function StaffingAiChatDemo({
                         void handleSendMessage();
                       }
                     }}
-                    placeholder={`Tell ${assistantName} what kind of work you're looking for...`}
+                    placeholder="Ask the AI assistant..."
                     className="min-h-[104px] resize-none rounded-2xl border-slate-300 bg-white pb-14 text-black placeholder:text-slate-500"
                   />
                   <Button
@@ -886,6 +742,14 @@ export default function StaffingAiChatDemo({
                     <PaperAirplaneIcon className="h-4 w-4" />
                   </Button>
                 </div>
+                <p className="text-[10px] leading-4 text-slate-500">
+                  This chat is used only to collect job-related screening
+                  information and help organize your responses for recruiter
+                  review. The AI does not make hiring decisions, rank candidates,
+                  or determine eligibility for employment. A recruiter or hiring
+                  team member will review your information before any decision is
+                  made.
+                </p>
               </form>
             )}
           </div>

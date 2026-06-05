@@ -15,27 +15,27 @@ export default function ChatbotPreviewPanel({ form }: ChatbotPreviewPanelProps) 
   const demoHref = form.companySlug ? `/demo/${form.companySlug}` : "/demo";
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
+    <div className="grid gap-6">
       <div className="rounded-md border border-slate-200 bg-white p-5">
         <h3 className="text-sm font-semibold text-slate-950">Setup summary</h3>
         <dl className="mt-4 grid gap-3 text-sm">
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-col gap-1">
             <dt className="text-slate-500">Company</dt>
             <dd className="font-medium text-slate-950">{form.companyName || "Not set"}</dd>
           </div>
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-col gap-1">
             <dt className="text-slate-500">Slug</dt>
             <dd className="font-mono text-slate-950">{form.companySlug || "not-set"}</dd>
           </div>
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-col gap-1">
             <dt className="text-slate-500">Jobs</dt>
             <dd className="font-medium text-slate-950">{form.jobs.length}</dd>
           </div>
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-col gap-1">
             <dt className="text-slate-500">Questions</dt>
             <dd className="font-medium text-slate-950">{form.questions.length}</dd>
           </div>
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-col gap-1">
             <dt className="text-slate-500">Required fields</dt>
             <dd className="font-medium text-slate-950">
               {form.requiredCandidateFields.length}

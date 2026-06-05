@@ -18,7 +18,7 @@ export default function ChatbotAiBehaviorSection({
   update,
 }: ChatbotAiBehaviorSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="tone">Tone</Label>
         <select

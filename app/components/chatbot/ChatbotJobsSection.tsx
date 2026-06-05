@@ -32,7 +32,7 @@ export default function ChatbotJobsSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col items-start gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">Jobs</h3>
           <p className="text-sm text-slate-500">
@@ -47,7 +47,7 @@ export default function ChatbotJobsSection({
               jobs: [...form.jobs, { ...EMPTY_CHATBOT_JOB }],
             })
           }
-          className="shrink-0"
+          className="shrink-0 bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
         >
           <PlusIcon className="h-4 w-4" />
           Add job
@@ -81,7 +81,7 @@ export default function ChatbotJobsSection({
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4">
               <div>
                 <Label>Title</Label>
                 <Input
@@ -132,7 +132,7 @@ export default function ChatbotJobsSection({
                   placeholder="OPEN"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Requirements</Label>
                 <Textarea
                   value={job.requirements ?? ""}
@@ -142,7 +142,7 @@ export default function ChatbotJobsSection({
                   placeholder="Reliable transportation, able to lift 40 lbs"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Application URL</Label>
                 <Input
                   value={job.applicationUrl ?? ""}
@@ -152,7 +152,7 @@ export default function ChatbotJobsSection({
                   placeholder="https://example.com/apply"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Description</Label>
                 <Textarea
                   value={job.description ?? ""}

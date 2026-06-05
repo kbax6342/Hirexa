@@ -16,7 +16,7 @@ export default function LeadRoutingSection({
   update,
 }: LeadRoutingSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="leadRecruiterEmail">Recruiter email</Label>
         <Input
@@ -65,7 +65,7 @@ export default function LeadRoutingSection({
           Send email notification
         </label>
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="completionMessage">Completion message</Label>
         <Textarea
           id="completionMessage"

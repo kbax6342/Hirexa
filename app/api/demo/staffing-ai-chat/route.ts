@@ -448,10 +448,6 @@ function getEffectiveRequiredFields(settings: AiChatCompanySettings) {
 }
 
 async function resolveCompanySettings(body: StaffingAiChatRequest) {
-  if (body.companySettings) {
-    return normalizeCompanyChatSettings(body.companySettings);
-  }
-
   if (body.companySlug) {
     const companyChatbot = await getCompanyChatbotSettingsBySlug(body.companySlug);
     if (companyChatbot) {
@@ -459,6 +455,10 @@ async function resolveCompanySettings(body: StaffingAiChatRequest) {
     }
 
     return getCompanyChatSettingsBySlug(body.companySlug);
+  }
+
+  if (body.companySettings) {
+    return normalizeCompanyChatSettings(body.companySettings);
   }
 
   return getCurrentCompanyChatSettings();
@@ -677,6 +677,7 @@ export async function POST(request: Request) {
 
     let nextDraft = heuristicDraft;
     let assistantMessage = "";
+    let responseSource: StaffingAiChatResponse["responseSource"] = "fallback";
 
     try {
       const aiResponse = await requestAiAssistantResponse({
@@ -690,6 +691,7 @@ export async function POST(request: Request) {
       if (aiResponse) {
         nextDraft = mergeStaffingLeadDraft(heuristicDraft, aiResponse.extractedLeadDraft);
         assistantMessage = aiResponse.assistantMessage.trim();
+        responseSource = "openai";
       }
     } catch (error) {
       console.error("[demo/staffing-ai-chat] AI request failed", {
@@ -726,6 +728,8 @@ export async function POST(request: Request) {
         leadDraft: nextDraft,
         missingFields,
         isComplete: false,
+        responseSource,
+        modelName: responseSource === "openai" ? MODEL_NAME : undefined,
       } satisfies StaffingAiChatResponse);
     }
 
@@ -747,6 +751,8 @@ export async function POST(request: Request) {
       leadDraft: nextDraft,
       missingFields,
       isComplete: true,
+      responseSource,
+      modelName: responseSource === "openai" ? MODEL_NAME : undefined,
       completionSummary,
     } satisfies StaffingAiChatResponse);
   } catch (error) {

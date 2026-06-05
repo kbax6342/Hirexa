@@ -12,7 +12,11 @@ import { CTA } from "./components/cta"
 import { Footer } from "./components/footer"
 import HomepageAiChatWidget from "./components/home/HomepageAiChatWidget";
 import { getOnboardingStatusForUser } from "./lib/onboarding/status";
-import { getHomepageAiChatCompanySettings } from "@/lib/chatbot/homepageChatbotSettings";
+import { getCompanyChatbotSettingsBySlug } from "@/lib/chatbot/getCompanyChatbot";
+import {
+  getHomepageAiChatCompanySettings,
+  HOMEPAGE_COMPANY_CHATBOT_SLUG,
+} from "@/lib/chatbot/homepageChatbotSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +34,11 @@ export default async function Home() {
   }
 
   const href = session?.user ? "/dashboard" : "/login";
-  const homepageChatSettings = getHomepageAiChatCompanySettings();
+  const homepageChatbot = await getCompanyChatbotSettingsBySlug(
+    HOMEPAGE_COMPANY_CHATBOT_SLUG
+  );
+  const homepageChatSettings =
+    homepageChatbot?.aiChatSettings ?? getHomepageAiChatCompanySettings();
 
   return (
     <>

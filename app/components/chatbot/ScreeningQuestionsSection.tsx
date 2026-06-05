@@ -38,7 +38,7 @@ export default function ScreeningQuestionsSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col items-start gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">
             Screening questions
@@ -61,6 +61,7 @@ export default function ScreeningQuestionsSection({
               ],
             })
           }
+          className="bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
         >
           <PlusIcon className="h-4 w-4" />
           Add question
@@ -94,8 +95,8 @@ export default function ScreeningQuestionsSection({
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="md:col-span-2">
+            <div className="grid gap-4">
+              <div>
                 <Label>Question text</Label>
                 <Textarea
                   value={question.questionText}
@@ -143,7 +144,7 @@ export default function ScreeningQuestionsSection({
                 />
                 Knockout
               </label>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Options</Label>
                 <Textarea
                   value={question.options.join("\n")}

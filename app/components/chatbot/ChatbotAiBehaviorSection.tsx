@@ -18,14 +18,14 @@ export default function ChatbotAiBehaviorSection({
   update,
 }: ChatbotAiBehaviorSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="tone">Tone</Label>
         <select
           id="tone"
           value={form.tone}
           onChange={(event) => update({ tone: event.target.value })}
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-black"
         >
           {tones.map((tone) => (
             <option key={tone} value={tone}>
@@ -49,7 +49,7 @@ export default function ChatbotAiBehaviorSection({
           id="answerLength"
           value={form.answerLength}
           onChange={(event) => update({ answerLength: event.target.value })}
-          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-black"
         >
           {answerLengths.map((length) => (
             <option key={length} value={length}>
@@ -67,14 +67,14 @@ export default function ChatbotAiBehaviorSection({
           placeholder="ask_one_follow_up"
         />
       </div>
-      <label className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm">
+      <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black">
         <Checkbox
           checked={form.showAiDisclosure}
           onCheckedChange={(checked) => update({ showAiDisclosure: checked === true })}
         />
         Show AI disclosure
       </label>
-      <label className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm">
+      <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black">
         <Checkbox
           checked={form.useEmojis}
           onCheckedChange={(checked) => update({ useEmojis: checked === true })}

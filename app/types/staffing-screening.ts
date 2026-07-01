@@ -180,6 +180,9 @@ export type StaffingLeadApiError = {
 
 export type StaffingAiChatResponse = {
   assistantMessage: string;
+  reply?: string;
+  messages?: StaffingChatMessage[];
+  conversationId?: string;
   leadDraft: StaffingLeadDraft;
   missingFields: string[];
   isComplete: boolean;
@@ -187,7 +190,9 @@ export type StaffingAiChatResponse = {
 };
 
 export type StaffingAiChatRequest = {
-  messages: StaffingChatMessage[];
+  message?: string;
+  messages?: StaffingChatMessage[];
+  conversationId?: string;
   leadDraft: StaffingLeadDraft;
   companySlug?: string;
   companySettings?: AiChatCompanySettings;

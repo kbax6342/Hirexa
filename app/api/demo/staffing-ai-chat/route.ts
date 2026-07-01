@@ -21,7 +21,6 @@ import type {
   StaffingAiChatResponse,
   StaffingChatMessage,
   StaffingLeadDraft,
-  StaffingAiChatRequest,
 } from "@/app/types/staffing-screening";
 import {
   STAFFING_CONTACT_METHOD_OPTIONS,
@@ -32,7 +31,6 @@ import {
   STAFFING_TRANSPORTATION_OPTIONS,
   STAFFING_WORK_TYPE_OPTIONS,
   staffingChatMessageSchema,
-  staffingLeadDraftSchema,
 } from "@/app/types/staffing-screening";
 import { aiChatCompanySettingsSchema } from "@/app/types/ai-chat-settings";
 import { getCompanyChatbotSettingsBySlug } from "@/lib/chatbot/getCompanyChatbot";
@@ -41,12 +39,45 @@ export const runtime = "nodejs";
 
 const MODEL_NAME = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
+const requestLeadDraftSchema = z
+  .object({
+    candidateName: z.unknown().optional(),
+    phone: z.unknown().optional(),
+    email: z.unknown().optional(),
+    preferredContactMethod: z.unknown().optional(),
+    desiredWorkTypes: z.unknown().optional(),
+    desiredJobType: z.unknown().optional(),
+    shiftAvailability: z.unknown().optional(),
+    startAvailability: z.unknown().optional(),
+    transportationStatus: z.unknown().optional(),
+    experience: z.unknown().optional(),
+    desiredPayRange: z.unknown().optional(),
+    consentToContact: z.unknown().optional(),
+  })
+  .passthrough()
+  .default({});
+
 const requestSchema = z.object({
-  messages: z.array(staffingChatMessageSchema).min(1),
-  leadDraft: staffingLeadDraftSchema.default({}),
+  message: z.string().trim().min(1).optional(),
+  messages: z.array(staffingChatMessageSchema).optional(),
+  conversationId: z.string().trim().min(1).optional(),
+  leadDraft: requestLeadDraftSchema,
   companySlug: z.string().trim().optional(),
-  companySettings: aiChatCompanySettingsSchema.optional(),
+  companySettings: z.unknown().optional(),
+}).passthrough().superRefine((value, context) => {
+  const hasMessage = typeof value.message === "string" && value.message.trim().length > 0;
+  const hasMessages = Array.isArray(value.messages) && value.messages.length > 0;
+
+  if (!hasMessage && !hasMessages) {
+    context.addIssue({
+      code: "custom",
+      path: ["messages"],
+      message: "Provide either a non-empty messages array or a message string.",
+    });
+  }
 });
+
+type ParsedStaffingAiChatRequest = z.infer<typeof requestSchema>;
 
 const aiResponseSchema = {
   type: "object",
@@ -140,6 +171,155 @@ type AiStructuredResponse = {
   assistantMessage: string;
   extractedLeadDraft: AiExtractedLeadDraft;
 };
+
+class OpenAiDemoChatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenAiDemoChatError";
+  }
+}
+
+function createConversationId() {
+  return `staffing-demo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function redactDebugText(value: string) {
+  return value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(
+      /(?:\+?1[\s.-]*)?(?:\(?\d{3}\)?[\s.-]*)\d{3}[\s.-]*\d{4}/g,
+      "[redacted-phone]"
+    );
+}
+
+function truncateDebugText(value: string, limit = 240) {
+  const redacted = redactDebugText(value);
+  return redacted.length > limit ? `${redacted.slice(0, limit)}...` : redacted;
+}
+
+function sanitizeRequestBodyForLog(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { bodyType: typeof body };
+  }
+
+  const input = body as Record<string, unknown>;
+  const leadDraft =
+    input.leadDraft && typeof input.leadDraft === "object" && !Array.isArray(input.leadDraft)
+      ? (input.leadDraft as Record<string, unknown>)
+      : null;
+
+  return {
+    keys: Object.keys(input),
+    message:
+      typeof input.message === "string"
+        ? truncateDebugText(input.message)
+        : undefined,
+    messages: Array.isArray(input.messages)
+      ? input.messages.map((message) => {
+          const chatMessage = message as { role?: unknown; content?: unknown };
+          return {
+            role: chatMessage.role,
+            content:
+              typeof chatMessage.content === "string"
+                ? truncateDebugText(chatMessage.content)
+                : chatMessage.content,
+          };
+        })
+      : undefined,
+    conversationId: typeof input.conversationId === "string" ? input.conversationId : undefined,
+    companySlug: typeof input.companySlug === "string" ? input.companySlug : undefined,
+    hasCompanySettings: Boolean(input.companySettings),
+    leadDraftKeys: leadDraft ? Object.keys(leadDraft) : [],
+    leadDraft: leadDraft
+      ? Object.fromEntries(
+          Object.entries(leadDraft).map(([key, value]) => [
+            key,
+            key === "email" || key === "phone" ? "[redacted]" : value,
+          ])
+        )
+      : undefined,
+  };
+}
+
+function getRequestPresence(body: unknown) {
+  const input =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const hasMessage =
+    typeof input.message === "string" && input.message.trim().length > 0;
+  const hasMessages = Array.isArray(input.messages) && input.messages.length > 0;
+
+  return {
+    present: {
+      message: hasMessage,
+      messages: hasMessages,
+      leadDraft: Boolean(input.leadDraft),
+      conversationId:
+        typeof input.conversationId === "string" &&
+        input.conversationId.trim().length > 0,
+      companySlug:
+        typeof input.companySlug === "string" && input.companySlug.trim().length > 0,
+      companySettings: Boolean(input.companySettings),
+    },
+    missing: !hasMessage && !hasMessages ? ["messages or message"] : [],
+  };
+}
+
+function formatZodIssues(error: z.ZodError) {
+  return error.issues.map((issue) => ({
+    path: issue.path.join(".") || "request",
+    message: issue.message,
+  }));
+}
+
+function normalizeConversationMessages(
+  body: ParsedStaffingAiChatRequest
+): StaffingChatMessage[] {
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    return body.messages;
+  }
+
+  return [
+    {
+      role: "candidate",
+      content: body.message?.trim() ?? "",
+    },
+  ];
+}
+
+function buildChatResponse(args: {
+  assistantMessage: string;
+  conversationId: string;
+  requestMessages: StaffingChatMessage[];
+  leadDraft: StaffingLeadDraft;
+  missingFields: StaffingRequiredField[];
+  isComplete: boolean;
+  completionSummary?: StaffingAiChatResponse["completionSummary"];
+}): StaffingAiChatResponse {
+  const assistantMessage = args.assistantMessage.trim();
+
+  return {
+    assistantMessage,
+    reply: assistantMessage,
+    messages: [
+      ...args.requestMessages,
+      {
+        role: "assistant",
+        content: assistantMessage,
+      },
+    ],
+    conversationId: args.conversationId,
+    leadDraft: args.leadDraft,
+    missingFields: args.missingFields,
+    isComplete: args.isComplete,
+    completionSummary: args.completionSummary,
+  };
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -447,9 +627,17 @@ function getEffectiveRequiredFields(settings: AiChatCompanySettings) {
     : requiredFields.filter((field) => field !== "transportationStatus");
 }
 
-async function resolveCompanySettings(body: StaffingAiChatRequest) {
+async function resolveCompanySettings(body: ParsedStaffingAiChatRequest) {
   if (body.companySettings) {
-    return normalizeCompanyChatSettings(body.companySettings);
+    const parsedSettings = aiChatCompanySettingsSchema.safeParse(body.companySettings);
+
+    if (parsedSettings.success) {
+      return normalizeCompanyChatSettings(parsedSettings.data);
+    }
+
+    console.warn("[demo/staffing-ai-chat] ignoring invalid companySettings", {
+      details: formatZodIssues(parsedSettings.error),
+    });
   }
 
   if (body.companySlug) {
@@ -480,6 +668,62 @@ function joinFieldLabels(fields: StaffingRequiredField[]) {
   return fields.map((field) => STAFFING_FIELD_LABELS[field].toLowerCase());
 }
 
+function formatOptionsAsLines(options: readonly string[]) {
+  return options.join("\n");
+}
+
+function hasCandidateContactDetails(leadDraft: StaffingLeadDraft) {
+  return Boolean(
+    leadDraft.candidateName?.trim() &&
+      leadDraft.phone?.trim() &&
+      leadDraft.email?.trim()
+  );
+}
+
+function buildDesiredWorkTypesChoiceMessage(leadDraft: StaffingLeadDraft) {
+  const candidateName = leadDraft.candidateName?.trim();
+  const intro = candidateName
+    ? `Thanks for sharing your contact details, ${candidateName}! Next, could you let me know your desired work types?`
+    : "Thanks for sharing your contact details! Next, could you let me know your desired work types?";
+
+  return `${intro}\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_WORK_TYPE_OPTIONS
+  )}`;
+}
+
+function shouldFormatDesiredWorkTypesChoiceMessage(args: {
+  assistantMessage: string;
+  leadDraft: StaffingLeadDraft;
+  missingFields: StaffingRequiredField[];
+}) {
+  if (!args.missingFields.includes("desiredWorkTypes")) return false;
+  if ((args.leadDraft.desiredWorkTypes ?? []).length > 0) return false;
+
+  const normalizedMessage = normalizeComparable(args.assistantMessage);
+  const asksForDesiredWorkTypes =
+    normalizedMessage.includes("desired work type") ||
+    normalizedMessage.includes("desired work types") ||
+    normalizedMessage.includes("what kind of work") ||
+    normalizedMessage.includes("work types");
+
+  return Boolean(
+    hasCandidateContactDetails(args.leadDraft) &&
+      (args.leadDraft.preferredContactMethod || asksForDesiredWorkTypes)
+  );
+}
+
+function formatAssistantChoiceLists(args: {
+  assistantMessage: string;
+  leadDraft: StaffingLeadDraft;
+  missingFields: StaffingRequiredField[];
+}) {
+  if (shouldFormatDesiredWorkTypesChoiceMessage(args)) {
+    return buildDesiredWorkTypesChoiceMessage(args.leadDraft);
+  }
+
+  return args.assistantMessage;
+}
+
 function buildFallbackAssistantMessage(
   missingFields: StaffingRequiredField[],
   settings: AiChatCompanySettings
@@ -504,14 +748,23 @@ function buildFallbackAssistantMessage(
   if (missingSet.has("desiredWorkTypes") || missingSet.has("desiredJobType")) {
     const prompts: string[] = [];
     if (missingSet.has("desiredWorkTypes")) {
-      prompts.push(`what kind of work you're looking for, such as ${roleExamples}`);
+      prompts.push("what kind of work you're looking for");
     }
     if (missingSet.has("desiredJobType")) {
       prompts.push(
         "whether you want temporary, temp-to-hire, full-time, part-time, direct hire, or you're open to anything"
       );
     }
-    return `${fallbackIntro} Tell me ${prompts.join(" and ")} so I can keep your screening moving.`;
+    const optionList = missingSet.has("desiredWorkTypes")
+      ? `\n\nYou can choose from:\n\n${formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS)}`
+      : "";
+    const exampleHint = settings.primaryRoles.length > 0
+      ? ` For this demo, common roles include ${roleExamples}.`
+      : "";
+
+    return `${fallbackIntro} Tell me ${prompts.join(
+      " and "
+    )} so I can keep your screening moving.${exampleHint}${optionList}`;
   }
 
   if (missingSet.has("shiftAvailability") || missingSet.has("startAvailability")) {
@@ -578,14 +831,33 @@ async function requestAiAssistantResponse(args: {
   missingFields: StaffingRequiredField[];
   requiredFields: StaffingRequiredField[];
   settings: AiChatCompanySettings;
+  conversationId: string;
 }) {
   const client = getOpenAIClient();
-  if (!client) return null;
+  const hasOpenAIKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+
+  console.log("[demo/staffing-ai-chat] OpenAI config", {
+    hasOpenAIKey,
+    model: MODEL_NAME,
+  });
+
+  if (!client) {
+    throw new OpenAiDemoChatError(
+      "OPENAI_API_KEY is not configured for the staffing demo chat."
+    );
+  }
 
   const transcript = args.messages
     .slice(-12)
     .map((message) => `${message.role === "candidate" ? "Candidate" : "Assistant"}: ${message.content}`)
     .join("\n");
+
+  console.log("[demo/staffing-ai-chat] OpenAI request starting", {
+    conversationId: args.conversationId,
+    model: MODEL_NAME,
+    messageCount: args.messages.length,
+    missingFields: args.missingFields,
+  });
 
   const response = await client.responses.create({
     model: MODEL_NAME,
@@ -602,13 +874,23 @@ async function requestAiAssistantResponse(args: {
         content: [
           `Current lead draft:\n${JSON.stringify(args.currentDraft, null, 2)}`,
           `Missing fields:\n${JSON.stringify(args.missingFields, null, 2)}`,
-          `Allowed work types: ${STAFFING_WORK_TYPE_OPTIONS.join(", ")}`,
-          `Allowed job types: ${STAFFING_POSITION_TYPE_OPTIONS.join(", ")}`,
-          `Allowed shifts: ${STAFFING_SHIFT_OPTIONS.join(", ")}`,
-          `Allowed start availability values: ${STAFFING_START_AVAILABILITY_OPTIONS.join(", ")}`,
-          `Allowed transportation values: ${STAFFING_TRANSPORTATION_OPTIONS.join(", ")}`,
-          `Allowed experience values: ${STAFFING_EXPERIENCE_OPTIONS.join(", ")}`,
-          `Allowed contact methods: ${STAFFING_CONTACT_METHOD_OPTIONS.join(", ")}`,
+          `Allowed work types:\n${formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS)}`,
+          `Allowed job types:\n${formatOptionsAsLines(STAFFING_POSITION_TYPE_OPTIONS)}`,
+          `Allowed shifts:\n${formatOptionsAsLines(STAFFING_SHIFT_OPTIONS)}`,
+          `Allowed start availability values:\n${formatOptionsAsLines(STAFFING_START_AVAILABILITY_OPTIONS)}`,
+          `Allowed transportation values:\n${formatOptionsAsLines(STAFFING_TRANSPORTATION_OPTIONS)}`,
+          `Allowed experience values:\n${formatOptionsAsLines(STAFFING_EXPERIENCE_OPTIONS)}`,
+          `Allowed contact methods:\n${formatOptionsAsLines(STAFFING_CONTACT_METHOD_OPTIONS)}`,
+          [
+            "Formatting rule for selectable choices:",
+            "When asking the candidate to choose from any allowed list, write \"You can choose from:\" on its own line, add a blank line, then put each option on its own line.",
+            "When asking for desired work types after contact details are collected, use exactly this structure with the candidate's name:",
+            "Thanks for sharing your contact details, [Name]! Next, could you let me know your desired work types?",
+            "",
+            "You can choose from:",
+            "",
+            formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS),
+          ].join("\n"),
           `Conversation transcript:\n${transcript}`,
           "Return JSON only.",
         ].join("\n\n"),
@@ -627,8 +909,13 @@ async function requestAiAssistantResponse(args: {
 
   const responseText = getResponseText(response);
   if (!responseText) {
-    return null;
+    throw new OpenAiDemoChatError("OpenAI returned an empty staffing chat response.");
   }
+
+  console.log("[demo/staffing-ai-chat] OpenAI response received", {
+    conversationId: args.conversationId,
+    responseTextLength: responseText.length,
+  });
 
   return JSON.parse(responseText) as AiStructuredResponse;
 }
@@ -651,26 +938,61 @@ function ensureComplianceLine(
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null);
+    const requestPresence = getRequestPresence(body);
+
+    console.log("[demo/staffing-ai-chat] incoming request body", {
+      body: sanitizeRequestBodyForLog(body),
+      requiredFields: requestPresence,
+    });
+
     const parsedBody = requestSchema.safeParse(body);
 
     if (!parsedBody.success) {
+      const details = formatZodIssues(parsedBody.error);
+      const conversationId = createConversationId();
+
+      console.warn("[demo/staffing-ai-chat] validation failed", {
+        details,
+        requiredFields: requestPresence,
+      });
+
       return NextResponse.json(
         {
+          error: "Invalid staffing demo chat request.",
+          details,
+          fieldErrors: parsedBody.error.flatten().fieldErrors,
           assistantMessage:
             "I’m sorry, something went wrong with this demo chat request. Please try again.",
+          reply:
+            "I'm sorry, something went wrong with this demo chat request. Please try again.",
+          messages: [],
+          conversationId,
           leadDraft: {},
           missingFields: [],
           isComplete: false,
-        } satisfies StaffingAiChatResponse,
+        } satisfies StaffingAiChatResponse & {
+          error: string;
+          details: ReturnType<typeof formatZodIssues>;
+          fieldErrors: Record<string, string[] | undefined>;
+        },
         { status: 400 }
       );
     }
+
+    const conversationId = parsedBody.data.conversationId ?? createConversationId();
+    const conversationMessages = normalizeConversationMessages(parsedBody.data);
+
+    console.log("[demo/staffing-ai-chat] validated request", {
+      conversationId,
+      messageCount: conversationMessages.length,
+      requiredFields: requestPresence,
+    });
 
     const settings = await resolveCompanySettings(parsedBody.data);
     const requiredFields = getEffectiveRequiredFields(settings);
     const currentDraft = mergeStaffingLeadDraft({}, parsedBody.data.leadDraft);
     const heuristicDraft = inferLeadDraftHeuristically({
-      messages: parsedBody.data.messages,
+      messages: conversationMessages,
       currentDraft,
     });
     const missingBeforeAi = getMissingStaffingFields(heuristicDraft, requiredFields);
@@ -680,11 +1002,12 @@ export async function POST(request: Request) {
 
     try {
       const aiResponse = await requestAiAssistantResponse({
-        messages: parsedBody.data.messages,
+        messages: conversationMessages,
         currentDraft: heuristicDraft,
         missingFields: missingBeforeAi,
         requiredFields,
         settings,
+        conversationId,
       });
 
       if (aiResponse) {
@@ -693,8 +1016,26 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       console.error("[demo/staffing-ai-chat] AI request failed", {
-        error: error instanceof Error ? error.message : String(error),
+        conversationId,
+        error: getErrorMessage(error),
       });
+
+      const friendlyMessage =
+        "I'm sorry, I couldn't reach the AI staffing assistant right now. Please try again in a moment.";
+
+      return NextResponse.json(
+        {
+          error: `OpenAI staffing chat request failed: ${getErrorMessage(error)}`,
+          assistantMessage: friendlyMessage,
+          reply: friendlyMessage,
+          messages: conversationMessages,
+          conversationId,
+          leadDraft: heuristicDraft,
+          missingFields: missingBeforeAi,
+          isComplete: false,
+        } satisfies StaffingAiChatResponse & { error: string },
+        { status: 500 }
+      );
     }
 
     const missingFields = getMissingStaffingFields(nextDraft, requiredFields);
@@ -720,13 +1061,23 @@ export async function POST(request: Request) {
         : buildFallbackAssistantMessage(missingFields, settings);
     }
 
+    assistantMessage = formatAssistantChoiceLists({
+      assistantMessage,
+      leadDraft: nextDraft,
+      missingFields,
+    });
+
     if (!isComplete) {
-      return NextResponse.json({
-        assistantMessage,
-        leadDraft: nextDraft,
-        missingFields,
-        isComplete: false,
-      } satisfies StaffingAiChatResponse);
+      return NextResponse.json(
+        buildChatResponse({
+          assistantMessage,
+          conversationId,
+          requestMessages: conversationMessages,
+          leadDraft: nextDraft,
+          missingFields,
+          isComplete: false,
+        })
+      );
     }
 
     const completionSummary = buildStaffingLeadSummary(nextDraft, {
@@ -738,30 +1089,43 @@ export async function POST(request: Request) {
       sourcePage: `/demo/${settings.companySlug}`,
     });
 
-    return NextResponse.json({
-      assistantMessage: ensureComplianceLine(
-        assistantMessage ||
-          buildCompletionMessage(settings, completionSummary.score, completionSummary.tier),
-        settings
-      ),
-      leadDraft: nextDraft,
-      missingFields,
-      isComplete: true,
-      completionSummary,
-    } satisfies StaffingAiChatResponse);
+    return NextResponse.json(
+      buildChatResponse({
+        assistantMessage: ensureComplianceLine(
+          assistantMessage ||
+            buildCompletionMessage(settings, completionSummary.score, completionSummary.tier),
+          settings
+        ),
+        conversationId,
+        requestMessages: conversationMessages,
+        leadDraft: nextDraft,
+        missingFields,
+        isComplete: true,
+        completionSummary,
+      })
+    );
   } catch (error) {
     console.error("[demo/staffing-ai-chat] failed", {
-      error: error instanceof Error ? error.message : String(error),
+      error: getErrorMessage(error),
     });
+
+    const friendlyMessage =
+      "I'm sorry, I ran into a problem with the staffing demo chat. Please try again.";
 
     return NextResponse.json(
       {
-        assistantMessage:
+        error: `Staffing demo chat failed: ${getErrorMessage(error)}`,
+        assistantMessage: friendlyMessage,
+        /*
           "I’m sorry, I ran into a problem with the staffing demo chat. Please try again.",
+        */
+        reply: friendlyMessage,
+        messages: [],
+        conversationId: createConversationId(),
         leadDraft: {},
         missingFields: [],
         isComplete: false,
-      } satisfies StaffingAiChatResponse,
+      } satisfies StaffingAiChatResponse & { error: string },
       { status: 500 }
     );
   }

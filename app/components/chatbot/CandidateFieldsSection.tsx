@@ -31,9 +31,9 @@ export default function CandidateFieldsSection({
   update,
 }: CandidateFieldsSectionProps) {
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid gap-6">
       <div>
-        <h3 className="text-sm font-semibold text-slate-950">
+        <h3 className="text-sm font-semibold text-black">
           Required candidate fields
         </h3>
         {fieldErrors?.requiredCandidateFields ? (
@@ -41,11 +41,11 @@ export default function CandidateFieldsSection({
             {fieldErrors.requiredCandidateFields}
           </p>
         ) : null}
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2">
           {REQUIRED_CANDIDATE_FIELD_OPTIONS.map((field) => (
             <label
               key={field}
-              className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm"
+              className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black"
             >
               <Checkbox
                 checked={form.requiredCandidateFields.includes(field)}
@@ -66,14 +66,14 @@ export default function CandidateFieldsSection({
       </div>
 
       <div>
-        <h3 className="text-sm font-semibold text-slate-950">
+        <h3 className="text-sm font-semibold text-black">
           Optional candidate fields
         </h3>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2">
           {OPTIONAL_CANDIDATE_FIELD_OPTIONS.map((field) => (
             <label
               key={field}
-              className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm"
+              className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black"
             >
               <Checkbox
                 checked={form.optionalCandidateFields.includes(field)}

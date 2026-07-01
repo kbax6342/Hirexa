@@ -22,7 +22,7 @@ export default function QualificationRulesSection({
   update,
 }: QualificationRulesSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="requiredTransportation">Required transportation</Label>
         <Input
@@ -97,7 +97,7 @@ export default function QualificationRulesSection({
           placeholder={"Forklift certification\nOSHA 10"}
         />
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="disqualifyingAnswers">Disqualifying answers</Label>
         <Textarea
           id="disqualifyingAnswers"

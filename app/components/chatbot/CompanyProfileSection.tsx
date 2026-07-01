@@ -21,7 +21,7 @@ export default function CompanyProfileSection({
   update,
 }: CompanyProfileSectionProps) {
   return (
-    <div className="grid gap-5 md:grid-cols-2">
+    <div className="grid gap-5">
       <div>
         <Label htmlFor="companyName">Company name</Label>
         <Input
@@ -105,7 +105,7 @@ export default function CompanyProfileSection({
           placeholder={"Dearborn\nDetroit\nLivonia"}
         />
       </div>
-      <div className="md:col-span-2">
+      <div>
         <Label htmlFor="companyDescription">Company description</Label>
         <Textarea
           id="companyDescription"

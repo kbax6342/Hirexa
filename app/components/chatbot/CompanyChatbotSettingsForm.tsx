@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import {
   ArrowLeftIcon,
@@ -19,8 +20,6 @@ import LeadRoutingSection from "@/app/components/chatbot/LeadRoutingSection";
 import QualificationRulesSection from "@/app/components/chatbot/QualificationRulesSection";
 import ScreeningQuestionsSection from "@/app/components/chatbot/ScreeningQuestionsSection";
 import { Button } from "@/app/components/ui/button";
-import { Card, CardContent } from "@/app/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
 import {
   DEFAULT_COMPANY_CHATBOT_INPUT,
   type CompanyChatbotInput,
@@ -52,17 +51,27 @@ function slugFromName(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-const tabs = [
-  ["company", "Company Profile"],
-  ["branding", "Branding"],
-  ["behavior", "AI Behavior"],
-  ["fields", "Candidate Fields"],
-  ["jobs", "Jobs"],
-  ["questions", "Screening Questions"],
-  ["qualification", "Qualification Rules"],
-  ["routing", "Lead Routing"],
-  ["preview", "Preview"],
-] as const;
+function SettingsSection({
+  children,
+  id,
+  title,
+}: {
+  children: ReactNode;
+  id: string;
+  title: string;
+}) {
+  return (
+    <section
+      id={id}
+      className="rounded-md border border-slate-200 bg-white p-5 text-black shadow-sm sm:p-6"
+    >
+      <h2 className="text-lg font-semibold text-black">{title}</h2>
+      <div className="mt-5 text-black [&_a]:text-black [&_button]:border-black [&_button]:bg-white [&_button]:text-black [&_dd]:text-black [&_div]:bg-white [&_dt]:text-black [&_h3]:text-black [&_h4]:text-black [&_input]:bg-white [&_input]:text-black [&_label]:text-black [&_p]:text-black [&_select]:border-slate-300 [&_select]:bg-white [&_select]:text-black [&_span]:text-black [&_textarea]:bg-white [&_textarea]:text-black">
+        {children}
+      </div>
+    </section>
+  );
+}
 
 export default function CompanyChatbotSettingsForm({
   mode,
@@ -137,118 +146,135 @@ export default function CompanyChatbotSettingsForm({
   const previewHref = form.companySlug ? `/demo/${form.companySlug}` : "/demo";
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <div className="mb-6 mt-[60px] flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="mx-auto max-w-5xl px-4 py-8 text-black sm:px-6 lg:px-8">
+      <div className="mb-6 mt-[60px] flex flex-col gap-4">
         <div>
-          <Button asChild variant="ghost" className="-ml-3 mb-3 text-slate-600">
+          <Button
+            asChild
+            variant="ghost"
+            className="-ml-3 mb-3 bg-white text-black hover:bg-white hover:text-black"
+          >
             <Link href="/dashboard/chatbots">
               <ArrowLeftIcon className="h-4 w-4" />
               Back
             </Link>
           </Button>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-950">
+          <h1 className="text-2xl font-semibold tracking-tight text-black">
             {mode === "create" ? "New company chatbot" : "Company chatbot setup"}
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-black">
             Configure reusable Hirexa AI settings for demos, embeds, screening, and lead routing.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2">
           {form.companySlug ? (
-            <Button asChild variant="outline">
+            <Button
+              asChild
+              variant="outline"
+              className="border-black bg-white text-black hover:bg-white hover:text-black"
+            >
               <Link href={previewHref} target="_blank">
                 <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                 Preview demo
               </Link>
             </Button>
           ) : (
-            <Button type="button" variant="outline" disabled>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-black bg-white text-black"
+              disabled
+            >
               <ArrowTopRightOnSquareIcon className="h-4 w-4" />
               Preview demo
             </Button>
           )}
-          <Button type="button" onClick={saveSettings} disabled={isSaving}>
+          <Button
+            type="button"
+            variant="outline"
+            className="border-black bg-white text-black hover:bg-white hover:text-black"
+            onClick={saveSettings}
+            disabled={isSaving}
+          >
             {isSaving ? "Saving..." : "Save setup"}
           </Button>
         </div>
       </div>
 
       {message ? (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-black bg-white px-4 py-3 text-sm text-black">
           <CheckCircleIcon className="h-4 w-4" />
           {message}
         </div>
       ) : null}
       {error ? (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mb-4 rounded-md border border-black bg-white px-4 py-3 text-sm text-black">
           {error}
         </div>
       ) : null}
 
-      <Tabs defaultValue="company" className="w-full">
-        <TabsList className="mb-5 flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
-          {tabs.map(([value, label]) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm data-[state=active]:border-slate-950 data-[state=active]:bg-slate-950 data-[state=active]:text-white"
-            >
-              {label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+      <div className="space-y-5">
+        <SettingsSection id="company-profile" title="Company Profile">
+          <CompanyProfileSection
+            form={{ ...form, companyName: form.companyName }}
+            fieldErrors={fieldErrors}
+            update={(patch) =>
+              "companyName" in patch
+                ? updateCompanyName(patch.companyName ?? "")
+                : update(patch)
+            }
+          />
+        </SettingsSection>
 
-        <Card className="border-slate-200">
-          <CardContent className="p-5 sm:p-6">
-            <TabsContent value="company" className="m-0">
-              <CompanyProfileSection
-                form={{ ...form, companyName: form.companyName }}
-                fieldErrors={fieldErrors}
-                update={(patch) =>
-                  "companyName" in patch
-                    ? updateCompanyName(patch.companyName ?? "")
-                    : update(patch)
-                }
-              />
-            </TabsContent>
-            <TabsContent value="branding" className="m-0">
-              <ChatbotBrandingSection
-                form={form}
-                fieldErrors={fieldErrors}
-                update={update}
-              />
-            </TabsContent>
-            <TabsContent value="behavior" className="m-0">
-              <ChatbotAiBehaviorSection form={form} update={update} />
-            </TabsContent>
-            <TabsContent value="fields" className="m-0">
-              <CandidateFieldsSection
-                form={form}
-                fieldErrors={fieldErrors}
-                update={update}
-              />
-            </TabsContent>
-            <TabsContent value="jobs" className="m-0">
-              <ChatbotJobsSection form={form} update={update} />
-            </TabsContent>
-            <TabsContent value="questions" className="m-0">
-              <ScreeningQuestionsSection form={form} update={update} />
-            </TabsContent>
-            <TabsContent value="qualification" className="m-0">
-              <QualificationRulesSection form={form} update={update} />
-            </TabsContent>
-            <TabsContent value="routing" className="m-0">
-              <LeadRoutingSection form={form} update={update} />
-            </TabsContent>
-            <TabsContent value="preview" className="m-0">
-              <ChatbotPreviewPanel form={form} />
-            </TabsContent>
-          </CardContent>
-        </Card>
-      </Tabs>
+        <SettingsSection id="branding" title="Branding">
+          <ChatbotBrandingSection
+            form={form}
+            fieldErrors={fieldErrors}
+            update={update}
+          />
+        </SettingsSection>
+
+        <SettingsSection id="ai-behavior" title="AI Behavior">
+          <ChatbotAiBehaviorSection form={form} update={update} />
+        </SettingsSection>
+
+        <SettingsSection id="candidate-fields" title="Candidate Fields">
+          <CandidateFieldsSection
+            form={form}
+            fieldErrors={fieldErrors}
+            update={update}
+          />
+        </SettingsSection>
+
+        <SettingsSection id="jobs" title="Jobs">
+          <ChatbotJobsSection form={form} update={update} />
+        </SettingsSection>
+
+        <SettingsSection id="screening-questions" title="Screening Questions">
+          <ScreeningQuestionsSection form={form} update={update} />
+        </SettingsSection>
+
+        <SettingsSection id="qualification-rules" title="Qualification Rules">
+          <QualificationRulesSection form={form} update={update} />
+        </SettingsSection>
+
+        <SettingsSection id="lead-routing" title="Lead Routing">
+          <LeadRoutingSection form={form} update={update} />
+        </SettingsSection>
+
+        <SettingsSection id="preview" title="Preview">
+          <ChatbotPreviewPanel form={form} />
+        </SettingsSection>
+      </div>
 
       <div className="mt-6 flex justify-end">
-        <Button type="button" onClick={saveSettings} disabled={isSaving}>
+        <Button
+          type="button"
+          variant="outline"
+          className="border-black bg-white text-black hover:bg-white hover:text-black"
+          onClick={saveSettings}
+          disabled={isSaving}
+        >
           {isSaving ? "Saving..." : "Save setup"}
         </Button>
       </div>

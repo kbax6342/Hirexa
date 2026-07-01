@@ -49,6 +49,14 @@ type DisplayChatMessage = StaffingChatMessage & {
   id: string;
 };
 
+type StaffingAiChatErrorPayload = {
+  error?: string;
+  details?: Array<{ path?: string; message?: string }>;
+  fieldErrors?: Record<string, string[] | undefined>;
+  assistantMessage?: string;
+  reply?: string;
+};
+
 const DEFAULT_SETTINGS = getSafeDefaultCompanyChatSettings();
 
 const INITIAL_DRAFT: StaffingLeadDraft = {
@@ -80,6 +88,38 @@ function resetDraft() {
     shiftAvailability: [],
     experience: [],
   } satisfies StaffingLeadDraft;
+}
+
+function getStaffingChatErrorMessage(
+  payload: StaffingAiChatErrorPayload | null,
+  fallback = "Unable to continue the staffing demo chat."
+) {
+  if (process.env.NODE_ENV === "development" && payload?.error) {
+    const detailText = Array.isArray(payload.details)
+      ? payload.details
+          .map((detail) =>
+            [detail.path, detail.message].filter(Boolean).join(": ")
+          )
+          .filter(Boolean)
+          .join("; ")
+      : "";
+
+    return detailText ? `${payload.error} ${detailText}` : payload.error;
+  }
+
+  return payload?.reply || payload?.assistantMessage || fallback;
+}
+
+function isStaffingAiChatResponse(
+  payload: StaffingAiChatResponse | StaffingAiChatErrorPayload | null
+): payload is StaffingAiChatResponse {
+  return Boolean(
+    payload &&
+      typeof payload.assistantMessage === "string" &&
+      "leadDraft" in payload &&
+      "missingFields" in payload &&
+      "isComplete" in payload
+  );
 }
 
 function getRequiredFields(settings: AiChatCompanySettings) {
@@ -134,6 +174,7 @@ export default function StaffingAiChatDemo({
     useState<StaffingLeadSummary | null>(null);
   const [leadSubmissionResult, setLeadSubmissionResult] =
     useState<StaffingLeadApiSuccess | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isSubmittingLead, setIsSubmittingLead] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -217,6 +258,7 @@ export default function StaffingAiChatDemo({
         setDraftLead(resetDraft());
         setCompletionSummary(null);
         setLeadSubmissionResult(null);
+        setConversationId(null);
         setError(null);
         setSettingsWarning(null);
         setTextInput("");
@@ -252,6 +294,7 @@ export default function StaffingAiChatDemo({
         setDraftLead(resetDraft());
         setCompletionSummary(null);
         setLeadSubmissionResult(null);
+        setConversationId(null);
         setError(null);
         setTextInput("");
         setSettingsWarning(null);
@@ -262,6 +305,7 @@ export default function StaffingAiChatDemo({
         setDraftLead(resetDraft());
         setCompletionSummary(null);
         setLeadSubmissionResult(null);
+        setConversationId(null);
         setError(null);
         setTextInput("");
         setSettingsWarning(
@@ -290,6 +334,7 @@ export default function StaffingAiChatDemo({
     applyDraftUpdate(resetDraft());
     setCompletionSummary(null);
     setLeadSubmissionResult(null);
+    setConversationId(null);
     setError(null);
     setIsSendingMessage(false);
     setIsSubmittingLead(false);
@@ -397,6 +442,7 @@ export default function StaffingAiChatDemo({
     try {
       const requestBody: StaffingAiChatRequest = {
         messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        conversationId: conversationId ?? undefined,
         leadDraft: draftLead,
         companySlug: resolvedSettings.companySlug,
         companySettings: resolvedSettings,
@@ -412,22 +458,22 @@ export default function StaffingAiChatDemo({
 
       const payload = (await response.json().catch(() => null)) as
         | StaffingAiChatResponse
-        | { error?: string }
+        | StaffingAiChatErrorPayload
         | null;
 
-      if (!response.ok || !payload || !("assistantMessage" in payload)) {
+      if (!response.ok || !isStaffingAiChatResponse(payload)) {
         throw new Error(
-          payload && "error" in payload && payload.error
-            ? payload.error
-            : "Unable to continue the staffing demo chat."
+          getStaffingChatErrorMessage(payload)
         );
       }
 
+      const assistantReply = payload.reply ?? payload.assistantMessage;
+      setConversationId(payload.conversationId ?? conversationId ?? null);
       applyDraftUpdate(payload.leadDraft);
       const assistantChatMessage: DisplayChatMessage = {
         id: createMessageId(),
         role: "assistant",
-        content: payload.assistantMessage,
+        content: assistantReply,
       };
 
       setMessages((current) => [...current, assistantChatMessage]);
@@ -438,7 +484,7 @@ export default function StaffingAiChatDemo({
           ...nextMessages,
           {
             role: "assistant",
-            content: payload.assistantMessage,
+            content: assistantReply,
           },
         ]);
       }
@@ -665,7 +711,7 @@ export default function StaffingAiChatDemo({
                       "max-w-[88%] rounded-[1.35rem] px-4 py-3 text-sm leading-6",
                       message.role === "candidate"
                         ? "border border-slate-200 bg-slate-100 text-black shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)]"
-                        : "border border-slate-200 bg-white text-black"
+                        : "whitespace-pre-line border border-slate-200 bg-white text-black"
                     )}
                     style={
                       message.role === "candidate"

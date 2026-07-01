@@ -32,10 +32,10 @@ export default function ChatbotJobsSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col items-start gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-950">Jobs</h3>
-          <p className="text-sm text-slate-500">
+          <h3 className="text-sm font-semibold text-black">Jobs</h3>
+          <p className="text-sm text-black">
             Add the roles the chatbot should recommend and screen against.
           </p>
         </div>
@@ -55,7 +55,7 @@ export default function ChatbotJobsSection({
       </div>
 
       {form.jobs.length === 0 ? (
-        <div className="rounded-md border border-dashed border-slate-300 p-5 text-sm text-slate-500">
+        <div className="rounded-md border border-dashed border-slate-300 bg-white p-5 text-sm text-black">
           No jobs yet.
         </div>
       ) : null}
@@ -64,10 +64,10 @@ export default function ChatbotJobsSection({
         {form.jobs.map((job, index) => (
           <div
             key={job.id ?? index}
-            className="rounded-md border border-slate-200 p-4"
+            className="rounded-md border border-slate-200 bg-white p-4 text-black"
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold text-slate-950">
+            <div className="mb-4 flex flex-col items-start gap-3">
+              <h4 className="text-sm font-semibold text-black">
                 Job {index + 1}
               </h4>
               <Button
@@ -81,7 +81,7 @@ export default function ChatbotJobsSection({
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4">
               <div>
                 <Label>Title</Label>
                 <Input
@@ -132,7 +132,7 @@ export default function ChatbotJobsSection({
                   placeholder="OPEN"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Requirements</Label>
                 <Textarea
                   value={job.requirements ?? ""}
@@ -142,7 +142,7 @@ export default function ChatbotJobsSection({
                   placeholder="Reliable transportation, able to lift 40 lbs"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Application URL</Label>
                 <Input
                   value={job.applicationUrl ?? ""}
@@ -152,7 +152,7 @@ export default function ChatbotJobsSection({
                   placeholder="https://example.com/apply"
                 />
               </div>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Description</Label>
                 <Textarea
                   value={job.description ?? ""}

@@ -38,12 +38,12 @@ export default function ScreeningQuestionsSection({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col items-start gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-950">
+          <h3 className="text-sm font-semibold text-black">
             Screening questions
           </h3>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-black">
             Reusable questions are included in the demo prompt and candidate answer model.
           </p>
         </div>
@@ -68,7 +68,7 @@ export default function ScreeningQuestionsSection({
       </div>
 
       {form.questions.length === 0 ? (
-        <div className="rounded-md border border-dashed border-slate-300 p-5 text-sm text-slate-500">
+        <div className="rounded-md border border-dashed border-slate-300 bg-white p-5 text-sm text-black">
           No screening questions yet.
         </div>
       ) : null}
@@ -77,10 +77,10 @@ export default function ScreeningQuestionsSection({
         {form.questions.map((question, index) => (
           <div
             key={question.id ?? index}
-            className="rounded-md border border-slate-200 p-4"
+            className="rounded-md border border-slate-200 bg-white p-4 text-black"
           >
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold text-slate-950">
+            <div className="mb-4 flex flex-col items-start gap-3">
+              <h4 className="text-sm font-semibold text-black">
                 Question {index + 1}
               </h4>
               <Button
@@ -94,8 +94,8 @@ export default function ScreeningQuestionsSection({
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="md:col-span-2">
+            <div className="grid gap-4">
+              <div>
                 <Label>Question text</Label>
                 <Textarea
                   value={question.questionText}
@@ -125,7 +125,7 @@ export default function ScreeningQuestionsSection({
                   }
                 />
               </div>
-              <label className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm">
+              <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black">
                 <Checkbox
                   checked={question.isRequired}
                   onCheckedChange={(checked) =>
@@ -134,7 +134,7 @@ export default function ScreeningQuestionsSection({
                 />
                 Required
               </label>
-              <label className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-sm">
+              <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-black">
                 <Checkbox
                   checked={question.isKnockout}
                   onCheckedChange={(checked) =>
@@ -143,7 +143,7 @@ export default function ScreeningQuestionsSection({
                 />
                 Knockout
               </label>
-              <div className="md:col-span-2">
+              <div>
                 <Label>Options</Label>
                 <Textarea
                   value={question.options.join("\n")}

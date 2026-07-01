@@ -19,7 +19,7 @@ type ChatbotSettingsPageProps = {
 export const dynamic = "force-dynamic";
 
 function SettingsPageShell({ children }: { children: ReactNode }) {
-  return <main className="min-h-screen bg-white text-slate-950">{children}</main>;
+  return <main className="min-h-screen bg-white text-black">{children}</main>;
 }
 
 function formatLeadName(lead: { firstName: string | null; lastName: string | null }) {
@@ -69,20 +69,20 @@ export default async function ChatbotSettingsPage({
       <CompanyChatbotSettingsForm mode="edit" initialChatbot={chatbot} />
       <div
         id="candidate-leads"
-        className="mx-auto max-w-7xl px-4 pb-10 sm:px-6 lg:px-8"
+        className="mx-auto max-w-5xl bg-white px-4 pb-10 text-black sm:px-6 lg:px-8"
       >
-        <Card className="border-slate-200">
-          <CardContent className="p-5 sm:p-6">
-            <h2 className="text-lg font-semibold text-slate-950">
+        <Card className="border-slate-200 bg-white text-black shadow-sm">
+          <CardContent className="bg-white p-5 text-black sm:p-6">
+            <h2 className="text-lg font-semibold text-black">
               Candidate leads
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-black">
               {chatbot.leadCount ?? 0} leads have been captured for this company chatbot.
             </p>
             {recentLeads.length > 0 ? (
-              <div className="mt-5 overflow-hidden rounded-md border border-slate-200">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <div className="mt-5 overflow-hidden rounded-md border border-slate-200 bg-white text-black">
+                <table className="w-full bg-white text-left text-sm text-black">
+                  <thead className="border-b border-slate-200 bg-white text-xs uppercase tracking-wide text-black">
                     <tr>
                       <th className="px-4 py-3">Candidate</th>
                       <th className="px-4 py-3">Role</th>
@@ -90,27 +90,27 @@ export default async function ChatbotSettingsPage({
                       <th className="px-4 py-3">Created</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200 bg-white">
+                  <tbody className="divide-y divide-slate-200 bg-white text-black">
                     {recentLeads.map((lead) => (
-                      <tr key={lead.id}>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-slate-950">
+                      <tr key={lead.id} className="bg-white text-black">
+                        <td className="bg-white px-4 py-3 text-black">
+                          <div className="font-medium text-black">
                             {formatLeadName(lead)}
                           </div>
-                          <div className="text-xs text-slate-500">
+                          <div className="text-xs text-black">
                             {lead.email || lead.phone || "No contact saved"}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-slate-700">
+                        <td className="bg-white px-4 py-3 text-black">
                           {lead.desiredJobType || "Not specified"}
                         </td>
-                        <td className="px-4 py-3 text-slate-700">
+                        <td className="bg-white px-4 py-3 text-black">
                           {lead.candidateScore ?? "—"}{" "}
                           {lead.qualificationStatus
                             ? `· ${lead.qualificationStatus}`
                             : ""}
                         </td>
-                        <td className="px-4 py-3 text-slate-500">
+                        <td className="bg-white px-4 py-3 text-black">
                           {new Date(lead.createdAt).toLocaleDateString()}
                         </td>
                       </tr>
@@ -119,7 +119,7 @@ export default async function ChatbotSettingsPage({
                 </table>
               </div>
             ) : (
-              <div className="mt-5 rounded-md border border-dashed border-slate-300 p-5 text-sm text-slate-500">
+              <div className="mt-5 rounded-md border border-dashed border-slate-300 bg-white p-5 text-sm text-black">
                 No candidate leads have been saved yet.
               </div>
             )}

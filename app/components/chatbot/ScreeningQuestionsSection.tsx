@@ -61,6 +61,7 @@ export default function ScreeningQuestionsSection({
               ],
             })
           }
+          className="bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
         >
           <PlusIcon className="h-4 w-4" />
           Add question

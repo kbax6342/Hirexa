@@ -186,6 +186,8 @@ export type StaffingAiChatResponse = {
   leadDraft: StaffingLeadDraft;
   missingFields: string[];
   isComplete: boolean;
+  responseSource?: "openai" | "fallback";
+  modelName?: string;
   completionSummary?: StaffingLeadSummary;
 };
 

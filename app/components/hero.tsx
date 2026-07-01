@@ -7,7 +7,6 @@ import {
   ArrowRightIcon,
   BoltIcon,
   BriefcaseIcon,
-  ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   MagnifyingGlassIcon,
   SparklesIcon,
@@ -206,18 +205,6 @@ export function Hero({ href }: { href: string }) {
                     <MagnifyingGlassIcon className="h-4 w-4" />
                   </Link>
                 </Button>
-
-                <Button
-                  asChild
-                  variant="outline"
-                  size="lg"
-                  className="h-10 w-full rounded-2xl border-slate-200 bg-white text-sm font-semibold text-slate-900 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.18)] hover:bg-slate-50"
-                >
-                  <Link href="/demo/minutemen-ai-chat">
-                    AI Chat Demo
-                    <ChatBubbleLeftRightIcon className="h-4 w-4" />
-                  </Link>
-                </Button>
               </div>
             </div>
           </div>
@@ -264,18 +251,6 @@ export function Hero({ href }: { href: string }) {
                 className="h-12 rounded-full border-white/12 bg-white/[0.04] px-8 text-base font-medium text-slate-100 hover:bg-white/[0.08] hover:text-white"
               >
                 <Link href="/jobs">Browse Jobs</Link>
-              </Button>
-
-              <Button
-                asChild
-                variant="outline"
-                size="lg"
-                className="h-12 rounded-full border-white/12 bg-white/[0.04] px-8 text-base font-medium text-slate-100 hover:bg-white/[0.08] hover:text-white"
-              >
-                <Link href="/demo/minutemen-ai-chat">
-                  AI Chat Demo
-                  <ChatBubbleLeftRightIcon className="h-4 w-4" />
-                </Link>
               </Button>
             </div>
 

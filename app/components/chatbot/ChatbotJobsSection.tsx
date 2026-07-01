@@ -47,7 +47,7 @@ export default function ChatbotJobsSection({
               jobs: [...form.jobs, { ...EMPTY_CHATBOT_JOB }],
             })
           }
-          className="shrink-0"
+          className="shrink-0 bg-sky-600 text-white hover:bg-sky-700 hover:text-white"
         >
           <PlusIcon className="h-4 w-4" />
           Add job

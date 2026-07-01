@@ -112,6 +112,7 @@ export default function CompanyProfileSection({
           value={form.companyDescription ?? ""}
           onChange={(event) => update({ companyDescription: event.target.value })}
           placeholder="Describe the hiring company and the type of candidates this chatbot should screen."
+          className="bg-white text-black placeholder:text-slate-500"
         />
       </div>
     </div>

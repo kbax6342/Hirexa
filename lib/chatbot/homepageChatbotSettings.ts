@@ -23,7 +23,7 @@ export function getHomepageAiChatCompanySettings(): AiChatCompanySettings {
     brandPrimaryColor: "#0284c7",
     chatDisplayName: "Hirexa AI",
     chatTitle: "Hirexa AI",
-    chatSubtitle: "Job search assistant",
+    chatSubtitle: "Hirexa AI",
     welcomeMessage:
       "Hi, I'm Hirexa AI. Tell me what kind of role you're looking for, and I'll help collect the key details.",
     fallbackMessage:

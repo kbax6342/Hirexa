@@ -24,6 +24,9 @@ export default function DemoQuickControls({
   const settingsHref = `/dashboard/chatbots/${encodeURIComponent(
     companySlug
   )}/settings`;
+  const botDashboardHref = `/dashboard/chatbots/${encodeURIComponent(
+    companySlug
+  )}/bot-dashboard`;
 
   return (
     <div className="space-y-2">
@@ -42,7 +45,7 @@ export default function DemoQuickControls({
         variant="outline"
         className="w-full justify-start rounded-full border-slate-200 bg-white text-black hover:bg-slate-50 hover:text-black"
       >
-        <Link href={`${settingsHref}#candidate-leads`}>
+        <Link href={botDashboardHref}>
           <ClipboardDocumentListIcon className="h-4 w-4" />
           View candidate leads
         </Link>

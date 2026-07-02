@@ -5,6 +5,7 @@ import { prisma } from "@/app/lib/prisma";
 import { scoreStaffingLead } from "@/app/lib/staffing/scoreStaffingLead";
 import {
   type StaffingLeadApiError,
+  type StaffingLeadSubmissionInput,
   staffingLeadSubmissionSchema,
 } from "@/app/types/staffing-screening";
 import { normalizeCompanySlug } from "@/lib/chatbot/saveCompanyChatbot";
@@ -23,8 +24,30 @@ function splitCandidateName(candidateName?: string) {
   };
 }
 
+function normalizeLeadEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
 function toPrismaJson(value: unknown) {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function firstText(...values: Array<string | null | undefined>) {
+  return values.map((value) => value?.trim()).find(Boolean);
+}
+
+function buildWorkExperienceSummary(lead: StaffingLeadSubmissionInput) {
+  const summary = [
+    lead.workExperienceSummary,
+    lead.resumeUploadOrWorkHistorySummary,
+    lead.desiredWorkTypes?.join(", "),
+    lead.experience?.join(", "),
+  ]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join(" | ");
+
+  return summary || undefined;
 }
 
 export async function POST(request: Request) {
@@ -53,55 +76,95 @@ export async function POST(request: Request) {
     let leadId = `demo_lead_${crypto.randomUUID()}`;
 
     if (chatbot?.saveLeadToDashboard) {
-      const { firstName, lastName } = splitCandidateName(
-        parsed.data.candidateName
+      const email = parsed.data.email
+        ? normalizeLeadEmail(parsed.data.email)
+        : null;
+      const nameParts = splitCandidateName(
+        parsed.data.fullName ?? parsed.data.candidateName
       );
+      const firstName = firstText(parsed.data.firstName, nameParts.firstName);
+      const lastName = firstText(parsed.data.lastName, nameParts.lastName);
       const lead = await prisma.$transaction(async (tx) => {
-        const createdLead = await tx.chatbotCandidateLead.create({
-          data: {
-            companyChatbotId: chatbot.id,
-            firstName,
-            lastName,
-            email: parsed.data.email,
-            phone: parsed.data.phone,
-            desiredJobType: parsed.data.desiredJobType,
-            employmentType: parsed.data.desiredJobType,
-            preferredShift: parsed.data.shiftAvailability?.[0],
-            availability: {
-              shiftAvailability: parsed.data.shiftAvailability ?? [],
-              startAvailability: parsed.data.startAvailability ?? null,
-            } as Prisma.InputJsonValue,
-            workExperienceSummary: [
-              parsed.data.desiredWorkTypes?.join(", "),
-              parsed.data.experience?.join(", "),
-            ]
-              .filter(Boolean)
-              .join(" | "),
-            transportationStatus: parsed.data.transportationStatus,
-            desiredPay: parsed.data.desiredPayRange,
-            qualificationStatus: tier,
-            candidateScore: score,
-            aiSummary: recommendedAction,
-            missingFields: [],
-            structuredAnswersJson: toPrismaJson(parsed.data),
-            sourcePageUrl: parsed.data.sourcePage,
-            consentAcceptedAt: parsed.data.consentToContact ? new Date() : null,
-            aiDisclosureShownAt: new Date(),
-          },
-        });
+        const leadData = {
+          firstName,
+          lastName,
+          email,
+          phone: parsed.data.phone,
+          city: parsed.data.city,
+          state: parsed.data.state,
+          zipCode: parsed.data.zipCode,
+          desiredJobType: parsed.data.desiredJobType,
+          employmentType: parsed.data.desiredJobType,
+          preferredShift:
+            parsed.data.preferredShift ?? parsed.data.shiftAvailability?.[0],
+          availability: {
+            shiftAvailability: parsed.data.shiftAvailability ?? [],
+            startAvailability: parsed.data.startAvailability ?? null,
+          } as Prisma.InputJsonValue,
+          workExperienceSummary: buildWorkExperienceSummary(parsed.data),
+          transportationStatus: parsed.data.transportationStatus,
+          workAuthorization: firstText(
+            parsed.data.workAuthorizationStatus,
+            parsed.data.workAuthorization
+          ),
+          resumeUrl: parsed.data.resumeUrl,
+          linkedinUrl: parsed.data.linkedinUrl,
+          certifications: parsed.data.certifications,
+          desiredPay: firstText(parsed.data.desiredPay, parsed.data.desiredPayRange),
+          startDate: parsed.data.startDate,
+          previousEmployer: parsed.data.previousEmployer,
+          educationLevel: parsed.data.educationLevel,
+          languagesSpoken: parsed.data.languagesSpoken,
+          veteranStatus: parsed.data.veteranStatus,
+          referralSource: parsed.data.referralSource,
+          qualificationStatus: tier,
+          candidateScore: score,
+          aiSummary: recommendedAction,
+          missingFields: [],
+          structuredAnswersJson: toPrismaJson(parsed.data),
+          sourcePageUrl: parsed.data.sourcePage,
+          consentAcceptedAt: parsed.data.consentToContact ? new Date() : null,
+          aiDisclosureShownAt: new Date(),
+        };
+
+        const existingLead = email
+          ? await tx.chatbotCandidateLead.findFirst({
+              where: {
+                companyChatbotId: chatbot.id,
+                email: {
+                  equals: email,
+                  mode: "insensitive",
+                },
+              },
+              orderBy: { updatedAt: "desc" },
+              select: { id: true },
+            })
+          : null;
+
+        const savedLead = existingLead
+          ? await tx.chatbotCandidateLead.update({
+              where: { id: existingLead.id },
+              data: leadData,
+            })
+          : await tx.chatbotCandidateLead.create({
+              data: {
+                companyChatbotId: chatbot.id,
+                ...leadData,
+              },
+            });
 
         if (parsed.data.chatMessages?.length) {
           await tx.chatbotMessage.createMany({
             data: parsed.data.chatMessages.map((message) => ({
               companyChatbotId: chatbot.id,
-              leadId: createdLead.id,
+              leadId: savedLead.id,
               role: message.role,
               content: message.content,
             })),
           });
         }
 
-        return createdLead;
+        return savedLead;
       });
 
       leadId = lead.id;

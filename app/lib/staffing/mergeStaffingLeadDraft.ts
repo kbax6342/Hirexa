@@ -19,17 +19,38 @@ import {
 } from "@/app/types/staffing-screening";
 
 type RawStaffingLeadDraft = {
+  firstName?: unknown;
+  lastName?: unknown;
+  fullName?: unknown;
   candidateName?: unknown;
   phone?: unknown;
   email?: unknown;
+  city?: unknown;
+  state?: unknown;
+  zipCode?: unknown;
   preferredContactMethod?: unknown;
   desiredWorkTypes?: unknown;
   desiredJobType?: unknown;
+  preferredShift?: unknown;
   shiftAvailability?: unknown;
   startAvailability?: unknown;
   transportationStatus?: unknown;
+  workAuthorization?: unknown;
+  workAuthorizationStatus?: unknown;
   experience?: unknown;
+  workExperienceSummary?: unknown;
+  resumeUploadOrWorkHistorySummary?: unknown;
+  resumeUrl?: unknown;
+  linkedinUrl?: unknown;
+  certifications?: unknown;
+  desiredPay?: unknown;
   desiredPayRange?: unknown;
+  startDate?: unknown;
+  previousEmployer?: unknown;
+  educationLevel?: unknown;
+  languagesSpoken?: unknown;
+  veteranStatus?: unknown;
+  referralSource?: unknown;
   consentToContact?: unknown;
 };
 
@@ -62,6 +83,7 @@ const POSITION_TYPE_SYNONYMS: Record<StaffingPositionType, string[]> = {
   "Temp-to-Hire": ["temp to hire", "temp-to-hire", "temp hire"],
   "Full-Time": ["full time", "full-time"],
   "Part-Time": ["part time", "part-time"],
+  Seasonal: ["seasonal", "season"],
   "Direct Hire": ["direct hire", "direct-hire"],
   "Open to Anything": ["open to anything", "anything", "open"],
 };
@@ -124,6 +146,13 @@ function titleCase(value: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
+}
+
+function splitNameParts(value: string) {
+  return normalizeText(value)
+    .split(/\s+/)
+    .map((part) => part.replace(/[^a-z'-]/gi, ""))
+    .filter(Boolean);
 }
 
 function dedupeStrings<T extends string>(values: T[]) {
@@ -219,14 +248,24 @@ function resolveOptionArray<T extends string>(
   return dedupeStrings(resolved);
 }
 
-function normalizeCandidateName(value: unknown) {
+function normalizeNamePart(value: unknown) {
   if (typeof value !== "string") return undefined;
-  const normalized = normalizeText(value);
+  const normalized = normalizeText(value).replace(/[^a-z'-]/gi, "");
   if (!normalized || /@/.test(normalized) || /\d{3,}/.test(normalized)) {
     return undefined;
   }
 
   return titleCase(normalized);
+}
+
+function normalizeCandidateName(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const parts = splitNameParts(value);
+  if (parts.length === 0 || /@/.test(value) || /\d{3,}/.test(value)) {
+    return undefined;
+  }
+
+  return titleCase(parts.join(" "));
 }
 
 function normalizePhone(value: unknown) {
@@ -249,6 +288,16 @@ function normalizeEmail(value: unknown) {
   if (typeof value !== "string") return undefined;
   const normalized = normalizeText(value).toLowerCase();
   return normalized || undefined;
+}
+
+function normalizePlainText(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const normalized = normalizeText(value);
+  return normalized || undefined;
+}
+
+function normalizeTextArray(value: unknown) {
+  return dedupeStrings(splitRawValues(value));
 }
 
 function normalizeSingleOption<T extends string>(
@@ -318,9 +367,38 @@ export function mergeStaffingLeadDraft(
     ...currentDraft,
   };
 
-  const candidateName = normalizeCandidateName(incomingDraft.candidateName);
-  if (candidateName) {
-    nextDraft.candidateName = candidateName;
+  const incomingFullName = normalizeCandidateName(
+    incomingDraft.fullName ?? incomingDraft.candidateName
+  );
+  const incomingFullNameParts = incomingFullName
+    ? splitNameParts(incomingFullName)
+    : [];
+  const incomingFirstName =
+    normalizeNamePart(incomingDraft.firstName) ??
+    (incomingFullNameParts.length > 0
+      ? titleCase(incomingFullNameParts[0])
+      : undefined);
+  const incomingLastName =
+    normalizeNamePart(incomingDraft.lastName) ??
+    (incomingFullNameParts.length > 1
+      ? titleCase(incomingFullNameParts.slice(1).join(" "))
+      : undefined);
+
+  if (incomingFirstName) {
+    nextDraft.firstName = incomingFirstName;
+  }
+
+  if (incomingLastName) {
+    nextDraft.lastName = incomingLastName;
+  }
+
+  if (nextDraft.firstName && nextDraft.lastName) {
+    const fullName = `${nextDraft.firstName} ${nextDraft.lastName}`;
+    nextDraft.fullName = fullName;
+    nextDraft.candidateName = fullName;
+  } else if (incomingFullName && incomingFullNameParts.length >= 2) {
+    nextDraft.fullName = incomingFullName;
+    nextDraft.candidateName = incomingFullName;
   }
 
   const phone = normalizePhone(incomingDraft.phone);
@@ -331,6 +409,21 @@ export function mergeStaffingLeadDraft(
   const email = normalizeEmail(incomingDraft.email);
   if (email) {
     nextDraft.email = email;
+  }
+
+  const city = normalizePlainText(incomingDraft.city);
+  if (city) {
+    nextDraft.city = city;
+  }
+
+  const state = normalizePlainText(incomingDraft.state);
+  if (state) {
+    nextDraft.state = state;
+  }
+
+  const zipCode = normalizePlainText(incomingDraft.zipCode);
+  if (zipCode) {
+    nextDraft.zipCode = zipCode;
   }
 
   const preferredContactMethod = normalizeSingleOption(
@@ -363,6 +456,11 @@ export function mergeStaffingLeadDraft(
     nextDraft.desiredJobType = desiredJobType;
   }
 
+  const preferredShift = normalizePlainText(incomingDraft.preferredShift);
+  if (preferredShift) {
+    nextDraft.preferredShift = preferredShift;
+  }
+
   const shiftAvailability = resolveOptionArray(
     incomingDraft.shiftAvailability,
     STAFFING_SHIFT_OPTIONS,
@@ -393,6 +491,14 @@ export function mergeStaffingLeadDraft(
     nextDraft.transportationStatus = transportationStatus;
   }
 
+  const workAuthorization = normalizePlainText(
+    incomingDraft.workAuthorizationStatus ?? incomingDraft.workAuthorization
+  );
+  if (workAuthorization) {
+    nextDraft.workAuthorization = workAuthorization;
+    nextDraft.workAuthorizationStatus = workAuthorization;
+  }
+
   const experience = resolveOptionArray(
     incomingDraft.experience,
     STAFFING_EXPERIENCE_OPTIONS,
@@ -402,9 +508,83 @@ export function mergeStaffingLeadDraft(
     nextDraft.experience = mergeUniqueArray(nextDraft.experience, experience);
   }
 
+  const workExperienceSummary = normalizePlainText(
+    incomingDraft.workExperienceSummary
+  );
+  if (workExperienceSummary) {
+    nextDraft.workExperienceSummary = workExperienceSummary;
+  }
+
+  const resumeUploadOrWorkHistorySummary = normalizePlainText(
+    incomingDraft.resumeUploadOrWorkHistorySummary
+  );
+  if (resumeUploadOrWorkHistorySummary) {
+    nextDraft.resumeUploadOrWorkHistorySummary =
+      resumeUploadOrWorkHistorySummary;
+  }
+
+  const resumeUrl = normalizePlainText(incomingDraft.resumeUrl);
+  if (resumeUrl) {
+    nextDraft.resumeUrl = resumeUrl;
+  }
+
+  const linkedinUrl = normalizePlainText(incomingDraft.linkedinUrl);
+  if (linkedinUrl) {
+    nextDraft.linkedinUrl = linkedinUrl;
+  }
+
+  const certifications = normalizeTextArray(incomingDraft.certifications);
+  if (certifications.length > 0) {
+    nextDraft.certifications = dedupeStrings([
+      ...(nextDraft.certifications ?? []),
+      ...certifications,
+    ]);
+  }
+
+  const desiredPay = normalizePlainText(incomingDraft.desiredPay);
+  if (desiredPay) {
+    nextDraft.desiredPay = desiredPay;
+    if (!nextDraft.desiredPayRange) {
+      nextDraft.desiredPayRange = desiredPay;
+    }
+  }
+
   const desiredPayRange = normalizeDesiredPayRange(incomingDraft.desiredPayRange);
   if (desiredPayRange) {
     nextDraft.desiredPayRange = desiredPayRange;
+  }
+
+  const startDate = normalizePlainText(incomingDraft.startDate);
+  if (startDate) {
+    nextDraft.startDate = startDate;
+  }
+
+  const previousEmployer = normalizePlainText(incomingDraft.previousEmployer);
+  if (previousEmployer) {
+    nextDraft.previousEmployer = previousEmployer;
+  }
+
+  const educationLevel = normalizePlainText(incomingDraft.educationLevel);
+  if (educationLevel) {
+    nextDraft.educationLevel = educationLevel;
+  }
+
+  const languagesSpoken = normalizeTextArray(incomingDraft.languagesSpoken);
+  if (languagesSpoken.length > 0) {
+    nextDraft.languagesSpoken = dedupeStrings([
+      ...(nextDraft.languagesSpoken ?? []),
+      ...languagesSpoken,
+    ]);
+  }
+
+  const veteranStatus = normalizePlainText(incomingDraft.veteranStatus);
+  if (veteranStatus) {
+    nextDraft.veteranStatus = veteranStatus;
+  }
+
+  const referralSource = normalizePlainText(incomingDraft.referralSource);
+  if (referralSource) {
+    nextDraft.referralSource = referralSource;
   }
 
   const consentToContact = normalizeConsentToContact(incomingDraft.consentToContact);

@@ -17,6 +17,7 @@ export const STAFFING_POSITION_TYPE_OPTIONS = [
   "Temp-to-Hire",
   "Full-Time",
   "Part-Time",
+  "Seasonal",
   "Direct Hire",
   "Open to Anything",
 ] as const;
@@ -75,20 +76,41 @@ export type StaffingLeadTier = "Hot Lead" | "Good Lead" | "Needs Review" | "Low 
 
 export const staffingLeadDraftSchema = z
   .object({
+    firstName: z.string().trim().min(1).optional(),
+    lastName: z.string().trim().min(1).optional(),
+    fullName: z.string().trim().min(1).optional(),
     candidateName: z.string().trim().min(1).optional(),
     phone: z.string().trim().min(7).optional(),
     email: z.string().trim().email().optional(),
+    city: z.string().trim().min(1).optional(),
+    state: z.string().trim().min(1).optional(),
+    zipCode: z.string().trim().min(1).optional(),
     preferredContactMethod: z.enum(STAFFING_CONTACT_METHOD_OPTIONS).optional(),
     desiredWorkTypes: z
       .array(z.enum(STAFFING_WORK_TYPE_OPTIONS))
       .min(1)
       .optional(),
     desiredJobType: z.enum(STAFFING_POSITION_TYPE_OPTIONS).optional(),
+    preferredShift: z.string().trim().min(1).optional(),
     shiftAvailability: z.array(z.enum(STAFFING_SHIFT_OPTIONS)).min(1).optional(),
     startAvailability: z.enum(STAFFING_START_AVAILABILITY_OPTIONS).optional(),
     transportationStatus: z.enum(STAFFING_TRANSPORTATION_OPTIONS).optional(),
+    workAuthorization: z.string().trim().min(1).optional(),
+    workAuthorizationStatus: z.string().trim().min(1).optional(),
     experience: z.array(z.enum(STAFFING_EXPERIENCE_OPTIONS)).min(1).optional(),
+    workExperienceSummary: z.string().trim().min(1).optional(),
+    resumeUploadOrWorkHistorySummary: z.string().trim().min(1).optional(),
+    resumeUrl: z.string().trim().min(1).optional(),
+    linkedinUrl: z.string().trim().min(1).optional(),
+    certifications: z.array(z.string().trim().min(1)).optional(),
+    desiredPay: z.string().trim().min(1).optional(),
     desiredPayRange: z.string().trim().min(1).optional(),
+    startDate: z.string().trim().min(1).optional(),
+    previousEmployer: z.string().trim().min(1).optional(),
+    educationLevel: z.string().trim().min(1).optional(),
+    languagesSpoken: z.array(z.string().trim().min(1)).optional(),
+    veteranStatus: z.string().trim().min(1).optional(),
+    referralSource: z.string().trim().min(1).optional(),
     consentToContact: z.boolean().optional(),
   })
   .strict();

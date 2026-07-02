@@ -37,6 +37,15 @@ export const STAFFING_FIELD_LABELS: Record<StaffingRequiredField, string> = {
 
 const STAFFING_REQUIRED_FIELD_SET = new Set<string>(STAFFING_REQUIRED_FIELDS);
 
+function hasFirstAndLastName(leadDraft: StaffingLeadDraft) {
+  const firstName = leadDraft.firstName?.trim();
+  const lastName = leadDraft.lastName?.trim();
+  if (firstName && lastName) return true;
+
+  const fullName = leadDraft.fullName?.trim() || leadDraft.candidateName?.trim() || "";
+  return fullName.split(/\s+/).filter(Boolean).length >= 2;
+}
+
 export function normalizeRequiredStaffingFields(
   requiredFields?: ReadonlyArray<string>
 ) {
@@ -54,6 +63,10 @@ export function isStaffingFieldComplete(
   leadDraft: StaffingLeadDraft,
   field: StaffingRequiredField
 ) {
+  if (field === "candidateName") {
+    return hasFirstAndLastName(leadDraft);
+  }
+
   const value = leadDraft[field];
 
   if (Array.isArray(value)) {

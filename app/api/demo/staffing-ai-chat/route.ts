@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
 
-import { buildCompanyChatSystemPrompt } from "@/app/lib/ai-chat/buildCompanyChatSystemPrompt";
 import {
   getCompanyChatSettingsBySlug,
   getCurrentCompanyChatSettings,
@@ -37,21 +36,45 @@ import { getCompanyChatbotSettingsBySlug } from "@/lib/chatbot/getCompanyChatbot
 
 export const runtime = "nodejs";
 
-const MODEL_NAME = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
+const STAFFING_CHAT_MODEL =
+  process.env.OPENAI_STAFFING_CHAT_MODEL?.trim() || "gpt-4o-mini";
+const STAFFING_CHAT_MAX_OUTPUT_TOKENS = 120;
+const STAFFING_CHAT_TEMPERATURE = 0.2;
 
 const requestLeadDraftSchema = z
   .object({
+    firstName: z.unknown().optional(),
+    lastName: z.unknown().optional(),
+    fullName: z.unknown().optional(),
     candidateName: z.unknown().optional(),
     phone: z.unknown().optional(),
     email: z.unknown().optional(),
+    city: z.unknown().optional(),
+    state: z.unknown().optional(),
+    zipCode: z.unknown().optional(),
     preferredContactMethod: z.unknown().optional(),
     desiredWorkTypes: z.unknown().optional(),
     desiredJobType: z.unknown().optional(),
+    preferredShift: z.unknown().optional(),
     shiftAvailability: z.unknown().optional(),
     startAvailability: z.unknown().optional(),
     transportationStatus: z.unknown().optional(),
+    workAuthorization: z.unknown().optional(),
+    workAuthorizationStatus: z.unknown().optional(),
     experience: z.unknown().optional(),
+    workExperienceSummary: z.unknown().optional(),
+    resumeUploadOrWorkHistorySummary: z.unknown().optional(),
+    resumeUrl: z.unknown().optional(),
+    linkedinUrl: z.unknown().optional(),
+    certifications: z.unknown().optional(),
+    desiredPay: z.unknown().optional(),
     desiredPayRange: z.unknown().optional(),
+    startDate: z.unknown().optional(),
+    previousEmployer: z.unknown().optional(),
+    educationLevel: z.unknown().optional(),
+    languagesSpoken: z.unknown().optional(),
+    veteranStatus: z.unknown().optional(),
+    referralSource: z.unknown().optional(),
     consentToContact: z.unknown().optional(),
   })
   .passthrough()
@@ -91,6 +114,9 @@ const aiResponseSchema = {
       type: "object",
       additionalProperties: false,
       required: [
+        "firstName",
+        "lastName",
+        "fullName",
         "candidateName",
         "phone",
         "email",
@@ -105,6 +131,9 @@ const aiResponseSchema = {
         "consentToContact",
       ],
       properties: {
+        firstName: { type: ["string", "null"] },
+        lastName: { type: ["string", "null"] },
+        fullName: { type: ["string", "null"] },
         candidateName: { type: ["string", "null"] },
         phone: { type: ["string", "null"] },
         email: { type: ["string", "null"] },
@@ -153,6 +182,9 @@ const aiResponseSchema = {
 } as const;
 
 type AiExtractedLeadDraft = {
+  firstName: string | null;
+  lastName: string | null;
+  fullName: string | null;
   candidateName: string | null;
   phone: string | null;
   email: string | null;
@@ -171,6 +203,29 @@ type AiStructuredResponse = {
   assistantMessage: string;
   extractedLeadDraft: AiExtractedLeadDraft;
 };
+
+const STAFFING_JOB_TYPE_PROMPT_OPTIONS = [
+  "Full-time",
+  "Part-time",
+  "Temporary",
+  "Seasonal",
+] as const;
+
+type StaffingIntakeStep =
+  | "firstName"
+  | "lastName"
+  | "email"
+  | "phone"
+  | "preferredContactMethod"
+  | "desiredWorkTypes"
+  | "desiredJobType"
+  | "shiftAvailability"
+  | "startAvailability"
+  | "transportationStatus"
+  | "experience"
+  | "desiredPayRange"
+  | "consentToContact"
+  | "complete";
 
 class OpenAiDemoChatError extends Error {
   constructor(message: string) {
@@ -195,6 +250,15 @@ function redactDebugText(value: string) {
 function truncateDebugText(value: string, limit = 240) {
   const redacted = redactDebugText(value);
   return redacted.length > limit ? `${redacted.slice(0, limit)}...` : redacted;
+}
+
+function estimateTokenCount(value: string) {
+  return Math.ceil(value.length / 4);
+}
+
+function logStaffingChatDebug(message: string, meta?: Record<string, unknown>) {
+  if (process.env.NODE_ENV === "production") return;
+  console.log(message, meta);
 }
 
 function sanitizeRequestBodyForLog(body: unknown) {
@@ -368,6 +432,39 @@ function titleCase(value: string) {
     .join(" ");
 }
 
+function getNameParts(value: string) {
+  return value
+    .replace(/[^\p{L}' -]+/gu, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function assignNameParts(
+  inferred: Record<string, unknown>,
+  parts: string[],
+  currentDraft: StaffingLeadDraft
+) {
+  const cleanParts = parts
+    .map((part) => part.replace(/[^\p{L}'-]+/gu, ""))
+    .filter(Boolean);
+  if (cleanParts.length === 0) return;
+
+  const firstName = titleCase(cleanParts[0]);
+  const lastName =
+    cleanParts.length > 1 ? titleCase(cleanParts.slice(1).join(" ")) : undefined;
+
+  inferred.firstName = firstName;
+
+  if (lastName) {
+    inferred.lastName = lastName;
+    inferred.fullName = `${firstName} ${lastName}`;
+    inferred.candidateName = `${firstName} ${lastName}`;
+  } else if (!currentDraft.firstName) {
+    inferred.firstName = firstName;
+  }
+}
+
 function findLatestMessage(
   messages: StaffingChatMessage[],
   role: StaffingChatMessage["role"]
@@ -433,22 +530,54 @@ function inferLeadDraftHeuristically(args: {
   const payMatch = latestCandidateMessage.match(
     /(\$?\d{2,3}(?:\.\d{1,2})?\s*(?:-|to)\s*\$?\d{2,3}(?:\.\d{1,2})?\s*(?:\/?\s*(?:hr|hour))?|\$?\d{2,3}(?:\.\d{1,2})?\s*(?:\/?\s*(?:hr|hour)|an hour))/i
   );
-  if (payMatch) {
+  if (
+    payMatch &&
+    (hintedFields.includes("desiredPayRange") ||
+      /(?:\$|\b(?:hr|hour|pay|wage|rate)\b)/i.test(
+        `${payMatch[0]} ${latestCandidateMessage}`
+      ))
+  ) {
     inferred.desiredPayRange = payMatch[0];
   }
 
+  const lastNameMatch = latestCandidateMessage.match(
+    /(?:my last name is|last name is|surname is)\s+([a-z]+(?:\s+[a-z]+){0,2})/i
+  );
   const nameMatch = latestCandidateMessage.match(
     /(?:my name is|this is|it(?:')?s)\s+([a-z]+(?:\s+[a-z]+){0,2})/i
   );
-  if (nameMatch) {
-    inferred.candidateName = titleCase(nameMatch[1]);
+  if (lastNameMatch && args.currentDraft.firstName && !args.currentDraft.lastName) {
+    const lastNameParts = getNameParts(lastNameMatch[1]);
+    if (lastNameParts.length > 0) {
+      const lastName = titleCase(lastNameParts.join(" "));
+      inferred.lastName = lastName;
+      inferred.fullName = `${args.currentDraft.firstName} ${lastName}`;
+      inferred.candidateName = `${args.currentDraft.firstName} ${lastName}`;
+    }
+  } else if (nameMatch) {
+    assignNameParts(inferred, getNameParts(nameMatch[1]), args.currentDraft);
   } else if (
     hintedFields.includes("candidateName") &&
     !/\d/.test(latestCandidateMessage) &&
     !latestCandidateMessage.includes("@") &&
     latestCandidateMessage.split(/\s+/).filter(Boolean).length <= 4
   ) {
-    inferred.candidateName = titleCase(latestCandidateMessage);
+    const latestAssistantNormalized = normalizeComparable(latestAssistantMessage);
+    const nameParts = getNameParts(latestCandidateMessage);
+
+    if (
+      args.currentDraft.firstName &&
+      !args.currentDraft.lastName &&
+      latestAssistantNormalized.includes("last name") &&
+      nameParts.length > 0
+    ) {
+      const lastName = titleCase(nameParts.join(" "));
+      inferred.lastName = lastName;
+      inferred.fullName = `${args.currentDraft.firstName} ${lastName}`;
+      inferred.candidateName = `${args.currentDraft.firstName} ${lastName}`;
+    } else {
+      assignNameParts(inferred, nameParts, args.currentDraft);
+    }
   }
 
   if (/\btemp[\s-]*to[\s-]*hire\b/i.test(latestCandidateMessage)) {
@@ -461,6 +590,8 @@ function inferLeadDraftHeuristically(args: {
     inferred.desiredJobType = "Part-Time";
   } else if (/\btemporary\b|\btemp\b/i.test(latestCandidateMessage)) {
     inferred.desiredJobType = "Temporary";
+  } else if (/\bseasonal\b|\bseason\b/i.test(latestCandidateMessage)) {
+    inferred.desiredJobType = "Seasonal";
   } else if (/\bopen to anything\b|\banything\b/i.test(latestCandidateMessage)) {
     inferred.desiredJobType = "Open to Anything";
   }
@@ -672,6 +803,344 @@ function formatOptionsAsLines(options: readonly string[]) {
   return options.join("\n");
 }
 
+function getCandidateDisplayName(leadDraft: StaffingLeadDraft) {
+  const explicitName =
+    leadDraft.fullName?.trim() || leadDraft.candidateName?.trim();
+  if (explicitName) return explicitName;
+
+  return [leadDraft.firstName?.trim(), leadDraft.lastName?.trim()]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getStaffingIntakeStep(
+  leadDraft: StaffingLeadDraft,
+  missingFields: StaffingRequiredField[]
+): StaffingIntakeStep {
+  const firstName = leadDraft.firstName?.trim();
+  const lastName = leadDraft.lastName?.trim();
+
+  if (!firstName) return "firstName";
+  if (!lastName) return "lastName";
+
+  const orderedFields: Array<{
+    field: StaffingRequiredField;
+    step: StaffingIntakeStep;
+  }> = [
+    { field: "email", step: "email" },
+    { field: "phone", step: "phone" },
+    { field: "desiredWorkTypes", step: "desiredWorkTypes" },
+    { field: "desiredJobType", step: "desiredJobType" },
+    { field: "shiftAvailability", step: "shiftAvailability" },
+    { field: "startAvailability", step: "startAvailability" },
+    { field: "desiredPayRange", step: "desiredPayRange" },
+    { field: "experience", step: "experience" },
+    { field: "transportationStatus", step: "transportationStatus" },
+    { field: "preferredContactMethod", step: "preferredContactMethod" },
+    { field: "consentToContact", step: "consentToContact" },
+  ];
+
+  return (
+    orderedFields.find(({ field }) => missingFields.includes(field))?.step ??
+    "complete"
+  );
+}
+
+function buildFirstNamePrompt(latestCandidateMessage: string) {
+  const normalized = normalizeComparable(latestCandidateMessage);
+  const lookingForWork =
+    normalized.includes("looking for work") ||
+    normalized.includes("looking for a job") ||
+    normalized.includes("looking for job") ||
+    normalized.includes("need work") ||
+    normalized.includes("need a job") ||
+    normalized.includes("find work") ||
+    normalized.includes("find a job");
+
+  return lookingForWork
+    ? "Great to hear you're looking for work! Can I get your first name please?"
+    : "Can I get your first name please?";
+}
+
+function buildLastNamePrompt(leadDraft: StaffingLeadDraft) {
+  const firstName = leadDraft.firstName?.trim();
+  return firstName
+    ? `Thanks, ${firstName}! What's your last name?`
+    : "Thanks! What's your last name?";
+}
+
+function buildEmailPrompt(leadDraft: StaffingLeadDraft) {
+  const displayName = getCandidateDisplayName(leadDraft);
+  return displayName
+    ? `Awesome, ${displayName}! Now, could you share your email address?`
+    : "Awesome! Now, could you share your email address?";
+}
+
+function buildPhonePrompt() {
+  return "Thanks. What's the best phone number for recruiter follow-up?";
+}
+
+function buildShiftAvailabilityPrompt() {
+  return `What shifts are you available to work?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_SHIFT_OPTIONS
+  )}`;
+}
+
+function buildStartAvailabilityPrompt() {
+  return `How soon could you start?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_START_AVAILABILITY_OPTIONS
+  )}`;
+}
+
+function buildTransportationPrompt(settings: AiChatCompanySettings) {
+  const locationText = settings.companyLocation?.trim()
+    ? ` around ${settings.companyLocation}`
+    : "";
+
+  return `Do you have reliable transportation${locationText}?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_TRANSPORTATION_OPTIONS
+  )}`;
+}
+
+function buildExperiencePrompt() {
+  return `What relevant experience do you have?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_EXPERIENCE_OPTIONS
+  )}`;
+}
+
+function buildPayPrompt(settings: AiChatCompanySettings) {
+  return settings.payRange
+    ? `What pay range are you looking for? The current hiring range is ${settings.payRange}.`
+    : "What pay range are you looking for?";
+}
+
+function buildPreferredContactMethodPrompt() {
+  return `What's the best way for a recruiter to contact you?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_CONTACT_METHOD_OPTIONS
+  )}`;
+}
+
+function buildConsentPrompt() {
+  return "Do you consent to be contacted about job opportunities by phone, text, or email?";
+}
+
+function formatDeterministicIntakeMessage(args: {
+  assistantMessage: string;
+  leadDraft: StaffingLeadDraft;
+  missingFields: StaffingRequiredField[];
+  latestCandidateMessage: string;
+  settings: AiChatCompanySettings;
+}) {
+  const selectedStep = getStaffingIntakeStep(args.leadDraft, args.missingFields);
+
+  if (selectedStep === "firstName") {
+    return {
+      assistantMessage: buildFirstNamePrompt(args.latestCandidateMessage),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "lastName") {
+    return {
+      assistantMessage: buildLastNamePrompt(args.leadDraft),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "email") {
+    return {
+      assistantMessage: buildEmailPrompt(args.leadDraft),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "phone") {
+    return {
+      assistantMessage: buildPhonePrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "desiredWorkTypes") {
+    return {
+      assistantMessage: buildDesiredWorkTypesChoiceMessage(args.leadDraft),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "desiredJobType") {
+    return {
+      assistantMessage: buildDesiredJobTypeChoiceMessage(args.leadDraft),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "shiftAvailability") {
+    return {
+      assistantMessage: buildShiftAvailabilityPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "startAvailability") {
+    return {
+      assistantMessage: buildStartAvailabilityPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "desiredPayRange") {
+    return {
+      assistantMessage: buildPayPrompt(args.settings),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "experience") {
+    return {
+      assistantMessage: buildExperiencePrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "transportationStatus") {
+    return {
+      assistantMessage: buildTransportationPrompt(args.settings),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "preferredContactMethod") {
+    return {
+      assistantMessage: buildPreferredContactMethodPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "consentToContact") {
+    return {
+      assistantMessage: buildConsentPrompt(),
+      selectedStep,
+    };
+  }
+
+  return {
+    assistantMessage: args.assistantMessage,
+    selectedStep,
+  };
+}
+
+function logNameIntakeDebug(args: {
+  conversationId: string;
+  currentStep: StaffingIntakeStep;
+  selectedStep: StaffingIntakeStep;
+  leadDraft: StaffingLeadDraft;
+}) {
+  if (process.env.NODE_ENV === "production") return;
+
+  logStaffingChatDebug("[demo/staffing-ai-chat] intake step", {
+    conversationId: args.conversationId,
+    currentStep: args.currentStep,
+    detectedFirstName: args.leadDraft.firstName ?? null,
+    detectedLastName: args.leadDraft.lastName ?? null,
+    nextStep: args.selectedStep,
+  });
+}
+
+function isGenericIntakeStartMessage(value: string) {
+  const normalized = normalizeComparable(value);
+  return (
+    /^(hi|hello|hey|good morning|good afternoon|good evening)\b/.test(
+      normalized
+    ) ||
+    normalized.includes("looking for work") ||
+    normalized.includes("looking for a job") ||
+    normalized.includes("need work") ||
+    normalized.includes("need a job") ||
+    normalized.includes("find work") ||
+    normalized.includes("find a job")
+  );
+}
+
+function hasDraftValue(value: unknown) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "boolean") return true;
+  if (typeof value === "string") return value.trim().length > 0;
+  return value != null;
+}
+
+function normalizeDraftValueForProgress(value: unknown) {
+  if (Array.isArray(value)) return JSON.stringify([...value].sort());
+  if (typeof value === "string") return value.trim().toLowerCase();
+  return JSON.stringify(value ?? null);
+}
+
+function hasUsefulDraftProgress(
+  previousDraft: StaffingLeadDraft,
+  nextDraft: StaffingLeadDraft
+) {
+  const progressFields: Array<keyof StaffingLeadDraft> = [
+    "firstName",
+    "lastName",
+    "fullName",
+    "candidateName",
+    "email",
+    "phone",
+    "preferredContactMethod",
+    "desiredWorkTypes",
+    "desiredJobType",
+    "shiftAvailability",
+    "startAvailability",
+    "transportationStatus",
+    "experience",
+    "desiredPayRange",
+    "consentToContact",
+  ];
+
+  return progressFields.some((field) => {
+    const previousValue = previousDraft[field];
+    const nextValue = nextDraft[field];
+
+    return (
+      hasDraftValue(nextValue) &&
+      normalizeDraftValueForProgress(previousValue) !==
+        normalizeDraftValueForProgress(nextValue)
+    );
+  });
+}
+
+function shouldUseAiExtraction(args: {
+  currentStep: StaffingIntakeStep;
+  latestCandidateMessage: string;
+  currentDraft: StaffingLeadDraft;
+  heuristicDraft: StaffingLeadDraft;
+  missingBeforeHeuristics: StaffingRequiredField[];
+  missingAfterHeuristics: StaffingRequiredField[];
+}) {
+  if (args.currentStep === "complete") return false;
+
+  const madeProgress =
+    hasUsefulDraftProgress(args.currentDraft, args.heuristicDraft) ||
+    args.missingAfterHeuristics.length < args.missingBeforeHeuristics.length;
+  if (madeProgress) return false;
+
+  const normalized = normalizeComparable(args.latestCandidateMessage);
+  if (!normalized) return false;
+
+  if (
+    args.currentStep === "firstName" &&
+    isGenericIntakeStartMessage(args.latestCandidateMessage)
+  ) {
+    return false;
+  }
+
+  if (args.currentStep === "email" || args.currentStep === "phone") {
+    return false;
+  }
+
+  return true;
+}
+
 function hasCandidateContactDetails(leadDraft: StaffingLeadDraft) {
   return Boolean(
     leadDraft.candidateName?.trim() &&
@@ -688,6 +1157,17 @@ function buildDesiredWorkTypesChoiceMessage(leadDraft: StaffingLeadDraft) {
 
   return `${intro}\n\nYou can choose from:\n\n${formatOptionsAsLines(
     STAFFING_WORK_TYPE_OPTIONS
+  )}`;
+}
+
+function buildDesiredJobTypeChoiceMessage(leadDraft: StaffingLeadDraft) {
+  const candidateName = leadDraft.candidateName?.trim();
+  const intro = candidateName
+    ? `Next up, ${candidateName}! What type of job are you looking for?`
+    : "Next up! What type of job are you looking for?";
+
+  return `${intro}\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    STAFFING_JOB_TYPE_PROMPT_OPTIONS
   )}`;
 }
 
@@ -712,6 +1192,28 @@ function shouldFormatDesiredWorkTypesChoiceMessage(args: {
   );
 }
 
+function shouldFormatDesiredJobTypeChoiceMessage(args: {
+  assistantMessage: string;
+  leadDraft: StaffingLeadDraft;
+  missingFields: StaffingRequiredField[];
+}) {
+  if (!args.missingFields.includes("desiredJobType")) return false;
+  if (args.leadDraft.desiredJobType) return false;
+  if ((args.leadDraft.desiredWorkTypes ?? []).length === 0) return false;
+
+  const normalizedMessage = normalizeComparable(args.assistantMessage);
+  const asksForJobType =
+    normalizedMessage.includes("what type of job") ||
+    normalizedMessage.includes("job type") ||
+    normalizedMessage.includes("employment type") ||
+    normalizedMessage.includes("full time") ||
+    normalizedMessage.includes("part time") ||
+    normalizedMessage.includes("temporary") ||
+    normalizedMessage.includes("seasonal");
+
+  return asksForJobType || Boolean(args.leadDraft.candidateName?.trim());
+}
+
 function formatAssistantChoiceLists(args: {
   assistantMessage: string;
   leadDraft: StaffingLeadDraft;
@@ -719,6 +1221,10 @@ function formatAssistantChoiceLists(args: {
 }) {
   if (shouldFormatDesiredWorkTypesChoiceMessage(args)) {
     return buildDesiredWorkTypesChoiceMessage(args.leadDraft);
+  }
+
+  if (shouldFormatDesiredJobTypeChoiceMessage(args)) {
+    return buildDesiredJobTypeChoiceMessage(args.leadDraft);
   }
 
   return args.assistantMessage;
@@ -752,19 +1258,28 @@ function buildFallbackAssistantMessage(
     }
     if (missingSet.has("desiredJobType")) {
       prompts.push(
-        "whether you want temporary, temp-to-hire, full-time, part-time, direct hire, or you're open to anything"
+        "whether you want full-time, part-time, temporary, or seasonal work"
       );
     }
-    const optionList = missingSet.has("desiredWorkTypes")
-      ? `\n\nYou can choose from:\n\n${formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS)}`
-      : "";
+    const optionList = [
+      missingSet.has("desiredWorkTypes")
+        ? formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS)
+        : "",
+      missingSet.has("desiredJobType")
+        ? formatOptionsAsLines(STAFFING_JOB_TYPE_PROMPT_OPTIONS)
+        : "",
+    ].filter(Boolean);
+    const formattedOptionList =
+      optionList.length > 0
+        ? `\n\nYou can choose from:\n\n${optionList.join("\n")}`
+        : "";
     const exampleHint = settings.primaryRoles.length > 0
       ? ` For this demo, common roles include ${roleExamples}.`
       : "";
 
     return `${fallbackIntro} Tell me ${prompts.join(
       " and "
-    )} so I can keep your screening moving.${exampleHint}${optionList}`;
+    )} so I can keep your screening moving.${exampleHint}${formattedOptionList}`;
   }
 
   if (missingSet.has("shiftAvailability") || missingSet.has("startAvailability")) {
@@ -826,19 +1341,18 @@ function buildFallbackAssistantMessage(
 }
 
 async function requestAiAssistantResponse(args: {
-  messages: StaffingChatMessage[];
+  latestCandidateMessage: string;
   currentDraft: StaffingLeadDraft;
+  currentStep: StaffingIntakeStep;
   missingFields: StaffingRequiredField[];
-  requiredFields: StaffingRequiredField[];
-  settings: AiChatCompanySettings;
   conversationId: string;
 }) {
   const client = getOpenAIClient();
   const hasOpenAIKey = Boolean(process.env.OPENAI_API_KEY?.trim());
 
-  console.log("[demo/staffing-ai-chat] OpenAI config", {
+  logStaffingChatDebug("[demo/staffing-ai-chat] OpenAI config", {
     hasOpenAIKey,
-    model: MODEL_NAME,
+    model: STAFFING_CHAT_MODEL,
   });
 
   if (!client) {
@@ -847,55 +1361,55 @@ async function requestAiAssistantResponse(args: {
     );
   }
 
-  const transcript = args.messages
-    .slice(-12)
-    .map((message) => `${message.role === "candidate" ? "Candidate" : "Assistant"}: ${message.content}`)
-    .join("\n");
+  const systemInstruction = [
+    "You are a low-token staffing intake extraction helper.",
+    "Use only the current candidate message and current intake state.",
+    "Extract fields into JSON. Keep assistantMessage empty unless a short clarification is required.",
+    "Do not make hiring decisions or guarantees.",
+  ].join(" ");
 
-  console.log("[demo/staffing-ai-chat] OpenAI request starting", {
+  const userInstruction = [
+    `Current step: ${args.currentStep}`,
+    `Current candidate message:\n${args.latestCandidateMessage}`,
+    `Current intake state:\n${JSON.stringify(args.currentDraft)}`,
+    `Missing fields:\n${JSON.stringify(args.missingFields)}`,
+    `Allowed work types: ${STAFFING_WORK_TYPE_OPTIONS.join(", ")}`,
+    `Allowed job types: ${STAFFING_POSITION_TYPE_OPTIONS.join(", ")}`,
+    `Allowed shifts: ${STAFFING_SHIFT_OPTIONS.join(", ")}`,
+    `Allowed start availability values: ${STAFFING_START_AVAILABILITY_OPTIONS.join(", ")}`,
+    `Allowed transportation values: ${STAFFING_TRANSPORTATION_OPTIONS.join(", ")}`,
+    `Allowed experience values: ${STAFFING_EXPERIENCE_OPTIONS.join(", ")}`,
+    `Allowed contact methods: ${STAFFING_CONTACT_METHOD_OPTIONS.join(", ")}`,
+    "Name rule: firstName and lastName must be separate. Only set candidateName/fullName when both are known.",
+    "Return JSON only.",
+  ].join("\n\n");
+  const estimatedPromptTokens = estimateTokenCount(
+    `${systemInstruction}\n\n${userInstruction}`
+  );
+
+  logStaffingChatDebug("[demo/staffing-ai-chat] OpenAI request starting", {
     conversationId: args.conversationId,
-    model: MODEL_NAME,
-    messageCount: args.messages.length,
+    model: STAFFING_CHAT_MODEL,
+    inputMessageCount: 2,
+    estimatedPromptTokens,
+    currentStep: args.currentStep,
     missingFields: args.missingFields,
   });
 
   const response = await client.responses.create({
-    model: MODEL_NAME,
+    model: STAFFING_CHAT_MODEL,
     input: [
       {
         role: "system",
-        content: buildCompanyChatSystemPrompt({
-          settings: args.settings,
-          requiredFields: args.requiredFields,
-        }),
+        content: systemInstruction,
       },
       {
         role: "user",
-        content: [
-          `Current lead draft:\n${JSON.stringify(args.currentDraft, null, 2)}`,
-          `Missing fields:\n${JSON.stringify(args.missingFields, null, 2)}`,
-          `Allowed work types:\n${formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS)}`,
-          `Allowed job types:\n${formatOptionsAsLines(STAFFING_POSITION_TYPE_OPTIONS)}`,
-          `Allowed shifts:\n${formatOptionsAsLines(STAFFING_SHIFT_OPTIONS)}`,
-          `Allowed start availability values:\n${formatOptionsAsLines(STAFFING_START_AVAILABILITY_OPTIONS)}`,
-          `Allowed transportation values:\n${formatOptionsAsLines(STAFFING_TRANSPORTATION_OPTIONS)}`,
-          `Allowed experience values:\n${formatOptionsAsLines(STAFFING_EXPERIENCE_OPTIONS)}`,
-          `Allowed contact methods:\n${formatOptionsAsLines(STAFFING_CONTACT_METHOD_OPTIONS)}`,
-          [
-            "Formatting rule for selectable choices:",
-            "When asking the candidate to choose from any allowed list, write \"You can choose from:\" on its own line, add a blank line, then put each option on its own line.",
-            "When asking for desired work types after contact details are collected, use exactly this structure with the candidate's name:",
-            "Thanks for sharing your contact details, [Name]! Next, could you let me know your desired work types?",
-            "",
-            "You can choose from:",
-            "",
-            formatOptionsAsLines(STAFFING_WORK_TYPE_OPTIONS),
-          ].join("\n"),
-          `Conversation transcript:\n${transcript}`,
-          "Return JSON only.",
-        ].join("\n\n"),
+        content: userInstruction,
       },
     ],
+    max_output_tokens: STAFFING_CHAT_MAX_OUTPUT_TOKENS,
+    temperature: STAFFING_CHAT_TEMPERATURE,
     text: {
       format: {
         type: "json_schema",
@@ -912,7 +1426,7 @@ async function requestAiAssistantResponse(args: {
     throw new OpenAiDemoChatError("OpenAI returned an empty staffing chat response.");
   }
 
-  console.log("[demo/staffing-ai-chat] OpenAI response received", {
+  logStaffingChatDebug("[demo/staffing-ai-chat] OpenAI response received", {
     conversationId: args.conversationId,
     responseTextLength: responseText.length,
   });
@@ -940,7 +1454,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const requestPresence = getRequestPresence(body);
 
-    console.log("[demo/staffing-ai-chat] incoming request body", {
+    logStaffingChatDebug("[demo/staffing-ai-chat] incoming request body", {
       body: sanitizeRequestBodyForLog(body),
       requiredFields: requestPresence,
     });
@@ -982,7 +1496,7 @@ export async function POST(request: Request) {
     const conversationId = parsedBody.data.conversationId ?? createConversationId();
     const conversationMessages = normalizeConversationMessages(parsedBody.data);
 
-    console.log("[demo/staffing-ai-chat] validated request", {
+    logStaffingChatDebug("[demo/staffing-ai-chat] validated request", {
       conversationId,
       messageCount: conversationMessages.length,
       requiredFields: requestPresence,
@@ -991,51 +1505,67 @@ export async function POST(request: Request) {
     const settings = await resolveCompanySettings(parsedBody.data);
     const requiredFields = getEffectiveRequiredFields(settings);
     const currentDraft = mergeStaffingLeadDraft({}, parsedBody.data.leadDraft);
+    const latestCandidateMessage = findLatestMessage(
+      conversationMessages,
+      "candidate"
+    );
+    const missingBeforeHeuristics = getMissingStaffingFields(
+      currentDraft,
+      requiredFields
+    );
+    const currentIntakeStep = getStaffingIntakeStep(
+      currentDraft,
+      missingBeforeHeuristics
+    );
     const heuristicDraft = inferLeadDraftHeuristically({
       messages: conversationMessages,
       currentDraft,
     });
     const missingBeforeAi = getMissingStaffingFields(heuristicDraft, requiredFields);
+    const useAiExtraction = shouldUseAiExtraction({
+      currentStep: currentIntakeStep,
+      latestCandidateMessage,
+      currentDraft,
+      heuristicDraft,
+      missingBeforeHeuristics,
+      missingAfterHeuristics: missingBeforeAi,
+    });
+
+    logStaffingChatDebug("[demo/staffing-ai-chat] intake routing", {
+      conversationId,
+      currentStep: currentIntakeStep,
+      usedAiExtraction: useAiExtraction,
+      missingBeforeCount: missingBeforeHeuristics.length,
+      missingAfterHeuristicsCount: missingBeforeAi.length,
+    });
 
     let nextDraft = heuristicDraft;
     let assistantMessage = "";
 
-    try {
-      const aiResponse = await requestAiAssistantResponse({
-        messages: conversationMessages,
-        currentDraft: heuristicDraft,
-        missingFields: missingBeforeAi,
-        requiredFields,
-        settings,
-        conversationId,
-      });
-
-      if (aiResponse) {
-        nextDraft = mergeStaffingLeadDraft(heuristicDraft, aiResponse.extractedLeadDraft);
-        assistantMessage = aiResponse.assistantMessage.trim();
-      }
-    } catch (error) {
-      console.error("[demo/staffing-ai-chat] AI request failed", {
-        conversationId,
-        error: getErrorMessage(error),
-      });
-
-      const friendlyMessage =
-        "I'm sorry, I couldn't reach the AI staffing assistant right now. Please try again in a moment.";
-
-      return NextResponse.json(
-        {
-          error: `OpenAI staffing chat request failed: ${getErrorMessage(error)}`,
-          assistantMessage: friendlyMessage,
-          reply: friendlyMessage,
-          messages: conversationMessages,
-          conversationId,
-          leadDraft: heuristicDraft,
+    if (useAiExtraction) {
+      try {
+        const aiResponse = await requestAiAssistantResponse({
+          latestCandidateMessage,
+          currentDraft: heuristicDraft,
+          currentStep: currentIntakeStep,
           missingFields: missingBeforeAi,
-          isComplete: false,
-        } satisfies StaffingAiChatResponse & { error: string },
-        { status: 500 }
-      );
+          conversationId,
+        });
+
+        if (aiResponse) {
+          nextDraft = mergeStaffingLeadDraft(
+            heuristicDraft,
+            aiResponse.extractedLeadDraft
+          );
+          assistantMessage = aiResponse.assistantMessage.trim();
+        }
+      } catch (error) {
+        console.error("[demo/staffing-ai-chat] optional AI extraction failed", {
+          conversationId,
+          currentStep: currentIntakeStep,
+          error: getErrorMessage(error),
+        });
+      }
     }
 
     const missingFields = getMissingStaffingFields(nextDraft, requiredFields);
@@ -1060,6 +1590,22 @@ export async function POST(request: Request) {
           )
         : buildFallbackAssistantMessage(missingFields, settings);
     }
+
+    const deterministicIntakeMessage = formatDeterministicIntakeMessage({
+      assistantMessage,
+      leadDraft: nextDraft,
+      missingFields,
+      latestCandidateMessage,
+      settings,
+    });
+    assistantMessage = deterministicIntakeMessage.assistantMessage;
+
+    logNameIntakeDebug({
+      conversationId,
+      currentStep: currentIntakeStep,
+      selectedStep: deterministicIntakeMessage.selectedStep,
+      leadDraft: nextDraft,
+    });
 
     assistantMessage = formatAssistantChoiceLists({
       assistantMessage,

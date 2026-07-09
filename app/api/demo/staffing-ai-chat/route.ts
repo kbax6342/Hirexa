@@ -38,7 +38,7 @@ export const runtime = "nodejs";
 
 const STAFFING_CHAT_MODEL =
   process.env.OPENAI_STAFFING_CHAT_MODEL?.trim() || "gpt-4o-mini";
-const STAFFING_CHAT_MAX_OUTPUT_TOKENS = 120;
+const STAFFING_CHAT_MAX_OUTPUT_TOKENS = 220;
 const STAFFING_CHAT_TEMPERATURE = 0.2;
 
 const requestLeadDraftSchema = z
@@ -121,14 +121,27 @@ const aiResponseSchema = {
         "candidateName",
         "phone",
         "email",
+        "city",
+        "state",
+        "zipCode",
         "preferredContactMethod",
         "desiredWorkTypes",
         "desiredJobType",
         "shiftAvailability",
         "startAvailability",
         "transportationStatus",
+        "workAuthorizationStatus",
         "experience",
+        "resumeUploadOrWorkHistorySummary",
+        "linkedinUrl",
+        "certifications",
         "desiredPayRange",
+        "startDate",
+        "previousEmployer",
+        "educationLevel",
+        "languagesSpoken",
+        "veteranStatus",
+        "referralSource",
         "contactConsent",
         "consentToContact",
       ],
@@ -139,6 +152,9 @@ const aiResponseSchema = {
         candidateName: { type: ["string", "null"] },
         phone: { type: ["string", "null"] },
         email: { type: ["string", "null"] },
+        city: { type: ["string", "null"] },
+        state: { type: ["string", "null"] },
+        zipCode: { type: ["string", "null"] },
         preferredContactMethod: {
           type: ["string", "null"],
           enum: [...STAFFING_CONTACT_METHOD_OPTIONS, null],
@@ -169,6 +185,7 @@ const aiResponseSchema = {
           type: ["string", "null"],
           enum: [...STAFFING_TRANSPORTATION_OPTIONS, null],
         },
+        workAuthorizationStatus: { type: ["string", "null"] },
         experience: {
           type: ["array", "null"],
           items: {
@@ -176,7 +193,22 @@ const aiResponseSchema = {
             enum: [...STAFFING_EXPERIENCE_OPTIONS],
           },
         },
+        resumeUploadOrWorkHistorySummary: { type: ["string", "null"] },
+        linkedinUrl: { type: ["string", "null"] },
+        certifications: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
         desiredPayRange: { type: ["string", "null"] },
+        startDate: { type: ["string", "null"] },
+        previousEmployer: { type: ["string", "null"] },
+        educationLevel: { type: ["string", "null"] },
+        languagesSpoken: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
+        veteranStatus: { type: ["string", "null"] },
+        referralSource: { type: ["string", "null"] },
         contactConsent: { type: ["boolean", "null"] },
         consentToContact: { type: ["boolean", "null"] },
       },
@@ -191,14 +223,27 @@ type AiExtractedLeadDraft = {
   candidateName: string | null;
   phone: string | null;
   email: string | null;
+  city: string | null;
+  state: string | null;
+  zipCode: string | null;
   preferredContactMethod: string | null;
   desiredWorkTypes: string[] | null;
   desiredJobType: string | null;
   shiftAvailability: string[] | null;
   startAvailability: string | null;
   transportationStatus: string | null;
+  workAuthorizationStatus: string | null;
   experience: string[] | null;
+  resumeUploadOrWorkHistorySummary: string | null;
+  linkedinUrl: string | null;
+  certifications: string[] | null;
   desiredPayRange: string | null;
+  startDate: string | null;
+  previousEmployer: string | null;
+  educationLevel: string | null;
+  languagesSpoken: string[] | null;
+  veteranStatus: string | null;
+  referralSource: string | null;
   contactConsent: boolean | null;
   consentToContact: boolean | null;
 };
@@ -220,14 +265,27 @@ type StaffingIntakeStep =
   | "lastName"
   | "email"
   | "phone"
+  | "city"
+  | "state"
+  | "zipCode"
   | "preferredContactMethod"
   | "desiredWorkTypes"
   | "desiredJobType"
   | "shiftAvailability"
   | "startAvailability"
   | "transportationStatus"
+  | "workAuthorizationStatus"
   | "experience"
+  | "resumeUploadOrWorkHistorySummary"
+  | "linkedinUrl"
+  | "certifications"
   | "desiredPayRange"
+  | "startDate"
+  | "previousEmployer"
+  | "educationLevel"
+  | "languagesSpoken"
+  | "veteranStatus"
+  | "referralSource"
   | "consentToContact"
   | "complete";
 
@@ -480,6 +538,16 @@ function getWordCount(value: string) {
   return value.split(/\s+/).filter(Boolean).length;
 }
 
+function getShortTextAnswer(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.includes("@")) return undefined;
+  if (/(?:\+?1[\s.-]*)?(?:\(?\d{3}\)?[\s.-]*)\d{3}[\s.-]*\d{4}/.test(normalized)) {
+    return undefined;
+  }
+
+  return getWordCount(normalized) <= 8 ? normalized : undefined;
+}
+
 function getHintedFieldsFromAssistantMessage(message: string) {
   const normalized = normalizeComparable(message);
   const hinted = new Set<StaffingRequiredField>();
@@ -487,6 +555,9 @@ function getHintedFieldsFromAssistantMessage(message: string) {
   if (normalized.includes("name")) hinted.add("candidateName");
   if (normalized.includes("phone")) hinted.add("phone");
   if (normalized.includes("email")) hinted.add("email");
+  if (normalized.includes("city")) hinted.add("city");
+  if (normalized.includes("state")) hinted.add("state");
+  if (normalized.includes("zip")) hinted.add("zipCode");
   if (normalized.includes("contact method") || normalized.includes("text") || normalized.includes("phone call")) {
     hinted.add("preferredContactMethod");
   }
@@ -497,8 +568,28 @@ function getHintedFieldsFromAssistantMessage(message: string) {
   if (normalized.includes("shift")) hinted.add("shiftAvailability");
   if (normalized.includes("start")) hinted.add("startAvailability");
   if (normalized.includes("transportation")) hinted.add("transportationStatus");
+  if (normalized.includes("authorization") || normalized.includes("authorized")) {
+    hinted.add("workAuthorizationStatus");
+  }
   if (normalized.includes("experience")) hinted.add("experience");
+  if (normalized.includes("resume") || normalized.includes("work history")) {
+    hinted.add("resumeUploadOrWorkHistorySummary");
+  }
+  if (normalized.includes("linkedin")) hinted.add("linkedinUrl");
+  if (normalized.includes("certification") || normalized.includes("certifications")) {
+    hinted.add("certifications");
+  }
   if (normalized.includes("pay")) hinted.add("desiredPayRange");
+  if (normalized.includes("start date")) hinted.add("startDate");
+  if (normalized.includes("previous employer") || normalized.includes("last employer")) {
+    hinted.add("previousEmployer");
+  }
+  if (normalized.includes("education")) hinted.add("educationLevel");
+  if (normalized.includes("languages")) hinted.add("languagesSpoken");
+  if (normalized.includes("veteran")) hinted.add("veteranStatus");
+  if (normalized.includes("referral") || normalized.includes("hear about")) {
+    hinted.add("referralSource");
+  }
   if (normalized.includes("consent") || normalized.includes("contacted")) {
     hinted.add("consentToContact");
   }
@@ -516,6 +607,7 @@ function inferLeadDraftHeuristically(args: {
   const hintedFields = getHintedFieldsFromAssistantMessage(latestAssistantMessage);
   const isShortResponse = getWordCount(latestCandidateMessage) <= 5;
   const inferred: Record<string, unknown> = {};
+  const shortTextAnswer = getShortTextAnswer(latestCandidateMessage);
 
   const emailMatch = latestCandidateMessage.match(
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
@@ -529,6 +621,65 @@ function inferLeadDraftHeuristically(args: {
   );
   if (phoneMatch) {
     inferred.phone = phoneMatch[0];
+  }
+
+  const zipMatch = latestCandidateMessage.match(/\b\d{5}\b/);
+  if (zipMatch) {
+    inferred.zipCode = zipMatch[0];
+  } else if (hintedFields.includes("zipCode") && shortTextAnswer) {
+    inferred.zipCode = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("city") && shortTextAnswer) {
+    inferred.city = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("state") && shortTextAnswer) {
+    inferred.state = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("workAuthorizationStatus") && shortTextAnswer) {
+    inferred.workAuthorizationStatus = shortTextAnswer;
+    inferred.workAuthorization = shortTextAnswer;
+  }
+
+  if (
+    hintedFields.includes("resumeUploadOrWorkHistorySummary") &&
+    shortTextAnswer
+  ) {
+    inferred.resumeUploadOrWorkHistorySummary = latestCandidateMessage.trim();
+  }
+
+  if (hintedFields.includes("linkedinUrl") && shortTextAnswer) {
+    inferred.linkedinUrl = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("certifications") && shortTextAnswer) {
+    inferred.certifications = latestCandidateMessage;
+  }
+
+  if (hintedFields.includes("startDate") && shortTextAnswer) {
+    inferred.startDate = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("previousEmployer") && shortTextAnswer) {
+    inferred.previousEmployer = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("educationLevel") && shortTextAnswer) {
+    inferred.educationLevel = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("languagesSpoken") && shortTextAnswer) {
+    inferred.languagesSpoken = latestCandidateMessage;
+  }
+
+  if (hintedFields.includes("veteranStatus") && shortTextAnswer) {
+    inferred.veteranStatus = shortTextAnswer;
+  }
+
+  if (hintedFields.includes("referralSource") && shortTextAnswer) {
+    inferred.referralSource = shortTextAnswer;
   }
 
   const payMatch = latestCandidateMessage.match(
@@ -755,9 +906,10 @@ function inferLeadDraftHeuristically(args: {
 }
 
 function getEffectiveRequiredFields(settings: AiChatCompanySettings) {
-  let requiredFields = normalizeRequiredStaffingFields(
-    settings.requiredScreeningFields
-  );
+  let requiredFields = normalizeRequiredStaffingFields([
+    ...(settings.requiredScreeningFields ?? []),
+    ...(settings.optionalScreeningFields ?? []),
+  ]);
 
   if (
     settings.requireConsentToContact &&
@@ -802,14 +954,18 @@ async function resolveCompanySettings(body: ParsedStaffingAiChatRequest) {
 
 function buildCompletionMessage(
   settings: AiChatCompanySettings,
+  leadDraft: StaffingLeadDraft,
   summaryScore: number,
   tier: string
 ) {
+  const firstName = leadDraft.firstName?.trim();
   const completionMessage =
     settings.completionMessage?.trim() ||
-    "Thanks — a recruiter can review this information and follow up. This AI chat does not make hiring decisions.";
+    (firstName
+      ? `Thanks, ${firstName} — Hirexa can use this information to guide the next step in your job search. Your screening summary is ready.`
+      : "Thanks — Hirexa can use this information to guide the next step in your job search. Your screening summary is ready.");
 
-  return `${completionMessage} Your screening summary is ready with a ${summaryScore}/100 lead score (${tier}).`;
+  return `${completionMessage} Lead score: ${summaryScore}/100 (${tier}).`;
 }
 
 function joinFieldLabels(fields: StaffingRequiredField[]) {
@@ -847,6 +1003,9 @@ function getStaffingIntakeStep(
     { field: "email", step: "email" },
     { field: "phone", step: "phone" },
     { field: "consentToContact", step: "consentToContact" },
+    { field: "city", step: "city" },
+    { field: "state", step: "state" },
+    { field: "zipCode", step: "zipCode" },
     { field: "desiredWorkTypes", step: "desiredWorkTypes" },
     { field: "desiredJobType", step: "desiredJobType" },
     { field: "shiftAvailability", step: "shiftAvailability" },
@@ -854,6 +1013,19 @@ function getStaffingIntakeStep(
     { field: "desiredPayRange", step: "desiredPayRange" },
     { field: "experience", step: "experience" },
     { field: "transportationStatus", step: "transportationStatus" },
+    { field: "workAuthorizationStatus", step: "workAuthorizationStatus" },
+    {
+      field: "resumeUploadOrWorkHistorySummary",
+      step: "resumeUploadOrWorkHistorySummary",
+    },
+    { field: "linkedinUrl", step: "linkedinUrl" },
+    { field: "certifications", step: "certifications" },
+    { field: "startDate", step: "startDate" },
+    { field: "previousEmployer", step: "previousEmployer" },
+    { field: "educationLevel", step: "educationLevel" },
+    { field: "languagesSpoken", step: "languagesSpoken" },
+    { field: "veteranStatus", step: "veteranStatus" },
+    { field: "referralSource", step: "referralSource" },
     { field: "preferredContactMethod", step: "preferredContactMethod" },
   ];
 
@@ -887,14 +1059,49 @@ function buildLastNamePrompt(leadDraft: StaffingLeadDraft) {
 }
 
 function buildEmailPrompt(leadDraft: StaffingLeadDraft) {
+  if (leadDraft.email && !hasValidEmail(leadDraft.email)) {
+    return "Please share a valid email address.";
+  }
+
   const displayName = getCandidateDisplayName(leadDraft);
   return displayName
     ? `Awesome, ${displayName}! Now, could you share your email address?`
     : "Awesome! Now, could you share your email address?";
 }
 
-function buildPhonePrompt() {
+function buildPhonePrompt(leadDraft: StaffingLeadDraft) {
+  if (leadDraft.phone && !hasValidPhone(leadDraft.phone)) {
+    return "Please share a valid phone number for recruiter follow-up.";
+  }
+
   return "Thanks. What's the best phone number for recruiter follow-up?";
+}
+
+function hasValidEmail(value: string | undefined) {
+  return Boolean(value?.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
+}
+
+function hasValidPhone(value: string | undefined) {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+function hasValidZipCode(value: string | undefined) {
+  return Boolean(value?.trim() && /^\d{5}$/.test(value.trim()));
+}
+
+function buildCityPrompt() {
+  return "What city are you located in?";
+}
+
+function buildStatePrompt() {
+  return "What state are you located in?";
+}
+
+function buildZipCodePrompt(leadDraft: StaffingLeadDraft) {
+  return leadDraft.zipCode && !hasValidZipCode(leadDraft.zipCode)
+    ? "Please enter a standard 5-digit ZIP code."
+    : "What's your ZIP code?";
 }
 
 function buildShiftAvailabilityPrompt() {
@@ -925,10 +1132,50 @@ function buildExperiencePrompt() {
   )}`;
 }
 
+function buildWorkAuthorizationPrompt() {
+  return "What is your work authorization status?";
+}
+
+function buildResumeOrWorkHistoryPrompt() {
+  return "Could you share a resume link or briefly summarize your recent work history?";
+}
+
+function buildLinkedInPrompt() {
+  return "Do you have a LinkedIn URL you'd like to share?";
+}
+
+function buildCertificationsPrompt() {
+  return "What certifications do you have?";
+}
+
 function buildPayPrompt(settings: AiChatCompanySettings) {
   return settings.payRange
     ? `What pay range are you looking for? The current hiring range is ${settings.payRange}.`
     : "What pay range are you looking for?";
+}
+
+function buildStartDatePrompt() {
+  return "What start date works best for you?";
+}
+
+function buildPreviousEmployerPrompt() {
+  return "Who was your previous employer?";
+}
+
+function buildEducationLevelPrompt() {
+  return "What's your highest education level?";
+}
+
+function buildLanguagesSpokenPrompt() {
+  return "What languages do you speak?";
+}
+
+function buildVeteranStatusPrompt() {
+  return "Would you like to share your veteran status?";
+}
+
+function buildReferralSourcePrompt() {
+  return "How did you hear about this opportunity?";
 }
 
 function buildPreferredContactMethodPrompt() {
@@ -975,7 +1222,28 @@ function formatDeterministicIntakeMessage(args: {
 
   if (selectedStep === "phone") {
     return {
-      assistantMessage: buildPhonePrompt(),
+      assistantMessage: buildPhonePrompt(args.leadDraft),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "city") {
+    return {
+      assistantMessage: buildCityPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "state") {
+    return {
+      assistantMessage: buildStatePrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "zipCode") {
+    return {
+      assistantMessage: buildZipCodePrompt(args.leadDraft),
       selectedStep,
     };
   }
@@ -1022,9 +1290,79 @@ function formatDeterministicIntakeMessage(args: {
     };
   }
 
+  if (selectedStep === "workAuthorizationStatus") {
+    return {
+      assistantMessage: buildWorkAuthorizationPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "resumeUploadOrWorkHistorySummary") {
+    return {
+      assistantMessage: buildResumeOrWorkHistoryPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "linkedinUrl") {
+    return {
+      assistantMessage: buildLinkedInPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "certifications") {
+    return {
+      assistantMessage: buildCertificationsPrompt(),
+      selectedStep,
+    };
+  }
+
   if (selectedStep === "transportationStatus") {
     return {
       assistantMessage: buildTransportationPrompt(args.settings),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "startDate") {
+    return {
+      assistantMessage: buildStartDatePrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "previousEmployer") {
+    return {
+      assistantMessage: buildPreviousEmployerPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "educationLevel") {
+    return {
+      assistantMessage: buildEducationLevelPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "languagesSpoken") {
+    return {
+      assistantMessage: buildLanguagesSpokenPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "veteranStatus") {
+    return {
+      assistantMessage: buildVeteranStatusPrompt(),
+      selectedStep,
+    };
+  }
+
+  if (selectedStep === "referralSource") {
+    return {
+      assistantMessage: buildReferralSourcePrompt(),
       selectedStep,
     };
   }
@@ -1105,14 +1443,30 @@ function hasUsefulDraftProgress(
     "candidateName",
     "email",
     "phone",
+    "city",
+    "state",
+    "zipCode",
     "preferredContactMethod",
     "desiredWorkTypes",
     "desiredJobType",
     "shiftAvailability",
     "startAvailability",
     "transportationStatus",
+    "workAuthorizationStatus",
+    "workAuthorization",
     "experience",
+    "resumeUploadOrWorkHistorySummary",
+    "linkedinUrl",
+    "certifications",
     "desiredPayRange",
+    "desiredPay",
+    "startDate",
+    "previousEmployer",
+    "educationLevel",
+    "languagesSpoken",
+    "veteranStatus",
+    "referralSource",
+    "contactConsent",
     "consentToContact",
   ];
 
@@ -1264,7 +1618,6 @@ function buildFallbackAssistantMessage(
     return ensureComplianceLine(
       settings.completionMessage?.trim() ||
         "Thanks — I have everything I need for a recruiter to review.",
-      settings
     );
   }
 
@@ -1454,19 +1807,8 @@ async function requestAiAssistantResponse(args: {
   return JSON.parse(responseText) as AiStructuredResponse;
 }
 
-function ensureComplianceLine(
-  message: string,
-  settings: AiChatCompanySettings
-) {
-  const disclaimer =
-    settings.complianceDisclaimer?.trim() ||
-    "A recruiter will review your information. This AI chat does not make hiring decisions.";
-
-  if (message.includes(disclaimer)) {
-    return message;
-  }
-
-  return `${message.trim()} ${disclaimer}`;
+function ensureComplianceLine(message: string) {
+  return message.trim();
 }
 
 export async function POST(request: Request) {
@@ -1605,6 +1947,7 @@ export async function POST(request: Request) {
       assistantMessage = isComplete
         ? buildCompletionMessage(
             settings,
+            nextDraft,
             fallbackSummary!.score,
             fallbackSummary!.tier
           )
@@ -1659,8 +2002,12 @@ export async function POST(request: Request) {
       buildChatResponse({
         assistantMessage: ensureComplianceLine(
           assistantMessage ||
-            buildCompletionMessage(settings, completionSummary.score, completionSummary.tier),
-          settings
+            buildCompletionMessage(
+              settings,
+              nextDraft,
+              completionSummary.score,
+              completionSummary.tier
+            )
         ),
         conversationId,
         requestMessages: conversationMessages,

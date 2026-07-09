@@ -992,6 +992,24 @@ export default function StaffingAiChatDemo({
                       </dd>
                     </div>
                     <div>
+                      <dt className="text-black">City</dt>
+                      <dd className="mt-1 text-black">
+                        {formatValue(finalSummary.city)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-black">State</dt>
+                      <dd className="mt-1 text-black">
+                        {formatValue(finalSummary.state)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-black">Zip Code</dt>
+                      <dd className="mt-1 text-black">
+                        {formatValue(finalSummary.zipCode)}
+                      </dd>
+                    </div>
+                    <div>
                       <dt className="text-black">Preferred contact</dt>
                       <dd className="mt-1 text-black">
                         {formatValue(finalSummary.preferredContactMethod)}

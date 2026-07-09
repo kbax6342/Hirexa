@@ -202,16 +202,32 @@ const requiredFieldMap: Record<string, StaffingRequiredField | null> = {
   lastName: "candidateName",
   email: "email",
   phone: "phone",
+  city: "city",
+  state: "state",
+  zipCode: "zipCode",
   desiredJobType: "desiredJobType",
   availability: "startAvailability",
   workExperience: "experience",
   preferredShift: "shiftAvailability",
   transportationStatus: "transportationStatus",
+  workAuthorizationStatus: "workAuthorizationStatus",
+  resumeUploadOrWorkHistorySummary: "resumeUploadOrWorkHistorySummary",
+  linkedinUrl: "linkedinUrl",
+  certifications: "certifications",
   desiredPay: "desiredPayRange",
+  startDate: "startDate",
+  previousEmployer: "previousEmployer",
+  educationLevel: "educationLevel",
+  languagesSpoken: "languagesSpoken",
+  veteranStatus: "veteranStatus",
+  referralSource: "referralSource",
 };
 
 function mapRequiredFields(chatbot: CompanyChatbotRecord) {
-  const mapped = chatbot.requiredCandidateFields
+  const mapped = [
+    ...chatbot.requiredCandidateFields,
+    ...chatbot.optionalCandidateFields,
+  ]
     .map((field) => requiredFieldMap[field] ?? null)
     .filter((field): field is StaffingRequiredField => Boolean(field));
 

@@ -90,6 +90,10 @@ html[data-share-safe-mode="on"] [data-sonner-toast]::after {
   color: hsl(var(--foreground));
 }
 
+.hirexa-staffing-chat-input-section {
+  margin-top: -5%;
+}
+
 /* Utilities */
 @layer utilities {
   .text-balance {

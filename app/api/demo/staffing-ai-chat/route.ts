@@ -75,6 +75,7 @@ const requestLeadDraftSchema = z
     languagesSpoken: z.unknown().optional(),
     veteranStatus: z.unknown().optional(),
     referralSource: z.unknown().optional(),
+    contactConsent: z.unknown().optional(),
     consentToContact: z.unknown().optional(),
   })
   .passthrough()
@@ -128,6 +129,7 @@ const aiResponseSchema = {
         "transportationStatus",
         "experience",
         "desiredPayRange",
+        "contactConsent",
         "consentToContact",
       ],
       properties: {
@@ -175,6 +177,7 @@ const aiResponseSchema = {
           },
         },
         desiredPayRange: { type: ["string", "null"] },
+        contactConsent: { type: ["boolean", "null"] },
         consentToContact: { type: ["boolean", "null"] },
       },
     },
@@ -196,6 +199,7 @@ type AiExtractedLeadDraft = {
   transportationStatus: string | null;
   experience: string[] | null;
   desiredPayRange: string | null;
+  contactConsent: boolean | null;
   consentToContact: boolean | null;
 };
 
@@ -734,6 +738,7 @@ function inferLeadDraftHeuristically(args: {
       isShortResponse &&
       /^(yes|yep|yeah|sure)$/i.test(normalized))
   ) {
+    inferred.contactConsent = true;
     inferred.consentToContact = true;
   } else if (
     hintedFields.includes("consentToContact") &&
@@ -742,6 +747,7 @@ function inferLeadDraftHeuristically(args: {
     ) ||
       (isShortResponse && /^(no|nope)$/i.test(normalized)))
   ) {
+    inferred.contactConsent = false;
     inferred.consentToContact = false;
   }
 
@@ -749,9 +755,20 @@ function inferLeadDraftHeuristically(args: {
 }
 
 function getEffectiveRequiredFields(settings: AiChatCompanySettings) {
-  const requiredFields = normalizeRequiredStaffingFields(
+  let requiredFields = normalizeRequiredStaffingFields(
     settings.requiredScreeningFields
   );
+
+  if (
+    settings.requireConsentToContact &&
+    !requiredFields.includes("consentToContact")
+  ) {
+    requiredFields = [...requiredFields, "consentToContact"];
+  } else if (!settings.requireConsentToContact) {
+    requiredFields = requiredFields.filter(
+      (field) => field !== "consentToContact"
+    );
+  }
 
   return settings.transportationQuestionEnabled
     ? requiredFields
@@ -829,6 +846,7 @@ function getStaffingIntakeStep(
   }> = [
     { field: "email", step: "email" },
     { field: "phone", step: "phone" },
+    { field: "consentToContact", step: "consentToContact" },
     { field: "desiredWorkTypes", step: "desiredWorkTypes" },
     { field: "desiredJobType", step: "desiredJobType" },
     { field: "shiftAvailability", step: "shiftAvailability" },
@@ -837,7 +855,6 @@ function getStaffingIntakeStep(
     { field: "experience", step: "experience" },
     { field: "transportationStatus", step: "transportationStatus" },
     { field: "preferredContactMethod", step: "preferredContactMethod" },
-    { field: "consentToContact", step: "consentToContact" },
   ];
 
   return (
@@ -921,7 +938,9 @@ function buildPreferredContactMethodPrompt() {
 }
 
 function buildConsentPrompt() {
-  return "Do you consent to be contacted about job opportunities by phone, text, or email?";
+  return `Do you consent to be contacted about job opportunities by phone, text, or email?\n\nYou can choose from:\n\n${formatOptionsAsLines(
+    ["Yes", "No"]
+  )}`;
 }
 
 function formatDeterministicIntakeMessage(args: {
@@ -1333,7 +1352,7 @@ function buildFallbackAssistantMessage(
   }
 
   if (missingSet.has("consentToContact")) {
-    return "Do you consent to be contacted about job opportunities by phone, text, or email?";
+    return buildConsentPrompt();
   }
 
   const nextFields = joinFieldLabels(missingFields.slice(0, 2));
@@ -1381,6 +1400,7 @@ async function requestAiAssistantResponse(args: {
     `Allowed experience values: ${STAFFING_EXPERIENCE_OPTIONS.join(", ")}`,
     `Allowed contact methods: ${STAFFING_CONTACT_METHOD_OPTIONS.join(", ")}`,
     "Name rule: firstName and lastName must be separate. Only set candidateName/fullName when both are known.",
+    "Consent rule: only set contactConsent and consentToContact when the candidate explicitly answers yes or no to contact consent.",
     "Return JSON only.",
   ].join("\n\n");
   const estimatedPromptTokens = estimateTokenCount(

@@ -84,6 +84,13 @@ export async function POST(request: Request) {
       );
       const firstName = firstText(parsed.data.firstName, nameParts.firstName);
       const lastName = firstText(parsed.data.lastName, nameParts.lastName);
+      const contactConsent =
+        parsed.data.contactConsent ?? parsed.data.consentToContact ?? null;
+      const structuredAnswersJson = toPrismaJson({
+        ...parsed.data,
+        contactConsent,
+        consentToContact: contactConsent ?? parsed.data.consentToContact,
+      });
       const lead = await prisma.$transaction(async (tx) => {
         const leadData = {
           firstName,
@@ -117,13 +124,14 @@ export async function POST(request: Request) {
           languagesSpoken: parsed.data.languagesSpoken,
           veteranStatus: parsed.data.veteranStatus,
           referralSource: parsed.data.referralSource,
+          contactConsent,
           qualificationStatus: tier,
           candidateScore: score,
           aiSummary: recommendedAction,
           missingFields: [],
-          structuredAnswersJson: toPrismaJson(parsed.data),
+          structuredAnswersJson,
           sourcePageUrl: parsed.data.sourcePage,
-          consentAcceptedAt: parsed.data.consentToContact ? new Date() : null,
+          consentAcceptedAt: contactConsent === true ? new Date() : null,
           aiDisclosureShownAt: new Date(),
         };
 

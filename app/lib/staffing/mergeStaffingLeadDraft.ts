@@ -51,6 +51,7 @@ type RawStaffingLeadDraft = {
   languagesSpoken?: unknown;
   veteranStatus?: unknown;
   referralSource?: unknown;
+  contactConsent?: unknown;
   consentToContact?: unknown;
 };
 
@@ -587,8 +588,11 @@ export function mergeStaffingLeadDraft(
     nextDraft.referralSource = referralSource;
   }
 
-  const consentToContact = normalizeConsentToContact(incomingDraft.consentToContact);
+  const consentToContact = normalizeConsentToContact(
+    incomingDraft.contactConsent ?? incomingDraft.consentToContact
+  );
   if (typeof consentToContact === "boolean") {
+    nextDraft.contactConsent = consentToContact;
     nextDraft.consentToContact = consentToContact;
   }
 

@@ -88,7 +88,9 @@ export default async function BotDashboardPage({
       languagesSpoken: true,
       veteranStatus: true,
       referralSource: true,
+      contactConsent: true,
       qualificationStatus: true,
+      captureStatus: true,
       candidateScore: true,
       aiSummary: true,
       structuredAnswersJson: true,
@@ -132,6 +134,7 @@ export default async function BotDashboardPage({
         </div>
 
         <CandidateLeadsTable
+          companySlug={chatbot.companySlug}
           leads={dedupedLeads.slice(0, 50)}
           totalLeads={dedupedLeads.length}
         />

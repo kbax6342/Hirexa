@@ -33,16 +33,17 @@ const featureCards = [
   },
 ];
 
+type FeaturedEvent = {
+  name: string;
+  match: string;
+  focus: string;
+  date?: string;
+  time?: string;
+  location: string;
+};
+
 // Placeholder event previews until real hiring event data is connected.
-const featuredEvents = [
-  {
-    name: "District 1 Job Fair",
-    match: "100%",
-    focus: "Community hiring, employer meetups, and neighborhood job opportunities",
-    date: "June 1st, 2026",
-    time: "11 a.m. to 2 p.m.",
-    location: "Detroit, Michigan",
-  },
+const featuredEvents: FeaturedEvent[] = [
   {
     name: "Detroit Tech Hiring Mixer",
     match: "91%",

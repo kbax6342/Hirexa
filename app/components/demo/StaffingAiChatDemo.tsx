@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowPathIcon,
   ChatBubbleLeftRightIcon,
@@ -47,6 +48,7 @@ type StaffingAiChatDemoProps = {
 
 type DisplayChatMessage = StaffingChatMessage & {
   id: string;
+  quickReplies?: string[];
 };
 
 type StaffingAiChatErrorPayload = {
@@ -58,6 +60,15 @@ type StaffingAiChatErrorPayload = {
 };
 
 const DEFAULT_SETTINGS = getSafeDefaultCompanyChatSettings();
+const OLD_HIREXA_AI_WELCOME_KEY =
+  "hi im hirexa ai tell me what kind of role youre looking for and ill help collect the key details";
+const HIREXA_AI_WELCOME_MESSAGE =
+  "Hi, I’m Hirexa AI. I’ll help collect the key details about the type of role you’re looking for. What’s your name?";
+const PRIVACY_NOTICE_MESSAGE_ID = "privacy-notice";
+const PRIVACY_POLICY_LABEL = "Privacy Policy";
+const CHATBOT_PRIVACY_NOTICE_TEXT =
+  "By using this chatbot, you agree that the information you provide may be collected, saved, and reviewed by authorized hiring or staffing agency staff to respond to your inquiry, contact you, and help match you with potential job opportunities. - Privacy Policy";
+const QUICK_REPLY_MARKER = "You can choose from:";
 
 const INITIAL_DRAFT: StaffingLeadDraft = {
   desiredWorkTypes: [],
@@ -67,6 +78,52 @@ const INITIAL_DRAFT: StaffingLeadDraft = {
 
 function createMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getQuickReplyMarkerIndex(content: string) {
+  return content.toLowerCase().indexOf(QUICK_REPLY_MARKER.toLowerCase());
+}
+
+function cleanQuickReplyOption(value: string) {
+  return value
+    .replace(/^[-*]\s*/, "")
+    .replace(/^or\s+/i, "")
+    .replace(/[.;]+$/, "")
+    .trim();
+}
+
+function parseQuickReplyOptions(content: string) {
+  const markerIndex = getQuickReplyMarkerIndex(content);
+  if (markerIndex < 0) return [];
+
+  const optionsSource = content.slice(markerIndex + QUICK_REPLY_MARKER.length);
+  const seenOptions = new Set<string>();
+  const options = optionsSource
+    .split(/\r?\n|,\s*/g)
+    .map(cleanQuickReplyOption)
+    .filter(Boolean)
+    .filter((option) => {
+      const normalizedOption = option.toLowerCase();
+      if (seenOptions.has(normalizedOption)) return false;
+      seenOptions.add(normalizedOption);
+      return true;
+    });
+
+  return options.length > 1 ? options : [];
+}
+
+function createAssistantDisplayMessage(
+  content: string,
+  id = createMessageId()
+): DisplayChatMessage {
+  const quickReplies = parseQuickReplyOptions(content);
+
+  return {
+    id,
+    role: "assistant",
+    content,
+    ...(quickReplies.length > 0 ? { quickReplies } : {}),
+  };
 }
 
 function formatValue(value: boolean | string | string[] | undefined) {
@@ -132,26 +189,74 @@ function getRequiredFields(settings: AiChatCompanySettings) {
     : requiredFields.filter((field) => field !== "transportationStatus");
 }
 
+function getWelcomeMessageKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildInitialMessages(settings: AiChatCompanySettings): DisplayChatMessage[] {
-  const welcomeMessage =
+  const rawWelcomeMessage =
     settings.welcomeMessage?.trim() || DEFAULT_SETTINGS.welcomeMessage || "";
-  const complianceMessage =
-    settings.complianceDisclaimer?.trim() ||
-    DEFAULT_SETTINGS.complianceDisclaimer ||
-    "";
+  const welcomeMessage = getWelcomeMessageKey(rawWelcomeMessage) ===
+    OLD_HIREXA_AI_WELCOME_KEY
+    ? HIREXA_AI_WELCOME_MESSAGE
+    : rawWelcomeMessage;
 
   return [
-    {
-      id: "welcome",
-      role: "assistant" as const,
-      content: welcomeMessage,
-    },
-    {
-      id: "compliance",
-      role: "assistant" as const,
-      content: complianceMessage,
-    },
+    createAssistantDisplayMessage(welcomeMessage, "welcome"),
+    createAssistantDisplayMessage(
+      CHATBOT_PRIVACY_NOTICE_TEXT,
+      PRIVACY_NOTICE_MESSAGE_ID
+    ),
   ].filter((message) => message.content.trim().length > 0);
+}
+
+function toStaffingChatMessages(messages: DisplayChatMessage[]): StaffingChatMessage[] {
+  return messages
+    .filter((message) => message.id !== PRIVACY_NOTICE_MESSAGE_ID)
+    .map(({ role, content }) => ({ role, content }));
+}
+
+function getMessageContentWithoutQuickReplies(message: DisplayChatMessage) {
+  if (!message.quickReplies?.length) return message.content;
+
+  const optionListStart = getQuickReplyMarkerIndex(message.content);
+
+  return optionListStart >= 0
+    ? message.content.slice(0, optionListStart).trim()
+    : message.content;
+}
+
+function renderChatMessageContent(
+  message: DisplayChatMessage,
+  content = message.content
+) {
+  if (
+    message.role !== "assistant" ||
+    message.content !== CHATBOT_PRIVACY_NOTICE_TEXT
+  ) {
+    return content;
+  }
+
+  const [beforeLabel, afterLabel = ""] =
+    CHATBOT_PRIVACY_NOTICE_TEXT.split(PRIVACY_POLICY_LABEL);
+
+  return (
+    <>
+      {beforeLabel}
+      <Link
+        href="/privacy-policy"
+        className="font-medium text-slate-700 underline underline-offset-2 hover:text-slate-950"
+      >
+        {PRIVACY_POLICY_LABEL}
+      </Link>
+      {afterLabel}
+    </>
+  );
 }
 
 export default function StaffingAiChatDemo({
@@ -178,9 +283,26 @@ export default function StaffingAiChatDemo({
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isSubmittingLead, setIsSubmittingLead] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedQuickReplies, setSelectedQuickReplies] = useState<
+    Record<string, string>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [settingsWarning, setSettingsWarning] = useState<string | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const selectedQuickRepliesRef = useRef<Record<string, string>>({});
+
+  const clearSelectedQuickReplies = useCallback(() => {
+    selectedQuickRepliesRef.current = {};
+    setSelectedQuickReplies({});
+  }, []);
+
+  const markQuickReplySelected = useCallback((messageId: string, option: string) => {
+    selectedQuickRepliesRef.current = {
+      ...selectedQuickRepliesRef.current,
+      [messageId]: option,
+    };
+    setSelectedQuickReplies(selectedQuickRepliesRef.current);
+  }, []);
 
   const requiredFields = useMemo(
     () => getRequiredFields(resolvedSettings),
@@ -261,6 +383,7 @@ export default function StaffingAiChatDemo({
         setConversationId(null);
         setError(null);
         setSettingsWarning(null);
+        clearSelectedQuickReplies();
         setTextInput("");
         return;
       }
@@ -298,6 +421,7 @@ export default function StaffingAiChatDemo({
         setError(null);
         setTextInput("");
         setSettingsWarning(null);
+        clearSelectedQuickReplies();
       } catch (settingsError) {
         if (!isMounted) return;
         setResolvedSettings(DEFAULT_SETTINGS);
@@ -308,6 +432,7 @@ export default function StaffingAiChatDemo({
         setConversationId(null);
         setError(null);
         setTextInput("");
+        clearSelectedQuickReplies();
         setSettingsWarning(
           settingsError instanceof Error
             ? `${settingsError.message} Using fallback demo settings.`
@@ -321,7 +446,7 @@ export default function StaffingAiChatDemo({
     return () => {
       isMounted = false;
     };
-  }, [companySettings, companySlug]);
+  }, [clearSelectedQuickReplies, companySettings, companySlug]);
 
   function applyDraftUpdate(nextDraft: StaffingLeadDraft) {
     setDraftLead(nextDraft);
@@ -339,6 +464,7 @@ export default function StaffingAiChatDemo({
     setIsSendingMessage(false);
     setIsSubmittingLead(false);
     setIsSettingsOpen(false);
+    clearSelectedQuickReplies();
     onRestart?.();
   }
 
@@ -393,6 +519,7 @@ export default function StaffingAiChatDemo({
         languagesSpoken: summary.languagesSpoken,
         veteranStatus: summary.veteranStatus,
         referralSource: summary.referralSource,
+        contactConsent: summary.contactConsent ?? summary.consentToContact,
         consentToContact: summary.consentToContact,
         companySlug: summary.companySlug ?? resolvedSettings.companySlug,
         companyName: summary.companyName ?? resolvedSettings.companyName,
@@ -442,8 +569,8 @@ export default function StaffingAiChatDemo({
     }
   }
 
-  async function handleSendMessage() {
-    const trimmedValue = textInput.trim();
+  async function sendCandidateMessage(messageText: string) {
+    const trimmedValue = messageText.trim();
 
     if (!trimmedValue || isSendingMessage || isSubmittingLead || completionSummary) {
       return;
@@ -463,7 +590,7 @@ export default function StaffingAiChatDemo({
 
     try {
       const requestBody: StaffingAiChatRequest = {
-        messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        messages: toStaffingChatMessages(nextMessages),
         conversationId: conversationId ?? undefined,
         leadDraft: draftLead,
         companySlug: resolvedSettings.companySlug,
@@ -492,23 +619,16 @@ export default function StaffingAiChatDemo({
       const assistantReply = payload.reply ?? payload.assistantMessage;
       setConversationId(payload.conversationId ?? conversationId ?? null);
       applyDraftUpdate(payload.leadDraft);
-      const assistantChatMessage: DisplayChatMessage = {
-        id: createMessageId(),
-        role: "assistant",
-        content: assistantReply,
-      };
+      const assistantChatMessage = createAssistantDisplayMessage(assistantReply);
 
       setMessages((current) => [...current, assistantChatMessage]);
 
       if (payload.isComplete && payload.completionSummary) {
         setCompletionSummary(payload.completionSummary);
-        void submitCompletedLead(payload.completionSummary, [
-          ...nextMessages,
-          {
-            role: "assistant",
-            content: assistantReply,
-          },
-        ]);
+        void submitCompletedLead(
+          payload.completionSummary,
+          toStaffingChatMessages([...nextMessages, assistantChatMessage])
+        );
       }
     } catch (chatError) {
       setError(
@@ -519,6 +639,16 @@ export default function StaffingAiChatDemo({
     } finally {
       setIsSendingMessage(false);
     }
+  }
+
+  async function handleSendMessage() {
+    await sendCandidateMessage(textInput);
+  }
+
+  function handleQuickReplySelect(messageId: string, option: string) {
+    if (selectedQuickRepliesRef.current[messageId]) return;
+    markQuickReplySelected(messageId, option);
+    void sendCandidateMessage(option);
   }
 
   const finalSummary = completionSummary;
@@ -719,32 +849,83 @@ export default function StaffingAiChatDemo({
               id="hirexa-staffing-chat-messages"
               className="max-h-[360px] space-y-3 overflow-y-auto px-4 py-4 sm:px-5"
             >
-              {messages.map((message) => (
-                <div
-                  id={`hirexa-staffing-chat-message-${message.id}`}
-                  key={message.id}
-                  className={cn(
-                    "flex",
-                    message.role === "candidate" ? "justify-end" : "justify-start"
-                  )}
-                >
+              {messages.map((message, messageIndex) => {
+                const quickReplies = message.quickReplies ?? [];
+                const selectedQuickReply = selectedQuickReplies[message.id];
+                const hasCandidateReplyAfter = messages
+                  .slice(messageIndex + 1)
+                  .some((nextMessage) => nextMessage.role === "candidate");
+                const messageContent = getMessageContentWithoutQuickReplies(message);
+
+                return (
                   <div
+                    id={`hirexa-staffing-chat-message-${message.id}`}
+                    key={message.id}
                     className={cn(
-                      "max-w-[88%] rounded-[1.35rem] px-4 py-3 text-sm leading-6",
-                      message.role === "candidate"
-                        ? "border border-slate-200 bg-slate-100 text-black shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)]"
-                        : "whitespace-pre-line border border-slate-200 bg-white text-black"
+                      "flex",
+                      message.role === "candidate" ? "justify-end" : "justify-start"
                     )}
-                    style={
-                      message.role === "candidate"
-                        ? { borderColor: accentColor }
-                        : undefined
-                    }
                   >
-                    {message.content}
+                    <div
+                      className={cn(
+                        "flex max-w-[88%] flex-col",
+                        message.role === "candidate" ? "items-end" : "items-start"
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "rounded-[1.35rem] px-4 py-3 text-sm leading-6",
+                          message.role === "candidate"
+                            ? "border border-slate-200 bg-slate-100 text-black shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)]"
+                            : "whitespace-pre-line border border-slate-200 bg-white text-black"
+                        )}
+                        style={
+                          message.role === "candidate"
+                            ? { borderColor: accentColor }
+                            : undefined
+                        }
+                      >
+                        {renderChatMessageContent(message, messageContent)}
+                      </div>
+
+                      {message.role === "assistant" && quickReplies.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {quickReplies.map((option) => {
+                            const isSelected = selectedQuickReply === option;
+                            const isDisabled =
+                              Boolean(selectedQuickReply) ||
+                              hasCandidateReplyAfter ||
+                              isSendingMessage ||
+                              isSubmittingLead ||
+                              Boolean(completionSummary);
+
+                            return (
+                              <button
+                                key={option}
+                                type="button"
+                                aria-pressed={isSelected}
+                                disabled={isDisabled}
+                                onClick={() =>
+                                  handleQuickReplySelect(message.id, option)
+                                }
+                                className={cn(
+                                  "rounded-full border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-700 transition-all duration-200 hover:bg-blue-50 disabled:cursor-not-allowed",
+                                  isSelected
+                                    ? "scale-105 bg-blue-600 text-white shadow-md hover:bg-blue-600"
+                                    : "bg-white",
+                                  isDisabled && !isSelected ? "opacity-70" : ""
+                                )}
+                              >
+                                {option}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {isSendingMessage ? (
                 <div
@@ -861,7 +1042,10 @@ export default function StaffingAiChatDemo({
                     <div>
                       <dt className="text-black">Consent</dt>
                       <dd className="mt-1 text-black">
-                        {formatValue(finalSummary.consentToContact)}
+                        {formatValue(
+                          finalSummary.contactConsent ??
+                            finalSummary.consentToContact
+                        )}
                       </dd>
                     </div>
                   </dl>
@@ -898,7 +1082,7 @@ export default function StaffingAiChatDemo({
 
           <div
             id="hirexa-staffing-chat-input-section"
-            className="border-t border-slate-200 bg-white px-4 py-4 sm:px-5"
+            className="hirexa-staffing-chat-input-section border-t border-slate-200 bg-white px-4 py-4 sm:px-5"
           >
             {finalSummary ? (
               <div className="flex flex-col gap-3 sm:flex-row">

@@ -794,7 +794,9 @@ model ChatbotCandidateLead {
   languagesSpoken       String[]                 @default([])
   veteranStatus         String?
   referralSource        String?
+  contactConsent        Boolean?
   qualificationStatus   String?
+  captureStatus         String                   @default("New Lead")
   candidateScore        Int?
   aiSummary             String?                  @db.Text
   missingFields         String[]                 @default([])
@@ -814,7 +816,9 @@ model ChatbotCandidateLead {
   @@index([companyChatbotId, createdAt])
   @@index([email])
   @@index([phone])
+  @@index([contactConsent])
   @@index([qualificationStatus])
+  @@index([captureStatus])
   @@index([createdAt])
 }
 

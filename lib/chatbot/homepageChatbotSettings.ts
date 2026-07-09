@@ -25,7 +25,7 @@ export function getHomepageAiChatCompanySettings(): AiChatCompanySettings {
     chatTitle: "Hirexa AI",
     chatSubtitle: "Hirexa AI",
     welcomeMessage:
-      "Hi, I'm Hirexa AI. Tell me what kind of role you're looking for, and I'll help collect the key details.",
+      "Hi, I’m Hirexa AI. I’ll help collect the key details about the type of role you’re looking for. What’s your name?",
     fallbackMessage:
       "Thanks. I'm still gathering a few job-search details so Hirexa can better understand what you need.",
     completionMessage:

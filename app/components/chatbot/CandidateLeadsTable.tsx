@@ -1,4 +1,6 @@
 import { Card, CardContent } from "@/app/components/ui/card";
+import LeadCaptureStatusSelect from "@/app/components/chatbot/LeadCaptureStatusSelect";
+import { LEAD_CAPTURE_STATUS_OPTIONS } from "@/app/lib/chatbot/leadCaptureStatus";
 
 const EMPTY_VALUE = "\u2014";
 
@@ -30,7 +32,9 @@ export type CandidateLeadsTableLead = {
   languagesSpoken: string[];
   veteranStatus: string | null;
   referralSource: string | null;
+  contactConsent: boolean | null;
   qualificationStatus: string | null;
+  captureStatus: string | null;
   candidateScore: number | null;
   aiSummary: string | null;
   structuredAnswersJson: unknown;
@@ -38,6 +42,7 @@ export type CandidateLeadsTableLead = {
 };
 
 type CandidateLeadsTableProps = {
+  companySlug: string;
   leads: CandidateLeadsTableLead[];
   totalLeads: number;
 };
@@ -277,6 +282,19 @@ function formatLeadQuality(lead: CandidateLeadsTableLead) {
   );
 }
 
+function formatContactConsent(lead: CandidateLeadsTableLead) {
+  const consent = firstPresent(
+    lead.contactConsent,
+    getStructuredValue(lead, ["contactConsent", "consentToContact"])
+  );
+
+  if (typeof consent === "boolean") {
+    return consent ? "Yes" : "No";
+  }
+
+  return toDisplayString(consent);
+}
+
 function getExternalHref(value: string) {
   if (value === EMPTY_VALUE) return null;
   if (/^https?:\/\//i.test(value)) return value;
@@ -455,6 +473,7 @@ const columns: LeadColumn[] = [
   },
   { header: "Score", getValue: formatScore },
   { header: "Lead Quality", getValue: formatLeadQuality },
+  { header: "Contact Consent", getValue: formatContactConsent },
   { header: "Created", getValue: getCreatedDate },
 ];
 
@@ -499,6 +518,7 @@ function CandidateLeadCell({
 }
 
 export default function CandidateLeadsTable({
+  companySlug,
   leads,
   totalLeads,
 }: CandidateLeadsTableProps) {
@@ -524,11 +544,25 @@ export default function CandidateLeadsTable({
           </div>
         </div>
 
+        <div className="mt-5 grid gap-3 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+          {LEAD_CAPTURE_STATUS_OPTIONS.map((option) => (
+            <div key={option.value} className="space-y-1">
+              <span
+                className={`inline-flex items-center rounded-full border px-3 py-1 font-semibold ${option.badgeClassName}`}
+              >
+                {option.label}
+              </span>
+              <p className="leading-5">{option.meaning}</p>
+            </div>
+          ))}
+        </div>
+
         {leads.length > 0 ? (
           <div className="mt-5 overflow-x-auto rounded-md border border-slate-200 bg-white text-black">
             <table className="min-w-max bg-white text-left text-sm text-black">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="whitespace-nowrap px-4 py-3">Status</th>
                   {columns.map((column) => (
                     <th key={column.header} className="whitespace-nowrap px-4 py-3">
                       {column.header}
@@ -539,6 +573,13 @@ export default function CandidateLeadsTable({
               <tbody className="divide-y divide-slate-200 bg-white text-black">
                 {leads.map((lead) => (
                   <tr key={lead.id} className="bg-white text-black">
+                    <td className="bg-white px-4 py-3 align-top">
+                      <LeadCaptureStatusSelect
+                        companySlug={companySlug}
+                        leadId={lead.id}
+                        initialStatus={lead.captureStatus}
+                      />
+                    </td>
                     {columns.map((column) => (
                       <CandidateLeadCell
                         key={column.header}

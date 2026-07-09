@@ -111,6 +111,7 @@ export const staffingLeadDraftSchema = z
     languagesSpoken: z.array(z.string().trim().min(1)).optional(),
     veteranStatus: z.string().trim().min(1).optional(),
     referralSource: z.string().trim().min(1).optional(),
+    contactConsent: z.boolean().optional(),
     consentToContact: z.boolean().optional(),
   })
   .strict();

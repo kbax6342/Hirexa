@@ -9,6 +9,9 @@ function cloneSettings(settings: AiChatCompanySettings): AiChatCompanySettings {
   return JSON.parse(JSON.stringify(settings)) as AiChatCompanySettings;
 }
 
+const CHATBOT_PRIVACY_NOTICE =
+  "By using this chatbot, you agree that the information you provide may be collected, saved, and reviewed by authorized hiring or staffing agency staff to respond to your inquiry, contact you, and help match you with potential job opportunities. - Privacy Policy";
+
 export const SAFE_DEFAULT_COMPANY_CHAT_SETTINGS: AiChatCompanySettings = {
   id: "hirexa-safe-default-company",
   companyName: "Hirexa AI Demo Company",
@@ -48,8 +51,7 @@ export const SAFE_DEFAULT_COMPANY_CHAT_SETTINGS: AiChatCompanySettings = {
     "Thanks. I’m still collecting a few job-relevant details so a recruiter can review your information.",
   completionMessage:
     "Thanks — a recruiter can review this information and follow up. This AI chat does not make hiring decisions.",
-  complianceDisclaimer:
-    "This AI chat helps collect job-relevant screening information only. A recruiter will review the information before any hiring decision is made.",
+  complianceDisclaimer: CHATBOT_PRIVACY_NOTICE,
   requireConsentToContact: true,
   allowResumeUpload: false,
   allowJobRecommendations: true,
@@ -142,8 +144,7 @@ export const DEFAULT_MINUTEMEN_CHAT_SETTINGS: AiChatCompanySettings = {
     "Thanks. I’m collecting a few more job-relevant details so a recruiter can review your staffing fit.",
   completionMessage:
     "Thanks — a recruiter can review this information and follow up. This AI chat does not make hiring decisions.",
-  complianceDisclaimer:
-    "This AI chat helps collect job-relevant screening information only. A recruiter will review the information before any hiring decision is made.",
+  complianceDisclaimer: CHATBOT_PRIVACY_NOTICE,
   requireConsentToContact: true,
   allowResumeUpload: false,
   allowJobRecommendations: true,

@@ -75,7 +75,7 @@ export function scoreStaffingLead(
     score += 10;
   }
 
-  if (lead.consentToContact) {
+  if (lead.contactConsent ?? lead.consentToContact) {
     score += 5;
   }
 
